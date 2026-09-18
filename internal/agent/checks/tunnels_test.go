@@ -746,3 +746,88 @@ func TestTunnelsCheck_IdleTunnelAnsweringMatrixIsNotDown(t *testing.T) {
 	}
 	t.Fatalf("проверка tunnel_awg10 не выпущена; получили: %+v", out)
 }
+
+// probeStub -- два VPN-туннеля со свежим обменом ключами и матрица с заданными
+// ячейками. Форма workrouter 18.09: удалённая сторона nl21 отвечает на обмен
+// ключами, но трафик через неё не идёт -- матрица awg-manager пишет «нет связи».
+func probeStub(t *testing.T, cells string, updatedAt time.Time) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fresh := time.Now().Add(-44 * time.Second).UTC().Format(time.RFC3339)
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"nl21","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun10","lastHandshake":"` + fresh + `"},
+				{"id":"awg11","name":"hipvps","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun11","lastHandshake":"` + fresh + `"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"tunnelId":"awg10","status":"disabled","method":"http","failCount":0,"failThreshold":3},
+				{"tunnelId":"awg11","status":"disabled","method":"http","failCount":0,"failThreshold":3}
+			]}}`))
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"r1","routes":[{"interface":"opkgtun10","tunnelId":"opkgtun10"},{"interface":"opkgtun11","tunnelId":"opkgtun11"}]}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"direct"}}}`))
+		case "/api/monitoring/matrix":
+			ts := updatedAt.UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[` + strings.ReplaceAll(cells, "TS", ts) + `],"updatedAt":"` + ts + `"}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+}
+
+func probeStatuses(t *testing.T, srv *httptest.Server) map[string]wire.Check {
+	t.Helper()
+	out := map[string]wire.Check{}
+	for _, c := range (TunnelsCheck{Client: awgmgr.New(srv.URL)}).Run(context.Background(), Deps{}) {
+		out[c.Name] = c
+	}
+	return out
+}
+
+func TestTunnelsCheck_FreshHandshakeButProbeFailsIsDown(t *testing.T) {
+	srv := probeStub(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":null,"ok":false,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":67,"ok":true,"ts":"TS"}`, time.Now())
+	defer srv.Close()
+	got := probeStatuses(t, srv)
+	if c := got["tunnel_awg10"]; c.Status != "fail" {
+		t.Fatalf("awg-manager пишет «нет связи», а соседний VPN-туннель ту же цель пробивает -- это отказ, не «ок»: %+v", c)
+	}
+	if c := got["tunnel_awg10"]; c.Details["matrix_ok"] != false {
+		t.Fatalf("matrix_ok должен быть false: %v", c.Details["matrix_ok"])
+	}
+	if c := got["tunnel_awg11"]; c.Status != "ok" {
+		t.Fatalf("живой соседний VPN-туннель уронили: %+v", c)
+	}
+}
+
+func TestTunnelsCheck_ProbeFailsEverywhereIsNotBlamedOnTunnel(t *testing.T) {
+	// Все пробы упали -- недоступна скорее сама цель, чем туннели. Свежий
+	// обмен ключами остаётся в силе.
+	srv := probeStub(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":null,"ok":false,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":null,"ok":false,"ts":"TS"}`, time.Now())
+	defer srv.Close()
+	for name, c := range probeStatuses(t, srv) {
+		if strings.HasPrefix(name, "tunnel_") && c.Status != "ok" {
+			t.Fatalf("%s: упавшая цель пробы -- не повод объявлять туннель мёртвым: %+v", name, c)
+		}
+	}
+}
+
+func TestTunnelsCheck_StaleProbeDoesNotOverrideHandshake(t *testing.T) {
+	srv := probeStub(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":null,"ok":false,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":67,"ok":true,"ts":"TS"}`, time.Now().Add(-10*time.Minute))
+	defer srv.Close()
+	if c := probeStatuses(t, srv)["tunnel_awg10"]; c.Status != "ok" {
+		t.Fatalf("матрица десятиминутной давности ничего не доказывает: %+v", c)
+	}
+}

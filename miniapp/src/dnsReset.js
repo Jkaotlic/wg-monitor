@@ -23,7 +23,7 @@ export const DNS_RESET_MIN_VERSION = 'v0.31.0'
 // не должно: старый дашборд держал свою и разошёлся с агентом. Расхождение
 // ловит test/dnsReference.test.js, читая dnsref.go.
 export const DNS_REFERENCE_FOREIGN = ['tls upstream 9.9.9.9 sni dns.quad9.net', 'tls upstream 1.1.1.1 sni cloudflare-dns.com']
-export const DNS_REFERENCE_RU_ZONES = ['ru', 'su', 'xn--p1ai', 'xn--80adxhks', 'xn--d1acj3b', 'xn--p1acf', 'tatar']
+export const DNS_REFERENCE_RU_ZONES = ['ru', 'su', 'xn--p1ai', 'xn--80adxhks', 'xn--d1acj3b', 'xn--p1acf']
 export const DNS_REFERENCE_YANDEX = 'common.dot.dns.yandex.net'
 
 // Команды в том виде, в каком их выполняет агент: ndmc -c "dns-proxy <строка>",
@@ -76,11 +76,18 @@ export function dnsResetConfirmBody(routerName) {
 export function parsePreview(output) {
   const text = String(output ?? '')
   if (!text.startsWith('Предпросмотр')) return null
-  const out = { remove: [], keep: [], addCount: 0 }
+  const out = { remove: [], keep: [], addCount: 0, skippedCount: 0 }
   let section = ''
   for (const raw of text.split('\n')) {
     const add = /^Заменим на эталонные \((\d+)\)/.exec(raw)
     if (add) out.addCount = Number(add[1])
+    // Агент урезает эталон под лимит KeenOS (8 DoT-серверов), если рядом
+    // оставлен свой DNS-сервер: предпросмотр называет, что не встанет.
+    const skipped = /^не поместилось.*\((\d+)\):/.exec(raw)
+    if (skipped) {
+      out.skippedCount = Number(skipped[1])
+      section = 'skipped'
+    }
     if (raw.startsWith('Уберём')) section = 'remove'
     else if (raw.startsWith('Оставим')) section = 'keep'
     else if (raw.startsWith('Заменим')) section = 'add'
@@ -102,6 +109,9 @@ export function previewText(p) {
   const now = p.remove.length + p.keep.length
   let text = `Сейчас на роутере ${now} ${plural(now, 'строка', 'строки', 'строк')} DNS. Заменим на эталонные: ${p.addCount}.`
   if (p.keep.length > 0) text += ' Свой DNS-сервер не тронем.'
+  if (p.skippedCount > 0) {
+    text += ` ${p.skippedCount} ${plural(p.skippedCount, 'строка', 'строки', 'строк')} эталона не ${p.skippedCount === 1 ? 'поместится' : 'поместятся'}: роутер держит не больше 8 DNS-серверов.`
+  }
   return text
 }
 

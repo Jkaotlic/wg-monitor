@@ -44,3 +44,19 @@ describe('эталон ручного сброса совпадает с аге�
     expect(T.copyFailed).toBe('Не удалось скопировать — выделите текст вручную.')
   })
 })
+
+describe('предпросмотр при лимите KeenOS', () => {
+  it('называет строки, которые не поместятся', async () => {
+    const { parsePreview, previewText } = await import('../src/dnsReset.js')
+    const out = [
+      'Предпросмотр сброса DNS — ничего не изменено', '', 'Уберём (0):', '',
+      'Оставим как есть (1):', '  = tls upstream 198.51.100.53 sni resolver.example.com', '',
+      'Заменим на эталонные (7):', '  + tls upstream 9.9.9.9 sni dns.quad9.net', '',
+      'не поместилось в лимит KeenOS (8 адресов), не ставим (1):', '  · tls upstream common.dot.dns.yandex.net domain xn--p1acf',
+    ].join('\n')
+    const p = parsePreview(out)
+    expect(p.addCount).toBe(7)
+    expect(p.skippedCount).toBe(1)
+    expect(previewText(p)).toContain('1 строка эталона не поместится')
+  })
+})

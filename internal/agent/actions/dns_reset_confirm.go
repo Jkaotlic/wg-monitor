@@ -118,7 +118,7 @@ func dnsLineKey(line string) string {
 // эталона там ЕСТЬ. Успех -- это найденная строка, а не отсутствие ошибки у
 // команды: роутер мог принять команду и записать её иначе, а мог не принять
 // вовсе. Возвращает число неподтверждённых строк.
-func confirmDNSReferenceApplied(ctx context.Context, exec ExecFunc, b *strings.Builder) int {
+func confirmDNSReferenceApplied(ctx context.Context, exec ExecFunc, b *strings.Builder, reference []string) int {
 	b.WriteString("\nподтверждение по факту:\n")
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
@@ -132,13 +132,13 @@ func confirmDNSReferenceApplied(ctx context.Context, exec ExecFunc, b *strings.B
 		}
 	}
 	var missing []string
-	for _, want := range dnsReferenceUpstreams {
+	for _, want := range reference {
 		if k := dnsLineKey(want); k == "" || !present[k] {
 			missing = append(missing, want)
 		}
 	}
 	if len(missing) == 0 {
-		fmt.Fprintf(b, "  ✓ подтверждено: все %d строк эталона найдены в конфиге\n", len(dnsReferenceUpstreams))
+		fmt.Fprintf(b, "  ✓ подтверждено: все %d строк эталона найдены в конфиге\n", len(reference))
 		return 0
 	}
 	fmt.Fprintf(b, "  ✗ не применилось строк: %d\n", len(missing))

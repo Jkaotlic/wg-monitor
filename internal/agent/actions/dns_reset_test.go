@@ -373,3 +373,51 @@ func TestApplyDNSProxyUpstreamsNothingToDo(t *testing.T) {
 		t.Fatalf("nothing to remove or add must mean no ndmc calls, got %v", every)
 	}
 }
+
+// Оставленный свой резолвер занимает место в том же списке из восьми: эталон
+// урезается с хвоста, и это пометка, а не провал.
+func TestDNSReset_KeptResolverTrimsReferenceToLimit(t *testing.T) {
+	ref := dnsReferenceUpstreams
+	kept := "tls upstream 198.51.100.53 sni resolver.example.com"
+	after := "dns-proxy\n    " + kept + "\n"
+	for _, l := range ref[:len(ref)-1] {
+		after += "    " + l + "\n"
+	}
+	f := &fakeDNSExec{
+		runningConfig: "dns-proxy\n    " + kept + "\n!\n",
+		afterConfig:   after + "!\n",
+	}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{KeepHosts: []string{"198.51.100.53"}})
+	applied := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "dns-proxy tls upstream") || strings.HasPrefix(c, "dns-proxy https upstream") {
+			applied++
+		}
+	}
+	if applied+1 > 8 {
+		t.Fatalf("вместе с оставленным %d строк -- больше лимита KeenOS:\n%s", applied+1, out)
+	}
+	if status != "ok" {
+		t.Fatalf("урезанный по лимиту эталон -- не провал: status=%s\n%s", status, out)
+	}
+	if !strings.Contains(out, "не поместилось") {
+		t.Fatalf("о срезанной строке надо сказать:\n%s", out)
+	}
+}
+
+// Предпросмотр обязан показывать то, что выполнится: с оставленным своим
+// резолвером эталон урезается и в нём.
+func TestDNSReset_PreviewTrimsLikeRealReset(t *testing.T) {
+	kept := "tls upstream 198.51.100.53 sni resolver.example.com"
+	f := &fakeDNSExec{runningConfig: "dns-proxy\n    " + kept + "\n!\n"}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{DryRun: true, KeepHosts: []string{"198.51.100.53"}})
+	if status != "ok" {
+		t.Fatalf("status=%s\n%s", status, out)
+	}
+	if !strings.Contains(out, "Заменим на эталонные (7)") || !strings.Contains(out, "не поместилось") {
+		t.Fatalf("предпросмотр обещает не то, что выполнится:\n%s", out)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("предпросмотр ничего не выполняет: %q", f.calls)
+	}
+}

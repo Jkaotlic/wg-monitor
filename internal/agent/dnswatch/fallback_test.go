@@ -16,7 +16,7 @@ const (
 	quad9DoT      = "tls upstream 9.9.9.9 sni dns.quad9.net"
 )
 
-var ruZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf", "tatar"}
+var ruZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf"}
 var pinnedZones = []string{"themoviedb.org", "tmdb.org", "b-cdn.net", "phncdn.com", "pornhub.com", "rncdn7.com"}
 
 func defaultSetConfig() Config {
@@ -58,7 +58,7 @@ func TestDefaults_Verbatim(t *testing.T) {
 }
 
 // TestBuildFallbackSet_SplitLikeAGH: everything live → the mirror of the
-// operator's AGH upstream_dns: 3 foreign without domain, 7 Yandex DoT domain
+// operator's AGH upstream_dns: 3 foreign without domain, 6 Yandex DoT domain
 // lines, 6 Cloudflare-pinned domain lines — in that order.
 func TestBuildFallbackSet_SplitLikeAGH(t *testing.T) {
 	lines, ruDegraded, ok := BuildFallbackSet(defaultSetConfig(), DefaultRUCandidates, DefaultForeignCandidates)
@@ -71,8 +71,8 @@ func TestBuildFallbackSet_SplitLikeAGH(t *testing.T) {
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("lines:\n got %q\nwant %q", lines, want)
 	}
-	if len(lines) != 3+7+6 {
-		t.Fatalf("len = %d, want 16", len(lines))
+	if len(lines) != 3+6+6 {
+		t.Fatalf("len = %d, want 15", len(lines))
 	}
 }
 

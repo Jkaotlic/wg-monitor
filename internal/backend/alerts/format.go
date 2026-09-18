@@ -1058,6 +1058,11 @@ func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 	if pc == "dead" {
 		parts = append(parts, "Проверка связи показывает сбой — пакеты не доходят даже после авто-рестартов.")
 	}
+	// Обмен ключами свежий, а проба awg-manager через туннель не проходит:
+	// сервер отвечает на обмен, но трафик теряется (workrouter 18.09).
+	if probeOK, has := boolOrFalse(d, "matrix_ok"); has && !probeOK && hasAge && age <= 180 {
+		parts = append(parts, "Обмен ключами идёт, но проверка awg-manager через этот VPN-туннель не проходит: сервер отвечает на обмен, а трафик теряется. Похоже на блокировку у провайдера или сломанную маршрутизацию на сервере.")
+	}
 	if len(parts) == 0 && len(ns) > 0 && neighborsAlive(ns) {
 		parts = append(parts, "Соседние VPN-туннели живы, так что интернет и роутер в порядке. Проблема локальная — сервер этого VPN-туннеля или его настройки.")
 	}

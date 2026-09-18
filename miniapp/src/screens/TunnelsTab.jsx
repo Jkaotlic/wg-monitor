@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings } from '../api.js'
-import { parseRouteSnapshot, snapshotState, tunnelRuleSummary } from '../routes.js'
+import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
@@ -32,6 +32,7 @@ import { ConfImportScreen } from './ConfImportScreen.jsx'
 // вывода и два разных действия.
 const CHAIN_TITLE = {
   active: 'Работает сейчас',
+  activeDown: 'Несёт трафик, но не отвечает',
   ready: 'Готов подхватить',
   down: 'Не отвечает',
   off: 'Выключен вручную',
@@ -55,6 +56,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const [importing, setImporting] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
+  // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
+  // удалённой стороной не звался «работает» (см. withCheckVerdict).
+  const [checks, setChecks] = useState(null)
 
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
 
@@ -83,8 +87,22 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
   }, [result])
 
-  const view = tunnelsView(snapshot)
-  const list = tunnelList(snapshot)
+  // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
+  useEffect(() => {
+    let alive = true
+    fetchRouterChecks(routerID)
+      .then((ev) => {
+        if (alive) setChecks(ev)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [routerID, result])
+
+  const shown = withCheckVerdict(snapshot, checks)
+  const view = tunnelsView(shown)
+  const list = tunnelList(shown)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
@@ -169,7 +187,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // прямо сейчас, и «выключить» на нём не переключатель, а обрыв.
   const chainAction = (c) => {
     if (c.role === 'active' || c.role === 'unknown') return null
-    if (c.role === 'down') return restartButton(c)
+    if (c.role === 'down' || c.role === 'activeDown') return restartButton(c)
     return toggleButton(c)
   }
 
@@ -197,11 +215,15 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       )}
 
       {view.active && (
-        <Section title="VPN-туннель, который работает">
+        <Section title={view.active.live === 'down' ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
           <Hero>
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
-            <StateTag>VPN-туннель поднят</StateTag>
+            {view.active.live === 'down' ? (
+              <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
+            ) : (
+              <StateTag>VPN-туннель поднят</StateTag>
+            )}
             <h2 class="traffic-title" style="margin-top:8px">{view.active.title}</h2>
             {/* Идентификатор и интерфейс -- инженерия: они стоят подписью под
                 именем, а не вместо него. */}
@@ -213,7 +235,13 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               <Stat
                 label="обмен ключами"
                 value={view.active.handshakeAgeSec != null ? humanAge(view.active.handshakeAgeSec) : null}
-                note={view.active.handshakeAgeSec != null ? 'назад, канал живой' : 'роутер не сообщил'}
+                note={
+                  view.active.handshakeAgeSec == null
+                    ? 'роутер не сообщил'
+                    : view.active.live === 'down'
+                      ? 'назад, но трафик не проходит'
+                      : 'назад, канал живой'
+                }
               />
               <Stat label="несёт" value={view.active.rules} unit="назн." note={view.policyName ? `общий набор «${view.policyName}»` : undefined} />
             </div>
