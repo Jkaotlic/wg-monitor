@@ -47,10 +47,18 @@ export function carrierKnown({ traffic, tunnels }) {
   return Boolean(traffic?.egress_tunnel_id) && Boolean(tunnels?.some((x) => x.tunnel_id === traffic.egress_tunnel_id))
 }
 
+// Мёртвый -- тот, кто должен работать, но не работает: тревога по нему или
+// поднятый с проваленной проверкой. Выключенный руками (stopped/disabled без
+// тревоги) не мёртв: трафик на него и не рассчитан.
+function isDead(t, incidents = []) {
+  if (incidents?.some((i) => i.check_name === `tunnel_${t.tunnel_id}`)) return true
+  return isRunning(t) && t.status === 'fail'
+}
+
 // Несущий неизвестен, туннелей несколько и часть мертва: любой выбор -- угадывание.
 function blindSplit({ traffic, tunnels, incidents }) {
   if (traffic?.mode !== 'split' || carrierKnown({ traffic, tunnels })) return false
-  return (tunnels?.length ?? 0) > 1 && tunnels.some((t) => !isAlive(t, incidents))
+  return (tunnels?.length ?? 0) > 1 && tunnels.some((t) => isDead(t, incidents))
 }
 
 function tunnelBranch({ line, incidents, stale }) {
