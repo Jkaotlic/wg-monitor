@@ -291,6 +291,15 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 			details["note"] = "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"
 		}
 	}
+	// Обратное тоже верно: свежий обмен ключами ещё не значит, что трафик
+	// идёт. Удалённая сторона может отвечать на обмен, а данные при этом
+	// теряются (workrouter 18.09: nl21 «ок» каждые три минуты, пока
+	// awg-manager писал «нет связи»). Матрица -- активная проба через туннель,
+	// и её провал при живом соседе перевешивает свежесть обмена.
+	if matrixSaysDead(matrix, tu.ID, time.Now()) {
+		details["matrix_ok"] = false
+		reasons = append(reasons, probeFailedReason)
+	}
 	if len(reasons) == 0 {
 		return OK(name, start, details)
 	}
@@ -332,7 +341,7 @@ func suppressUnusedTunnelFailure(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc
 	}
 	for _, reason := range reasons {
 		switch {
-		case strings.HasPrefix(reason, "status="), strings.HasPrefix(reason, "no handshake"), strings.HasPrefix(reason, "handshake stale"):
+		case strings.HasPrefix(reason, "status="), strings.HasPrefix(reason, "no handshake"), strings.HasPrefix(reason, "handshake stale"), reason == probeFailedReason:
 			continue
 		default:
 			return false
@@ -382,6 +391,38 @@ func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.
 		return false
 	}
 	return now.Sub(ts) <= matrixFreshWindow
+}
+
+// probeFailedReason -- причина отказа по матрице; её же узнаёт
+// suppressUnusedTunnelFailure.
+const probeFailedReason = "probe failed: awg-manager не получает ответа через VPN-туннель"
+
+// matrixSaysDead -- свежая матрица пробовала эту линию, и ВСЕ её пробы
+// провалились, а хотя бы одна проба через другой туннель прошла. Второе
+// условие отделяет мёртвый туннель от недоступной цели пробы: если не
+// отвечает никто, виноват не туннель, и свежий обмен ключами остаётся в силе.
+func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.Time) bool {
+	if matrix == nil {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
+	if err != nil || now.Sub(ts) > matrixFreshWindow {
+		return false
+	}
+	own, othersAlive := 0, false
+	for _, c := range matrix.Cells {
+		if c.TunnelID == tunnelID {
+			if c.OK {
+				return false
+			}
+			own++
+			continue
+		}
+		if c.OK {
+			othersAlive = true
+		}
+	}
+	return own > 0 && othersAlive
 }
 
 // matrixFreshWindow -- насколько свежей должна быть матрица, чтобы её ответу

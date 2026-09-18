@@ -94,7 +94,7 @@ export function incidentCopy(checkName) {
   if (checkName?.startsWith('tunnel_')) {
     return {
       what: `${checkLabel(checkName)} не отвечает`,
-      why: 'Обмен ключами не проходит — трафик через этот VPN-туннель не пойдёт.',
+      why: 'Трафик через этот VPN-туннель не проходит: сервер не обменивается ключами или не отвечает на проверку.',
     }
   }
   return { what: checkLabel(checkName), why: '' }
