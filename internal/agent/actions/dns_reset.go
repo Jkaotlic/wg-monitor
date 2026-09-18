@@ -115,16 +115,31 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		}
 		b.WriteString("\n")
 	}
+	// Оставленные строки занимают место в том же списке из восьми: эталон
+	// урезается с хвоста (последними идут наименее нужные русские зоны), и
+	// это пометка, а не провал -- иначе сброс не проходил бы никогда.
+	reference := dnsReferenceUpstreams
+	if room := dnsref.KeeneticDoTLimit - len(kept); room < len(reference) {
+		if room < 0 {
+			room = 0
+		}
+		fmt.Fprintf(&b, "не поместилось в лимит KeenOS (%d адресов), не ставим (%d):\n", dnsref.KeeneticDoTLimit, len(reference)-room)
+		for _, l := range reference[room:] {
+			fmt.Fprintf(&b, "  · %s\n", l)
+		}
+		b.WriteString("\n")
+		reference = reference[:room]
+	}
 	failures := applyDNSProxyUpstreams(ctx, exec, &b,
 		"remove existing dns-proxy upstreams", remove,
-		"apply reference upstreams", dnsReferenceUpstreams)
+		"apply reference upstreams", reference)
 
 	b.WriteString("\nsave:\n")
 	if !ndmcStep(ctx, exec, &b, "system configuration save") {
 		failures++
 	}
 
-	failures += confirmDNSReferenceApplied(ctx, exec, &b)
+	failures += confirmDNSReferenceApplied(ctx, exec, &b, reference)
 
 	if len(plain) > 0 {
 		fmt.Fprintf(&b, "\nNOTE: %d per-interface name-server entr(y/ies) left untouched "+

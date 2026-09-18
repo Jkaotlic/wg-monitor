@@ -14,8 +14,8 @@ import (
 // на роутер разное.
 func TestBothSetsDeriveFromOneTable(t *testing.T) {
 	zones := dnsref.RUZones()
-	if len(zones) != 7 {
-		t.Fatalf("ру-зон %d, хотим 7 (решение оператора № 5)", len(zones))
+	if len(zones) != 6 {
+		t.Fatalf("ру-зон %d, хотим 6 (решение оператора № 5; .tatar убран 18.09 -- лимит KeenOS)", len(zones))
 	}
 	lines := dnsref.ReferenceDoTLines()
 	for _, z := range zones {
@@ -133,4 +133,19 @@ func TestRUCanaryLivesInRUZone(t *testing.T) {
 		}
 	}
 	t.Errorf("канарейка %q не лежит ни в одной ру-зоне эталона", name)
+}
+
+// KeenOS держит не больше восьми DoT-серверов («server list limit exceeded,
+// the maximum is 8 addresses», workrouter 18.09): девятая строка эталона не
+// вставала никогда, и любой сброс заканчивался «не полностью».
+func TestReferenceFitsKeeneticDoTLimit(t *testing.T) {
+	lines := dnsref.ReferenceDoTLines()
+	if len(lines) > dnsref.KeeneticDoTLimit {
+		t.Fatalf("эталон %d строк, KeenOS держит %d", len(lines), dnsref.KeeneticDoTLimit)
+	}
+	for _, l := range lines {
+		if strings.HasSuffix(l, " domain tatar") {
+			t.Fatalf(".tatar убран решением оператора 18.09: %q", l)
+		}
+	}
 }

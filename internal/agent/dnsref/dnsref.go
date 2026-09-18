@@ -36,7 +36,9 @@ const yandexDoTHost = "common.dot.dns.yandex.net"
 // Таблица. Ни один срез наружу не отдаётся как есть — только копией: иначе
 // вызывающий, дописавший элемент, испортит источник правды для всех.
 var (
-	ruZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf", "tatar"}
+	// .tatar убран 18.09.2026 решением оператора: KeenOS держит не больше
+	// восьми DoT-серверов, а с ним эталон выходил на девять.
+	ruZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf"}
 
 	// Кандидаты сторожа. Каждая строка -- готовая подкоманда ndmc без
 	// префикса `dns-proxy`; сторож их пробует и НИКОГДА не сохраняет.
@@ -63,6 +65,11 @@ var (
 		"tls upstream 1.1.1.1 sni cloudflare-dns.com",
 	}
 )
+
+// KeeneticDoTLimit -- сколько DoT-серверов держит dns-proxy KeenOS («server
+// list limit exceeded, the maximum is 8 addresses»). Строка на каждую зону
+// считается отдельным адресом.
+const KeeneticDoTLimit = 8
 
 // ruCanary -- имя в ру-зоне, которым проверка dns_split спрашивает dns-proxy
 // роутера, отвечает ли он вообще.
