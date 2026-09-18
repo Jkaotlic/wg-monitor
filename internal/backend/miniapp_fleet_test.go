@@ -86,7 +86,10 @@ func TestMiniappFleetNeverLeaksRouterSecrets(t *testing.T) {
 		t.Fatalf("сводка парка: код %d, тело %s", rec.Code, body)
 	}
 	// Ни значений, ни имён полей: имя поля в ответе означает, что значение
-	// приедет туда завтра, когда его кто-нибудь заполнит.
+	// приедет туда завтра, когда его кто-нибудь заполнит. Адрес панели админ
+	// получает ссылкой panel_url в строках /v1/miniapp/routers
+	// (TestMiniappCommandScreensNeverLeakRouterSecrets); сводке парка он не
+	// нужен -- ей хватает признака panel_address_known.
 	for _, secret := range []string{awgmURL, awgmAuth, sshHost, expectedMAC, "-1009876543210"} {
 		if strings.Contains(body, secret) {
 			t.Errorf("в сводке парка утекло %q: %s", secret, body)
@@ -463,6 +466,17 @@ func TestMiniappFleetCarriesReviveState(t *testing.T) {
 	}
 	if strings.Contains(body, "panel.example.com") {
 		t.Fatalf("адрес панели уехал в сводку: %s", body)
+	}
+
+	// Признак -- через тот же panelAddress, что ссылка panel_url: негодный
+	// адрес не «известен», иначе лист оживления не спросит годный.
+	if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, "javascript:alert(1)", otherID); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range fleetResponse(t, fleetRequest(t, h, 999)).Routers {
+		if r.ID == otherID && r.PanelAddressKnown {
+			t.Fatal("негодный адрес панели считается известным")
+		}
 	}
 }
 

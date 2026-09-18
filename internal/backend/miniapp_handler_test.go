@@ -648,8 +648,9 @@ func TestMiniappTimelineOngoingHasNoEnd(t *testing.T) {
 }
 
 // Версия агента и тип -- для поиска и фильтров списка (спека цикла 2, п. 11).
-// Это не доступы: их видит каждый, кто видит роутер. Адреса панели и ssh в
-// списке по-прежнему нет ни значением, ни именем поля.
+// Это не доступы: их видит каждый, кто видит роутер. Ssh в списке по-прежнему
+// нет ни значением, ни именем поля; адрес панели владелец и админ получают
+// только ссылкой panel_url (решение оператора 18.09), не полем awgm_url.
 func TestMiniappRoutersCarryAgentVersionAndKind(t *testing.T) {
 	d, ownedID, _, ownerID := seedMiniappFleet(t)
 	if err := d.Users().UpdateDeployInfo("router-owned", db.DeployInfo{Kind: db.KindMobile, AWGMURL: "https://panel.example.com", SSHHost: "198.51.100.20"}); err != nil {
@@ -684,10 +685,13 @@ func TestMiniappRoutersCarryAgentVersionAndKind(t *testing.T) {
 		if !found {
 			t.Fatalf("uid %d: нет router-owned в списке", uid)
 		}
-		for _, leak := range []string{"panel.example.com", "198.51.100.20", "awgm_url", "ssh_host"} {
+		for _, leak := range []string{"198.51.100.20", "awgm_url", "ssh_host"} {
 			if strings.Contains(body, leak) {
 				t.Errorf("uid %d: в списке роутеров есть %q", uid, leak)
 			}
+		}
+		if strings.Count(body, "panel.example.com") != strings.Count(body, `"panel_url":"https://panel.example.com"`) {
+			t.Errorf("uid %d: адрес панели не только в panel_url: %s", uid, body)
 		}
 		if uid == 999 && !strings.Contains(body, `"agent_version":""`) {
 			t.Errorf("неизвестная версия должна приходить пустой строкой, а не пропадать: %s", body)

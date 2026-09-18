@@ -36,18 +36,20 @@ type miniappSettingsResp struct {
 	// "admin". Экран рисует по ней кнопки, которых серверу иначе пришлось бы
 	// отказывать -- обслуживание (включая установку прошивки) открыто всем
 	// трём (решение оператора 14.09), а Role остаётся для действий, чей круг
-	// уже: например, PanelKnown/PanelScope ниже видят только владелец и админ.
+	// уже: например, панель (PanelKnown/PanelScope/PanelURL) видят только владелец и админ.
 	Role string `json:"role,omitempty"`
 	// NotifyMuted -- выключены ли уведомления об этом роутере лично у того,
 	// кто смотрит экран. У каждого получателя своё значение, поэтому оно и
 	// живёт в ответе экрана, а не в общих настройках роутера.
 	NotifyMuted bool `json:"notify_muted"`
-	// PanelKnown/PanelScope -- признаки панели awg-manager роутера, а НЕ её
-	// адрес: адрес не уезжает клиенту ни в каком ответе. Переход делает бэкенд
-	// по одноразовому билету (miniapp_panel_ticket.go). Видят владелец и
-	// админ; оператору роутера строки нет вовсе.
+	// PanelKnown/PanelScope/PanelURL -- панель awg-manager роутера: известна
+	// ли, откроется ли вне дома и сама ссылка (прошедший panelAddress, без
+	// логина и пароля). Ссылку клиент открывает во внешнем браузере напрямую
+	// (решение оператора 18.09 отменило билеты и «адрес не попадает в API»).
+	// Видят владелец и админ; оператору роутера строки нет вовсе.
 	PanelKnown bool   `json:"panel_known,omitempty"`
 	PanelScope string `json:"panel_scope,omitempty"`
+	PanelURL   string `json:"panel_url,omitempty"`
 }
 
 func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
@@ -101,11 +103,10 @@ func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
 		if u.LastDeployedVersion != nil {
 			resp.AgentVersion = *u.LastDeployedVersion
 		}
-		if role == "owner" || role == "admin" {
-			if raw, ok := panelAddress(u.AWGMURL); ok {
-				resp.PanelKnown = true
-				resp.PanelScope = panelScope(raw)
-			}
+		if addr := miniappPanelURLFor(role, u.AWGMURL); addr != "" {
+			resp.PanelKnown = true
+			resp.PanelScope = panelScope(addr)
+			resp.PanelURL = addr
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
