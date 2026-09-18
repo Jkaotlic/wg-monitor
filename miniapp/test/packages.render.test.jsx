@@ -170,7 +170,7 @@ describe('проводка экрана', () => {
     cleanup(root)
   })
 
-  it('оверлей packages открывает экран, «назад» ведёт в Обслуживание', async () => {
+  it('оверлей packages открывает экран, «назад» ведёт во вкладку «Управление»', async () => {
     const dispatch = vi.fn()
     const root = document.createElement('div')
     document.body.appendChild(root)
@@ -179,7 +179,7 @@ describe('проводка экрана', () => {
     await flush()
     expect(root.querySelector('.overlay-title').textContent).toBe('Пакеты по расписанию')
     await act(async () => root.querySelector('.overlay-back').click())
-    expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'admin' })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'manage' })
     cleanup(root)
   })
 })

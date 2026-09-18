@@ -92,7 +92,7 @@ export function AgentConnectionScreen({ routerID, routerName, onClose }) {
   const title = routerName ? `Подключение агента «${routerName}»` : 'Подключение агента'
 
   return (
-    <Overlay title={title} backLabel="Обслуживание" onBack={onClose}>
+    <Overlay title={title} backLabel="Управление" onBack={onClose}>
       <form class="screen connection" onSubmit={save} autocomplete="off" noValidate>
         <h1 class="screen-title">
           <Quoted text={title} />

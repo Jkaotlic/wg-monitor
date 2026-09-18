@@ -322,18 +322,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {view.active && (
-        <div style="margin-top:24px">
-          <NavCard
-            title="Маршруты"
-            note={`${view.active.rules} назн.`}
-            onClick={onOpenRoutes}
-          />
-        </div>
-      )}
-
+      {/* Внизу акцентный переход один -- «Новый VPN-туннель из кабинета»
+          (спека C4): ради него сюда чаще всего и приходят. Маршруты, загрузка
+          .conf и замена конфига -- обычные строки списка: четыре одинаково
+          ярких карточки подряд спорили друг с другом. */}
       {snapshot && onOpenCabinet && (
-        <div style="margin-top:12px">
+        <div style="margin-top:24px">
           <NavCard
             title="Новый VPN-туннель из кабинета"
             note="Amnezia · HideMy"
@@ -342,22 +336,21 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </div>
       )}
 
-      {snapshot && mayManageTunnels(role) && (
-        <div style="margin-top:12px">
-          <NavCard title={IMPORT_TEXTS.title} note={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
-        </div>
-      )}
-
-      {/* Замена конфига предлагается для работающего VPN-туннеля: смысл операции --
-          заменить то, чем сейчас ходит трафик, не потеряв прежний туннель. */}
-      {view.active && view.policyName && (
-        <div style="margin-top:12px">
-          <NavCard
-            title="Заменить конфиг VPN-туннеля"
-            note={view.active.title}
-            onClick={() => setReplacing(view.active)}
-          />
-        </div>
+      {(view.active || (snapshot && mayManageTunnels(role))) && (
+        <ul class="card list-reset tunnels-more" style="margin-top:12px">
+          {view.active && (
+            <ListRow title="Маршруты" sub={`${view.active.rules} назн.`} onClick={onOpenRoutes} />
+          )}
+          {snapshot && mayManageTunnels(role) && (
+            <ListRow title={IMPORT_TEXTS.title} sub={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
+          )}
+          {/* Замена конфига предлагается для работающего VPN-туннеля: смысл
+              операции -- заменить то, чем сейчас ходит трафик, не потеряв
+              прежний туннель. */}
+          {view.active && view.policyName && (
+            <ListRow title="Заменить конфиг VPN-туннеля" sub={view.active.title} onClick={() => setReplacing(view.active)} />
+          )}
+        </ul>
       )}
 
       {replacing && (

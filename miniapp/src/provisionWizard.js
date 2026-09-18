@@ -45,7 +45,7 @@ export const WIZARD_SECRET_KEYS = ['rootPassword', 'awgmPassword', 'awgmAPIKey']
 export const TOKEN_TEXTS = {
   once: 'Токен показывается один раз: закроете экран — увидеть его снова будет нельзя.',
   commandHint: 'Выполните на роутере — в SSH или в терминале панели awg-manager:',
-  after: 'Владельца роутеру назначают потом — в «Обслуживание и доступы» → «Доступ».',
+  after: 'Владельца роутеру назначают потом — во вкладке «Управление» → «Доступ».',
 }
 
 const INSTALL_STEPS = ['path', 'router', 'access', 'confirm']

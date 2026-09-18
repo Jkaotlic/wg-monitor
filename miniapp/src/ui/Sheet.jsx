@@ -95,7 +95,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  function start() {
+  function start(choice) {
     if (local) {
       setLocalBusy(true)
       setLocalError(null)
@@ -109,7 +109,8 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
         setValues(fresh)
       }
       Promise.resolve()
-        .then(() => sheet.perform(typedNow, submitted))
+        // Выбор листа вариантов -- третьим аргументом; у обычного листа его нет.
+        .then(() => (choice === undefined ? sheet.perform(typedNow, submitted) : sheet.perform(typedNow, submitted, choice)))
         .then((resp) => {
           if (sheet.onDone) sheet.onDone(resp)
           if (alive.current) close()
@@ -231,17 +232,37 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
                 />
               </div>
             )}
-            <div class="sheet-actions">
-              <button type="button" class="btn btn-ghost" disabled={localBusy} onClick={dismiss}>Отмена</button>
-              <button
-                type="button"
-                class={`btn ${sheet.danger ? 'btn-danger' : 'btn-primary'}`}
-                disabled={!ready || localBusy}
-                onClick={start}
-              >
-                {localBusy ? (sheet.busyLabel || 'Сохраняем…') : sheet.buttonLabel}
-              </button>
-            </div>
+            {local && sheet.choices?.length > 0 ? (
+              // Лист выбора: варианты столбиком, каждый выполняется сразу.
+              <div class="sheet-choices">
+                {sheet.choices.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    class={`btn btn-wide ${c.danger ? 'btn-danger' : 'btn-ghost'}`}
+                    disabled={localBusy}
+                    onClick={() => start(c.value)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                <button type="button" class="btn btn-ghost btn-wide sheet-choices-cancel" disabled={localBusy} onClick={dismiss}>
+                  Отмена
+                </button>
+              </div>
+            ) : (
+              <div class="sheet-actions">
+                <button type="button" class="btn btn-ghost" disabled={localBusy} onClick={dismiss}>Отмена</button>
+                <button
+                  type="button"
+                  class={`btn ${sheet.danger ? 'btn-danger' : 'btn-primary'}`}
+                  disabled={!ready || localBusy}
+                  onClick={() => start()}
+                >
+                  {localBusy ? (sheet.busyLabel || 'Сохраняем…') : sheet.buttonLabel}
+                </button>
+              </div>
+            )}
           </>
         )}
 

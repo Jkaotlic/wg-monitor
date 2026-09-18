@@ -1,4 +1,4 @@
-import { initialNav, normalizeTab, deepLinkOverlay, TABS, OPEN_OVERLAYS, URL_FLEET_OVERLAYS } from './nav.js'
+import { initialNav, normalizeTab, deepLinkOverlay, TABS, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS } from './nav.js'
 
 // Адрес веб-управления -- то же, что deep-link из тревоги, плюс вкладка:
 // ?router=<id>&tab=<tab>&open=<overlay>. Лист подтверждения в адрес не
@@ -14,16 +14,22 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
   const tab = normalizeTab(params.get('tab'))
   const open = params.get('open')
   // Слой парка с адресом («Свои VPN-серверы») открывается и без роутера.
-  // Возврат -- в «Обслуживание», если роутер выбран (Парк живёт там), иначе
+  // Возврат -- к списку роутеров, если роутер выбран (Парк живёт там), иначе
   // к сводке.
   if (isAdmin && URL_FLEET_OVERLAYS.includes(open)) {
     if (state.routerID != null && TABS.includes(tab)) state.tab = tab
     state.overlay = open
-    state.overlayParams = { returnTo: state.routerID != null ? 'admin' : null }
+    state.overlayParams = { returnTo: state.routerID != null ? 'fleet' : null }
     return state
   }
   if (state.routerID == null) return state
   if (TABS.includes(tab)) state.tab = tab
+  // Настройки и «Обслуживание» стали вкладкой «Управление»: старая ссылка из
+  // уведомления открывает её, а не пустой экран.
+  if (OVERLAY_TABS[open]) {
+    state.tab = OVERLAY_TABS[open]
+    return state
+  }
   state.overlay = deepLinkOverlay(search ?? '', state)
   return state
 }

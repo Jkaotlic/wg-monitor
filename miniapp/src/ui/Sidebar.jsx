@@ -2,13 +2,14 @@ import { fleetRow } from '../fleet.js'
 import { emptyFilterText } from '../fleetFilter.js'
 import { useFleetFilter } from '../useFleetFilter.js'
 import { FleetFilterBar } from './FleetFilterBar.jsx'
+import { PanelLine } from './PanelLine.jsx'
 
 // Боковая колонка широкой раскладки: бренд, поиск и список роутеров (тот же
 // порядок и те же слова, что в «Моих роутерах»), внизу Парк и выход. Колонка
 // нужна и при одном роутере: Парк и «Выйти» живут здесь.
 //
 // «Парк» не гаснет никогда: Парк -- про весь флот и от выбранного роутера не
-// зависит. Куда он ведёт при пустом выборе, решает оболочка (WideLayout).
+// зависит. Ведёт он на сводку (#park), куда -- решает оболочка (WideLayout).
 //
 // Поиск -- только когда искать есть в чём (два роутера и больше).
 export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick, onPark, onLogout, shortcut = true }) {
@@ -50,6 +51,7 @@ export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick,
             <span class={`side-dot side-dot-${r.pill.tone}`} aria-hidden="true" />
             <span class="side-row-main">
               <span class="side-row-name">{r.nickname}</span>
+              <PanelLine url={r.panelURL} nested />
               <span class="side-row-state">{r.pill.text}</span>
             </span>
           </button>

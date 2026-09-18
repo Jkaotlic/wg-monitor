@@ -295,13 +295,13 @@ describe('Парк: переустановить агент сейчас', () =>
 })
 
 async function mountAdmin(openLayer, onOpenAgentConnection) {
-  const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+  const { RouterAdminSections } = await import('../src/screens/RouterAdminSections.jsx')
   const sheets = []
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
     render(
-      <AdminOverlay routerID={22} routerName="home" isAdmin onClose={() => {}} openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />,
+      <RouterAdminSections routerID={22} routerName="home" isAdmin openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />,
       root,
     )
   })
@@ -309,7 +309,7 @@ async function mountAdmin(openLayer, onOpenAgentConnection) {
   return { root, sheets }
 }
 
-describe('Обслуживание: перенаправить агента', () => {
+describe('Управление: перенаправить агента', () => {
 
   it('свёрнуто под «Опасное»; адрес без https не пускает; запуск открывает «Ход работы»', async () => {
     const opened = []
@@ -340,10 +340,10 @@ describe('Обслуживание: перенаправить агента', ()
   })
 
   it('не админу «Опасного» нет', async () => {
-    const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+    const { RouterAdminSections } = await import('../src/screens/RouterAdminSections.jsx')
     const root = document.createElement('div')
     document.body.appendChild(root)
-    await act(async () => render(<AdminOverlay routerID={22} routerName="home" isAdmin={false} onClose={() => {}} openSheet={() => {}} />, root))
+    await act(async () => render(<RouterAdminSections routerID={22} routerName="home" isAdmin={false} openSheet={() => {}} />, root))
     await flush()
     expect(root.querySelector('details.danger-zone')).toBe(null)
     cleanup(root)

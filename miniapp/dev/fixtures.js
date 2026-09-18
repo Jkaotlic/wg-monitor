@@ -19,6 +19,9 @@ export const ROUTERS = [
     last_seen_at: agoISO(12),
     last_seen_age_sec: 12,
     active_incidents: [{ check_name: 'hydraroute', fail_count: 3 }],
+    // Адрес панели -- владельцу и админу (v0.41), строкой под именем.
+    panel_url: 'https://awg.example.com',
+    reserve_only_alert: false,
     checks: [
       { check_name: 'dns', status: 'ok' },
       { check_name: 'external_reach', status: 'ok' },
@@ -788,9 +791,10 @@ export function respond(method, path) {
       // агент ниже пола версии сделает не то, что показано.
       agent_version: 'v0.31.0',
       role: 'admin',
-      // Признаки панели, а не адрес: адрес в ответ настроек не входит.
+      // Адрес панели -- владельцу и админу (v0.41); panel_scope -- частный ли.
       panel_known: true,
       panel_scope: 'public',
+      panel_url: 'https://awg.example.com',
     }
   }
   // Срез версий. Числа живые (рабочий роутер, 12.09.2026): панель 2.18.2+r2,

@@ -1,5 +1,7 @@
 import { Overlay } from '../ui/Overlay.jsx'
 import { Chip } from '../ui/Chip.jsx'
+import { PanelLine } from '../ui/PanelLine.jsx'
+import { ParkSection } from './ParkSection.jsx'
 import { FleetFilterBar } from '../ui/FleetFilterBar.jsx'
 import { sortByUrgency, fleetRow, batchProgress } from '../fleet.js'
 import { emptyFilterText } from '../fleetFilter.js'
@@ -15,7 +17,11 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 //
 // Поиск и фильтры сужают только список; заголовок и «Опросить все» говорят
 // про весь парк -- иначе «все в порядке» читалось бы про отфильтрованных.
-export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true }) {
+//
+// Админу под списком -- Парк (v0.41): он про весь флот, и держать его в
+// «Обслуживании» одного роутера значило искать его не там. Список поэтому
+// открывается админу и при одном роутере.
+export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false, openSheet, openLayer, onOpenConnection }) {
   const all = sortByUrgency(routers).map(fleetRow)
   const broken = all.filter((r) => r.pill.tone === 'danger').length
   const f = useFleetFilter(routers)
@@ -57,6 +63,7 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
                     <span class="row-title">{r.nickname}</span>
                     <Chip tone={r.pill.tone}>{r.pill.text}</Chip>
                   </span>
+                  <PanelLine url={r.panelURL} nested />
                   <span class="fleet-sub">{r.sub}</span>
                 </span>
                 <svg class="list-row-chevron" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -86,6 +93,12 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
                 'Каждый роутер переспросит себя сам. Ничего не меняет; спящие ответят, когда проснутся.'}
             </p>
           </>
+        )}
+
+        {isAdmin && (
+          <div class="fleet-park" id="park">
+            <ParkSection openSheet={openSheet} onOpenRouter={onPick} currentID={currentID} openLayer={openLayer} onOpenConnection={onOpenConnection} />
+          </div>
         )}
       </div>
     </Overlay>

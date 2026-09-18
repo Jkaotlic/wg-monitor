@@ -104,7 +104,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
   }
 
   return (
-    <Overlay title="Настройки агента" backLabel="Обслуживание" onBack={onClose}>
+    <Overlay title="Настройки агента" backLabel="Управление" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">{routerName || 'Роутер'}</h1>
 

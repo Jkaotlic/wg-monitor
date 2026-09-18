@@ -1,11 +1,13 @@
 import { TABS, tabLabel } from '../nav.js'
 import { fleetRow } from '../fleet.js'
 import { Chip } from './Chip.jsx'
-import { GearIcon } from './GearIcon.jsx'
+import { PanelLine } from './PanelLine.jsx'
 
 // Шапка основной области: какой роутер, в каком он состоянии и что с ним --
-// одной строкой; справа вкладки (вместо нижнего таббара) и настройки.
-export function WideHeader({ router, tab, onTab, onSettings }) {
+// одной строкой; справа вкладки (вместо нижнего таббара). Шестерёнки больше
+// нет: настройки стали вкладкой «Управление» (v0.41). Под именем -- адрес
+// панели awg-manager, если сервер его отдал.
+export function WideHeader({ router, tab, onTab }) {
   const row = fleetRow(router)
   return (
     <header class="main-head">
@@ -14,6 +16,7 @@ export function WideHeader({ router, tab, onTab, onSettings }) {
           <h1 class="main-head-name">{row.nickname}</h1>
           <Chip tone={row.pill.tone}>{row.pill.text}</Chip>
         </div>
+        <PanelLine url={row.panelURL} />
         <p class="main-head-sub">{row.sub}</p>
       </div>
       <nav class="main-tabs" aria-label="Вкладки">
@@ -29,9 +32,6 @@ export function WideHeader({ router, tab, onTab, onSettings }) {
           </button>
         ))}
       </nav>
-      <button type="button" class="main-gear" onClick={onSettings} aria-label="Настройки">
-        <GearIcon size={18} />
-      </button>
     </header>
   )
 }

@@ -1,7 +1,9 @@
 import { tabLabel } from '../nav.js'
+import { GearIcon } from './GearIcon.jsx'
 
 // Нижняя навигация. Четыре таба -- четыре вопроса оператора: что с роутером,
-// куда идёт трафик, что показывает диагностика, что происходило раньше.
+// куда идёт трафик, что показывает диагностика, что происходило раньше; пятый
+// -- «Управление»: настройки, обслуживание и доступы этого роутера.
 const ICONS = {
   router: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
@@ -28,6 +30,7 @@ const ICONS = {
       <path d="M 9 18.5 a 2 2 0 0 0 4 0" />
     </svg>
   ),
+  manage: <GearIcon size={22} />,
 }
 
 

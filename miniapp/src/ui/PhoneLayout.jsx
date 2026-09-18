@@ -11,9 +11,8 @@ export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout, refresh
   return (
     <>
       <Header
-        fleetVisible={routers.length > 1}
+        fleetVisible={routers.length > 1 || Boolean(isAdmin)}
         onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })}
-        onSettings={nav.routerID != null ? () => dispatch({ type: 'overlay', overlay: 'settings' }) : undefined}
         onLogout={onLogout}
       />
       <div class="app-body">

@@ -1,0 +1,130 @@
+{
+ "router": {
+  "id": 56,
+  "nickname": "router-a",
+  "status": "alert",
+  "last_seen_at": "2026-09-18T07:58:53.95466096Z",
+  "last_seen_age_sec": 33,
+  "agent_version": "v0.40.0",
+  "kind": "static"
+ },
+ "incidents": [
+  {
+   "check_name": "tunnel_awg10",
+   "hard_since": "2026-09-18T07:39:08.387808226Z",
+   "fail_count": 22,
+   "acked": false
+  }
+ ],
+ "events": {
+  "checks": [
+   {
+    "check_name": "agent_heartbeat",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z"
+   },
+   {
+    "check_name": "awg_manager",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z",
+    "facts": {
+     "version": "2.19.1+r2",
+     "firmware": "5.02.A.8.0-3",
+     "kmod_version": "3.1.20260906",
+     "kmod_model": "KN-1811",
+     "kmod_loaded": true
+    }
+   },
+   {
+    "check_name": "dns",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z",
+    "facts": {
+     "resolvers": 0
+    }
+   },
+   {
+    "check_name": "dns_split",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z",
+    "details": {
+     "checked_at": "2026-09-18T07:52:50Z",
+     "resolves": "ok",
+     "route": "direct",
+     "zones": {
+      "ru": "none",
+      "su": "none",
+      "tatar": "none",
+      "xn--80adxhks": "none",
+      "xn--d1acj3b": "none",
+      "xn--p1acf": "none",
+      "xn--p1ai": "none"
+     }
+    }
+   },
+   {
+    "check_name": "hydraroute",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z",
+    "facts": {
+     "routes_hr_neo": 32,
+     "routes_ndms": 0,
+     "routes_static": 0,
+     "active_backend": "kernel"
+    }
+   },
+   {
+    "check_name": "tunnel_awg10",
+    "status": "fail",
+    "ts": "2026-09-18T07:58:53Z"
+   },
+   {
+    "check_name": "tunnel_awg14",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z"
+   },
+   {
+    "check_name": "tunnels",
+    "status": "ok",
+    "ts": "2026-09-18T07:58:53Z"
+   }
+  ],
+  "tunnels": [
+   {
+    "tunnel_id": "awg10",
+    "name": "vpn-nl",
+    "status": "fail",
+    "run_state": "running",
+    "enabled": true,
+    "handshake_age_sec": 1447,
+    "ping_check_status": "disabled",
+    "ping_latency_ms": 0,
+    "default_route_intent": true,
+    "is_active_default": false,
+    "active_default_known": true,
+    "ts": "2026-09-18T07:58:53Z"
+   },
+   {
+    "tunnel_id": "awg14",
+    "name": "vpn-hip",
+    "status": "ok",
+    "run_state": "running",
+    "enabled": true,
+    "handshake_age_sec": 88,
+    "ping_check_status": "disabled",
+    "ping_latency_ms": 0,
+    "matrix_latency_ms": 117,
+    "matrix_updated_at": "2026-09-18T10:58:02.378836+03:00",
+    "default_route_intent": true,
+    "is_active_default": false,
+    "active_default_known": true,
+    "note": "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу",
+    "ts": "2026-09-18T07:58:53Z"
+   }
+  ],
+  "traffic": {
+   "mode": "split",
+   "contested_default": true
+  }
+ }
+}

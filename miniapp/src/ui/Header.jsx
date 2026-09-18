@@ -1,23 +1,16 @@
-import { GearIcon } from './GearIcon.jsx'
-
 // Шапка приложения. Кнопка "Мои роутеры" появляется только когда роутеров
-// больше одного: человеку с единственным роутером список показывать незачем.
+// больше одного (или у админа: под списком живёт Парк) -- человеку с
+// единственным роутером список показывать незачем.
 //
-// Шестерёнка ведёт в настройки роутера, а не приложения: настраивать в самом
-// мини-аппе нечего, а пороги, версии и обслуживание -- ровно то, за чем
-// человек раньше шёл в бота.
+// Шестерёнки в шапке больше нет: настройки роутера стали пятой вкладкой
+// «Управление» внизу (v0.41).
 //
 // «Выйти» -- только в веб-управлении (onLogout передаёт оболочка web): в
 // Telegram выходить не из чего, личность там -- сам Telegram.
-export function Header({ fleetVisible, onFleet, onSettings, onLogout }) {
+export function Header({ fleetVisible, onFleet, onLogout }) {
   return (
     <div class="app-header">
       <span class="app-header-brand">wg-monitor</span>
-      {onSettings && (
-        <button type="button" class="app-header-gear" onClick={onSettings} aria-label="Настройки">
-          <GearIcon />
-        </button>
-      )}
       {fleetVisible && (
         <button type="button" class="app-header-fleet" onClick={onFleet}>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">

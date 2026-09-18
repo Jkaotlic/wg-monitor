@@ -16,7 +16,7 @@ describe('urlFromNav', () => {
   })
 
   it('оверлей роутера пишется, лист и список роутеров -- нет', () => {
-    expect(urlFromNav({ routerID: 7, tab: 'diag', overlay: 'admin', sheet: { title: 'Точно?' } })).toBe('?router=7&tab=diag&open=admin')
+    expect(urlFromNav({ routerID: 7, tab: 'diag', overlay: 'agentcfg', sheet: { title: 'Точно?' } })).toBe('?router=7&tab=diag&open=agentcfg')
     expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'fleet', sheet: null })).toBe('?router=7')
   })
 })
@@ -66,14 +66,15 @@ describe('круговое свойство', () => {
   })
 
   it('открытый лист теряется при круге -- обновление страницы не повторяет подтверждение', () => {
-    const s = { routerID: 7, tab: 'router', overlay: 'settings', sheet: { title: 'Перезагрузить?' } }
+    const s = { routerID: 7, tab: 'manage', overlay: null, sheet: { title: 'Перезагрузить?' } }
     expect(navFromURL(urlFromNav(s), IDS).sheet).toBe(null)
   })
 })
 
 describe('слои без адреса', () => {
   it('мастер и ход работы в адрес не пишутся -- пишется слой, откуда их открыли', () => {
-    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'provision', overlayParams: { returnTo: 'admin' }, sheet: null })).toBe('?router=7&open=admin')
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'provision', overlayParams: { returnTo: 'selfhosted' }, sheet: null })).toBe('?router=7&open=selfhosted')
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'provision', overlayParams: { returnTo: 'fleet' }, sheet: null })).toBe('?router=7')
     expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'job', overlayParams: { jobId: 'secret-job', title: 'x', returnTo: null }, sheet: null })).toBe('?router=7')
     expect(urlFromNav({ routerID: null, tab: 'router', overlay: 'backenddeploy', overlayParams: { targetVersion: 'v0.36.0' }, sheet: null })).toBe('')
   })
@@ -114,11 +115,11 @@ describe('кабинет и свои серверы в адресе', () => {
     expect(s.overlayParams).toEqual({ returnTo: null })
   })
 
-  it('свои серверы с роутером -- возврат в «Обслуживание»', () => {
+  it('свои серверы с роутером -- возврат к списку роутеров (там Парк)', () => {
     expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: 'admin' }, sheet: null })).toBe('?router=7&open=selfhosted')
     const s = navFromURL('?router=7&open=selfhosted', IDS, ADMIN)
     expect(pick(s)).toEqual({ routerID: 7, tab: 'router', overlay: 'selfhosted', sheet: null })
-    expect(s.overlayParams).toEqual({ returnTo: 'admin' })
+    expect(s.overlayParams).toEqual({ returnTo: 'fleet' })
   })
 
   it('экран сервера в адрес не пишется -- остаётся список; id сервера в адресе нет', () => {
@@ -131,7 +132,7 @@ describe('кабинет и свои серверы в адресе', () => {
   it('один роутер: ?open=selfhosted открывает список поверх него', () => {
     const s = navFromURL('?open=selfhosted', [5], ADMIN)
     expect(pick(s)).toEqual({ routerID: 5, tab: 'router', overlay: 'selfhosted', sheet: null })
-    expect(s.overlayParams).toEqual({ returnTo: 'admin' })
+    expect(s.overlayParams).toEqual({ returnTo: 'fleet' })
   })
 
   it('круг для своих серверов', () => {
@@ -141,5 +142,21 @@ describe('кабинет и свои серверы в адресе', () => {
     ]) {
       expect(urlFromNav(navFromURL(urlFromNav(s), IDS, ADMIN))).toBe(urlFromNav(s))
     }
+  })
+})
+
+// Старые уведомления в личке несут ?open=settings и ?open=admin: настройки и
+// «Обслуживание» стали вкладкой «Управление», и ссылка обязана вести туда.
+describe('старые ссылки на настройки', () => {
+  it('open=settings и open=admin открывают вкладку «Управление»', () => {
+    for (const o of ['settings', 'admin']) {
+      expect(pick(navFromURL(`?router=7&open=${o}`, IDS))).toEqual({ routerID: 7, tab: 'manage', overlay: null, sheet: null })
+      expect(pick(navFromURL(`?router=7&tab=diag&open=${o}`, IDS))).toEqual({ routerID: 7, tab: 'manage', overlay: null, sheet: null })
+    }
+  })
+
+  it('вкладка пишется в адрес и читается обратно', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'manage', overlay: null, sheet: null })).toBe('?router=7&tab=manage')
+    expect(pick(navFromURL('?router=7&tab=manage', IDS))).toEqual({ routerID: 7, tab: 'manage', overlay: null, sheet: null })
   })
 })
