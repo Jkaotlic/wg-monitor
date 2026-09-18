@@ -213,30 +213,45 @@ export function firmwareStatus(output) {
   }
 }
 
-// Панель роутера. Адреса здесь нет и быть не может: сервер прислал только
-// признаки, а переход делает он же -- по одноразовому билету во внешнем
-// браузере (internal/backend/miniapp_panel_ticket.go).
+// Адрес панели awg-manager. С v0.41 сервер отдаёт его владельцу роутера и
+// админу (panel_url); оператору роутера -- нет, и строки у него нет вовсе.
+// Открывается напрямую во внешнем браузере: панель спросит свой логин.
+// Принимаются только http(s): иной адрес в ответе -- не панель.
+export function panelLink(url) {
+  const raw = String(url ?? '').trim()
+  if (!raw) return ''
+  try {
+    const u = new URL(raw)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : ''
+  } catch {
+    return ''
+  }
+}
+
+// Хост -- то, что человек узнаёт (awg.example.com), без схемы и пути.
+export function panelHost(url) {
+  const link = panelLink(url)
+  return link ? new URL(link).host : ''
+}
+
+export const PANEL_PRIVATE_HINT = 'откроется только из домашней сети'
+
+// Строка «Панель роутера» в «Управлении»: адрес известен -- хост и
+// подсказка про частный адрес; нет -- честно «не сохранён».
 export function panelRow(settings) {
-  if (!settings?.panel_known) {
+  const url = panelLink(settings?.panel_url)
+  if (!url) {
     return {
       known: false,
-      value: 'адрес не сохранён',
+      url: '',
+      host: '',
       hint: 'Мы не знаем адрес панели этого роутера, поэтому открыть её из приложения нельзя.',
     }
   }
   return {
     known: true,
-    value: 'известна',
-    hint: settings.panel_scope === 'private' ? 'Адрес панели частный: она откроется только из домашней сети роутера.' : '',
+    url,
+    host: panelHost(url),
+    hint: settings.panel_scope === 'private' ? PANEL_PRIVATE_HINT : '',
   }
-}
-
-// panelOpenURL -- абсолютный адрес билета для tg.openLink. Сервер отдаёт путь,
-// а не адрес: публичный адрес бэкенда за релеем знает браузер. Принимается
-// только путь этого же сайта -- чужой адрес в ответе значил бы, что ответ
-// подменён.
-export function panelOpenURL(openPath, origin) {
-  const p = String(openPath ?? '')
-  if (!p.startsWith('/v1/panel/') || p.startsWith('//')) return ''
-  return origin + p
 }

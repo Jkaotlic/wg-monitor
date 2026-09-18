@@ -101,6 +101,17 @@ describe('несущий известен', () => {
   })
 })
 
+describe('reserve_tunnel_ids -- omitempty', () => {
+  // Бэкенд не пишет пустой список: при названном несущем в раздельной
+  // маршрутизации отсутствие поля значит «живых запасных нет».
+  it('поля нет при названном несущем -- резерва нет, а не «любой running»', () => {
+    const traffic = { ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
+    const s = screen(traffic)
+    expect(s.reserve).toBeUndefined()
+    expect(s.headline.tag).toBe('всё работает, резерва нет')
+  })
+})
+
 describe('строка списка роутеров', () => {
   it('тревога только по запасному -- янтарное «резерв не работает»', () => {
     const r = fleetRow({ id: 1, nickname: 'w', status: 'alert', last_seen_age_sec: 5, reserve_only_alert: true, active_incidents: [{ check_name: 'tunnel_awg10' }] })

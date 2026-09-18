@@ -30,7 +30,7 @@ async function mount(traffic) {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <RouterDetail id={56} openSheet={() => {}} onTab={() => {}} />
+        <RouterDetail id={56} panelURL="https://awg.example.com" openSheet={() => {}} onTab={() => {}} />
       </AppContext.Provider>,
       root,
     ),
@@ -57,6 +57,8 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
     expect(root.querySelector('.stat-grid').textContent).toContain('117')
     expect(root.querySelector('.hero').textContent).toContain('всё работает, резерва нет')
     expect(root.textContent).toContain('Запасного VPN-туннеля нет')
+    // Адрес панели -- строкой под именем роутера в шапке телефона.
+    expect(root.querySelector('.hero .panel-line').textContent).toBe('awg.example.com')
     render(null, root)
     root.remove()
   })

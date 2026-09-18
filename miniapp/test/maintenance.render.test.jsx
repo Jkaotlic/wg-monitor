@@ -12,7 +12,7 @@ vi.mock('../src/api.js', async (importOriginal) => ({
   fetchRouterVersions: () => Promise.resolve(mocks.versions),
 }))
 
-const { SettingsScreen } = await import('../src/screens/SettingsScreen.jsx')
+const { SettingsSections } = await import('../src/screens/SettingsScreen.jsx')
 const { MAINT_TEXTS } = await import('../src/maintenance.js')
 
 const AWGM_ROW = { component: 'awgmgr', name: 'awg-manager', installed: '2.19.0+r2', available: '2.19.1' }
@@ -26,7 +26,7 @@ async function mount({ settings = OPERATOR, versions = VERSIONS, routerName = 'h
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
-    render(<SettingsScreen routerID={2} routerName={routerName} asleep={false} openSheet={(s) => sheets.push(s)} onClose={() => {}} />, root)
+    render(<SettingsSections routerID={2} routerName={routerName} asleep={false} openSheet={(s) => sheets.push(s)} />, root)
   })
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
   return { root, sheets, unmount: () => { render(null, root); root.remove() } }

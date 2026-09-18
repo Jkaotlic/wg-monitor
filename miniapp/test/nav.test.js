@@ -110,7 +110,7 @@ describe('backButtonVisible', () => {
 // потом -- "что через неё идёт".
 describe('переименование таба маршрутов в туннели', () => {
   it('в списке табов есть tunnels и нет routes', () => {
-    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events'])
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events', 'manage'])
   })
 
   it('переключение на tunnels работает', () => {
@@ -137,8 +137,9 @@ describe('переименование таба маршрутов в тунне
 // открыть вовсе. Меняются только подписи -- слова для человека.
 describe('подписи вкладок', () => {
   it('человеческие, а ключи прежние', () => {
-    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events'])
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events', 'manage'])
     expect(tabLabel('router')).toBe('Сейчас')
+    expect(tabLabel('manage')).toBe('Управление')
     expect(tabLabel('tunnels')).toBe('VPN-туннели')
     expect(tabLabel('diag')).toBe('Проверки')
     expect(tabLabel('events')).toBe('Что было')
@@ -153,11 +154,13 @@ describe('подписи вкладок', () => {
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
   it('открывает любой оверлей роутера, но только вместе с роутером', () => {
-    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']) {
+    for (const o of ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']) {
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
     }
-    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet'])
+    expect(OPEN_OVERLAYS).toEqual(['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet'])
+    // Настройки и «Обслуживание» стали вкладкой: слоем их по адресу не открыть.
+    expect(deepLinkOverlay('?router=7&open=settings', { routerID: 7 })).toBe(null)
   })
 
   it('без open и с неизвестным open -- ничего', () => {
@@ -231,15 +234,18 @@ describe('слои парка', () => {
   it('параметры слоя кладутся рядом с ним и уходят вместе с ним', () => {
     const s = navReducer(base, { type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка', returnTo: 'admin' } })
     expect(s).toEqual({ ...base, overlay: 'job', overlayParams: { jobId: 'j1', title: 'Установка', returnTo: 'admin' } })
-    const plain = navReducer(s, { type: 'overlay', overlay: 'admin' })
-    expect(plain).toEqual({ ...base, overlay: 'admin' })
+    const plain = navReducer(s, { type: 'overlay', overlay: 'fleet' })
+    expect(plain).toEqual({ ...base, overlay: 'fleet' })
     expect('overlayParams' in plain).toBe(false)
   })
 
   it('«назад» со слоя парка -- туда, откуда пришли', () => {
-    const s = { ...base, routerID: 3, overlay: 'provision', overlayParams: { returnTo: 'admin' } }
+    const s = { ...base, routerID: 3, overlay: 'provision', overlayParams: { returnTo: 'fleet' } }
     const back = navReducer(s, { type: 'back' })
-    expect(back).toEqual({ ...base, routerID: 3, overlay: 'admin' })
+    expect(back).toEqual({ ...base, routerID: 3, overlay: 'fleet' })
+    // Старый возврат «в Обслуживание» ведёт к списку роутеров: Парк теперь там.
+    const legacy = navReducer({ ...s, overlayParams: { returnTo: 'admin' } }, { type: 'back' })
+    expect(legacy).toEqual({ ...base, routerID: 3, overlay: 'fleet' })
     const fromHome = navReducer({ ...base, overlay: 'job', overlayParams: { jobId: 'j', returnTo: null } }, { type: 'back' })
     expect(fromHome).toEqual(base)
   })
@@ -305,7 +311,7 @@ describe('закреплённый слой', () => {
   it('действие с unpin выпускает: мастер -- в «Ход работы», раскатка -- «Вернуться»', () => {
     const job = navReducer(busyWizard, { type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 't', returnTo: 'admin' }, unpin: true })
     expect(job).toEqual({ ...base, overlay: 'job', overlayParams: { jobId: 'j1', title: 't', returnTo: 'admin' } })
-    expect(navReducer(deploy, { type: 'overlay', overlay: 'admin', unpin: true })).toEqual({ ...base, overlay: 'admin' })
+    expect(navReducer(deploy, { type: 'overlay', overlay: 'fleet', unpin: true })).toEqual({ ...base, overlay: 'fleet' })
   })
 })
 
@@ -332,7 +338,7 @@ describe('кабинет и свои серверы', () => {
     }
     const list = navReducer(s, { type: 'back' })
     expect(list).toEqual({ ...base, routerID: 3, overlay: 'selfhosted', overlayParams: { returnTo: 'admin' } })
-    expect(navReducer(list, { type: 'back' })).toEqual({ ...base, routerID: 3, overlay: 'admin' })
+    expect(navReducer(list, { type: 'back' })).toEqual({ ...base, routerID: 3, overlay: 'fleet' })
   })
 
   it('returnParams без returnTo не создают слой из ничего', () => {
@@ -379,3 +385,19 @@ describe('занятый лист', () => {
   })
 })
 
+
+// v0.41: настройки и «Обслуживание и доступы» стали вкладкой «Управление».
+describe('вкладка «Управление»', () => {
+  const base = { routerID: 3, tab: 'router', overlay: null, sheet: null }
+
+  it('слой settings или admin открывает вкладку, а не крышку', () => {
+    for (const o of ['settings', 'admin', 'manage']) {
+      expect(navReducer(base, { type: 'overlay', overlay: o })).toEqual({ ...base, tab: 'manage' })
+    }
+  })
+
+  it('экраны глубже «Управления» закрываются во вкладку', () => {
+    const s = { ...base, tab: 'router', overlay: 'agentcfg' }
+    expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage' })
+  })
+})

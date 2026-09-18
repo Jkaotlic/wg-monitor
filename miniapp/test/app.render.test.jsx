@@ -41,8 +41,9 @@ vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <d
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: () => <div class="stub">VPN-туннели</div> }))
 vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">Проверки</div> }))
 vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: () => <div class="stub">Что было</div> }))
-vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsScreen: () => <div class="stub stub-settings">Настройки роутера</div> }))
-vi.mock('../src/screens/AdminOverlay.jsx', () => ({ AdminOverlay: () => <div class="stub stub-admin">Обслуживание</div> }))
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => <div class="stub stub-settings">Настройки роутера</div> }))
+vi.mock('../src/screens/RouterAdminSections.jsx', () => ({ RouterAdminSections: () => <div class="stub stub-admin">Обслуживание</div> }))
+vi.mock('../src/screens/AgentConfigScreen.jsx', () => ({ AgentConfigScreen: () => <div class="stub stub-agentcfg">Настройки агента</div> }))
 
 const { ApiError } = await import('../src/api.js')
 const { __real: real } = await import('../src/api.js')
@@ -139,8 +140,8 @@ describe('оболочка: веб-управление', () => {
   })
 
   it('место из адреса открывается сразу: роутер, вкладка, оверлей', async () => {
-    const root = await mountAt('/dashboard/?router=2&open=settings')
-    expect(root.querySelector('.stub-settings')).toBeTruthy()
+    const root = await mountAt('/dashboard/?router=2&open=agentcfg')
+    expect(root.querySelector('.stub-agentcfg')).toBeTruthy()
     cleanup(root)
   })
 
@@ -164,11 +165,11 @@ describe('оболочка: веб-управление', () => {
   })
 
   it('Esc закрывает оверлей', async () => {
-    const root = await mountAt('/dashboard/?router=2&open=admin')
-    expect(root.querySelector('.stub-admin')).toBeTruthy()
+    const root = await mountAt('/dashboard/?router=2&open=agentcfg')
+    expect(root.querySelector('.stub-agentcfg')).toBeTruthy()
     await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
     await flush()
-    expect(root.querySelector('.stub-admin')).toBe(null)
+    expect(root.querySelector('.stub-agentcfg')).toBe(null)
     expect(window.location.search).toBe('?router=2')
     cleanup(root)
   })
@@ -265,10 +266,20 @@ describe('оболочка: Telegram', () => {
     cleanup(root)
   })
 
-  it('ссылка из тревоги: tab=routes и open=settings открываются и в Telegram', async () => {
-    const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
+  it('ссылка из тревоги: tab=routes открывается и в Telegram', async () => {
+    const root = await mountAt('/miniapp/?router=2&tab=routes')
     expect(root.querySelector('.app-body .stub').textContent).toBe('VPN-туннели')
-    expect(root.querySelector('.stub-settings')).toBeTruthy()
+    cleanup(root)
+  })
+
+  // Старые уведомления в личке несут open=settings: настройки теперь --
+  // вкладка «Управление» внизу, шестерёнки в шапке нет.
+  it('старая ссылка open=settings открывает вкладку «Управление»', async () => {
+    const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
+    expect(root.querySelector('.app-body .stub-settings')).toBeTruthy()
+    expect(root.querySelector('.app-body .stub-admin')).toBeTruthy()
+    expect(root.querySelector('.tabbar-item-active').textContent).toBe('Управление')
+    expect(root.querySelector('.app-header-gear')).toBe(null)
     cleanup(root)
   })
 })

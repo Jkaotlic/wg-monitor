@@ -106,7 +106,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   return (
-    <Overlay title="Сброс DNS" backLabel="Обслуживание" onBack={onClose}>
+    <Overlay title="Сброс DNS" backLabel="Управление" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">{routerName || 'Роутер'}</h1>
         {loadError && <p class="state state-error">{loadError}</p>}

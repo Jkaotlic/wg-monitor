@@ -60,6 +60,17 @@ function tunnelBranch({ line, incidents, stale }) {
   return isRunning(line) ? 'up' : 'down'
 }
 
+// Живые запасные звенья политики несущего по слову бэкенда, или null, если
+// бэкенд их не считал. Поле omitempty: при раздельной маршрутизации с
+// названным несущим его отсутствие значит «живых запасных нет» -- так
+// бэкенд отвечает и старым агентам, у которых несущий назван потому, что
+// живой туннель один.
+export function reserveIDs({ traffic, tunnels }) {
+  if (Array.isArray(traffic?.reserve_tunnel_ids)) return traffic.reserve_tunnel_ids
+  if (traffic?.mode === 'split' && carrierKnown({ traffic, tunnels })) return []
+  return null
+}
+
 // Запасной VPN-туннель -- ответ на «а если этот ляжет». Новый бэкенд знает
 // запасные звенья политики несущего и отдаёт живые в reserve_tunnel_ids: им и
 // верим. Без поля (старый агент) -- любой ЖИВОЙ туннель, кроме несущего; когда
@@ -67,9 +78,8 @@ function tunnelBranch({ line, incidents, stale }) {
 // его -- угадать ({ tunnel_id: '' }). Раньше резервом считался любой running,
 // и мёртвое звено объявлялось «готовым подхватить».
 export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' }) {
-  if (Array.isArray(traffic?.reserve_tunnel_ids)) {
-    return tunnels.find((t) => traffic.reserve_tunnel_ids.includes(t.tunnel_id))
-  }
+  const ids = reserveIDs({ traffic, tunnels })
+  if (ids) return tunnels.find((t) => ids.includes(t.tunnel_id))
   const alive = tunnels.filter((t) => isAlive(t, incidents))
   if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== traffic?.egress_tunnel_id)
   return alive.length > 1 ? { tunnel_id: '' } : undefined

@@ -9,7 +9,7 @@
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy, pluralRu } from './labels.js'
-import { carrierKnown, isAlive } from './trafficPath.js'
+import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
 
 export function routerHeadline({ router, traffic, incidents = [], tunnels = [] } = {}) {
   const age = router?.last_seen_age_sec
@@ -60,9 +60,9 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [] }
         if (isAlive(carrier, incidents)) {
           const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
           const deadName = lineName(dead) || name.slice('tunnel_'.length)
-          const reserves = Array.isArray(traffic.reserve_tunnel_ids)
-            ? traffic.reserve_tunnel_ids
-            : tunnels.filter((t) => t !== carrier && isAlive(t, incidents)).map((t) => t.tunnel_id)
+          const reserves =
+            reserveIDs({ traffic, tunnels }) ??
+            tunnels.filter((t) => t !== carrier && isAlive(t, incidents)).map((t) => t.tunnel_id)
           if (reserves.length === 0) {
             return {
               tone: 'warn',

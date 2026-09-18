@@ -18,7 +18,7 @@ import { Stat } from '../ui/Stat.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
-import { ListRow } from '../ui/ListRow.jsx'
+import { PanelLine } from '../ui/PanelLine.jsx'
 import { tunnelHealth } from './tunnelHealth.js'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
@@ -545,7 +545,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 }
 
 
-export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, openSheet, onTab }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -694,6 +694,9 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
     <Hero cold={headline.cold}>
       <StateTag tone={headline.tone}>{headline.tag}</StateTag>
       {!wide && <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>}
+      {/* Адрес панели awg-manager (владельцу и админу): нажатие открывает её
+          во внешнем браузере. На широком экране он стоит в шапке. */}
+      {!wide && <PanelLine url={panelURL} />}
       <p class="traffic-detail" style="margin-top:6px">
         <Quoted text={headline.verdict} />
       </p>
@@ -853,18 +856,6 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       </section>
     ) : null
 
-  const adminBlock = isAdmin ? (
-    <Section title="Администрирование">
-      <ul class="card list-reset">
-        <ListRow
-          title="Обслуживание и доступы"
-          sub="парк, обновление агентов, владелец и операторы"
-          onClick={onOpenAdmin}
-        />
-      </ul>
-    </Section>
-  ) : null
-
   if (!wide) {
     // Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
     // что сломано, потом куда идёт трафик, потом состояние туннелей, и
@@ -880,14 +871,13 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         {quickBlock}
         {compareBlock}
         {checksBlock}
-        {adminBlock}
       </div>
     )
   }
 
   // Широкий экран: слева -- что происходит (схема пути, плитки, резерв,
   // сравнение выходов, прочие проверки), справа -- что с этим делать
-  // (тревоги, быстрые действия, обслуживание). Порядок внутри колонок тот же.
+  // (тревоги, быстрые действия). Порядок внутри колонок тот же.
   return (
     <div class="screen now-grid">
       <div class="now-main">
@@ -901,7 +891,6 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       <div class="now-side">
         {incidentsBlock}
         {quickBlock}
-        {adminBlock}
       </div>
     </div>
   )

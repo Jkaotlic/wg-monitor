@@ -41,11 +41,11 @@ describe('useNavURL', () => {
     const before = window.history.length
     await act(async () => api.dispatch({ type: 'tab', tab: 'events' }))
     expect(window.location.search).toBe('?router=7&tab=events')
-    await act(async () => api.dispatch({ type: 'overlay', overlay: 'settings' }))
-    expect(window.location.search).toBe('?router=7&tab=events&open=settings')
+    await act(async () => api.dispatch({ type: 'overlay', overlay: 'routes' }))
+    expect(window.location.search).toBe('?router=7&tab=events&open=routes')
     expect(window.history.length).toBe(before + 2)
     await act(async () => api.dispatch({ type: 'sheet', sheet: { title: 'Точно?' } }))
-    expect(window.location.search).toBe('?router=7&tab=events&open=settings')
+    expect(window.location.search).toBe('?router=7&tab=events&open=routes')
     expect(window.history.length).toBe(before + 2)
     render(null, root)
   })
@@ -59,23 +59,29 @@ describe('useNavURL', () => {
 
   it('«назад» браузера над закреплённым мастером: навигация на месте, адрес возвращён', async () => {
     const root = await mount()
-    await act(async () => api.dispatch({ type: 'overlay', overlay: 'admin' }))
-    await act(async () => api.dispatch({ type: 'overlay', overlay: 'provision', params: { returnTo: 'admin' } }))
+    await act(async () => api.dispatch({ type: 'overlay', overlay: 'selfhosted' }))
+    await act(async () => api.dispatch({ type: 'overlay', overlay: 'provision', params: { returnTo: 'selfhosted' } }))
     await act(async () => api.dispatch({ type: 'pin', pinned: true }))
     const pinnedNav = api.nav
     window.history.replaceState(null, '', '/dashboard/?router=7&tab=diag')
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(api.nav).toBe(pinnedNav)
-    expect(window.location.search).toBe('?router=7&tab=diag&open=admin')
+    expect(window.location.search).toBe('?router=7&tab=diag&open=selfhosted')
     render(null, root)
   })
 
   it('popstate перечитывает навигацию из адреса', async () => {
     const root = await mount()
-    window.history.replaceState(null, '', '/dashboard/?router=3&open=admin')
+    window.history.replaceState(null, '', '/dashboard/?router=3&open=agentcfg')
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     expect(api.nav.routerID).toBe(3)
-    expect(api.nav.overlay).toBe('admin')
+    expect(api.nav.overlay).toBe('agentcfg')
+    // Старая ссылка на «Обслуживание» -- вкладка «Управление».
+    window.history.replaceState(null, '', '/dashboard/?router=3&open=admin')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(api.nav.tab).toBe('manage')
+    expect(api.nav.overlay).toBe(null)
+    expect(window.location.search).toBe('?router=3&tab=manage')
     render(null, root)
   })
 

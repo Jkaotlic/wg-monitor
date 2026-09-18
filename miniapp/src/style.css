@@ -972,7 +972,9 @@ body {
   bottom: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Столбцов столько, сколько вкладок: с v0.41 их пять. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -2058,24 +2060,75 @@ body {
   color: var(--dim);
 }
 
-/* Шестерёнка в шапке: зона нажатия 44 px, сама иконка мельче -- иначе она
-   спорит с брендом и кнопкой флота за внимание. */
-.app-header-gear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  margin-left: auto;
+/* Шестерёнка из шапки ушла во вкладку «Управление» (v0.41): бренд сам
+   отжимает кнопки шапки вправо. */
+.app-header-brand {
+  margin-right: auto;
+}
+
+/* Адрес панели awg-manager строкой под именем роутера: моноширинный хост,
+   нажатие открывает панель. Длинный хост обрезается многоточием, а не
+   раздвигает строку списка за край экрана. */
+.panel-line {
+  display: block;
+  max-width: 100%;
+  margin: 2px 0 0;
+  padding: 0;
   border: none;
   background: transparent;
-  color: var(--dim);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.app-header-gear:hover,
-.app-header-gear:focus-visible {
+.panel-line:hover,
+.panel-line:focus-visible {
   color: var(--ink);
+}
+
+/* Первая строка «Управления»: адрес панели целиком кнопкой. */
+.panel-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-open-host {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-open-go {
+  flex: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* Парк под списком «Моих роутеров» (админ, телефон). */
+.fleet-park {
+  margin-top: var(--sp-5);
 }
 
 /* Строка настройки с кнопкой справа: строка данных занимает ширину, кнопка
@@ -3759,21 +3812,6 @@ body {
   .main-tab:hover { color: var(--ink); background: var(--surf2); }
   .main-tab-active,
   .main-tab-active:hover { background: var(--sig); color: var(--on-sig); }
-
-  .main-gear {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    border: 1px solid var(--line);
-    border-radius: 50%;
-    background: var(--surf);
-    color: var(--dim);
-    cursor: pointer;
-    transition: color var(--transition-fast), border-color var(--transition-fast);
-  }
-
-  .main-gear:hover { color: var(--ink); border-color: var(--border-strong); }
 
   .main-content {
     padding-top: var(--sp-5);

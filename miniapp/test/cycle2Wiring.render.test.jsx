@@ -45,13 +45,15 @@ vi.mock('../src/screens/ParkSection.jsx', () => ({
     return <div class="stub stub-park">парк</div>
   },
 }))
-vi.mock('../src/screens/AccessSection.jsx', () => ({ AccessSection: () => <div class="stub">доступ</div> }))
+vi.mock('../src/screens/AccessSection.jsx', () => ({ AccessSection: () => <div class="stub stub-access">доступ</div> }))
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => <div class="stub stub-settings">настройки</div> }))
 vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <div class="stub stub-router">Сейчас {id}</div> }))
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: () => <div class="stub">туннели</div> }))
 vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">проверки</div> }))
 vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: () => <div class="stub">события</div> }))
 
 const { OverlayHost, returnLabel } = await import('../src/screens/OverlayHost.jsx')
+const { TabBody } = await import('../src/screens/TabBody.jsx')
 const { WideLayout } = await import('../src/ui/WideLayout.jsx')
 const { PhoneLayout } = await import('../src/ui/PhoneLayout.jsx')
 const { App } = await import('../src/App.jsx')
@@ -104,22 +106,25 @@ afterEach(() => {
 
 describe('OverlayHost: слои парка', () => {
   it('подпись возврата', () => {
-    expect(returnLabel('admin')).toBe('Обслуживание')
+    expect(returnLabel('fleet')).toBe('Мои роутеры')
+    // Старый возврат «в Обслуживание» ведёт к списку: Парк теперь там.
+    expect(returnLabel('admin')).toBe('Мои роутеры')
+    expect(returnLabel('manage')).toBe('Управление')
     expect(returnLabel(null)).toBe('Роутеры')
   })
 
-  it('мастер из Обслуживания: запуск ведёт в «Ход работы» с тем же возвратом, пароли не передаются', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'provision', overlayParams: { returnTo: 'admin' } }))
+  it('мастер из «Моих роутеров»: запуск ведёт в «Ход работы» с тем же возвратом, пароли не передаются', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'provision', overlayParams: { returnTo: 'fleet' } }))
     const root = await mount(h.node)
     expect(root.querySelector('.stub-provision')).toBeTruthy()
     const p = mocks.props.provision
-    expect(p.backLabel).toBe('Обслуживание')
+    expect(p.backLabel).toBe('Мои роутеры')
     p.onStarted({ jobId: 'j1', nickname: 'dacha-1' })
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'admin' }, unpin: true })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'fleet' }, unpin: true })
     p.onBusy(true)
     expect(h.actions.pop()).toEqual({ type: 'pin', pinned: true })
     p.onClose()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'fleet' })
     p.onRegistered()
     expect(h.refreshes.n).toBe(1)
     cleanup(root)
@@ -147,7 +152,8 @@ describe('OverlayHost: слои парка', () => {
     const root = await mount(h.node)
     expect(root.querySelector('.stub-deploy').textContent).toBe('раскатка v0.36.0')
     mocks.props.deploy.onBack()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin', unpin: true })
+    // Старый возврат 'admin' ведёт к списку роутеров.
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'fleet', unpin: true })
     cleanup(root)
   })
 
@@ -160,13 +166,13 @@ describe('OverlayHost: слои парка', () => {
     }
   })
 
-  it('подключение агента: админу экран, закрытие -- в Обслуживание; не-админу -- слова', async () => {
+  it('подключение агента: админу экран, закрытие -- во вкладку «Управление»; не-админу -- слова', async () => {
     let h = host(nav({ routerID: 2, overlay: 'agentconn' }))
     let root = await mount(h.node)
     expect(mocks.props.conn.routerID).toBe(2)
     expect(mocks.props.conn.routerName).toBe('dacha')
     mocks.props.conn.onClose()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'manage' })
     cleanup(root)
 
     h = host(nav({ routerID: 2, overlay: 'agentconn' }), { isAdmin: false })
@@ -175,31 +181,57 @@ describe('OverlayHost: слои парка', () => {
     cleanup(root)
   })
 
-  it('Обслуживание: вход в подключение агента и openLayer в Парк с возвратом admin', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'admin' }))
+  it('«Мои роутеры»: Парк админу, openLayer с возвратом к списку', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'fleet' }))
     const root = await mount(h.node)
-    expect(root.textContent).toContain('Подключение агента')
-    await act(async () => button(root, 'Открыть подключение агента').click())
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'agentconn' })
+    expect(root.querySelector('.stub-park')).toBeTruthy()
     mocks.props.park.openLayer('provision')
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'admin' } })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'fleet' } })
     mocks.props.park.openLayer('job', { jobId: 'j2', title: 't' })
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j2', title: 't', returnTo: 'admin' } })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j2', title: 't', returnTo: 'fleet' } })
     cleanup(root)
   })
 
-  it('Парк в Обслуживании: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'admin' }))
+  it('Парк в «Моих роутерах»: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'fleet' }))
     const root = await mount(h.node)
     mocks.props.park.onOpenConnection(2)
     expect(h.actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
     cleanup(root)
   })
 
-  it('Обслуживание не-админу: входа в подключение нет', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'admin' }), { isAdmin: false })
+  it('«Мои роутеры» не-админу: Парка нет', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'fleet' }), { isAdmin: false })
     const root = await mount(h.node)
+    expect(root.querySelector('.stub-park')).toBe(null)
+    cleanup(root)
+  })
+})
+
+describe('вкладка «Управление»', () => {
+  function tab(isAdmin) {
+    const actions = []
+    const node = <TabBody nav={nav({ routerID: 1, tab: 'manage' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin={isAdmin} />
+    return { node, actions }
+  }
+
+  it('админу: настройки, вход в подключение агента, доступ; Парка нет', async () => {
+    const t = tab(true)
+    const root = await mount(t.node)
+    expect(root.querySelector('.stub-settings')).toBeTruthy()
+    expect(root.querySelector('.stub-park')).toBe(null)
+    expect(root.querySelector('.stub-access')).toBeTruthy()
+    await act(async () => button(root, 'Открыть подключение агента').click())
+    expect(t.actions.pop()).toEqual({ type: 'overlay', overlay: 'agentconn' })
+    cleanup(root)
+  })
+
+  it('не-админу: настройки есть, входа в подключение и доступа нет', async () => {
+    const t = tab(false)
+    const root = await mount(t.node)
+    expect(root.querySelector('.stub-settings')).toBeTruthy()
     expect(button(root, 'Открыть подключение агента')).toBeFalsy()
+    expect(root.querySelector('.stub-access')).toBe(null)
     cleanup(root)
   })
 })

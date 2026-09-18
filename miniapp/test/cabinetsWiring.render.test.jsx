@@ -102,25 +102,25 @@ describe('кабинет роутера -- слой навигации', () => {
 describe('свои серверы -- слои парка', () => {
   it('подпись возврата на список', () => {
     expect(returnLabel('selfhosted')).toBe('Свои серверы')
-    expect(returnLabel('admin')).toBe('Обслуживание')
+    expect(returnLabel('fleet')).toBe('Мои роутеры')
     expect(returnLabel(null)).toBe('Роутеры')
   })
 
-  it('список из Обслуживания: открыть сервер -- с возвратом на список и его возвратом', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'selfhosted', overlayParams: { returnTo: 'admin' } }))
+  it('список из Парка на «Моих роутерах»: открыть сервер -- с возвратом на список и его возвратом', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'selfhosted', overlayParams: { returnTo: 'fleet' } }))
     const root = await mount(h.node)
     const p = mocks.props.list
-    expect(p.backLabel).toBe('Обслуживание')
+    expect(p.backLabel).toBe('Мои роутеры')
     p.onOpenInstance('ams')
     expect(h.actions.pop()).toEqual({
       type: 'overlay',
       overlay: 'selfhostedinst',
-      params: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: 'admin' } },
+      params: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: 'fleet' } },
     })
     p.onOpenInstance('')
     expect(h.actions.pop().params.instanceId).toBe('')
     p.onClose()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'fleet' })
     cleanup(root)
   })
 

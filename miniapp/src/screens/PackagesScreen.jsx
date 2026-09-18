@@ -6,7 +6,7 @@ import { PackagesCard } from './PackagesCard.jsx'
 // только ему, сервер отвечает остальным 404.
 export function PackagesScreen({ routerID, routerName, asleep, onClose }) {
   return (
-    <Overlay title="Пакеты по расписанию" backLabel="Обслуживание" onBack={onClose}>
+    <Overlay title="Пакеты по расписанию" backLabel="Управление" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">{routerName || 'Роутер'}</h1>
         {asleep && <p class="hint">Роутер сейчас не на связи — команды подождут его несколько минут.</p>}

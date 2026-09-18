@@ -58,7 +58,7 @@ export function fleetRow(router) {
     sub = `отчёт ${humanAge(age)} назад`
   }
 
-  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub }
+  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub, panelURL: router?.panel_url ?? '' }
 }
 
 // Групповой опрос флота. Одна кнопка, N роутеров -- и человек обязан видеть,
