@@ -522,3 +522,27 @@ func hasRow(rows []miniappVersionRow, component string) bool {
 	}
 	return false
 }
+
+// Главный экран роутера подсвечивает всем (владельцу, оператору, админу), что
+// нужна перезагрузка или обновление (оператор 18.09). Обновление агента --
+// тоже: решает сервер тем же agentUpdateVerdictFor, что и парк.
+func TestMiniappVersionsCarriesAgentUpdateForEveryone(t *testing.T) {
+	old := serverVersion
+	SetVersion("v0.43.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedLiveSnapshot(t, d, ownedID)
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.41.0"); err != nil {
+		t.Fatal(err)
+	}
+	_, resp := getVersions(t, versionsMux(d), ownedID, telegramUserID)
+	if resp.Agent == nil || resp.Agent.Installed != "v0.41.0" || resp.Agent.Available != "v0.43.0" {
+		t.Fatalf("обновление агента не названо: %+v", resp.Agent)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.43.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, resp := getVersions(t, versionsMux(d), ownedID, telegramUserID); resp.Agent != nil {
+		t.Fatalf("агент на версии бэкенда -- обновления нет: %+v", resp.Agent)
+	}
+}

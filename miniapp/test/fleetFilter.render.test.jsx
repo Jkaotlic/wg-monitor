@@ -112,3 +112,16 @@ describe('«Мои роутеры» на телефоне', () => {
     cleanup(root)
   })
 })
+
+describe('список роутеров как главный экран', () => {
+  it('без onClose кнопки «Назад» нет вовсе', async () => {
+    const root = await mount(<FleetOverlay routers={ROUTERS} currentID={null} onPick={() => {}} />)
+    expect(root.querySelector('.overlay-back')).toBe(null)
+    cleanup(root)
+  })
+  it('с выбранным роутером «Назад» на месте', async () => {
+    const root = await mount(<FleetOverlay routers={ROUTERS} currentID={3} onPick={() => {}} onClose={() => {}} />)
+    expect(root.querySelector('.overlay-back')).not.toBe(null)
+    cleanup(root)
+  })
+})

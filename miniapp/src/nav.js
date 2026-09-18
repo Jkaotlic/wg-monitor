@@ -67,6 +67,15 @@ export function navPinned(state) {
   return PINNED_OVERLAYS.includes(state?.overlay) || state?.overlayParams?.pinned === true
 }
 
+// fleetIsHome -- список роутеров открыт без выбранного роутера: это главный
+// экран, а не крышка. «Назад», Esc и кнопка Telegram его не закрывают --
+// иначе человек попадал в пустое «Выберите роутер в списке» (18.09). Выбору
+// роутера и слоям парка это не мешает: в отличие от navPinned, признак
+// касается только ухода «назад».
+export function fleetIsHome(state) {
+  return state?.overlay === 'fleet' && state?.routerID == null
+}
+
 // Параметры принадлежат слою: вместе с ним они уходят целиком (ключа нет),
 // а не остаются null -- так прежние снимки навигации не меняют форму.
 function withoutParams(state) {
@@ -182,7 +191,7 @@ export function navReducer(state, action) {
     case 'back': {
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
       if (state.sheet) return state.sheetBusy ? state : { ...state, sheet: null }
-      if (navPinned(state)) return state
+      if (navPinned(state) || fleetIsHome(state)) return state
       if (!state.overlay) return state
       // returnParams -- параметры слоя, куда возвращаемся: экран сервера
       // возвращает на список, и списку нужен его собственный returnTo.
@@ -212,7 +221,7 @@ function visibleOverlay(state, { wide = false } = {}) {
 export function backButtonVisible(state, opts) {
   if (state?.sheet) return true
   const overlay = visibleOverlay(state, opts)
-  return Boolean(overlay) && !navPinned(state)
+  return Boolean(overlay) && !navPinned(state) && !fleetIsHome(state)
 }
 
 // escapeAction -- что делает Esc. Лист подтверждения закрывает себя сам: он
@@ -220,5 +229,5 @@ export function backButtonVisible(state, opts) {
 export function escapeAction(state, opts) {
   if (state?.sheet) return null
   const overlay = visibleOverlay(state, opts)
-  return overlay && !navPinned(state) ? { type: 'back' } : null
+  return overlay && !navPinned(state) && !fleetIsHome(state) ? { type: 'back' } : null
 }

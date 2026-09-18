@@ -64,10 +64,19 @@ type miniappVersionsResp struct {
 	// RebootHint -- предупреждение о перезагрузке: установленная версия модуля
 	// ядра расходится с загруженной. Пусто -- повода нет.
 	RebootHint string `json:"reboot_hint,omitempty"`
+	// Agent -- обновление агента wg-monitor, если агент отстаёт от бэкенда.
+	// Решает тот же agentUpdateVerdictFor, что и парк; в «отложить» не
+	// входит: это не новость о пакете роутера. Нет ключа -- обновлять нечего.
+	Agent *miniappAgentNews `json:"agent,omitempty"`
 	// CheckedAt -- когда роутер в последний раз рассказал про версии. Без
 	// метки времени строка о версиях обещает больше, чем мы знаем; снимка нет
 	// вовсе -- ключа нет вовсе.
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
+}
+
+type miniappAgentNews struct {
+	Installed string `json:"installed"`
+	Available string `json:"available"`
 }
 
 // miniappUpdateComponents -- закрытый список того, про что бывает новость.
@@ -215,6 +224,13 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		resp.RebootHint = rebootHint
 		if err := reminders.MarkShown(routerID, "kmod_reboot", row.KmodVersion); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: reboot reminder mark shown failed", "router_id", routerID, "err", err)
+		}
+	}
+
+	if u, err := d.DB.Users().GetByID(routerID); err == nil && u != nil {
+		installed := stringValue(u.LastDeployedVersion)
+		if agentUpdateVerdictFor(installed, serverVersion).Behind {
+			resp.Agent = &miniappAgentNews{Installed: installed, Available: serverVersion}
 		}
 	}
 
