@@ -3,9 +3,13 @@ package backend
 
 import (
 	"context"
+	"math/rand/v2"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // pendingDeployMaxAttempts -- сколько раз команда обновления уходит агенту,
@@ -36,6 +40,8 @@ func deployFailureText(raw string) string {
 	switch {
 	case s == "":
 		return "агент не сообщил причину"
+	case isReleaseProxyBusyFailure(raw):
+		return "сервер обновлений был занят другими роутерами, повторим"
 	case strings.Contains(s, "insufficient /opt space"), strings.Contains(s, "df /opt"):
 		return "мало свободного места в разделе /opt"
 	// Единственный источник этого текста -- releaseorigin.ValidateRepoBase*
@@ -112,6 +118,66 @@ func recordPendingDeployFailure(d Deps, uid int64, nickname, target, output stri
 		return
 	}
 	giveUpPendingDeploy(d, uid, nickname, target, deployFailureText(output))
+}
+
+// legacyBusyOutput -- вывод старого агента (≤ v0.44), упёршегося в занятый
+// прокси релизов: «download <файл>: HTTP 503 for <адрес зеркала>». Маркера
+// wire.SelfUpdateBusyMarker он не знает, а 503 наш прокси отдаёт только на
+// «занято» (release_proxy.go). Адрес обязан быть нашим зеркалом
+// /v1/releases/download/: 503 от GitHub -- чужая беда, не очередь у нас.
+//
+// Строка привязана к началу вывода: новый агент, у которого бэкенд был занят,
+// а GitHub отдал выпуск с негодной подписью, пишет «github: …; backend:
+// download …: HTTP 503 …» -- это настоящий провал, и попытку он обязан
+// потратить.
+var legacyBusyOutput = regexp.MustCompile(`^download [^:\s]+: HTTP 503 for \S+/v1/releases/download/`)
+
+// isReleaseProxyBusyFailure -- неудача self_update из-за занятого прокси
+// релизов, а не из-за роутера.
+func isReleaseProxyBusyFailure(output string) bool {
+	return strings.Contains(output, wire.SelfUpdateBusyMarker) || legacyBusyOutput.MatchString(output)
+}
+
+// activeCommandReleaser -- узкая часть очереди: отпустить выданную команду
+// раньше TTL. Тот же узкий интерфейс-по-типу, что activeCommandChecker.
+type activeCommandReleaser interface {
+	ReleaseActive(userID int64, cmdID string, cooldown time.Duration) bool
+}
+
+// deployBusyCooldown -- пауза перед повтором после «занято». Минута-две с
+// разбросом: роутер опрашивает раз в минуту, и без разброса все отказники
+// вернулись бы к прокси одной волной. Переменная -- ради тестов.
+var deployBusyCooldown = func() time.Duration {
+	return time.Minute + rand.N(time.Minute) // #nosec G404 -- разброс повторов, не секрет
+}
+
+// recordPendingDeployBusy -- ответ агента «прокси релизов занят». Попытку не
+// тратит (прод 18.09: толпа у прокси исчерпала три попытки здоровому роутеру,
+// и обновление ему сдалось), причину пишет и отпускает команду: следующий
+// контакт после короткой паузы положит новую, не дожидаясь получасового TTL.
+func recordPendingDeployBusy(d Deps, uid int64, nickname, cmdID, target, output string) {
+	if d.DB == nil || strings.TrimSpace(target) == "" {
+		return
+	}
+	attempts, matched, err := d.DB.Users().RecordPendingDeployBusy(uid, target, output)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("pending deploy busy record failed", "nickname", nickname, "target_version", target, "err", err)
+		}
+		return
+	}
+	if !matched {
+		return
+	}
+	cooldown := deployBusyCooldown()
+	if r, ok := d.CommandSink.(activeCommandReleaser); ok {
+		r.ReleaseActive(uid, cmdID, cooldown)
+	}
+	if d.Logger != nil {
+		d.Logger.Info("pending deploy hit busy release proxy; attempt not counted",
+			"nickname", nickname, "target_version", target, "attempts", attempts,
+			"retry_after", cooldown.String(), "output", output)
+	}
 }
 
 // giveUpIfExhausted сдаётся, если попытки назначенного обновления уже

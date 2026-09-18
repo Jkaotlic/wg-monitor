@@ -685,6 +685,33 @@ func (u *UsersRepo) RecordPendingDeployError(id int64, targetVersion, errText st
 	return n, true, nil
 }
 
+// RecordPendingDeployBusy -- неудача, в которой роутер не виноват: прокси
+// релизов бэкенда был занят. Причину запоминает, а засчитанную при выдаче
+// попытку возвращает (не ниже нуля). Возвращает счёт после возврата.
+func (u *UsersRepo) RecordPendingDeployBusy(id int64, targetVersion, errText string) (int, bool, error) {
+	if strings.TrimSpace(targetVersion) == "" {
+		return 0, false, nil
+	}
+	errText = strings.TrimSpace(errText)
+	if len(errText) > MaxPendingLastErrorBytes {
+		errText = strings.ToValidUTF8(errText[:MaxPendingLastErrorBytes], "")
+	}
+	var n int
+	err := u.d.db.QueryRow(
+		`UPDATE users SET pending_last_error = ?,
+		        pending_attempts = MAX(pending_attempts - 1, 0)
+		  WHERE id = ? AND pending_version = ?
+		  RETURNING pending_attempts`, errText, id, targetVersion,
+	).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("users.RecordPendingDeployBusy: %w", err)
+	}
+	return n, true, nil
+}
+
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
 // version reported by the running agent in its latest heartbeat. If the
 // heartbeat matches a pending wizard deploy, it also clears the pending marker

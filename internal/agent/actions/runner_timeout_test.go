@@ -79,7 +79,7 @@ func TestActionTimeoutFor_Overrides(t *testing.T) {
 		{"entware_clean_install", 300 * time.Second},
 		// Long: multi-step network pipelines.
 		{"tunnel_import", 300 * time.Second},
-		{"self_update", 300 * time.Second},
+		{"self_update", 600 * time.Second}, // v0.45: до 5 мин ожидания «прокси занят» плюс запасной путь с GitHub
 		// Long: firmware install triggers a reboot.
 		{"firmware_install", 600 * time.Second},
 		// Long: diag_now runs a full fresh IncludeRestart=false pass over
@@ -121,7 +121,7 @@ func TestRunner_WithActionTimeout_LongActionsGetExtendedBudget(t *testing.T) {
 		{"opkg_feed_disable", 300 * time.Second},
 		{"opkg_cron_install", 300 * time.Second},
 		{"entware_clean_install", 300 * time.Second},
-		{"self_update", 300 * time.Second},
+		{"self_update", 600 * time.Second}, // v0.45: до 5 мин ожидания «прокси занят» плюс запасной путь с GitHub
 		{"opkg_upgrade", 300 * time.Second},
 		{"tunnel_import", 300 * time.Second},
 		{"firmware_install", 600 * time.Second},

@@ -1207,7 +1207,11 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			if strings.TrimSpace(output) == "" {
 				output = "status " + res.Status
 			}
-			recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
+			if isReleaseProxyBusyFailure(output) {
+				recordPendingDeployBusy(d, uid, nick, cmd.ID, commandVersionArg(cmd), output)
+			} else {
+				recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
+			}
 		}
 		d.Logger.Info("cmd result",
 			"nickname", nick, "cmd_id", res.ID, "status", res.Status,
