@@ -4367,3 +4367,39 @@ body {
   from { transform: translateY(8px) scale(0.98); opacity: 0; }
   to { transform: none; opacity: 1; }
 }
+
+/* Подсветка обслуживания на «Сейчас» (18.09): перезагрузка -- тон warn,
+   обновления -- спокойная рамка. Вся карточка -- кнопка в «Управление». */
+.maint-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-top: 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.maint-notice-warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+.maint-notice-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.maint-notice-warn .maint-notice-title {
+  color: var(--warn);
+}
+.maint-notice-note,
+.maint-notice-line {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.maint-notice-go {
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--sig);
+}

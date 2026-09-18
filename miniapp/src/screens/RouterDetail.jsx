@@ -1,13 +1,7 @@
 import { useContext, useEffect, useState } from 'preact/hooks'
-import {
-  fetchRouter,
-  fetchRouterChecks,
-  fetchIncidentHistory,
-  silenceIncident,
-  ackIncident,
-  muteIncident,
-} from '../api.js'
+import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, ackIncident, muteIncident, fetchRouterVersions } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
+import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
 import { routerHeadline } from '../routerHeadline.js'
@@ -560,6 +554,21 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   const [tunnels, setTunnels] = useState([])
   const [traffic, setTraffic] = useState(null)
   const [error, setError] = useState(null)
+  // Версии -- один раз на роутер, не с пульсом: сервер отмечает новости
+  // показанными, и дёргать его каждые 10 с незачем -- версии меняются раз в дни.
+  const [versions, setVersions] = useState(null)
+  useEffect(() => {
+    let alive = true
+    setVersions(null)
+    fetchRouterVersions(id)
+      .then((v) => {
+        if (alive) setVersions(v)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [id])
 
   // Named rather than inlined so a completed command can call it again:
   // an "ok" force_recheck or tunnel_restart changes state that lives in
@@ -747,6 +756,22 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   )
 
 
+  // Перезагрузка или обновление -- видно всем, кто открыл роутер (оператор
+  // 18.09), а не только дошедшему до «Управления». Нажатие ведёт туда.
+  const notice = maintenanceNotice(versions)
+  const maintBlock = notice && (
+    <button type="button" class={`card maint-notice maint-notice-${notice.tone}`} onClick={() => onTab?.('manage')}>
+      <span class="maint-notice-title">{notice.title}</span>
+      {notice.note && <span class="maint-notice-note">{notice.note}</span>}
+      {notice.lines.map((l) => (
+        <span key={l} class="maint-notice-line">
+          {l}
+        </span>
+      ))}
+      <span class="maint-notice-go">Открыть «Управление»</span>
+    </button>
+  )
+
   const incidentsBlock =
     incidents.length > 0 ? (
       <section class="section">
@@ -833,6 +858,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     return (
       <div class="screen">
         {heroBlock}
+        {maintBlock}
         {statsBlock}
         {backupBlock}
         {incidentsBlock}
@@ -851,6 +877,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     <div class="screen now-grid">
       <div class="now-main">
         {heroBlock}
+        {maintBlock}
         {statsBlock}
         {backupBlock}
         {tunnelsNavBlock}
