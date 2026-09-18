@@ -14,6 +14,10 @@ import (
 // only when enabled HR-Neo/HydraRoute rules need it.
 type HydraRouteCheck struct {
 	Client *awgmgr.Client
+	// Policies читает сводку политик доступа (actions.PolicyBriefs, проводка в
+	// cmd/agent): checks не может импортировать actions -- тот импортирует
+	// checks. Получает уже прочитанный список DNS-правил. nil -- сводки нет.
+	Policies func(ctx context.Context, dns []awgmgr.DNSRoute) ([]wire.PolicyBrief, error)
 }
 
 func (h HydraRouteCheck) Name() string { return "hydraroute" }
@@ -41,6 +45,7 @@ func (h HydraRouteCheck) Run(ctx context.Context, _ Deps) wire.Check {
 		details["ignored_singbox_router"] = true
 		return OK("hydraroute", start, details)
 	}
+	h.addPolicies(ctx, mechs, details)
 	if !st.Installed {
 		if mechs.hrneoRequired() {
 			return Fail("hydraroute", start, "required by active HR-Neo routes but not installed", details)
@@ -61,6 +66,10 @@ func (h HydraRouteCheck) Run(ctx context.Context, _ Deps) wire.Check {
 }
 
 type routeMechanisms struct {
+	// dns -- прочитанный список DNS-правил; nil, если чтение не удалось.
+	// Нужен сводке политик, чтобы не читать его второй раз.
+	dns                 []awgmgr.DNSRoute
+	dnsRead             bool
 	HRNeoRoutes         int
 	NDMSRoutes          int
 	StaticRoutes        int
@@ -77,6 +86,7 @@ func (h HydraRouteCheck) detectRouteMechanisms(ctx context.Context) (routeMechan
 	if err != nil {
 		return out, err
 	}
+	out.dns, out.dnsRead = dns, true
 	for _, route := range dns {
 		if !route.Enabled {
 			continue
@@ -113,6 +123,26 @@ func (h HydraRouteCheck) detectRouteMechanisms(ctx context.Context) (routeMechan
 	out.SingboxInstalled = info.Singbox.Installed || strings.Contains(strings.ToLower(out.ActiveBackend), "sing")
 	out.SingboxVersion = strings.TrimSpace(info.Singbox.Version)
 	return out, nil
+}
+
+// addPolicies кладёт в details сводку политик: кто несёт обход сейчас и что
+// в запасе (details["policies"]). Экран без неё угадывал несущий туннель и
+// красил живой обход тревогой запасного (workrouter, 18.09.2026). Ошибка
+// чтения -- policies_error, проверка от неё не падает: HydraRoute не сломан.
+// Сборка без политик -- поля нет вовсе. Без прочитанных правил сводку не
+// строим: её счётчики были бы нулями от незнания.
+func (h HydraRouteCheck) addPolicies(ctx context.Context, m routeMechanisms, details map[string]any) {
+	if h.Policies == nil || !m.dnsRead {
+		return
+	}
+	briefs, err := h.Policies(ctx, m.dns)
+	if err != nil {
+		details["policies_error"] = err.Error()
+		return
+	}
+	if briefs != nil {
+		details["policies"] = briefs
+	}
 }
 
 func (m routeMechanisms) hrneoRequired() bool {

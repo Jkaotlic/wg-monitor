@@ -212,7 +212,9 @@ func buildDNSWatchdog(cfg *agent.Config, exec actions.ExecFunc, logger *slog.Log
 func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) []checks.Check {
 	list := []checks.Check{
 		checks.AwgManagerCheck{Client: awgClient},
-		checks.HydraRouteCheck{Client: awgClient},
+		checks.HydraRouteCheck{Client: awgClient, Policies: func(ctx context.Context, dns []awgmgr.DNSRoute) ([]wire.PolicyBrief, error) {
+			return actions.PolicyBriefs(ctx, awgClient, dns)
+		}},
 		buildDNSCheck(cfg, awgClient, logger),
 		// По указателю: вердикт кешируется в самой проверке.
 		buildDNSSplitCheck(awgClient),
