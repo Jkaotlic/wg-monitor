@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 )
 
 // Переустановка агента сейчас и перенаправление на другой бэкенд (спека
@@ -95,6 +97,9 @@ func miniappAgentReinstallHandler(d Deps) http.HandlerFunc {
 			writeMiniappStartError(w, serr)
 			return
 		}
+		rememberRouterCredentials(d, u.ID, revive.StoredCredentials{
+			RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
+		}, "reinstall", adminID)
 		if d.Logger != nil {
 			d.Logger.Info("miniapp agent reinstall started", "router_id", u.ID, "nickname", u.Nickname, "job_id", jobID,
 				"version", version, "credentials", miniappCredentialKinds(req.RootPassword, req.AWGMLogin, req.AWGMPassword, req.AWGMAPIKey), "by", adminID)

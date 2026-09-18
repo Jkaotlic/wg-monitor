@@ -310,6 +310,11 @@ type provisionInstallCoreParams struct {
 	// skipped outright.
 	UpdateTopic   bool
 	TelegramGroup int64
+	// AfterCommit, если задан, зовётся с номером роутера сразу после коммита
+	// токена (config_written): строки нового роутера до него нет. Мини-апп
+	// сохраняет здесь пароль root для авто-оживления (v0.45) -- к этому шагу
+	// вход в терминал этим паролем уже прошёл.
+	AfterCommit func(userID int64)
 }
 
 // startProvisionInstall -- тело установки без HTTP: версия, запрет отката до
@@ -366,7 +371,13 @@ func startProvisionInstall(ctx context.Context, d Deps, p provisionInstallCorePa
 				return err
 			}
 		}
-		return d.DB.Users().UpdateDeployInfo(nickname, deployInfo)
+		if err := d.DB.Users().UpdateDeployInfo(nickname, deployInfo); err != nil {
+			return err
+		}
+		if p.AfterCommit != nil {
+			p.AfterCommit(userID)
+		}
+		return nil
 	}
 
 	job := awgmInstallJob{

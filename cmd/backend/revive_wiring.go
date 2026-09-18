@@ -47,6 +47,9 @@ func newReviveService(ctx context.Context, cfg *backend.Config, d *db.DB, provis
 		// не бессмертную фоновую проверку.
 		BaseCtx: ctx,
 		Logger:  log,
+		// Слишком старый агент на связи -- не «ожил сам»: его обновит только
+		// переустановка (v0.45, авто-оживление).
+		NeedsReinstall: backend.AgentNeedsReinstall,
 	})
 	if err != nil {
 		log.Warn("оживление агента выключено", "reason", err)

@@ -153,8 +153,13 @@ export function reviveRouterAgent(routerID, body) {
   return request(`/routers/${routerID}/agent/revive`, { method: 'POST', body: JSON.stringify(body) })
 }
 
-// Отмена оживления: сервер перестаёт ждать роутер и стирает пароль.
-// cleared=false -- снимать было нечего, это не ошибка.
+// «Забыть пароль» (v0.45): стирает сохранённый пароль root. Только админ.
+export function forgetRouterCredentials(routerID) {
+  return request(`/routers/${routerID}/credentials`, { method: 'DELETE' })
+}
+
+// Отмена оживления: сервер перестаёт ждать роутер и стирает копию пароля
+// этого оживления. cleared=false -- снимать было нечего, это не ошибка.
 export function cancelRouterAgentRevive(routerID) {
   return request(`/routers/${routerID}/agent/revive`, { method: 'DELETE' })
 }

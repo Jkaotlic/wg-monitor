@@ -272,3 +272,16 @@ CREATE TABLE IF NOT EXISTS revive_secrets (
     nonce      BLOB    NOT NULL,
     ciphertext BLOB    NOT NULL
 );
+
+-- Сохранённые учётные данные роутера для авто-оживления (v0.45, решение
+-- оператора 18.09: пароль root хранится зашифрованным). Тот же ключ и тот же
+-- AES-256-GCM, что у revive_secrets (AAD = user_id); ключ -- в файле
+-- revive.key_file, не в базе. В отличие от revive_secrets строка живёт до
+-- «Забыть пароль», удаления роутера или отказа входа именно с этим паролем.
+-- Наружу -- только факт «сохранён» (router_credentials.user_id).
+CREATE TABLE IF NOT EXISTS router_credentials (
+    user_id    INTEGER   PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    nonce      BLOB      NOT NULL,
+    ciphertext BLOB      NOT NULL,
+    saved_at   TIMESTAMP NOT NULL
+);

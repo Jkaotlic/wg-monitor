@@ -9,6 +9,7 @@ import {
   cancelRouterAgentUpdate,
   reviveRouterAgent,
   cancelRouterAgentRevive,
+  forgetRouterCredentials,
   reinstallRouterAgent,
   updateFleetAgents,
   sendCommand,
@@ -51,6 +52,10 @@ import {
   reviveDoneText,
   reviveCancelSheetText,
   reviveCancelDoneText,
+  savedPasswordLine,
+  autoReviveBlockedLine,
+  forgetPasswordSheetText,
+  forgetPasswordDoneText,
 } from '../revive.js'
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
@@ -64,7 +69,7 @@ import {
   otherVersionErrorText,
 } from '../agentVersionPick.js'
 import {
-  JOB_SECRET_NOTE,
+  REINSTALL_SECRET_NOTE,
   reinstallAllowed,
   reinstallNeedsPanel,
   PANEL_ADDRESS_MISSING,
@@ -90,6 +95,11 @@ import {
 // панель awg-manager вводится один раз при постановке, хранится на Pi
 // зашифрованным до успеха, отмены или срока, затем стирается.» Пароль
 // вводится на листе и в состояние экрана не попадает (Sheet.jsx).
+//
+// v0.45 (решение оператора 18.09): пароль root ещё и сохраняется на сервере
+// зашифрованным -- давно не обновлявшиеся роутеры сервер оживляет сам. В
+// строке -- только признак «сохранён», «Забыть пароль» и пометка
+// «поставлено автоматически»; самого пароля экран не получает никогда.
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
@@ -286,6 +296,27 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
     )
   }
 
+  // «Забыть пароль» (v0.45): сохранённый пароль root стирается, ждущее
+  // авто-оживление снимается вместе с ним. Набора имени нет: действие только
+  // убирает возможность, вернуть её -- ввести пароль снова.
+  function askForgetPassword(router) {
+    const text = forgetPasswordSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Забыть пароль',
+        errorText: reviveErrorText,
+        perform: () => forgetRouterCredentials(router.id),
+        onDone: (resp) => {
+          setFleetResult(null)
+          setNotice(forgetPasswordDoneText(resp, router.nickname))
+          load()
+        },
+      }),
+    )
+  }
+
   // Переустановка сейчас (спека, п. 7) -- только роутеру на связи; спящему
   // есть «Оживить агент». Сервер отвечает {job_id}, и человек сразу
   // переходит на «Ход работы»: итог установки живёт там, а не в строке.
@@ -301,7 +332,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
         confirmPhrase: router.nickname,
         fields: reinstallFields(),
         fieldsReady: reinstallReady,
-        note: JOB_SECRET_NOTE,
+        note: REINSTALL_SECRET_NOTE,
         errorText: jobStartErrorText,
         perform: (typed, values) => reinstallRouterAgent(router.id, reinstallRequestBody(values, typed)),
         onDone: (resp) => {
@@ -560,6 +591,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
             <div class="card">
               {rows.map((row) => {
                 const rv = revives.get(row.id)
+                const saved = savedPasswordLine(row.router)
+                const blocked = autoReviveBlockedLine(row.router)
                 return (
                 <div class="park-row" key={row.id}>
                   <DataRow title={row.name} value={row.state} valueSub={row.sub} />
@@ -611,7 +644,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
                   {rv.text && (
                     <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
                   )}
-                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
+                  {/* Авто-оживление давно не обновлявшихся (v0.45): чего ему
+                      не хватает -- говорит сервер; ручная кнопка ниже та же. */}
+                  {blocked && <p class="hint">{blocked}</p>}
+                  {saved && <p class="hint">{saved.text}</p>}
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || saved?.canForget || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
@@ -646,6 +683,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
                       {rv.canCancel && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askReviveCancel(row.router)}>
                           Отменить оживление
+                        </button>
+                      )}
+                      {saved?.canForget && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askForgetPassword(row.router)}>
+                          Забыть пароль
                         </button>
                       )}
                     </div>

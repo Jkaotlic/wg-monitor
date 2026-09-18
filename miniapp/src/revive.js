@@ -7,6 +7,10 @@
 // участия человека.» Поэтому лист спрашивает пароль один раз и честно говорит,
 // где он лежит; строка потом говорит только о ходе, пароля в ней нет.
 //
+// v0.45 (решение оператора 18.09): пароль root ещё и сохраняется
+// зашифрованным для авто-оживления давно не обновлявшихся -- до «Забыть
+// пароль», удаления роутера или отказа входа с ним.
+//
 // «Панель роутера» -- так её называет остальной мини-апп (agentConfig.js).
 //
 // Пре-флайт 15.09 (решение координатора): без пароля root переустановка
@@ -16,7 +20,9 @@ import { humanAge, pluralRu } from './labels.js'
 import { isAway } from './agentUpdate.js'
 
 export const REVIVE_NOT_CONFIGURED = 'Оживление агента не настроено на сервере.'
-export const REVIVE_SECRET_NOTE = 'Пароль хранится на сервере зашифрованным до оживления, потом стирается.'
+// v0.45 (решение оператора 18.09): пароль root ещё и сохраняется
+// зашифрованным для авто-оживления -- лист говорит об этом прямо.
+export const REVIVE_SECRET_NOTE = 'Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке «Забыть пароль» в Парке.'
 export const REVIVE_DEFAULT_DAYS = '30'
 export const REVIVE_EXPIRY_OPTIONS = [
   { value: '7', label: '7 дней' },
@@ -44,7 +50,15 @@ function trimmed(v) {
   return String(v ?? '').trim()
 }
 
+// Поставленное авто-проходом (v0.45) помечено: иначе админ увидел бы
+// оживление, которое не ставил, и не понял бы, откуда оно.
 export function reviveState(router, fleet) {
+  const s = reviveStateBare(router, fleet)
+  if (router?.revive?.auto === true && s.text) return { ...s, text: `поставлено автоматически · ${s.text}` }
+  return s
+}
+
+function reviveStateBare(router, fleet) {
   const r = router?.revive ?? null
   const on = enabled(fleet)
   const canStart = on && isAway(router)
@@ -180,13 +194,42 @@ export function reviveDoneText(resp, nickname) {
 }
 
 export function reviveCancelSheetText(router) {
+  const parts = ['Сервер перестанет ждать роутер и сотрёт копию пароля для этого оживления. Поставить оживление можно будет заново.']
+  if (router?.revive?.auto === true) parts.push('Само оно не поставится, пока пароль root не введут снова.')
+  if (router?.root_password_saved === true) parts.push('Сохранённый пароль root останется — стереть его: «Забыть пароль».')
   return {
     title: `Отменить оживление агента на «${router?.nickname ?? ''}»?`,
-    body: 'Сервер перестанет ждать роутер и сотрёт пароль. Поставить оживление можно будет заново.',
+    body: parts.join(' '),
   }
 }
 
 export function reviveCancelDoneText(resp, nickname) {
-  if (resp?.cleared) return `Оживление «${nickname}» отменено, пароль стёрт.`
+  if (resp?.cleared) return `Оживление «${nickname}» отменено, копия пароля стёрта.`
   return `Отменять было нечего: оживление «${nickname}» уже завершилось или снято.`
+}
+
+// Сохранённый пароль root (v0.45). Сервер отдаёт только признак -- самого
+// пароля в ответах нет и быть не может.
+export function savedPasswordLine(router) {
+  if (router?.root_password_saved !== true) return null
+  return { text: 'пароль root сохранён для авто-оживления', canForget: true }
+}
+
+// Почему авто-оживление не начнётся: фразу строит сервер (тот же признак
+// «давно не обновлялся», что у прохода), здесь -- только пояснение, к чему она.
+export function autoReviveBlockedLine(router) {
+  const why = trimmed(router?.auto_revive_blocked)
+  return why ? `агент давно не обновлялся — ${why}` : ''
+}
+
+export function forgetPasswordSheetText(router) {
+  return {
+    title: `Забыть пароль root для «${router?.nickname ?? ''}»?`,
+    body: 'Сервер сотрёт сохранённый пароль, и авто-оживление этого роутера не начнётся, пока пароль не введут снова. Ждущее авто-оживление снимется вместе с ним, поставленное вручную останется.',
+  }
+}
+
+export function forgetPasswordDoneText(resp, nickname) {
+  if (!resp?.cleared) return `Стирать было нечего: пароль для «${nickname}» не сохранён.`
+  return resp?.revive_cancelled ? `Пароль root для «${nickname}» стёрт, авто-оживление снято.` : `Пароль root для «${nickname}» стёрт.`
 }

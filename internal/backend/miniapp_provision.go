@@ -9,6 +9,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 )
 
@@ -174,6 +175,13 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 			AWGMAPIKey:   req.AWGMAPIKey,
 			Version:      miniappAgentVersionOrServer(req.Version),
 			Existing:     existing,
+			// Строки нового роутера до коммита токена нет -- пароль root для
+			// авто-оживления сохраняется там же, где она появляется.
+			AfterCommit: func(userID int64) {
+				rememberRouterCredentials(d, userID, revive.StoredCredentials{
+					RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
+				}, "provision", adminID)
+			},
 		})
 		if serr != nil {
 			if d.Logger != nil {

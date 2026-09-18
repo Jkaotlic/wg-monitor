@@ -14,6 +14,10 @@ import {
   reviveDoneText,
   reviveCancelSheetText,
   reviveCancelDoneText,
+  savedPasswordLine,
+  autoReviveBlockedLine,
+  forgetPasswordSheetText,
+  forgetPasswordDoneText,
 } from '../src/revive.js'
 import { ApiError } from '../src/api.js'
 
@@ -165,7 +169,7 @@ describe('оживление: лист', () => {
     expect(t.body).not.toContain('адрес панели')
     expect(t.body).toContain('Нужен пароль root роутера')
     expect(reviveSheetText(off({ nickname: 'bronya', panel_address_known: false })).body).toContain('Адрес панели у роутера не записан')
-    expect(REVIVE_SECRET_NOTE).toBe('Пароль хранится на сервере зашифрованным до оживления, потом стирается.')
+    expect(REVIVE_SECRET_NOTE).toBe('Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке «Забыть пароль» в Парке.')
   })
 
   it('отказы -- фразы экрана; сырой код и английский текст не показываются', () => {
@@ -205,8 +209,51 @@ describe('оживление: лист', () => {
   it('отмена: лист и итог словами', () => {
     const t = reviveCancelSheetText(off({ nickname: 'bronya' }))
     expect(t.title).toBe('Отменить оживление агента на «bronya»?')
-    expect(t.body).toBe('Сервер перестанет ждать роутер и сотрёт пароль. Поставить оживление можно будет заново.')
-    expect(reviveCancelDoneText({ cleared: true }, 'bronya')).toBe('Оживление «bronya» отменено, пароль стёрт.')
+    expect(t.body).toBe('Сервер перестанет ждать роутер и сотрёт копию пароля для этого оживления. Поставить оживление можно будет заново.')
+    expect(reviveCancelDoneText({ cleared: true }, 'bronya')).toBe('Оживление «bronya» отменено, копия пароля стёрта.')
     expect(reviveCancelDoneText({ cleared: false }, 'bronya')).toBe('Отменять было нечего: оживление «bronya» уже завершилось или снято.')
+  })
+})
+
+// v0.45: пароль root сохраняется для авто-оживления давно не обновлявшихся.
+describe('оживление: сохранённый пароль и авто-оживление', () => {
+  it('поставлено автоматически -- видно в строке, отмена та же', () => {
+    const s = reviveState(off({ revive: rv({ auto: true }) }), fleet())
+    expect(s.text).toBe('поставлено автоматически · ждёт роутер · проверок ещё не было')
+    expect(s.canCancel).toBe(true)
+    expect(reviveState(off({ revive: rv({ auto: true, status: 'running' }) }), fleet()).text).toBe('поставлено автоматически · оживляется…')
+    expect(reviveState(off({ revive: rv({ auto: true, status: 'failed', last_error_text: 'пароль не подошёл' }) }), fleet()).text)
+      .toBe('поставлено автоматически · не вышло: пароль не подошёл')
+    // Ручное -- без пометки.
+    expect(reviveState(off({ revive: rv() }), fleet()).text).not.toContain('автоматически')
+  })
+
+  it('отмена авто-оживления честно говорит, что само оно не вернётся до нового пароля', () => {
+    const t = reviveCancelSheetText(off({ revive: rv({ auto: true }), root_password_saved: true }))
+    expect(t.body).toContain('Само оно не поставится, пока пароль root не введут снова.')
+    expect(t.body).toContain('Сохранённый пароль root останется — стереть его: «Забыть пароль».')
+  })
+
+  it('признак «пароль сохранён» -- только когда сервер так сказал; кнопка «Забыть пароль» вместе с ним', () => {
+    expect(savedPasswordLine(off({ root_password_saved: true }))).toEqual({ text: 'пароль root сохранён для авто-оживления', canForget: true })
+    expect(savedPasswordLine(off({ root_password_saved: false }))).toBeNull()
+    expect(savedPasswordLine(off())).toBeNull()
+  })
+
+  it('почему авто-оживление не начнётся -- фраза сервера с пояснением «давно не обновлялся»', () => {
+    expect(autoReviveBlockedLine(off({ auto_revive_blocked: 'для авто-оживления нужен пароль root' })))
+      .toBe('агент давно не обновлялся — для авто-оживления нужен пароль root')
+    expect(autoReviveBlockedLine(off({ auto_revive_blocked: '' }))).toBe('')
+    expect(autoReviveBlockedLine(off())).toBe('')
+  })
+
+  it('лист «Забыть пароль» и итог', () => {
+    const t = forgetPasswordSheetText(off({ nickname: 'bronya' }))
+    expect(t.title).toBe('Забыть пароль root для «bronya»?')
+    expect(t.body).not.toMatch(INTERNAL)
+    expect(t.body).toContain('авто-оживление этого роутера не начнётся, пока пароль не введут снова')
+    expect(forgetPasswordDoneText({ cleared: true, revive_cancelled: false }, 'bronya')).toBe('Пароль root для «bronya» стёрт.')
+    expect(forgetPasswordDoneText({ cleared: true, revive_cancelled: true }, 'bronya')).toBe('Пароль root для «bronya» стёрт, авто-оживление снято.')
+    expect(forgetPasswordDoneText({ cleared: false }, 'bronya')).toBe('Стирать было нечего: пароль для «bronya» не сохранён.')
   })
 })

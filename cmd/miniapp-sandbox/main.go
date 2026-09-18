@@ -62,6 +62,7 @@ func main() {
 	version := flag.String("version", "v0.33.0", "версия бэкенда песочницы: от неё экран «Парк» считает отставших")
 	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
+	reviveAuto := flag.Bool("revive-auto", true, "оживление sandbox-off поставлено автоматически, пароль root у него «сохранён»")
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
 	noAccess := flag.Bool("no-access", false, "открыть мини-апп человеком без доступа: парк принадлежит другому, экран «Роутер ещё не привязан» с Telegram ID")
@@ -125,6 +126,14 @@ func main() {
 	}
 	reviver := newSandboxRevive(*reviveOn, map[int64]bool{ids["sandbox-bronya"]: true})
 	reviver.seedState(ids["sandbox-off"], *reviveState, time.Now().UTC())
+	if *reviveAuto {
+		reviver.markAuto(ids["sandbox-off"])
+		// Строка «пароль сохранён» -- только признак: вместо шифртекста
+		// заглушка, пароля в песочнице нет и не было.
+		if err := d.RouterCredentials().Put(ids["sandbox-off"], []byte("sandbox"), []byte("sandbox"), time.Now().UTC()); err != nil {
+			fatal(err)
+		}
+	}
 	sink := &fakeAgent{}
 
 	// Настоящий сторож heartbeat: без него строка о нём в панели пуста, и
