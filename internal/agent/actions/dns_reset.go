@@ -80,6 +80,8 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		remove = append(remove, line)
 	}
 
+	reference, skipped := dnsReferenceWithin(kept)
+
 	var b strings.Builder
 	if opts.DryRun {
 		fmt.Fprintf(&b, "Предпросмотр сброса DNS — ничего не изменено\n\n")
@@ -93,9 +95,13 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 				fmt.Fprintf(&b, "  = %s\n", l)
 			}
 		}
-		fmt.Fprintf(&b, "\nЗаменим на эталонные (%d):\n", len(dnsReferenceUpstreams))
-		for _, l := range dnsReferenceUpstreams {
+		fmt.Fprintf(&b, "\nЗаменим на эталонные (%d):\n", len(reference))
+		for _, l := range reference {
 			fmt.Fprintf(&b, "  + %s\n", l)
+		}
+		if len(skipped) > 0 {
+			b.WriteString("\n")
+			writeDNSSkipped(&b, skipped)
 		}
 		return "ok", b.String()
 	}
@@ -115,20 +121,8 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		}
 		b.WriteString("\n")
 	}
-	// Оставленные строки занимают место в том же списке из восьми: эталон
-	// урезается с хвоста (последними идут наименее нужные русские зоны), и
-	// это пометка, а не провал -- иначе сброс не проходил бы никогда.
-	reference := dnsReferenceUpstreams
-	if room := dnsref.KeeneticDoTLimit - len(kept); room < len(reference) {
-		if room < 0 {
-			room = 0
-		}
-		fmt.Fprintf(&b, "не поместилось в лимит KeenOS (%d адресов), не ставим (%d):\n", dnsref.KeeneticDoTLimit, len(reference)-room)
-		for _, l := range reference[room:] {
-			fmt.Fprintf(&b, "  · %s\n", l)
-		}
-		b.WriteString("\n")
-		reference = reference[:room]
+	if len(skipped) > 0 {
+		writeDNSSkipped(&b, skipped)
 	}
 	failures := applyDNSProxyUpstreams(ctx, exec, &b,
 		"remove existing dns-proxy upstreams", remove,
@@ -154,6 +148,30 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		return "partial", b.String()
 	}
 	return "ok", b.String()
+}
+
+// dnsReferenceWithin -- эталон, урезанный под лимит KeenOS с учётом
+// оставленных строк: они занимают место в том же списке из восьми. Режется
+// хвост -- последними идут наименее нужные русские зоны. Одна функция на
+// предпросмотр и сброс: предпросмотр обязан обещать ровно то, что выполнится.
+func dnsReferenceWithin(kept []string) (reference, skipped []string) {
+	reference = dnsReferenceUpstreams
+	room := dnsref.KeeneticDoTLimit - len(kept)
+	if room < 0 {
+		room = 0
+	}
+	if room >= len(reference) {
+		return reference, nil
+	}
+	return reference[:room], reference[room:]
+}
+
+func writeDNSSkipped(b *strings.Builder, skipped []string) {
+	fmt.Fprintf(b, "не поместилось в лимит KeenOS (%d адресов), не ставим (%d):\n", dnsref.KeeneticDoTLimit, len(skipped))
+	for _, l := range skipped {
+		fmt.Fprintf(b, "  · %s\n", l)
+	}
+	b.WriteString("\n")
 }
 
 // ApplyDNSProxyUpstreams swaps dns-proxy upstreams in the router's LIVE config

@@ -58,7 +58,7 @@ func TestDefaults_Verbatim(t *testing.T) {
 }
 
 // TestBuildFallbackSet_SplitLikeAGH: everything live → the mirror of the
-// operator's AGH upstream_dns: 3 foreign without domain, 7 Yandex DoT domain
+// operator's AGH upstream_dns: 3 foreign without domain, 6 Yandex DoT domain
 // lines, 6 Cloudflare-pinned domain lines — in that order.
 func TestBuildFallbackSet_SplitLikeAGH(t *testing.T) {
 	lines, ruDegraded, ok := BuildFallbackSet(defaultSetConfig(), DefaultRUCandidates, DefaultForeignCandidates)

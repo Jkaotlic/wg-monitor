@@ -404,3 +404,20 @@ func TestDNSReset_KeptResolverTrimsReferenceToLimit(t *testing.T) {
 		t.Fatalf("о срезанной строке надо сказать:\n%s", out)
 	}
 }
+
+// Предпросмотр обязан показывать то, что выполнится: с оставленным своим
+// резолвером эталон урезается и в нём.
+func TestDNSReset_PreviewTrimsLikeRealReset(t *testing.T) {
+	kept := "tls upstream 198.51.100.53 sni resolver.example.com"
+	f := &fakeDNSExec{runningConfig: "dns-proxy\n    " + kept + "\n!\n"}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{DryRun: true, KeepHosts: []string{"198.51.100.53"}})
+	if status != "ok" {
+		t.Fatalf("status=%s\n%s", status, out)
+	}
+	if !strings.Contains(out, "Заменим на эталонные (7)") || !strings.Contains(out, "не поместилось") {
+		t.Fatalf("предпросмотр обещает не то, что выполнится:\n%s", out)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("предпросмотр ничего не выполняет: %q", f.calls)
+	}
+}

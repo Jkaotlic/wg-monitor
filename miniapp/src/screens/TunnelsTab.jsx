@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings } from '../api.js'
-import { parseRouteSnapshot, snapshotState, tunnelRuleSummary } from '../routes.js'
+import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
@@ -55,6 +55,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const [importing, setImporting] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
+  // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
+  // удалённой стороной не звался «работает» (см. withCheckVerdict).
+  const [checks, setChecks] = useState(null)
 
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
 
@@ -83,8 +86,22 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
   }, [result])
 
-  const view = tunnelsView(snapshot)
-  const list = tunnelList(snapshot)
+  // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
+  useEffect(() => {
+    let alive = true
+    fetchRouterChecks(routerID)
+      .then((ev) => {
+        if (alive) setChecks(ev)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [routerID, result])
+
+  const shown = withCheckVerdict(snapshot, checks)
+  const view = tunnelsView(shown)
+  const list = tunnelList(shown)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у

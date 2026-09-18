@@ -37,6 +37,23 @@ export function tunnelSwitchedOff(t) {
   return t?.enabled === false
 }
 
+// withCheckVerdict -- снимок route_status с вердиктом проверок tunnel_*.
+// Снимок знает только интерфейс: «running» у туннеля, чья удалённая сторона
+// мертва, -- правда интерфейса и неправда для человека (workrouter 18.09:
+// awg-manager «нет связи», вкладка «работает»). Проваленная проверка ставит
+// в КОПИИ снимка статус «dead» -- дальше вкладка показывает его тем же путём,
+// что и упавший интерфейс. Выключенные настройкой не трогаем.
+export function withCheckVerdict(snapshot, events) {
+  const failing = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
+  if (!snapshot || failing.size === 0 || !Array.isArray(snapshot.tunnels)) return snapshot
+  return {
+    ...snapshot,
+    tunnels: snapshot.tunnels.map((t) =>
+      failing.has(t.id) && tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, status: 'dead' } : t,
+    ),
+  }
+}
+
 export function parseRouteSnapshot(output) {
   if (typeof output !== 'string' || output === '') return null
   try {
