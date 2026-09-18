@@ -16,6 +16,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 )
 
 // adminOpsEnv -- стенд админских операций цикла 2: настоящий mux, движок
@@ -30,6 +31,8 @@ type adminOpsEnv struct {
 	logs       *bytes.Buffer
 	sink       *dashboardActionSink
 	updatePath string
+	// revive -- настоящий сервис оживления, если его собрал мод (withRealRevive).
+	revive *revive.Service
 }
 
 func newAdminOpsEnv(t *testing.T, mods ...func(*Deps)) *adminOpsEnv {
@@ -71,6 +74,7 @@ func newAdminOpsEnv(t *testing.T, mods ...func(*Deps)) *adminOpsEnv {
 	for _, m := range mods {
 		m(&deps)
 	}
+	env.revive = deps.Revive
 	env.h = NewMux(deps)
 	return env
 }

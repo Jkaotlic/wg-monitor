@@ -53,6 +53,8 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// Тело POST несёт пароль: middleware тела не читают, хендлер его не логирует.
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/revive", reqID(auth(miniappAgentReviveHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/agent/revive", reqID(auth(miniappAgentReviveCancelHandler(d))))
+	// «Забыть пароль» (v0.45): стирает сохранённый пароль root, только админу.
+	mux.Handle("DELETE /v1/miniapp/routers/{id}/credentials", reqID(auth(miniappForgetCredentialsHandler(d))))
 	// Админские операции цикла 2 (веб-управление = мини-апп): гейт админа
 	// внутри, отказ 404. Тела с паролями middleware не читают, обработчики не
 	// логируют.

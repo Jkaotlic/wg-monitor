@@ -52,6 +52,15 @@ func (s *sandboxRevive) seedState(routerID int64, state string, now time.Time) {
 	s.views[routerID] = v
 }
 
+// markAuto -- намерение поставлено авто-проходом (v0.45), а не админом.
+func (s *sandboxRevive) markAuto(routerID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v := s.views[routerID]; v != nil {
+		v.Auto = true
+	}
+}
+
 func (s *sandboxRevive) Schedule(_ context.Context, routerID int64, req revive.ScheduleRequest) (revive.Intent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

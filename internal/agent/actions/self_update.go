@@ -4,19 +4,23 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	mathrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 	"github.com/Jkaotlic/wg-monitor/internal/releasesig"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // SelfUpdateRepoBase is the GitHub Releases base URL the agent pulls from.
@@ -119,6 +123,14 @@ const (
 //
 // On any failure prior to spawning the swap script, the running agent is
 // left untouched on the old binary.
+//
+// Источник (v0.45). Выпуск качается с адреса команды -- обычно зеркала на
+// нашем бэкенде. На 503 «прокси занят» агент ждёт Retry-After с разбросом (до
+// 5 минут на всё, с запасом до срока действия) и повторяет. Если бэкенд так и
+// не отдал выпуск (занят, 5xx, 404, сеть -- уже после запасного IP), тот же
+// выпуск берётся с GitHub (SelfUpdateRepoBase) с той же проверкой подписи и
+// sha256. Вывод называет источник. Если не вышло и там, а бэкенд был занят,
+// ошибка начинается с wire.SelfUpdateBusyMarker -- попытку бэкенд не засчитает.
 func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngrade bool, repoBaseOpt ...string) (string, error) {
 	validVersion, err := releaseorigin.ValidateReleaseTag(version)
 	if err != nil {
@@ -148,51 +160,48 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	if err != nil {
 		return "", fmt.Errorf("self_update: %w", err)
 	}
-	binURL, sumsURL := selfUpdateURLs(version, assetName, repoBase)
-
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-	var fallbackClient *http.Client
-	var fallbackLabel string
+	primary := &selfUpdateSource{
+		name:   "backend",
+		base:   repoBase,
+		client: &http.Client{Timeout: 60 * time.Second},
+	}
 	if len(repoBaseOpt) > 1 && strings.TrimSpace(repoBaseOpt[1]) != "" {
-		fallbackClient, fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
+		primary.fallback, primary.fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
 	}
-
-	// Download checksums.txt first (small file, safe to buffer in memory).
-	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel, maxSelfUpdateChecksumsSize)
-	if err != nil {
-		return "", fmt.Errorf("download checksums.txt: %w", err)
-	}
-	if releasesig.SignatureRequiredForVersion(version) {
-		sigBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL+".sig", fallbackLabel, maxSelfUpdateSignatureSize)
-		if err != nil {
-			return "", fmt.Errorf("download checksums.txt.sig: %w", err)
+	github := strings.TrimRight(strings.TrimSpace(SelfUpdateRepoBase), "/")
+	source := primary.name
+	if strings.TrimRight(repoBase, "/") == github {
+		// Команда и так ведёт на GitHub: запасного пути нет, ждать «занято»
+		// у чужого CDN незачем.
+		primary.name, source = "github", "github"
+		if err := selfUpdateFrom(ctx, primary, version, assetName); err != nil {
+			return "", err
 		}
-		if err := selfUpdateVerifyChecksumsSignature(sumsBody, sigBody); err != nil {
-			return "", fmt.Errorf("verify checksums.txt signature: %w", err)
+	} else {
+		primary.busy = newSelfUpdateBusyWait(ctx)
+		backendErr := selfUpdateFrom(ctx, primary, version, assetName)
+		if backendErr != nil {
+			if !selfUpdateShouldFallBack(ctx, backendErr) {
+				return "", backendErr
+			}
+			// Наш бэкенд выпуск так и не отдал -- тот же выпуск с GitHub.
+			// Проверка ровно та же: подпись checksums.txt и sha256 бинаря.
+			gh := &selfUpdateSource{name: "github", base: github, client: &http.Client{Timeout: 60 * time.Second}}
+			if ghErr := selfUpdateFrom(ctx, gh, version, assetName); ghErr != nil {
+				if selfUpdateIsBusy(backendErr) && selfUpdateIsFetchError(ghErr) {
+					// Роутер не виноват: прокси занят, а GitHub отсюда не
+					// достать. Маркер -- чтобы бэкенд не засчитал попытку.
+					return "", fmt.Errorf("%s: backend: %v; github: %v", wire.SelfUpdateBusyMarker, backendErr, ghErr)
+				}
+				// GitHub первым: причина провала -- его, бэкенд лишь пояснение.
+				return "", fmt.Errorf("github: %v; backend: %v", ghErr, backendErr)
+			}
+			source = "github (backend: " + truncateSelfUpdateReason(backendErr.Error()) + ")"
 		}
 	}
-	wantSha, ok := parseChecksum(string(sumsBody), assetName)
-	if !ok {
-		return "", fmt.Errorf("checksums.txt: no entry for %s", assetName)
-	}
 
-	if err := checkSelfUpdateFreeSpace(ctx); err != nil {
-		return "", err
-	}
-
-	// Stream the binary directly to disk — never load 64 MB into RAM.
-	// Critical on MIPSLE routers where total RAM is ≤64 MB.
 	binPath := selfUpdateBinPath
 	tmpPath := binPath + ".new"
-	gotSha, err := httpGetToFileWithFallback(ctx, httpClient, fallbackClient, binURL, fallbackLabel, tmpPath, maxSelfUpdateArtifactSize)
-	if err != nil {
-		return "", fmt.Errorf("download %s: %w", assetName, err)
-	}
-	if !strings.EqualFold(gotSha, wantSha) {
-		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("sha256 mismatch: want %s got %s", wantSha[:16], gotSha[:16])
-	}
-
 	scriptPath := selfUpdateSwapScriptPath()
 	script := selfUpdateSwapScript(binPath)
 	if err := writeSelfUpdateSwapScript(scriptPath, script); err != nil {
@@ -205,7 +214,227 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 		return "", err
 	}
 
-	return fmt.Sprintf("%s verified, swap scheduled in ~3s", version), nil
+	return fmt.Sprintf("%s verified via %s, swap scheduled in ~3s", version, source), nil
+}
+
+// selfUpdateSource -- откуда качается выпуск: наше зеркало на бэкенде или
+// GitHub. busy не nil -- на 503 «прокси занят» ждать Retry-After и повторять.
+type selfUpdateSource struct {
+	name          string
+	base          string
+	client        *http.Client
+	fallback      *http.Client
+	fallbackLabel string
+	busy          *selfUpdateBusyWait
+}
+
+// selfUpdateFrom качает checksums.txt (+ подпись), проверяет их, затем
+// бинарь в selfUpdateBinPath+".new" и сверяет его sha256. Проверки одни и те
+// же для любого источника: подписанный сумм-файл -- единственное, чему
+// верим, откуда бы он ни пришёл. Неудачи скачивания обёрнуты
+// selfUpdateFetchError -- только они дают право уйти на запасной источник.
+func selfUpdateFrom(ctx context.Context, src *selfUpdateSource, version, assetName string) error {
+	binURL, sumsURL := selfUpdateURLs(version, assetName, src.base)
+
+	// Download checksums.txt first (small file, safe to buffer in memory).
+	var sumsBody []byte
+	err := src.retryBusy(ctx, func() error {
+		var err error
+		sumsBody, err = httpGetWithFallback(ctx, src.client, src.fallback, sumsURL, src.fallbackLabel, maxSelfUpdateChecksumsSize)
+		return err
+	})
+	if err != nil {
+		return &selfUpdateFetchError{fmt.Errorf("download checksums.txt: %w", err)}
+	}
+	if releasesig.SignatureRequiredForVersion(version) {
+		var sigBody []byte
+		err := src.retryBusy(ctx, func() error {
+			var err error
+			sigBody, err = httpGetWithFallback(ctx, src.client, src.fallback, sumsURL+".sig", src.fallbackLabel, maxSelfUpdateSignatureSize)
+			return err
+		})
+		if err != nil {
+			return &selfUpdateFetchError{fmt.Errorf("download checksums.txt.sig: %w", err)}
+		}
+		if err := selfUpdateVerifyChecksumsSignature(sumsBody, sigBody); err != nil {
+			return fmt.Errorf("verify checksums.txt signature: %w", err)
+		}
+	}
+	wantSha, ok := parseChecksum(string(sumsBody), assetName)
+	if !ok {
+		return fmt.Errorf("checksums.txt: no entry for %s", assetName)
+	}
+
+	if err := checkSelfUpdateFreeSpace(ctx); err != nil {
+		return err
+	}
+
+	// Stream the binary directly to disk — never load 64 MB into RAM.
+	// Critical on MIPSLE routers where total RAM is ≤64 MB.
+	tmpPath := selfUpdateBinPath + ".new"
+	var gotSha string
+	err = src.retryBusy(ctx, func() error {
+		var err error
+		gotSha, err = httpGetToFileWithFallback(ctx, src.client, src.fallback, binURL, src.fallbackLabel, tmpPath, maxSelfUpdateArtifactSize)
+		return err
+	})
+	if err != nil {
+		return &selfUpdateFetchError{fmt.Errorf("download %s: %w", assetName, err)}
+	}
+	if !strings.EqualFold(gotSha, wantSha) {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sha256 mismatch: want %s got %s", shortSha(wantSha), shortSha(gotSha))
+	}
+	return nil
+}
+
+func shortSha(s string) string {
+	if len(s) > 16 {
+		return s[:16]
+	}
+	return s
+}
+
+// Ожидание «прокси занят». Бюджет -- 5 минут на все файлы вместе; запас
+// selfUpdateFallbackReserve до срока действия остаётся на скачивание с
+// GitHub. Всё -- переменные ради тестов.
+var (
+	selfUpdateBusyBudget      = 5 * time.Minute
+	selfUpdateFallbackReserve = 2 * time.Minute
+	selfUpdateSleep           = sleepCtx
+)
+
+const (
+	selfUpdateDefaultRetryAfter = 15 * time.Second
+	selfUpdateMaxRetryAfter     = 60 * time.Second
+)
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// selfUpdateBusyWait -- сколько ещё можно прождать у занятого прокси.
+type selfUpdateBusyWait struct {
+	ctx   context.Context
+	spent time.Duration
+}
+
+func newSelfUpdateBusyWait(ctx context.Context) *selfUpdateBusyWait {
+	return &selfUpdateBusyWait{ctx: ctx}
+}
+
+// take резервирует паузу wait, если она влезает и в бюджет, и в срок
+// действия с запасом на запасной путь.
+func (b *selfUpdateBusyWait) take(wait time.Duration) bool {
+	if b.spent+wait > selfUpdateBusyBudget {
+		return false
+	}
+	if deadline, ok := b.ctx.Deadline(); ok && time.Until(deadline)-wait < selfUpdateFallbackReserve {
+		return false
+	}
+	b.spent += wait
+	return true
+}
+
+// retryBusy повторяет fn, пока прокси отвечает 503 и бюджет позволяет ждать.
+// Пауза -- Retry-After с разбросом до половины сверху: повторы не идут толпой.
+func (s *selfUpdateSource) retryBusy(ctx context.Context, fn func() error) error {
+	for {
+		err := fn()
+		var he *selfUpdateHTTPError
+		if err == nil || s.busy == nil || !errors.As(err, &he) || he.Status != http.StatusServiceUnavailable {
+			return err
+		}
+		wait := parseSelfUpdateRetryAfter(he.RetryAfter)
+		if half := int64(wait / 2); half > 0 {
+			wait += time.Duration(mathrand.Int64N(half)) // #nosec G404 -- разброс повторов, не секрет
+		}
+		if !s.busy.take(wait) {
+			return err
+		}
+		if selfUpdateSleep(ctx, wait) != nil {
+			return err
+		}
+	}
+}
+
+// parseSelfUpdateRetryAfter понимает Retry-After в секундах (так отвечает
+// наш прокси). Непонятное -- умолчание, слишком долгое -- потолок.
+func parseSelfUpdateRetryAfter(v string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return selfUpdateDefaultRetryAfter
+	}
+	d := time.Duration(n) * time.Second
+	if d < time.Second {
+		return time.Second
+	}
+	if d > selfUpdateMaxRetryAfter {
+		return selfUpdateMaxRetryAfter
+	}
+	return d
+}
+
+// selfUpdateHTTPError -- ответ не 200. Текст прежний («HTTP 503 for <url>»):
+// его разбирает бэкенд (deployFailureText, признак «занято» у старых агентов).
+type selfUpdateHTTPError struct {
+	Status     int
+	URL        string
+	RetryAfter string
+}
+
+func (e *selfUpdateHTTPError) Error() string { return fmt.Sprintf("HTTP %d for %s", e.Status, e.URL) }
+
+// selfUpdateFetchError -- файл выпуска не скачался (в отличие от «скачался,
+// но не прошёл проверку»).
+type selfUpdateFetchError struct{ err error }
+
+func (e *selfUpdateFetchError) Error() string { return e.err.Error() }
+func (e *selfUpdateFetchError) Unwrap() error { return e.err }
+
+func selfUpdateIsFetchError(err error) bool {
+	var fe *selfUpdateFetchError
+	return errors.As(err, &fe)
+}
+
+// selfUpdateIsBusy -- наш прокси так и остался занят.
+func selfUpdateIsBusy(err error) bool {
+	var he *selfUpdateHTTPError
+	return selfUpdateIsFetchError(err) && errors.As(err, &he) && he.Status == http.StatusServiceUnavailable
+}
+
+// selfUpdateShouldFallBack -- можно ли после этой неудачи бэкенда идти на
+// GitHub: занят после бюджета, 5xx, 404, 429 или сетевая ошибка (уже после
+// запасного IP). Провал проверки подписи или sha256, нехватка места, лишний
+// размер -- нет: это ответ по существу, и с другого источника он не станет
+// лучше, а оператор должен его увидеть.
+func selfUpdateShouldFallBack(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || !selfUpdateIsFetchError(err) {
+		return false
+	}
+	if strings.Contains(err.Error(), "response too large") {
+		return false
+	}
+	var he *selfUpdateHTTPError
+	if errors.As(err, &he) {
+		return he.Status == http.StatusNotFound || he.Status == http.StatusTooManyRequests || he.Status >= http.StatusInternalServerError
+	}
+	return true
+}
+
+func truncateSelfUpdateReason(s string) string {
+	const maxLen = 300
+	if len(s) <= maxLen {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxLen], "") + "…"
 }
 
 func validateSelfUpdateRepoBase(repoBase, trustedBackendURL string) (string, error) {
@@ -382,7 +611,7 @@ func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes in
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
+		return nil, &selfUpdateHTTPError{Status: resp.StatusCode, URL: url, RetryAfter: resp.Header.Get("Retry-After")}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
@@ -409,7 +638,7 @@ func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxB
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
+		return "", &selfUpdateHTTPError{Status: resp.StatusCode, URL: rawURL, RetryAfter: resp.Header.Get("Retry-After")}
 	}
 
 	tmp := dst + ".tmp"
@@ -454,7 +683,7 @@ func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, ur
 	}
 	body, fallbackErr := httpGetLimited(ctx, fallback, url, limit)
 	if fallbackErr != nil {
-		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+		return nil, fmt.Errorf("%w; retry via %s failed: %w", err, fallbackLabel, fallbackErr)
 	}
 	return body, nil
 }
@@ -469,7 +698,7 @@ func httpGetToFileWithFallback(ctx context.Context, primary, fallback *http.Clie
 	}
 	sha, fallbackErr := httpGetToFile(ctx, fallback, rawURL, dst, maxBytes)
 	if fallbackErr != nil {
-		return "", fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+		return "", fmt.Errorf("%w; retry via %s failed: %w", err, fallbackLabel, fallbackErr)
 	}
 	return sha, nil
 }

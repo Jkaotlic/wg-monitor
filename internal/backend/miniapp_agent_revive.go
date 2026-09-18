@@ -190,6 +190,12 @@ func miniappAgentReviveHandler(d Deps) http.HandlerFunc {
 			writeMiniappReviveError(w, code, "Не удалось поставить оживление.")
 			return
 		}
+		// Решение оператора 18.09: пароль root сохраняется зашифрованным для
+		// авто-оживления (router_credentials) -- отдельно от секрета этого
+		// намерения, который сотрётся с его итогом.
+		rememberRouterCredentials(d, u.ID, revive.StoredCredentials{
+			RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
+		}, "revive", adminID)
 		resp := miniappReviveAccepted(intent)
 		if d.Logger != nil {
 			d.Logger.Info("miniapp agent revive scheduled",

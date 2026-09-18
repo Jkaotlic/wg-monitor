@@ -131,6 +131,7 @@ func main() {
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
 	backend.AttachDeployExpiryHandler(cmdQueue, logger)
+	backend.AttachDeployDispatchLimit(cmdQueue)
 	// Очередь пустая после старта, а назначенные обновления записаны в базе:
 	// без этого роутер, которому обновление назначили до рестарта, оставался
 	// «в ожидании» навсегда -- команду ему уже никто не слал.
@@ -192,6 +193,11 @@ func main() {
 	reviveSvc := newReviveService(ctx, cfg, d, provisionDeps, tgClient, logger)
 	if reviveSvc != nil {
 		go reviveSvc.Run(ctx)
+		// Авто-оживление давно не обновлявшихся (v0.45): по сохранённому
+		// паролю root, рядом с воркером оживления.
+		go backend.RunAutoRevive(ctx, backend.AutoReviveDeps{
+			DB: d, Revive: reviveSvc, CommandSink: cmdQueue, Logger: logger.With("component", "auto-revive"),
+		})
 	} else {
 		// Fix round 1, Important #2 (мандатное ревью): без ключа Service.Run
 		// никогда не пройдёт по базе, и просроченные секреты лежали бы в

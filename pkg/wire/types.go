@@ -136,6 +136,13 @@ var validCommandResultStatuses = map[string]bool{
 
 func IsValidCommandResultStatus(s string) bool { return validCommandResultStatuses[s] }
 
+// SelfUpdateBusyMarker -- начало вывода self_update, когда скачать не дал
+// прокси релизов бэкенда («занято», 503), а запасной путь тоже не помог.
+// Бэкенд по этой строке не засчитывает попытку обновления: роутер не виноват,
+// что в очереди за бинарём стояла толпа. Строка -- часть контракта агента и
+// бэкенда, менять её нельзя.
+const SelfUpdateBusyMarker = "release_proxy_busy"
+
 // OpkgUpgradeResult is the structured payload returned by opkg_upgrade and
 // opkg_feed_disable. Output mirrors the human-readable text in
 // CommandResult.Output (the backend stays canonical for rendering).

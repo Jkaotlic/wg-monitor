@@ -251,7 +251,8 @@ describe('Парк: переустановить агент сейчас', () =>
     const sheet = sheets[0]
     expect(sheet.confirmPhrase).toBe('home')
     expect(sheet.danger).toBe(true)
-    expect(sheet.note).toBe('Пароли уходят на сервер один раз и не сохраняются.')
+    // v0.45: переустановка сохраняет пароль root для авто-оживления -- лист говорит это прямо.
+    expect(sheet.note).toContain('пароль root сохранится там зашифрованным')
     const s = await mountSheet(sheet)
     for (const input of s.root.querySelectorAll('input')) {
       expect(input.getAttribute('autocomplete')).toBe(input.type === 'password' ? 'new-password' : 'off')

@@ -3,6 +3,7 @@ import { ApiError } from '../src/api.js'
 import { jobTitle } from '../src/jobSteps.js'
 import {
   JOB_SECRET_NOTE,
+  REINSTALL_SECRET_NOTE,
   PANEL_ADDRESS_MISSING,
   panelAddressMissing,
   reinstallNeedsPanel,
@@ -36,7 +37,9 @@ describe('переустановка агента сейчас', () => {
     const t = reinstallSheetText(HOME)
     expect(t.title).toBe('Переустановить агент на «home» сейчас?')
     expect(t.body).toContain('Нужен пароль root')
+    // Перенаправление пароль не сохраняет, переустановка -- сохраняет (v0.45).
     expect(JOB_SECRET_NOTE).toBe('Пароли уходят на сервер один раз и не сохраняются.')
+    expect(REINSTALL_SECRET_NOTE).toBe('Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — «Забыть пароль» в Парке.')
   })
 
   it('поля: пароли -- паролями, версия с подсказкой', () => {

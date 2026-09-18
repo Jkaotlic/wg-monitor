@@ -131,6 +131,9 @@ const defaultActionTimeout = 45 * time.Second
 //   - multi-step network pipelines: tunnel_import; and self_update, which
 //     streams an agent binary of up to 64MB behind a 60s-per-request HTTP
 //     client across up to three sequential requests (checksums, sig, binary).
+//     С v0.45 self_update ещё и ждёт занятый прокси релизов (до 5 минут) и
+//     уходит на GitHub, поэтому 10 минут: бэкенд держит место в раздаче
+//     чуть дольше (selfUpdateDispatchWindow, 12 минут).
 //
 // firmware_install additionally kicks off a router reboot. Sibling actions
 // in the same families that only read state or touch local files
@@ -147,7 +150,7 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"opkg_cron_install":     300 * time.Second,
 	"entware_clean_install": 300 * time.Second,
 	"tunnel_import":         300 * time.Second,
-	"self_update":           300 * time.Second,
+	"self_update":           600 * time.Second,
 	"firmware_install":      600 * time.Second,
 	"diag_now":              75 * time.Second,
 	// awgm_update: до 30с цикла "checking" + до 5 минут опроса после apply --

@@ -58,6 +58,8 @@ type IntentView struct {
 	LastErrorText string    `json:"last_error_text"`
 	LastProbeText string    `json:"last_probe_text"`
 	LastProbeAt   time.Time `json:"last_probe_at,omitzero"`
+	// Auto -- поставлено авто-проходом (RequestedBySystem), а не админом.
+	Auto bool `json:"auto"`
 }
 
 // Engine -- движок переустановки (адаптер в пакете backend). Launch получает
@@ -116,6 +118,11 @@ type Config struct {
 	AgentFreshWindow time.Duration
 	ReachableProbes  int
 	ConfirmGap       time.Duration
+
+	// NeedsReinstall -- агент на связи, но переустанавливать его всё равно
+	// надо (v0.45: слишком старый, сам не обновится). nil -- никого: агент
+	// на связи = оживлять нечего, как раньше.
+	NeedsReinstall func(u *db.User) bool
 }
 
 // Service -- оживление агента. nil-получатель означает «функция выключена».
@@ -293,7 +300,7 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	}
 
 	now := s.now()
-	if s.agentFresh(u, now) {
+	if s.agentFresh(u, now) && !s.needsReinstall(u) {
 		return Intent{}, ErrAgentAlive
 	}
 
@@ -318,7 +325,12 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 func (s *Service) put(routerID, requestedBy int64, creds Secrets, awgmURL string, expiresDays int, now time.Time) (Intent, error) {
 	s.work.Lock()
 	defer s.work.Unlock()
+	return s.putLocked(routerID, requestedBy, creds, awgmURL, expiresDays, now)
+}
 
+// putLocked -- put под уже взятым s.work (AutoSchedule проверяет намерение и
+// ставит своё под одним замком).
+func (s *Service) putLocked(routerID, requestedBy int64, creds Secrets, awgmURL string, expiresDays int, now time.Time) (Intent, error) {
 	if s.testBeforePut != nil {
 		s.testBeforePut()
 	}
@@ -438,6 +450,7 @@ func (s *Service) StatusFor(routerID int64) (*IntentView, error) {
 		LastErrorText: in.LastError,
 		LastProbeText: probeText(in.LastProbeState),
 		LastProbeAt:   in.LastProbeAt,
+		Auto:          in.RequestedBy == RequestedBySystem,
 	}, nil
 }
 

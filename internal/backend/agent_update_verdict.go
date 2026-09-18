@@ -1,7 +1,12 @@
 // internal/backend/agent_update_verdict.go
 package backend
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+)
 
 // agentSelfUpdateFloor -- ниже этой версии агент обновиться сам не умеет:
 // только переустановка (оживление, цикл 2б).
@@ -60,4 +65,25 @@ func agentUpdateVerdictFor(agentVersion, backendVersion string) agentUpdateVerdi
 	}
 	v.Warning = strings.Join(warn, "; ")
 	return v
+}
+
+// agentLongSilentAfter -- сколько молчания делает отстающий агент «давно не
+// обновлявшимся» (v0.45, спека задачи B, п. 2).
+const agentLongSilentAfter = 30 * 24 * time.Hour
+
+// agentLongNotUpdated -- единственный на сервере признак «давно не
+// обновлялся»: агент ниже agentSelfUpdateFloor (self_update не умеет вовсе)
+// ИЛИ роутер молчит дольше 30 дней, а агент отстаёт от бэкенда. Такой роутер
+// авто-проход оживляет переустановкой (auto_revive.go), строка парка
+// объясняет, почему не может. Неизвестная версия -- не признак: судить не по
+// чему. Ни разу не выходивший на связь -- тоже: это новый, а не забытый.
+func agentLongNotUpdated(u *db.User, backendVersion string, now time.Time) bool {
+	if u == nil {
+		return false
+	}
+	verdict := agentUpdateVerdictFor(stringValue(u.LastDeployedVersion), backendVersion)
+	if verdict.TooOld {
+		return true
+	}
+	return verdict.Behind && u.LastSeenAt != nil && now.Sub(u.LastSeenAt.UTC()) > agentLongSilentAfter
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { reviveRouterAgent, cancelRouterAgentRevive, ApiError } from '../src/api.js'
+import { reviveRouterAgent, cancelRouterAgentRevive, forgetRouterCredentials, ApiError } from '../src/api.js'
 
 function stubFetch(reply, { ok = true, status = 202 } = {}) {
   const calls = []
@@ -24,6 +24,12 @@ describe('оживление агента: запросы', () => {
     const calls = stubFetch({ cleared: true }, { status: 200 })
     expect(await cancelRouterAgentRevive(7)).toEqual({ cleared: true })
     expect(calls[0]).toEqual({ url: '/v1/miniapp/routers/7/agent/revive', method: 'DELETE', body: undefined })
+  })
+
+  it('«Забыть пароль» -- DELETE на .../credentials без тела', async () => {
+    const calls = stubFetch({ cleared: true, revive_cancelled: false }, { status: 200 })
+    expect(await forgetRouterCredentials(7)).toEqual({ cleared: true, revive_cancelled: false })
+    expect(calls[0]).toEqual({ url: '/v1/miniapp/routers/7/credentials', method: 'DELETE', body: undefined })
   })
 
   it('отказ -- код в ApiError.code, русская фраза в serverMessage', async () => {
