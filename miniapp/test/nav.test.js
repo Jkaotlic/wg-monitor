@@ -210,8 +210,10 @@ describe('невидимый список роутеров на широком �
     expect(escapeAction(s, { wide: true })).toBe(null)
   })
 
-  it('на телефоне -- как было', () => {
-    const s = { routerID: null, tab: 'router', overlay: 'fleet', sheet: null }
+  // С выбранным роутером список на телефоне -- крышка над ним и закрывается.
+  // Без роутера он главный экран и не закрывается (fleetHome.test.js).
+  it('на телефоне с выбранным роутером -- как было', () => {
+    const s = { routerID: 1, tab: 'router', overlay: 'fleet', sheet: null }
     expect(backButtonVisible(s)).toBe(true)
     expect(escapeAction(s)).toEqual({ type: 'back' })
   })

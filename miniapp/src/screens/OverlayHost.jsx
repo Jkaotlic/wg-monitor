@@ -64,7 +64,9 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
         routers={routers}
         currentID={nav.routerID}
         onPick={(id) => dispatch({ type: 'router', id })}
-        onClose={close}
+        // Без выбранного роутера список -- главный экран: уходить с него
+        // некуда (fleetIsHome в nav.js), кнопки «Назад» нет.
+        onClose={nav.routerID != null ? close : undefined}
         shortcut={!nav.sheet}
         isAdmin={isAdmin}
         openSheet={openSheet}
