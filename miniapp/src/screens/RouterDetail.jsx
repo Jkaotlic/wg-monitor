@@ -9,7 +9,7 @@ import {
 } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
 import { routerHeadline } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -731,25 +731,21 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
 
   // Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не
   // было нигде, и человек узнавал ответ в момент падения.
+  const backup = backupCopy({ backupLine, carrierDown: path.tunnel === 'down' })
   const backupBlock = (
     <div class="card row" style="margin-top:12px">
       <div>
-        <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
+        <div class="row-title">
+          <Quoted text={backup.title} />
+        </div>
         <div class="row-note">
-          <Quoted
-            text={
-              backupLine
-                ? backupLine.name
-                  ? `«${backupLine.name}» подхватит, если этот замолчит`
-                  : 'второй VPN-туннель подхватит, если один замолчит'
-                : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
-            }
-          />
+          <Quoted text={backup.note} />
         </div>
       </div>
-      <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
+      <span class={backup.tone === 'ok' ? 'dot dot-ok' : 'dot dot-warn'} />
     </div>
   )
+
 
   const incidentsBlock =
     incidents.length > 0 ? (

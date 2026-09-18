@@ -87,6 +87,29 @@ export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' })
   return alive.length > 1 ? { tunnel_id: '' } : undefined
 }
 
+// Слова строки резерва под схемой. Несущий молчит, а запасной жив -- «готов,
+// подхватит» было бы неправдой: у opkg-туннелей автофолбэка нет, политика
+// сама на запасной не уйдёт. Уводит трафик «Починить» (движок починки сам
+// роняет мёртвое звено, и политика переходит на резерв).
+export function backupCopy({ backupLine, carrierDown = false }) {
+  if (!backupLine) {
+    return { title: 'Запасного VPN-туннеля нет', note: 'если VPN-туннель ляжет, обход блокировок пропадёт до починки', tone: 'warn' }
+  }
+  const named = backupLine.name ? `«${backupLine.name}»` : ''
+  if (carrierDown) {
+    return {
+      title: named ? `Запасной ${named} жив` : 'Запасной VPN-туннель жив',
+      note: 'но сам трафик на него не перейдёт — нажмите «Починить» в тревоге',
+      tone: 'warn',
+    }
+  }
+  return {
+    title: 'Запасной VPN-туннель готов',
+    note: named ? `${named} подхватит, если этот замолчит` : 'второй VPN-туннель подхватит, если один замолчит',
+    tone: 'ok',
+  }
+}
+
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {
   const blind = blindSplit({ traffic, tunnels, incidents })
   const t = blind ? null : carrierLine({ traffic, tunnels })
