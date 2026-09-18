@@ -436,8 +436,8 @@ func miniappFleetIncidentFrom(incidents []dashboardIncident) *miniappFleetIncide
 }
 
 const (
-	autoReviveNeedsRootPassword = "для авто-оживления нужен пароль root"
-	autoReviveNeedsPanelAddress = "для авто-оживления нужен внешний адрес панели"
+	autoReviveBlockedNoRoot  = "для авто-оживления нужен пароль root"
+	autoReviveBlockedNoPanel = "для авто-оживления нужен внешний адрес панели"
 )
 
 // autoReviveBlockedText -- почему авто-проход не оживит «давно не
@@ -452,10 +452,10 @@ func autoReviveBlockedText(u *db.User, passwordSaved bool, rv *miniappFleetReviv
 		return ""
 	}
 	if !passwordSaved {
-		return autoReviveNeedsRootPassword
+		return autoReviveBlockedNoRoot
 	}
 	if _, ok := revive.NormalizePanelURL(stringValue(u.AWGMURL)); !ok {
-		return autoReviveNeedsPanelAddress
+		return autoReviveBlockedNoPanel
 	}
 	return ""
 }
