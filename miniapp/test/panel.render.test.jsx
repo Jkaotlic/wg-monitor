@@ -77,6 +77,17 @@ describe('«Панель роутера»', () => {
     root.remove()
   })
 
+  it('«Агент на роутере» -- в «Что стоит на роутере», а не в порогах', async () => {
+    mocks.settings = { role: 'operator', agent_version: 'v0.41.0', silence_after_sec: 120 }
+    const root = await mount()
+    const byTitle = (t) => sections(root).find((s) => s.querySelector('.section-title')?.textContent === t)
+    expect(byTitle('Что стоит на роутере').textContent).toContain('Агент на роутере')
+    expect(byTitle('Что стоит на роутере').textContent).toContain('v0.41.0')
+    expect(byTitle('Опрос и тревоги').textContent).not.toContain('Агент на роутере')
+    render(null, root)
+    root.remove()
+  })
+
   it('клиента билетов больше нет', async () => {
     const real = await vi.importActual('../src/api.js')
     expect('createPanelTicket' in real).toBe(false)

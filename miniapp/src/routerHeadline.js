@@ -8,7 +8,7 @@
 // Молчащий роутер перебивает всё: в этот момент любое другое показание на
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
-import { humanAge, incidentCopy, pluralRu } from './labels.js'
+import { humanAge, incidentCopy } from './labels.js'
 import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
 
 export function routerHeadline({ router, traffic, incidents = [], tunnels = [] } = {}) {
@@ -192,14 +192,4 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [] }
       ? 'Правила обхода не удалось прочитать целиком, поэтому по ним сейчас не понять, что идёт через VPN.'
       : 'Роутер не сообщил, какой VPN-туннель основной. Соберите отчёт заново.',
   }
-}
-
-// Сколько VPN-туннелей поднято из настроенных. Живёт рядом с шапкой, а не внутри
-// разметки: это счёт со склонением, то есть логика, и проверять её в вёрстке
-// было бы нечем. Ноль -- «0 VPN-туннелей», а не «0 VPN-туннеля»: в приложении, где
-// человек сверяет показания с роутером, сломанное склонение читается как
-// сломанные данные.
-export function linesSummary(live, total) {
-  if (!total) return 'VPN-туннелей нет'
-  return `${live} ${pluralRu(live, 'VPN-туннель', 'VPN-туннеля', 'VPN-туннелей')} из ${total}`
 }

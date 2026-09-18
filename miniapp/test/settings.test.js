@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelHost, panelLink } from '../src/settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelHost, panelLink, agentRow } from '../src/settings.js'
 
 // Пороги живут в backend.yaml и больше нигде: экран печатает то, что прислал
 // сервер (miniappSettingsResp), а не числа из макета.
@@ -16,7 +16,10 @@ describe('thresholdRows', () => {
     expect(byKey.silence.value).toBe('2 мин без отчёта')
     expect(byKey.alert.value).toBe('3 проверки подряд')
     expect(byKey.recovery.value).toBe('2 проверки подряд')
-    expect(byKey.agent.value).toBe('v0.16.0')
+    // Версия агента -- не порог: она в «Что стоит на роутере» (agentRow).
+    expect(byKey.agent).toBeUndefined()
+    expect(agentRow({ agent_version: 'v0.16.0' })).toEqual({ key: 'agent', title: 'Агент на роутере', value: 'v0.16.0' })
+    expect(agentRow({})).toBe(null)
   })
 
   // У мобильного роутера «молчит» и «выключен» -- разные события, и второе

@@ -54,14 +54,14 @@ export function thresholdRows(settings) {
       value: checksCount(settings.recovery_after_oks),
     })
   }
-  if (settings.agent_version) {
-    rows.push({
-      key: 'agent',
-      title: 'Агент на роутере',
-      value: settings.agent_version,
-    })
-  }
   return rows
+}
+
+// Строка «Агент на роутере» -- в разделе «Что стоит на роутере» (v0.41,
+// спека C3): версия агента -- то, что стоит на роутере, а не порог тревоги.
+export function agentRow(settings) {
+  if (!settings?.agent_version) return null
+  return { key: 'agent', title: 'Агент на роутере', value: settings.agent_version }
 }
 
 // version_audit отвечает JSON'ом (wire.VersionAudit): версии, а не текст.

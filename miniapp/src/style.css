@@ -461,6 +461,82 @@ body {
   margin-top: var(--sp-3);
 }
 
+/* «Починить» и «Перезапустить VPN-туннель» -- пара одного размера (v0.41).
+   Обёртка перезапуска растворяется в сетке (display: contents): кнопка
+   встаёт второй ячейкой, а строки хода команды -- на всю ширину под парой. */
+.incident-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+}
+
+.incident-pair .restart-block {
+  display: contents;
+}
+
+.incident-pair .btn {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  white-space: normal;
+}
+
+.incident-pair .state {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* Тихая ссылка: справка, а не действие («История за 24ч»). */
+.link-quiet {
+  display: inline-block;
+  padding: var(--sp-1) 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.link-quiet:hover,
+.link-quiet:focus-visible {
+  color: var(--ink);
+}
+
+/* Лист выбора: варианты столбиком, «Отмена» отдельно снизу. */
+.sheet-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sheet-choices-cancel {
+  margin-top: var(--sp-2);
+}
+
+/* «Как это работает» под кнопкой «Сравнить адреса выхода». */
+.compare-how {
+  margin-top: var(--sp-3);
+}
+
+.compare-how > summary {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.compare-how > .traffic-detail {
+  margin-top: var(--sp-2);
+}
+
+/* Проваленные проверки -- над спойлером, на виду. */
+.checks-failing {
+  margin-bottom: var(--sp-3);
+}
+
 .incident-history {
   margin-top: var(--sp-3);
 }
@@ -796,13 +872,9 @@ body {
    Same visual voice as every other .section-title (small, muted, uppercase,
    letter-spaced) so a collapsed spoiler reads as just another section header,
    not a foreign control -- the marker triangle is the only tell that this one
-   is interactive. Native <details>/<summary>, but driven as a CONTROLLED
-   disclosure: RouterDetail.jsx keeps `open` in state and syncs every native
-   toggle back via onToggle, so a manual collapse sticks while the failing set
-   is unchanged, yet a newly-failing check force-reopens it. Do NOT "simplify"
-   this back to `open={liveBoolean}` -- Preact diffs that prop against the vnode,
-   not the DOM, so a native collapse desyncs and a later failure stays hidden
-   (see the long note in RouterDetail.jsx above the spoiler). */
+   is interactive. Plain native <details>/<summary>: since v0.41 only healthy
+   checks live inside it, failing ones sit above it in .checks-failing, so
+   nothing ever needs to force it open. */
 .checks-spoiler-summary {
   display: flex;
   align-items: center;
@@ -3988,6 +4060,10 @@ body {
 
   .wide-shell .restart-block > .btn {
     width: 100%;
+  }
+
+  .wide-shell .incident-pair .restart-block {
+    margin-top: 0;
   }
 
   /* Надзаголовок раздела и строка итога под ним (Парк): 4 px между ними,

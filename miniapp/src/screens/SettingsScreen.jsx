@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow } from '../settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, agentRow } from '../settings.js'
 import { versionsRows, unknownLine, installedRows } from '../versions.js'
 import { humanAge } from '../labels.js'
 import { confirmSheet, localSheet } from '../sheet.js'
@@ -384,6 +384,11 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet }) {
       )}
 
       <Section title="Что стоит на роутере">
+        {agentRow(settings) && (
+          <div class="card settings-card">
+            <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
+          </div>
+        )}
         <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
           {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
         </button>

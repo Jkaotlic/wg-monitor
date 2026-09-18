@@ -156,7 +156,10 @@ beforeEach(() => {
 describe('экран VPN-туннеля', () => {
   it('список своих VPN-туннелей ведёт на экран, «назад» закрывает', async () => {
     const { root } = await mount()
-    expect([...root.querySelectorAll('.list-row-btn .row-title')].map((t) => t.textContent)).toEqual(['amsterdam', 'spare', 'old-home'])
+    // Строки «Все VPN-туннели»; ниже -- строки переходов (Маршруты, загрузка
+    // .conf, замена конфига) в своей карточке .tunnels-more.
+    const rows = [...root.querySelectorAll('.list-row-btn')].filter((b) => !b.closest('.tunnels-more'))
+    expect(rows.map((b) => b.querySelector('.row-title').textContent)).toEqual(['amsterdam', 'spare', 'old-home'])
     expect(root.textContent).toContain('Все VPN-туннели · 3')
     await openTunnel(root, 'spare')
     const screen = root.querySelector('.tunnel-screen')

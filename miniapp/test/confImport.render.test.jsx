@@ -101,16 +101,18 @@ const flushMany = async (n = 6) => {
 const byText = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 const routeStatusCalls = () => mocks.calls.filter((c) => c.action === 'route_status').length
 
-async function mount() {
+async function mount(extra = {}) {
   const root = document.createElement('div')
   document.body.appendChild(root)
-  await act(async () => render(<TunnelsTab routerID={7} openSheet={() => {}} onOpenRoutes={() => {}} />, root))
+  await act(async () => render(<TunnelsTab routerID={7} openSheet={() => {}} onOpenRoutes={() => {}} {...extra} />, root))
   await flushMany(2)
   return root
 }
 
+// С v0.41 вход в загрузку -- обычная строка списка под «VPN-туннелями», а не
+// карточка-переход (акцентная там одна -- «Новый VPN-туннель из кабинета»).
 function importCard(root) {
-  return [...root.querySelectorAll('.nav-card')].find((c) => c.querySelector('.nav-card-title')?.textContent === 'Загрузить конфиг .conf')
+  return [...root.querySelectorAll('.list-row-btn')].find((c) => c.querySelector('.row-title')?.textContent === 'Загрузить конфиг .conf')
 }
 
 async function openImport(root) {
@@ -415,10 +417,20 @@ describe('загрузка .conf: ревью', () => {
   })
 })
 
+describe('низ «VPN-туннелей» (v0.41, спека C4)', () => {
+  it('акцентный переход один -- кабинет; загрузка -- обычная строка списка', async () => {
+    const root = await mount({ onOpenCabinet: () => {} })
+    const cards = [...root.querySelectorAll('.nav-card')].map((c) => c.querySelector('.nav-card-title').textContent)
+    expect(cards).toEqual(['Новый VPN-туннель из кабинета'])
+    expect(importCard(root)).toBeTruthy()
+    render(null, root)
+  })
+})
+
 describe('приёмка: вход в загрузку', () => {
   it('подпись карточки -- какие конфиги подходят', async () => {
     const root = await mount()
-    expect(importCard(root).querySelector('.nav-card-note').textContent).toBe('WireGuard · AmneziaWG')
+    expect(importCard(root).querySelector('.list-row-sub').textContent).toBe('WireGuard · AmneziaWG')
     render(null, root)
   })
 })
