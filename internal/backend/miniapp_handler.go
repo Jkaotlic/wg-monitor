@@ -255,11 +255,17 @@ func miniappServiceDots(d Deps, routerID int64, incidents []dashboardIncident) (
 	return out, miniappReserveOnlyAlert(rows, incidents)
 }
 
-// miniappReserveOnlyAlert: тревоги есть, и каждая -- по туннелю tunnel_<id>,
-// который обход сейчас не несёт. Несущий -- тот же, что называет экран
-// роутера (miniappPolicyCarrier по сводке политик агента), плюс главный выход
-// через VPN-туннель, если он такой: его падение -- не «резерв». Несущий
-// неизвестен (старый агент, sing-box) -- false: не угадываем.
+// miniappReserveOnlyAlert: тревоги есть, и каждая -- по туннелю, который
+// обход сейчас не несёт, а только лежит в запасе у несущего набора. Несущий --
+// тот же, что называет экран роутера (miniappPolicyCarrier по сводке политик
+// агента); неизвестен (старый агент, sing-box) -- false: не угадываем.
+//
+// Тревога считается «резервной», только если её туннель одновременно:
+// звено несущего набора не в роли active; не активное звено НИ ОДНОГО набора
+// с исполняемыми правилами (второй набор мог идти именно через него); не
+// ведёт своих правил (routes_dns/routes_static); не главный выход. Кроме
+// того, ни один набор с исполняемыми правилами не должен остаться без живого
+// звена -- его правила не идут никуда. Всё прочее -- настоящая тревога.
 func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) bool {
 	if len(incidents) == 0 {
 		return false
@@ -279,16 +285,42 @@ func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) 
 	if hd.SingboxRouterActive {
 		return false
 	}
-	carrier, _ := miniappPolicyCarrier(tunnels, hd)
+	carrier, carrierPolicy := miniappPolicyCarrier(tunnels, hd)
 	if carrier == nil {
 		return false
 	}
-	for _, inc := range incidents {
-		id, ok := strings.CutPrefix(inc.CheckName, miniappTunnelPrefix)
-		if !ok || id == "" || id == carrier.TunnelID {
+	carrying := map[string]bool{}
+	for i := range hd.Policies {
+		p := &hd.Policies[i]
+		if miniappPolicyExecuted(p, hd) <= 0 {
+			continue
+		}
+		hasActive := false
+		for _, l := range p.Links {
+			if l.Role == "active" {
+				hasActive = true
+			}
+		}
+		if !hasActive {
 			return false
 		}
-		if t := miniappTunnelByID(tunnels, id); t != nil && t.IsActiveDefault {
+		if p.ActiveTunnelID != "" {
+			carrying[p.ActiveTunnelID] = true
+		}
+	}
+	spare := map[string]bool{}
+	for _, l := range carrierPolicy.Links {
+		if l.TunnelID != "" && l.Role != "active" {
+			spare[l.TunnelID] = true
+		}
+	}
+	for _, inc := range incidents {
+		id, ok := strings.CutPrefix(inc.CheckName, miniappTunnelPrefix)
+		if !ok || id == "" || !spare[id] || carrying[id] {
+			return false
+		}
+		t := miniappTunnelByID(tunnels, id)
+		if t == nil || t.IsActiveDefault || t.RoutesDNS+t.RoutesStatic > 0 {
 			return false
 		}
 	}

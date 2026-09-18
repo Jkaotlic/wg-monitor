@@ -176,3 +176,65 @@ func TestPanelTicketRoutesRemoved(t *testing.T) {
 		}
 	}
 }
+
+// seedReserveShape -- роутер формы workrouter с подменённой сводкой политик и
+// строкой третьего туннеля; тревога на tunnel_<incident>.
+func reserveOnlyFor(t *testing.T, hydra string, extra [][3]string, incident string) (string, bool) {
+	t.Helper()
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	now := time.Now().UTC().Add(-time.Minute)
+	rows := [][3]string{
+		{"hydraroute", "ok", hydra},
+		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"nl2","status":"running","enabled":true,"active_default_known":true}`},
+		{"tunnel_awg14", "ok", `{"tunnel_id":"awg14","tunnel_name":"hipvps","status":"running","enabled":true,"active_default_known":true}`},
+	}
+	for _, r := range append(rows, extra...) {
+		if err := d.Events().Insert(ownedID, r[0], r[1], r[2], now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedHardIncident(t, d, ownedID, "tunnel_"+incident)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	body, got := miniappRoutersRows(t, h, ownerTG)
+	_, ok := got["router-owned"]["reserve_only_alert"]
+	return body, ok
+}
+
+const reserveHydraHead = `{"installed":true,"running":true,"routes_hrneo":34,"singbox_router_active":false,"policies":[
+	{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":31,"hr_neo":31,"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}`
+
+// Второй набор «Games» реально идёт через мёртвый awg10: это не резерв, а
+// сломанный обход, пусть и меньший.
+func TestMiniappRoutersReserveOnlyAlertFalseWhenDeadTunnelCarriesOtherPolicy(t *testing.T) {
+	hydra := reserveHydraHead + `,
+	{"name":"Games","active_tunnel_id":"awg10","via_vpn":true,"dns":3,"hr_neo":3,"links":[{"tunnel_id":"awg10","role":"active"}]}]}`
+	if body, ok := reserveOnlyFor(t, hydra, nil, "awg10"); ok {
+		t.Fatalf("awg10 несёт набор Games -- не резерв: %s", body)
+	}
+}
+
+// Туннель вне набора со своими статическими маршрутами -- не запасной.
+func TestMiniappRoutersReserveOnlyAlertFalseForTunnelWithOwnRoutes(t *testing.T) {
+	hydra := reserveHydraHead + `]}`
+	extra := [][3]string{{"tunnel_awg20", "fail", `{"tunnel_id":"awg20","tunnel_name":"de","status":"running","enabled":true,"active_default_known":true,"routes_static":12}`}}
+	if body, ok := reserveOnlyFor(t, hydra, extra, "awg20"); ok {
+		t.Fatalf("awg20 ведёт 12 статических маршрутов -- не резерв: %s", body)
+	}
+}
+
+// Набор с правилами, у которого все звенья лежат: его правила не идут никуда,
+// и тревога по его звену -- настоящая.
+func TestMiniappRoutersReserveOnlyAlertFalseWhenPolicyAllUnavailable(t *testing.T) {
+	hydra := reserveHydraHead + `,
+	{"name":"Games","active_tunnel_id":"","via_vpn":false,"dns":3,"hr_neo":3,"links":[{"tunnel_id":"awg10","role":"unavailable"}]}]}`
+	if body, ok := reserveOnlyFor(t, hydra, nil, "awg10"); ok {
+		t.Fatalf("набор Games без живого звена -- не резерв: %s", body)
+	}
+}
+
+// Контроль формы: тот же помощник на чистом workrouter даёт плашку.
+func TestMiniappRoutersReserveOnlyAlertHelperBaseline(t *testing.T) {
+	if body, ok := reserveOnlyFor(t, reserveHydraHead+`]}`, nil, "awg10"); !ok {
+		t.Fatalf("workrouter: ждали reserve_only_alert: %s", body)
+	}
+}

@@ -311,8 +311,8 @@ func miniappBypassByRules(tunnels []miniappTunnel, hd miniappHydraDetails) (bool
 // Правила HydraRoute Neo исполняются только запущенным HydraRoute, остальные
 // правила политики -- самим роутером. Несущий обязан быть среди туннелей
 // экрана и работать: ссылка на линию, которой экран не показывает, -- не
-// ответ. Политик с правилами несколько -- несущим считается та, что ведёт
-// больше правил (первая при равенстве), как её и видит человек.
+// ответ. Политик с правилами несколько -- несущим считается та, что
+// исполняет больше правил (первая при равенстве).
 //
 // nil -- сводки нет (старый агент) или ни одна политика с правилами не идёт
 // через живой VPN-туннель; тогда отвечает miniappBypassByRules.
@@ -321,12 +321,10 @@ func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*min
 		best    *wire.PolicyBrief
 		carrier *miniappTunnel
 	)
+	bestExecuted := 0
 	for i := range hd.Policies {
 		p := &hd.Policies[i]
-		executed := p.DNS - p.HRNeo
-		if hd.Running {
-			executed = p.DNS
-		}
+		executed := miniappPolicyExecuted(p, hd)
 		if executed <= 0 || !p.ViaVPN || p.ActiveTunnelID == "" {
 			continue
 		}
@@ -334,11 +332,21 @@ func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*min
 		if t == nil || t.RunState != "running" {
 			continue
 		}
-		if best == nil || p.DNS > best.DNS {
-			best, carrier = p, t
+		if best == nil || executed > bestExecuted {
+			best, carrier, bestExecuted = p, t, executed
 		}
 	}
 	return carrier, best
+}
+
+// miniappPolicyExecuted -- сколько правил политики роутер исполняет сейчас:
+// правила HydraRoute Neo -- только при запущенном HydraRoute, остальные --
+// всегда.
+func miniappPolicyExecuted(p *wire.PolicyBrief, hd miniappHydraDetails) int {
+	if hd.Running {
+		return p.DNS
+	}
+	return p.DNS - p.HRNeo
 }
 
 // miniappPolicyReserve -- запасные звенья набора, живые по своей проверке:

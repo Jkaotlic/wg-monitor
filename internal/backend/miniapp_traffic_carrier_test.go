@@ -110,3 +110,22 @@ func TestMiniappTrafficPoliciesDoNotOverrideVPNDefault(t *testing.T) {
 		t.Fatalf("got %+v, хотим vpn через awg10", got)
 	}
 }
+
+// Несущий -- набор, который ведёт больше ИСПОЛНЯЕМЫХ правил: при остановленном
+// HydraRoute правила HR-Neo не считаются, и набор с правилами NDMS побеждает.
+func TestMiniappPolicyCarrierComparesExecutedRules(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg10", Name: "nl2", Status: "ok", RunState: "running", ActiveDefaultKnown: true},
+		{TunnelID: "awg14", Name: "hipvps", Status: "ok", RunState: "running", ActiveDefaultKnown: true},
+	}
+	var hd miniappHydraDetails
+	if err := json.Unmarshal([]byte(`{"running":false,"policies":[
+		{"name":"A","active_tunnel_id":"awg10","via_vpn":true,"dns":40,"hr_neo":38,"links":[{"tunnel_id":"awg10","role":"active"}]},
+		{"name":"B","active_tunnel_id":"awg14","via_vpn":true,"dns":5,"hr_neo":0,"links":[{"tunnel_id":"awg14","role":"active"}]}]}`), &hd); err != nil {
+		t.Fatal(err)
+	}
+	carrier, _ := miniappPolicyCarrier(tunnels, hd)
+	if carrier == nil || carrier.TunnelID != "awg14" {
+		t.Fatalf("carrier = %+v, хотим awg14 (5 исполняемых против 2)", carrier)
+	}
+}
