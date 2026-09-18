@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // miniappTunnelPrefix mirrors checks.tunnelCheckPrefix ("tunnel_"): per-tunnel
@@ -157,6 +158,12 @@ type miniappTraffic struct {
 	// Reason -- почему ответ «неизвестно», когда экрану есть что сказать
 	// точнее общего «роутер не сообщил». Пусто у остальных режимов.
 	Reason string `json:"reason,omitempty"`
+	// ReserveTunnelIDs -- запасные звенья набора, несущего обход, которые
+	// живы по своей проверке tunnel_* (status ok): кто подхватит обход, если
+	// несущий ляжет. Заполняется только когда несущий назван по сводке
+	// политик агента; пусто -- резерва нет или агент о нём не сообщил
+	// (отличает их наличие EgressTunnelID при режиме split).
+	ReserveTunnelIDs []string `json:"reserve_tunnel_ids,omitempty"`
 }
 
 // miniappTrafficReasonRulesUnreadable: агент не смог прочитать правила
@@ -174,6 +181,11 @@ type miniappHydraDetails struct {
 	// нули от незнания. 07.09.2026 на snekhaev список DNS-маршрутов перерос
 	// потолок чтения, и экран неделю писал «трафик идёт напрямую».
 	MechanismProbeError string `json:"mechanism_probe_error"`
+	// Policies -- сводка политик доступа (агент v0.41+): кто несёт каждую
+	// политику сейчас и роли звеньев. nil у старых агентов и сборок
+	// awg-manager без политик -- тогда несущий по-прежнему выводится из
+	// числа живых туннелей.
+	Policies []wire.PolicyBrief `json:"policies"`
 }
 
 // miniappDeriveTraffic answers "direct or via VPN" from stored state alone.
@@ -237,7 +249,15 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 		// раздельная маршрутизация: всё, что не названо правилами, идёт мимо
 		// VPN, а заблокированное уводят правила. Так настроены рабочий роутер
 		// и testkeen, и жёлтое «обход не работает» на них было неправдой.
-		if bypass, carrier := miniappBypassByRules(tunnels, hd); bypass {
+		if carrier, pol := miniappPolicyCarrier(tunnels, hd); carrier != nil {
+			// Несущего назвал сам роутер: активное звено набора с правилами.
+			// Без этого при двух живых экран брал первый running и красил
+			// живой обход тревогой запасного (workrouter, 18.09.2026).
+			out.Mode = miniappTrafficSplit
+			out.EgressTunnelID = carrier.TunnelID
+			out.EgressTunnelName = carrier.Name
+			out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol)
+		} else if bypass, carrier := miniappBypassByRules(tunnels, hd); bypass {
 			out.Mode = miniappTrafficSplit
 			if carrier != nil {
 				out.EgressTunnelID = carrier.TunnelID
@@ -284,4 +304,67 @@ func miniappBypassByRules(tunnels []miniappTunnel, hd miniappHydraDetails) (bool
 		return true, live[0]
 	}
 	return true, nil
+}
+
+// miniappPolicyCarrier -- VPN-туннель, который несёт обход по сводке политик
+// агента: активное звено политики, у которой есть исполняемые правила.
+// Правила HydraRoute Neo исполняются только запущенным HydraRoute, остальные
+// правила политики -- самим роутером. Несущий обязан быть среди туннелей
+// экрана и работать: ссылка на линию, которой экран не показывает, -- не
+// ответ. Политик с правилами несколько -- несущим считается та, что ведёт
+// больше правил (первая при равенстве), как её и видит человек.
+//
+// nil -- сводки нет (старый агент) или ни одна политика с правилами не идёт
+// через живой VPN-туннель; тогда отвечает miniappBypassByRules.
+func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*miniappTunnel, *wire.PolicyBrief) {
+	var (
+		best    *wire.PolicyBrief
+		carrier *miniappTunnel
+	)
+	for i := range hd.Policies {
+		p := &hd.Policies[i]
+		executed := p.DNS - p.HRNeo
+		if hd.Running {
+			executed = p.DNS
+		}
+		if executed <= 0 || !p.ViaVPN || p.ActiveTunnelID == "" {
+			continue
+		}
+		t := miniappTunnelByID(tunnels, p.ActiveTunnelID)
+		if t == nil || t.RunState != "running" {
+			continue
+		}
+		if best == nil || p.DNS > best.DNS {
+			best, carrier = p, t
+		}
+	}
+	return carrier, best
+}
+
+// miniappPolicyReserve -- запасные звенья набора, живые по своей проверке:
+// роль fallback (интерфейс поднят) ещё не значит, что туннель что-то везёт --
+// на workrouter запасной был поднят с обменом ключами 24-минутной давности.
+func miniappPolicyReserve(tunnels []miniappTunnel, p *wire.PolicyBrief) []string {
+	if p == nil {
+		return nil
+	}
+	var out []string
+	for _, l := range p.Links {
+		if l.Role != "fallback" || l.TunnelID == "" || l.TunnelID == p.ActiveTunnelID {
+			continue
+		}
+		if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.Status == "ok" {
+			out = append(out, l.TunnelID)
+		}
+	}
+	return out
+}
+
+func miniappTunnelByID(tunnels []miniappTunnel, id string) *miniappTunnel {
+	for i := range tunnels {
+		if tunnels[i].TunnelID == id {
+			return &tunnels[i]
+		}
+	}
+	return nil
 }
