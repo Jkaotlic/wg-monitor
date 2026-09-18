@@ -18,8 +18,10 @@ import { tunnelLive, tunnelSwitchedOff } from './routes.js'
 // который и так включён. Различение бесплатное: enabled -- это настройка,
 // status -- факт, и они приходят порознь.
 function chainRole(link, tunnel, activeTunnelID) {
-  if (link.tunnel_id && link.tunnel_id === activeTunnelID) return 'active'
   const live = tunnelLive(tunnel ?? {})
+  // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict):
+  // трафик в него уходит и теряется -- «Работает сейчас» было бы неправдой.
+  if (link.tunnel_id && link.tunnel_id === activeTunnelID) return live === 'down' ? 'activeDown' : 'active'
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
   if (live === 'unknown') return 'unknown'
@@ -32,6 +34,7 @@ function chainRole(link, tunnel, activeTunnelID) {
 // у остальных -- то, чем они отличаются друг от друга.
 const ROLE_NOTE = {
   active: '',
+  activeDown: 'трафик не проходит',
   ready: 'отвечает',
   down: 'включён',
   off: 'выключен',

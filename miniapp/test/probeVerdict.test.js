@@ -28,3 +28,20 @@ describe('вердикт проверок на вкладке «VPN-туннел
     expect(withCheckVerdict(snap, null)).toBe(snap)
   })
 })
+
+describe('несущий туннель с проваленной проверкой', () => {
+  it('цепочка и карточка не называют его работающим', async () => {
+    const { tunnelsView } = await import('../src/tunnelsView.js')
+    const s = withCheckVerdict(
+      { ...snap, policies: [{ name: 'HydraRoute', active_tunnel_id: 'awg10', dns: 31, interfaces: [
+        { bind: 'OpkgTun10', name: 'vpn-nl', tunnel_id: 'awg10', role: 'active' },
+        { bind: 'OpkgTun11', name: 'vpn-hip', tunnel_id: 'awg11', role: 'fallback' },
+      ] }] },
+      events,
+    )
+    const v = tunnelsView(s)
+    expect(v.active.live).toBe('down')
+    expect(v.chain[0].role).toBe('activeDown')
+    expect(v.chain[1].role).toBe('ready')
+  })
+})
