@@ -56,8 +56,10 @@ function blindSplit({ traffic, tunnels, incidents }) {
 function tunnelBranch({ line, incidents, stale }) {
   if (stale) return 'unknown'
   if (!line) return 'unknown'
-  if (incidents?.some((i) => i.check_name === `tunnel_${line.tunnel_id}`)) return 'down'
-  return isRunning(line) ? 'up' : 'down'
+  // То же правило живости, что у шапки (isAlive): проваленная проверка
+  // несущего -- уже «молчит», даже пока тревога не набрала порог. Иначе
+  // схема рисовала бы зелёное рядом с шапкой, где этот туннель мёртв.
+  return isAlive(line, incidents) ? 'up' : 'down'
 }
 
 // Живые запасные звенья политики несущего по слову бэкенда, или null, если
