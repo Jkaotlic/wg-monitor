@@ -210,7 +210,7 @@ func seedWorkChecks(d *db.DB, uid int64, ts time.Time) error {
 		{"agent_heartbeat", "ok", `{}`},
 		{"dns", "ok", `{"endpoints":0,"failed_count":0}`},
 		{"hydraroute", "ok", `{"running":true,"routes_hrneo":32,"routes_ndms":0,"routes_static":0,"active_backend":"kernel",` +
-			`"policies":[{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":0,"hr_neo":32,` +
+			`"policies":[{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":32,"hr_neo":32,` +
 			`"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`},
 		{"awg_manager", "ok", `{"version":"2.19.1","firmware":"5.02.A.8.0-3"}`},
 		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":1447,"ping_check_status":"disabled","default_route_intent":true,"is_active_default":false,"active_default_known":true}`},
