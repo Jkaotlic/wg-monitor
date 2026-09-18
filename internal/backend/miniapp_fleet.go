@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
@@ -51,6 +52,9 @@ type miniappFleetRevive struct {
 	// Пустая строка -- опроса ещё не было. Экран считает «N мин назад» от
 	// generated_at этого же ответа, а не от своих часов.
 	LastProbeAt string `json:"last_probe_at"`
+	// Auto -- поставлено авто-проходом по сохранённому паролю (v0.45), а не
+	// админом. Отмена та же.
+	Auto bool `json:"auto"`
 }
 
 // miniappFleetLastDeploy -- последняя раскатка агента. At -- users.last_deploy:
@@ -117,6 +121,14 @@ type miniappFleetRouter struct {
 	PanelAddressKnown bool `json:"panel_address_known"`
 	// Revive -- оживление агента; null, когда его не ставили. Без omitempty.
 	Revive *miniappFleetRevive `json:"revive"`
+	// RootPasswordSaved -- для роутера сохранён пароль root (v0.45). Только
+	// признак: ни пароля, ни шифртекста, ни их полей в ответе нет и быть не
+	// может (TestStoredRouterCredentialsNeverLeak).
+	RootPasswordSaved bool `json:"root_password_saved"`
+	// AutoReviveBlocked -- роутер «давно не обновлялся» (agentLongNotUpdated),
+	// но авто-оживление не начнётся: чего не хватает, по-русски. Пусто --
+	// либо не нужно, либо ничто не мешает, либо оживление уже поставлено.
+	AutoReviveBlocked string `json:"auto_revive_blocked"`
 	// PendingSince -- когда назначено ждущее обновление; null -- не ждёт.
 	PendingSince *string `json:"pending_since"`
 	// LastDeploy -- null, если раскатки не было. Без omitempty: форма строки
@@ -232,6 +244,14 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			users = nil
 		}
+		savedCreds, err := d.DB.RouterCredentials().SavedAt()
+		if err != nil {
+			// Добавка к строке: без неё признак «пароль сохранён» -- false.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: сохранённые пароли не прочитаны", "err", err)
+			}
+			savedCreds = nil
+		}
 		usersByID := make(map[int64]int, len(users))
 		for i := range users {
 			usersByID[users[i].ID] = i
@@ -264,6 +284,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				NotifyMuted:    mutedByAdmin[a.ID],
 				Away:           a.Status == "sleeping" || a.Status == "offline",
 			}
+			_, row.RootPasswordSaved = savedCreds[a.ID]
 			if i, ok := usersByID[a.ID]; ok {
 				row.Away, _, _ = miniappWakeWindow(d, &users[i], "self_update", now)
 				_, row.PanelAddressKnown = panelAddress(users[i].AWGMURL)
@@ -316,6 +337,9 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				} else if view != nil {
 					row.Revive = miniappFleetReviveFrom(view)
 				}
+			}
+			if i, ok := usersByID[a.ID]; ok && resp.ReviveEnabled {
+				row.AutoReviveBlocked = autoReviveBlockedText(&users[i], row.RootPasswordSaved, row.Revive, now)
 			}
 			resp.Routers = append(resp.Routers, row)
 		}
@@ -386,6 +410,7 @@ func miniappFleetReviveFrom(v *revive.IntentView) *miniappFleetRevive {
 		Attempts:      v.Attempts,
 		LastErrorText: v.LastErrorText,
 		LastProbeText: v.LastProbeText,
+		Auto:          v.Auto,
 	}
 	if !v.LastProbeAt.IsZero() {
 		out.LastProbeAt = v.LastProbeAt.UTC().Format(time.RFC3339)
@@ -408,4 +433,29 @@ func miniappFleetIncidentFrom(incidents []dashboardIncident) *miniappFleetIncide
 		}
 	}
 	return out
+}
+
+const (
+	autoReviveNeedsRootPassword = "для авто-оживления нужен пароль root"
+	autoReviveNeedsPanelAddress = "для авто-оживления нужен внешний адрес панели"
+)
+
+// autoReviveBlockedText -- почему авто-проход не оживит «давно не
+// обновлявшийся» роутер. Те же условия, что у revive.AutoSchedule: пароль
+// root сохранён, адрес панели проходит проверку постановки. Идущее или
+// ждущее оживление -- не жалоба: строка оживления и так говорит о нём.
+func autoReviveBlockedText(u *db.User, passwordSaved bool, rv *miniappFleetRevive, now time.Time) string {
+	if !agentLongNotUpdated(u, serverVersion, now) {
+		return ""
+	}
+	if rv != nil && (rv.Status == revive.StatusWaiting || rv.Status == revive.StatusRunning) {
+		return ""
+	}
+	if !passwordSaved {
+		return autoReviveNeedsRootPassword
+	}
+	if _, ok := revive.NormalizePanelURL(stringValue(u.AWGMURL)); !ok {
+		return autoReviveNeedsPanelAddress
+	}
+	return ""
 }

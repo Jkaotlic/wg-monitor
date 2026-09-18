@@ -756,6 +756,7 @@ func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
 	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
 		t.Fatal(err)
 	}
+	saveFixtureCreds(t, d, ownedID) // v0.45: сохранённый пароль root
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: &dashboardActionSink{}})
 
 	settingsPath := fmt.Sprintf("/v1/miniapp/routers/%d/settings", ownedID)
@@ -775,7 +776,7 @@ func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
 			if panelAllowed != bytes.Contains(body, []byte(`"panel_url":"`+awgmURL+`"`)) {
 				t.Errorf("tg %d %s: panel_url разрешён=%v, тело %s", who, path, panelAllowed, body)
 			}
-			secrets := []string{awgmAuth, sshHost, expectedMAC, "-1009876543210"}
+			secrets := append([]string{awgmAuth, sshHost, expectedMAC, "-1009876543210"}, reviveFixtureSecrets...)
 			if !panelAllowed {
 				secrets = append(secrets, awgmURL, "panel_url")
 			}
@@ -786,7 +787,7 @@ func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
 			}
 			// Ни значений, ни имён полей: имя поля в ответе означает, что
 			// значение приедет туда завтра, когда его кто-нибудь заполнит.
-			for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id"} {
+			for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id", "root_password", "awgm_password", "awgm_api_key", "ciphertext", "nonce"} {
 				if bytes.Contains(body, []byte(field)) {
 					t.Errorf("tg %d %s: есть поле %q -- секреты уедут в него завтра", who, path, field)
 				}

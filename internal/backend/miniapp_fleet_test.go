@@ -78,6 +78,10 @@ func TestMiniappFleetNeverLeaksRouterSecrets(t *testing.T) {
 		awgmURL, awgmAuth, sshHost, sshUser, expectedMAC, chatID, ownedID); err != nil {
 		t.Fatal(err)
 	}
+	// v0.45: сохранённый пароль root -- тоже секрет роутера. В сводке --
+	// только признак root_password_saved (TestStoredRouterCredentialsNeverLeak
+	// проверяет все остальные ответы).
+	saveFixtureCreds(t, d, ownedID)
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
 
 	rec := fleetRequest(t, h, 999)
@@ -90,12 +94,15 @@ func TestMiniappFleetNeverLeaksRouterSecrets(t *testing.T) {
 	// получает ссылкой panel_url в строках /v1/miniapp/routers
 	// (TestMiniappCommandScreensNeverLeakRouterSecrets); сводке парка он не
 	// нужен -- ей хватает признака panel_address_known.
-	for _, secret := range []string{awgmURL, awgmAuth, sshHost, expectedMAC, "-1009876543210"} {
+	for _, secret := range append([]string{awgmURL, awgmAuth, sshHost, expectedMAC, "-1009876543210"}, reviveFixtureSecrets...) {
 		if strings.Contains(body, secret) {
 			t.Errorf("в сводке парка утекло %q: %s", secret, body)
 		}
 	}
-	for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id"} {
+	if !strings.Contains(body, `"root_password_saved":true`) {
+		t.Errorf("признака сохранённого пароля нет -- сторож проверял бы пустоту: %s", body)
+	}
+	for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id", `"root_password":`, "awgm_password", "awgm_api_key", "ciphertext", "nonce"} {
 		if strings.Contains(body, field) {
 			t.Errorf("в сводке парка есть поле %q -- секреты уедут в него завтра", field)
 		}
