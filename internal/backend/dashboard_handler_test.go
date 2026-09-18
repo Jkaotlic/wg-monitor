@@ -891,7 +891,9 @@ func TestDashboardDeployRejectsWhenAnotherVersionIsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Users().MarkPendingDeploy(userID, "v0.13.0-rc120", "2026-06-10T12:00:00Z"); err != nil {
+	// Назначена та же версия, что просят: повтор -- отказ. Более свежая версия
+	// назначенную вытесняет (TestAgentDeployCoreNewerTargetSupersedesPending).
+	if err := d.Users().MarkPendingDeploy(userID, "v0.13.0-rc132", "2026-06-10T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	sink := &dashboardActionSink{}
@@ -916,7 +918,7 @@ func TestDashboardDeployRejectsWhenAnotherVersionIsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc120" {
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc132" {
 		t.Fatalf("pending_version=%v", u.PendingVersion)
 	}
 }

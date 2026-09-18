@@ -64,7 +64,28 @@ func agentDeployCore(d Deps, u *db.User, target string, opts agentDeployOpts) (a
 				targetVersion, stringValue(u.LastDeployedVersion))}
 	}
 	if pending := strings.TrimSpace(stringValue(u.PendingVersion)); pending != "" {
-		return agentDeployResult{}, &agentDeployError{http.StatusConflict, deployErrPending, "agent already has pending deploy " + pending}
+		// Более свежая версия вытесняет назначенную. Иначе выключенный роутер,
+		// которому однажды назначили v0.37, отбивал бы каждую следующую
+		// раскатку и, проснувшись, ставил бы старьё (18.09: bronya и
+		// caredns-oldcar ждали v0.37 при бэкенде v0.42). Та же или более старая
+		// версия -- прежний отказ: повтор безопасен.
+		if !isVersionDowngrade(pending, targetVersion) {
+			return agentDeployResult{}, &agentDeployError{http.StatusConflict, deployErrPending, "agent already has pending deploy " + pending}
+		}
+		// Снимаем только ту отметку, которую видели: если её уже переписали,
+		// проигрываем гонку тем же отказом, что и раньше.
+		cleared, err := d.DB.Users().ClearPendingDeployIfMatches(u.ID, pending)
+		if err != nil {
+			return agentDeployResult{}, &agentDeployError{http.StatusInternalServerError, errCodeInternal, err.Error()}
+		}
+		if !cleared {
+			return agentDeployResult{}, &agentDeployError{http.StatusConflict, deployErrPending, "agent already has pending deploy"}
+		}
+		d.CommandSink.DropPending(u.ID, "self_update")
+		if d.Logger != nil {
+			d.Logger.Info("agent deploy superseded", "source", opts.Source, "nickname", u.Nickname, "user_id", u.ID,
+				"from_version", pending, "target_version", targetVersion)
+		}
 	}
 	id, err := newCmdID()
 	if err != nil {

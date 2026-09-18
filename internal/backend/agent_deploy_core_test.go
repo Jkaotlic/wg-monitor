@@ -176,3 +176,51 @@ func TestAgentDeployCoreConcurrentAssignHitsErrDeployPending(t *testing.T) {
 		t.Fatalf("проигравшая гонку постановка не должна класть команду: %+v", q)
 	}
 }
+
+// 18.09: выключенным роутерам однажды назначили v0.37, и следующие раскатки
+// (v0.40, v0.42) отскакивали от «уже назначено» -- проснувшись, роутер ставил
+// бы v0.37. Более свежая версия вытесняет назначенную: старая команда
+// выбрасывается из очереди, отметка переписывается.
+func TestAgentDeployCoreNewerTargetSupersedesPending(t *testing.T) {
+	d, u := coreTestRouter(t, "v0.31.0")
+	if err := d.Users().MarkPendingDeploy(u.ID, "v0.37.0", "2026-09-17T08:40:44Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.Users().RecordPendingDeployError(u.ID, "v0.37.0", "download: HTTP 503"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ = d.Users().GetByID(u.ID)
+	sink := &dashboardActionSink{}
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	res, derr := agentDeployCore(Deps{DB: d, CommandSink: sink}, u, "v0.42.0", agentDeployOpts{RepoBaseURL: "https://backend.example.com", Now: now})
+	if derr != nil {
+		t.Fatalf("свежая версия должна вытеснить назначенную: %+v", derr)
+	}
+	if res.TargetVersion != "v0.42.0" {
+		t.Fatalf("результат: %+v", res)
+	}
+	if len(sink.droppedActions) != 1 || sink.droppedActions[0] != "self_update" {
+		t.Fatalf("старая команда осталась в очереди: %v", sink.droppedActions)
+	}
+	st, _ := d.Users().PendingDeploy(u.ID)
+	if st.Version != "v0.42.0" || st.Since != now.Format(time.RFC3339) || st.Attempts != 0 || st.LastError != "" {
+		t.Fatalf("отметка не переписана начисто: %+v", st)
+	}
+}
+
+func TestAgentDeployCoreSameOrOlderTargetStillRefusedWhilePending(t *testing.T) {
+	d, u := coreTestRouter(t, "v0.31.0")
+	if err := d.Users().MarkPendingDeploy(u.ID, "v0.42.0", "2026-09-18T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ = d.Users().GetByID(u.ID)
+	sink := &dashboardActionSink{}
+	for _, v := range []string{"v0.42.0", "v0.41.0"} {
+		if _, derr := agentDeployCore(Deps{DB: d, CommandSink: sink}, u, v, agentDeployOpts{RepoBaseURL: "https://backend.example.com"}); derr == nil || derr.Code != deployErrPending {
+			t.Fatalf("%s поверх назначенной v0.42.0 -- отказ: %+v", v, derr)
+		}
+	}
+	if len(sink.droppedActions) != 0 {
+		t.Fatalf("отказ не трогает очередь: %v", sink.droppedActions)
+	}
+}

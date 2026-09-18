@@ -141,7 +141,9 @@ func TestMiniappAgentUpdateRefusals(t *testing.T) {
 	check("нет выпуска", `{"confirm":"router-owned","target_version":"latest"}`, http.StatusConflict, "no_release")
 	check("даунгрейд", `{"confirm":"router-owned","target_version":"v0.30.0"}`, http.StatusBadRequest, "downgrade_rejected")
 
-	if err := d.Users().MarkPendingDeploy(ownedID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
+	// Назначена та же версия, что раскатывается по умолчанию (последняя):
+	// повтор -- отказ. Более старую назначенную свежая вытесняет.
+	if err := d.Users().MarkPendingDeploy(ownedID, "v0.33.0", "2026-09-15T10:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	check("уже назначено", `{"confirm":"router-owned"}`, http.StatusConflict, "deploy_pending")
@@ -408,6 +410,11 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	if err := d.Users().MarkPendingDeploy(pendingID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	// Назначена та же версия, что раскатывается: повтор -- пропуск.
+	sameID := add("router-pending-same", "5", "v0.31.0")
+	if err := d.Users().MarkPendingDeploy(sameID, "v0.33.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	add("router-fresh", "4", "v0.33.0")
 
 	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
@@ -428,9 +435,12 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 		}
 	}
 	want := map[string][2]string{
-		"router-owned":   {"deferred", "router_asleep"},
-		"router-online":  {"queued", ""},
-		"router-pending": {"skipped", "deploy_pending"},
+		"router-owned":  {"deferred", "router_asleep"},
+		"router-online": {"queued", ""},
+		// Назначенная v0.32.0 старше раскатываемой v0.33.0 -- вытесняется
+		// (18.09: выключенные роутеры ждали v0.37 при бэкенде v0.42).
+		"router-pending":      {"deferred", "router_asleep"},
+		"router-pending-same": {"skipped", "deploy_pending"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("в итоге %d роутеров, ждали %d: %+v", len(got), len(want), resp.Results)
@@ -447,8 +457,11 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	if got["router-owned"].RouterID != ownedID {
 		t.Errorf("router_id: %+v", got["router-owned"])
 	}
-	if n := len(sink.snapshotEnqueued()); n != 2 {
-		t.Fatalf("поставлено %d команд, ждали 2", n)
+	if n := len(sink.snapshotEnqueued()); n != 3 {
+		t.Fatalf("поставлено %d команд, ждали 3", n)
+	}
+	if st, _ := d.Users().PendingDeploy(pendingID); st.Version != "v0.33.0" {
+		t.Fatalf("назначенная версия не переписана на свежую: %+v", st)
 	}
 }
 

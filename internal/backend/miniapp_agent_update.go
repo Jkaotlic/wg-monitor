@@ -271,23 +271,22 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 				continue
 			}
 			row := miniappFleetAgentUpdateResult{RouterID: u.ID, Nickname: u.Nickname}
-			switch {
-			case strings.TrimSpace(stringValue(u.PendingVersion)) != "":
-				row.Outcome, row.ReasonCode = "skipped", deployErrPending
-			default:
-				if _, derr := agentDeployCore(d, u, serverVersion, opts); derr != nil {
-					if derr.Code == deployErrPending {
-						row.Outcome, row.ReasonCode = "skipped", deployErrPending
-					} else {
-						row.Outcome, row.ReasonCode = "error", derr.Code
-					}
-				} else if asleep, _, _ := miniappWakeWindow(d, u, "self_update", now); asleep {
-					row.Outcome, row.ReasonCode = "deferred", "router_asleep"
-					row.ReasonText = "Роутер не на связи: обновится, когда выйдет на связь."
+			// Назначенное обновление решает ядро: более старое оно вытесняет,
+			// то же -- отказывает deploy_pending (ниже это «пропущено»).
+			// Ранний пропуск здесь держал бы выключенные роутеры на старой
+			// версии вечно.
+			if _, derr := agentDeployCore(d, u, serverVersion, opts); derr != nil {
+				if derr.Code == deployErrPending {
+					row.Outcome, row.ReasonCode = "skipped", deployErrPending
 				} else {
-					row.Outcome = "queued"
-					row.ReasonText = "Обновление отправлено."
+					row.Outcome, row.ReasonCode = "error", derr.Code
 				}
+			} else if asleep, _, _ := miniappWakeWindow(d, u, "self_update", now); asleep {
+				row.Outcome, row.ReasonCode = "deferred", "router_asleep"
+				row.ReasonText = "Роутер не на связи: обновится, когда выйдет на связь."
+			} else {
+				row.Outcome = "queued"
+				row.ReasonText = "Обновление отправлено."
 			}
 			if row.ReasonText == "" {
 				row.ReasonText = miniappDeployErrorText(row.ReasonCode)
