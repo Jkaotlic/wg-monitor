@@ -68,7 +68,7 @@ describe('«Сейчас» без повторов', () => {
     const { root } = await mount()
     expect(root.querySelector('.hero').textContent).not.toMatch(/VPN-туннел\S* из \d/)
     expect(root.textContent).not.toMatch(/\d+ шт\./)
-    expect(root.querySelector('.stat-grid').textContent).toContain('поднято из 2')
+    expect(root.querySelector('.stat-grid').textContent).toContain('из 2 настроенных')
     cleanup(root)
   })
 

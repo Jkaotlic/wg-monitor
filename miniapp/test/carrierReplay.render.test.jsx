@@ -55,6 +55,11 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
     expect(svg).toContain('vpn-hip')
     expect(svg).not.toContain('VPN-ТУННЕЛЬ МОЛЧИТ')
     expect(root.querySelector('.stat-grid').textContent).toContain('117')
+    // Плитка считает работающие, а не поднятые интерфейсы: у vpn-nl
+    // интерфейс поднят, но обмен ключами не проходит.
+    const tunnelsTile = [...root.querySelectorAll('.stat-grid > *')].find((n) => /VPN-туннели/i.test(n.textContent))
+    expect(tunnelsTile.textContent).toMatch(/^VPN-туннели\s*1/i)
+    expect(tunnelsTile.textContent).toContain('работает из 2')
     expect(root.querySelector('.hero').textContent).toContain('всё работает, резерва нет')
     expect(root.textContent).toContain('Запасного VPN-туннеля нет')
     // Адрес панели -- строкой под именем роутера в шапке телефона.

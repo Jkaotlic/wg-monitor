@@ -645,7 +645,15 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
   // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
   // говорить про тот же несущий туннель, что и она.
   const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via })
-  const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
+  // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
+  // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
+  // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
+  const liveCount = tunnels.filter(
+    (t) =>
+      tunnelStateLabel(t) === 'работает' &&
+      t.status !== 'fail' &&
+      !incidents.some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
+  ).length
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -707,7 +715,7 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? `поднято из ${tunnels.length} настроенных`
+              ? `${liveCount === 1 ? 'работает' : 'работают'} из ${tunnels.length} настроенных`
               : 'роутер не сообщил ни одного'
         }
         tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
