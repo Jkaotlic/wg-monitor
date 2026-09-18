@@ -91,7 +91,9 @@ func TestIsReleaseProxyBusyFailure(t *testing.T) {
 		"download checksums.txt: HTTP 503 for https://github.com/Jkaotlic/wg-monitor/releases/download/v0.43.0/checksums.txt": false,
 		"download checksums.txt: HTTP 502 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt":               false,
 		"sha256 mismatch: want a got b": false,
-		"":                              false,
+		// Новый агент: прокси занят, но GitHub отдал выпуск с чужой подписью.
+		"github: verify checksums.txt signature: bad; backend: download checksums.txt: HTTP 503 for https://h.example.com/v1/releases/download/v0.45.0/checksums.txt": false,
+		"": false,
 	}
 	for in, want := range cases {
 		if got := isReleaseProxyBusyFailure(in); got != want {

@@ -125,7 +125,12 @@ func recordPendingDeployFailure(d Deps, uid int64, nickname, target, output stri
 // wire.SelfUpdateBusyMarker он не знает, а 503 наш прокси отдаёт только на
 // «занято» (release_proxy.go). Адрес обязан быть нашим зеркалом
 // /v1/releases/download/: 503 от GitHub -- чужая беда, не очередь у нас.
-var legacyBusyOutput = regexp.MustCompile(`download [^:\s]+: HTTP 503 for \S+/v1/releases/download/`)
+//
+// Строка привязана к началу вывода: новый агент, у которого бэкенд был занят,
+// а GitHub отдал выпуск с негодной подписью, пишет «github: …; backend:
+// download …: HTTP 503 …» -- это настоящий провал, и попытку он обязан
+// потратить.
+var legacyBusyOutput = regexp.MustCompile(`^download [^:\s]+: HTTP 503 for \S+/v1/releases/download/`)
 
 // isReleaseProxyBusyFailure -- неудача self_update из-за занятого прокси
 // релизов, а не из-за роутера.
