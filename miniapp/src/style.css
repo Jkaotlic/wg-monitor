@@ -2165,6 +2165,17 @@ body {
   color: var(--ink);
 }
 
+/* В строке-кнопке списка хост -- текст, не ссылка: без подчёркивания и
+   без своей реакции на наведение. */
+.panel-line-text {
+  text-decoration: none;
+  cursor: inherit;
+}
+
+.panel-line-text:hover {
+  color: var(--accent);
+}
+
 /* Первая строка «Управления»: адрес панели целиком кнопкой. */
 .panel-open {
   display: flex;
