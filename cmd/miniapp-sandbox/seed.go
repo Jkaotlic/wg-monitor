@@ -36,6 +36,10 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 		// Выключенный роутер без адреса панели -- случай bronya из парка
 		// 15.09: оживлению нужен адрес, и лист обязан его спросить.
 		{"sandbox-bronya", "static", "v0.29.0", 240 * time.Hour, "owner"},
+		// Форма workrouter 18.09: обход несёт живой awg14, запасное звено awg10
+		// мертво. Экран обязан сказать «всё работает, резерва нет», а не
+		// красить ветку по мёртвому запасному.
+		{"sandbox-work", "static", "v0.41.0", 30 * time.Second, "owner"},
 	}
 
 	for i, s := range specs {
@@ -63,7 +67,11 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 		}
 
 		seen := now.Add(-s.lastSeen)
-		if err := seedChecks(d, uid, seen, s.nick == "sandbox-broken"); err != nil {
+		if s.nick == "sandbox-work" {
+			if err := seedWorkChecks(d, uid, seen); err != nil {
+				return nil, err
+			}
+		} else if err := seedChecks(d, uid, seen, s.nick == "sandbox-broken"); err != nil {
 			return nil, err
 		}
 		// История за неделю: без неё вкладка «Что было» открывается почти
@@ -98,6 +106,21 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 			}
 			// Адрес панели записан: в приложение уходит только признак.
 			if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, "https://203.0.113.14:2222", uid); err != nil {
+				return nil, err
+			}
+		}
+		if s.nick == "sandbox-work" {
+			// Адрес панели -- доменом, как у настоящих роутеров: мини-апп
+			// показывает хост строкой под именем.
+			if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, "https://awg.example.com", uid); err != nil {
+				return nil, err
+			}
+			hardSince := now.Add(-20 * time.Minute)
+			lastAlert := now.Add(-19 * time.Minute)
+			if err := d.State().Save(uid, "tunnel_awg10", db.IncidentState{
+				UserID: uid, CheckName: "tunnel_awg10", CurrentStatus: "hard",
+				ConsecutiveFails: 22, HardSince: &hardSince, LastAlertAt: &lastAlert,
+			}); err != nil {
 				return nil, err
 			}
 		}
@@ -165,6 +188,38 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 				status = "ok"
 			}
 			if err := d.Events().Insert(uid, r.name, status, r.details, at); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// seedWorkChecks -- снимок прода workrouter 18.09 07:58 (обезличен): два
+// поднятых VPN-туннеля, оба заявляют основной маршрут, правила HydraRoute
+// ведут в политику, где awg14 -- активное звено, awg10 -- запасное. awg10
+// не отвечает (обмен ключами 24 минуты назад). details.policies -- форма
+// v0.41 (wire.PolicyBrief): по ней бэкенд называет несущего; бэкенд старше
+// её не читает, и экран обязан не угадывать.
+func seedWorkChecks(d *db.DB, uid int64, ts time.Time) error {
+	rows := []struct {
+		name    string
+		status  string
+		details string
+	}{
+		{"agent_heartbeat", "ok", `{}`},
+		{"dns", "ok", `{"endpoints":0,"failed_count":0}`},
+		{"hydraroute", "ok", `{"running":true,"routes_hrneo":32,"routes_ndms":0,"routes_static":0,"active_backend":"kernel",` +
+			`"policies":[{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":0,"hr_neo":32,` +
+			`"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`},
+		{"awg_manager", "ok", `{"version":"2.19.1","firmware":"5.02.A.8.0-3"}`},
+		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":1447,"ping_check_status":"disabled","default_route_intent":true,"is_active_default":false,"active_default_known":true}`},
+		{"tunnel_awg14", "ok", `{"tunnel_id":"awg14","tunnel_name":"vpn-hip","status":"running","enabled":true,"handshake_age_sec":88,"ping_check_status":"disabled","matrix_latency_ms":117,"matrix_updated_at":"2026-09-18T07:58:02Z","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"}`},
+	}
+	for shift := 0; shift < 3; shift++ {
+		at := ts.Add(-time.Duration(shift) * time.Minute)
+		for _, r := range rows {
+			if err := d.Events().Insert(uid, r.name, r.status, r.details, at); err != nil {
 				return err
 			}
 		}

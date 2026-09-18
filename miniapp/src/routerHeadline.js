@@ -9,6 +9,7 @@
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy, pluralRu } from './labels.js'
+import { carrierKnown, isAlive } from './trafficPath.js'
 
 export function routerHeadline({ router, traffic, incidents = [], tunnels = [] } = {}) {
   const age = router?.last_seen_age_sec
@@ -49,20 +50,57 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [] }
     // человек нигде не видел. В шапке называем ПОСЛЕДСТВИЕ, а сам туннель и
     // его имя остаются в карточке тревоги, где их сверяет тот, кто чинит.
     if (name.startsWith('tunnel_')) {
-      // Упавший VPN-туннель -- ещё не потерянный обход. Пока жив другой, трафик
-      // идёт через него, и кричать «не открывается» значит гнать человека
-      // чинить то, что у него работает. Тревога остаётся -- VPN-туннель поднимать
-      // надо, — но заголовок обязан говорить правду о последствиях.
-      const alive = tunnels.find(
-        (t) => t.run_state === 'running' && `tunnel_${t.tunnel_id}` !== name,
-      )
-      if (alive) {
-        return {
-          tone: 'warn',
-          cold: true,
-          stale,
-          tag: 'работает на запасном VPN-туннеле',
-          verdict: `Один VPN-туннель упал, обход идёт через «${alive.name || alive.tunnel_id}». Починить упавший всё равно стоит: запасной остался один.`,
+      const lineName = (t) => t?.name || t?.tunnel_id
+      // Несущего назвал сам роутер (агент v0.41+): схема и заголовок обязаны
+      // говорить про ОДИН и тот же туннель. 18.09 workrouter: обход шёл через
+      // живой hipvps, а заголовок писал «работает на запасном» -- угадывал.
+      if (carrierKnown({ traffic, tunnels })) {
+        const carrier = tunnels.find((t) => t.tunnel_id === traffic.egress_tunnel_id)
+        const via = traffic.egress_tunnel_name || lineName(carrier)
+        if (isAlive(carrier, incidents)) {
+          const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
+          const deadName = lineName(dead) || name.slice('tunnel_'.length)
+          const reserves = Array.isArray(traffic.reserve_tunnel_ids)
+            ? traffic.reserve_tunnel_ids
+            : tunnels.filter((t) => t !== carrier && isAlive(t, incidents)).map((t) => t.tunnel_id)
+          if (reserves.length === 0) {
+            return {
+              tone: 'warn',
+              cold: true,
+              stale,
+              tag: 'всё работает, резерва нет',
+              verdict: `Обход идёт через «${via}». Запасной «${deadName}» не отвечает — если основной ляжет, подхватить некому.`,
+            }
+          }
+          return {
+            tone: 'warn',
+            cold: true,
+            stale,
+            tag: 'всё работает, один запасной упал',
+            verdict: `Обход идёт через «${via}». Запасной «${deadName}» не отвечает, другой запасной наготове.`,
+          }
+        }
+        // Несущий мёртв: трафик обхода идёт в него, пока правила его не сменят.
+      } else {
+        // Упавший VPN-туннель -- ещё не потерянный обход. Пока жив другой, трафик
+        // идёт через него, и кричать «не открывается» значит гнать человека
+        // чинить то, что у него работает. Тревога остаётся -- VPN-туннель поднимать
+        // надо, — но заголовок обязан говорить правду о последствиях.
+        const alive = tunnels.find((t) => isAlive(t, incidents) && `tunnel_${t.tunnel_id}` !== name)
+        if (alive) {
+          // При раздельной маршрутизации несущего выбирают правила, и роутер
+          // старше v0.41 его не называет: назвать живой туннель -- угадать.
+          const verdict =
+            traffic?.mode === 'split'
+              ? 'Один VPN-туннель упал, обход идёт через оставшиеся. Починить упавший всё равно стоит: запаса стало меньше.'
+              : `Один VPN-туннель упал, обход идёт через «${lineName(alive)}». Починить упавший всё равно стоит: запасной остался один.`
+          return {
+            tone: 'warn',
+            cold: true,
+            stale,
+            tag: 'работает на запасном VPN-туннеле',
+            verdict,
+          }
         }
       }
       return {

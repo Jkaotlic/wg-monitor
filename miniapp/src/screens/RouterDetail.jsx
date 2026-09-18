@@ -9,7 +9,7 @@ import {
 } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState } from '../trafficPath.js'
+import { pathState, reserveLine } from '../trafficPath.js'
 import { routerHeadline, linesSummary } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -678,15 +678,11 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   // routerHeadline: молчащий роутер перебивает любое другое показание.
   const headline = routerHeadline({ router, traffic, incidents, tunnels })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
-  // Резерв -- любой работающий VPN-туннель, кроме того, что несёт обход сейчас.
-  // Когда несущий не назван (раздельная маршрутизация, выбирают правила),
-  // резерв есть, если живых больше одного, но назвать его -- угадать.
-  const running = tunnels.filter((t) => t.run_state === 'running')
-  const backupLine = path.via
-    ? running.find((t) => (t.name || t.tunnel_id) !== path.via)
-    : running.length > 1
-      ? { tunnel_id: '' }
-      : undefined
+  // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
+  // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
+  // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
+  // говорить про тот же несущий туннель, что и она.
+  const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via })
   const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
   const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
 

@@ -29,6 +29,11 @@ export function fleetRow(router) {
   let pill
   if (never) {
     pill = { tone: 'muted', text: 'ни разу не отвечал' }
+  } else if (router.status === 'alert' && router.reserve_only_alert) {
+    // Все тревоги -- по запасным звеньям, несущий жив: обход работает. Красное
+    // «тревога» тут гнало бы чинить срочно то, что можно чинить спокойно.
+    // Сервер знает несущего, поэтому признак считает он.
+    pill = { tone: 'warn', text: 'резерв не работает' }
   } else if (router.status === 'alert') {
     pill = { tone: 'danger', text: 'тревога' }
   } else if (router.status === 'offline') {
@@ -44,7 +49,9 @@ export function fleetRow(router) {
     // Идентификатор VPN-туннеля в этом списке не значит ничего: у человека здесь
     // нет ни снимка маршрутов, ни имён туннелей, чтобы понять, что такое
     // awg12. Внутри роутера VPN-туннель назван именем -- туда и идти.
-    sub = incidentWhatPlain(incidents[0].check_name)
+    sub = router.reserve_only_alert
+      ? 'запасной VPN-туннель не отвечает, обход работает'
+      : incidentWhatPlain(incidents[0].check_name)
   } else if (never) {
     sub = 'агент установлен, но отчётов от него не было'
   } else {
