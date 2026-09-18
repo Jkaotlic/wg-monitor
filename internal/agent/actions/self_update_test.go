@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type zeroReader struct{}
@@ -508,13 +509,20 @@ func TestHTTPGetToFileWritesBodyAndReturnsSHA256(t *testing.T) {
 }
 
 func TestHTTPGetToFileRejectsOversizedResponse(t *testing.T) {
+	// Лимит -- параметр функции, поэтому проверяем его на мегабайте, а не на
+	// боевых 64: CI 18.09 однажды встал на перекачке 64 МБ по loopback (клиент
+	// ждал чтения, сервер -- записи) и висел до таймаута пакета. Контекст с
+	// таймаутом превращает возможное зависание в быстрый внятный провал.
+	const limit = 1 << 20
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.CopyN(w, zeroReader{}, expectedMaxSelfUpdateArtifactSize+1)
+		_, _ = io.CopyN(w, zeroReader{}, limit+1)
 	}))
 	defer srv.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	dst := filepath.Join(t.TempDir(), "agent.new")
-	_, err := httpGetToFile(context.Background(), srv.Client(), srv.URL, dst, expectedMaxSelfUpdateArtifactSize)
+	_, err := httpGetToFile(ctx, srv.Client(), srv.URL, dst, limit)
 	if err == nil {
 		t.Fatal("expected oversized response to fail")
 	}
