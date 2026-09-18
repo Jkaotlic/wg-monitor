@@ -68,7 +68,7 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, noticeExpired(u.Nickname, in.ExpiresAt), generation)
 		return
 	}
-	if s.agentFresh(u, now) {
+	if s.agentFresh(u, now) && !s.needsReinstall(u) {
 		s.work.Unlock()
 		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, noticeAliveItself(u.Nickname), generation)
 		return
@@ -320,6 +320,7 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	case out.Success:
 		s.finish(ctx, routerID, running, StatusDone, reasonRevived, noticeRevived(nick, out.Version), in.Generation)
 	case out.AuthFailed:
+		s.forgetRejectedCredentials(routerID)
 		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, noticeAuthFailed(nick), in.Generation)
 	default:
 		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false, in.Generation)
