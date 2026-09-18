@@ -187,7 +187,13 @@ export function navReducer(state, action) {
       // returnParams -- параметры слоя, куда возвращаемся: экран сервера
       // возвращает на список, и списку нужен его собственный returnTo.
       const params = state.overlayParams
-      const next = { ...withoutParams(state), overlay: normalizeReturn(params?.returnTo ?? null) }
+      const target = normalizeReturn(params?.returnTo ?? null)
+      // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
+      // есть вкладка -- иначе «назад» оставил бы пустую основную область.
+      if (OVERLAY_TABS[target] && state.routerID != null) {
+        return { ...withoutParams(state), tab: OVERLAY_TABS[target], overlay: null }
+      }
+      const next = { ...withoutParams(state), overlay: target }
       return next.overlay && params?.returnParams ? { ...next, overlayParams: params.returnParams } : next
     }
     default:

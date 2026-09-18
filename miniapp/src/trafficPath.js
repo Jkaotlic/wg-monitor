@@ -47,17 +47,27 @@ export function carrierKnown({ traffic, tunnels }) {
   return Boolean(traffic?.egress_tunnel_id) && Boolean(tunnels?.some((x) => x.tunnel_id === traffic.egress_tunnel_id))
 }
 
+// Мёртвый -- тот, кто должен работать, но не работает: тревога по нему или
+// поднятый с проваленной проверкой. Выключенный руками (stopped/disabled без
+// тревоги) не мёртв: трафик на него и не рассчитан.
+function isDead(t, incidents = []) {
+  if (incidents?.some((i) => i.check_name === `tunnel_${t.tunnel_id}`)) return true
+  return isRunning(t) && t.status === 'fail'
+}
+
 // Несущий неизвестен, туннелей несколько и часть мертва: любой выбор -- угадывание.
 function blindSplit({ traffic, tunnels, incidents }) {
   if (traffic?.mode !== 'split' || carrierKnown({ traffic, tunnels })) return false
-  return (tunnels?.length ?? 0) > 1 && tunnels.some((t) => !isAlive(t, incidents))
+  return (tunnels?.length ?? 0) > 1 && tunnels.some((t) => isDead(t, incidents))
 }
 
 function tunnelBranch({ line, incidents, stale }) {
   if (stale) return 'unknown'
   if (!line) return 'unknown'
-  if (incidents?.some((i) => i.check_name === `tunnel_${line.tunnel_id}`)) return 'down'
-  return isRunning(line) ? 'up' : 'down'
+  // То же правило живости, что у шапки (isAlive): проваленная проверка
+  // несущего -- уже «молчит», даже пока тревога не набрала порог. Иначе
+  // схема рисовала бы зелёное рядом с шапкой, где этот туннель мёртв.
+  return isAlive(line, incidents) ? 'up' : 'down'
 }
 
 // Живые запасные звенья политики несущего по слову бэкенда, или null, если
@@ -83,6 +93,29 @@ export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' })
   const alive = tunnels.filter((t) => isAlive(t, incidents))
   if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== traffic?.egress_tunnel_id)
   return alive.length > 1 ? { tunnel_id: '' } : undefined
+}
+
+// Слова строки резерва под схемой. Несущий молчит, а запасной жив -- «готов,
+// подхватит» было бы неправдой: у opkg-туннелей автофолбэка нет, политика
+// сама на запасной не уйдёт. Уводит трафик «Починить» (движок починки сам
+// роняет мёртвое звено, и политика переходит на резерв).
+export function backupCopy({ backupLine, carrierDown = false }) {
+  if (!backupLine) {
+    return { title: 'Запасного VPN-туннеля нет', note: 'если VPN-туннель ляжет, обход блокировок пропадёт до починки', tone: 'warn' }
+  }
+  const named = backupLine.name ? `«${backupLine.name}»` : ''
+  if (carrierDown) {
+    return {
+      title: named ? `Запасной ${named} жив` : 'Запасной VPN-туннель жив',
+      note: 'но сам трафик на него не перейдёт — нажмите «Починить» в тревоге',
+      tone: 'warn',
+    }
+  }
+  return {
+    title: 'Запасной VPN-туннель готов',
+    note: named ? `${named} подхватит, если этот замолчит` : 'второй VPN-туннель подхватит, если один замолчит',
+    tone: 'ok',
+  }
 }
 
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {

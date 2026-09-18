@@ -34,9 +34,11 @@ func MiniAppURL(base string) string {
 
 // MiniAppRouterTabURL -- экран роутера сразу на вкладке и слое: кнопка
 // «Открыть в приложении» под панелями бота, откуда ушли VPN-туннели и
-// маршруты (цикл 4). tab -- ключ вкладки (router|tunnels|diag|events), open --
-// слой (routes, settings, …) или "". Ключи -- адреса мини-аппа (miniapp/src/nav.js,
-// TABS и OPEN_OVERLAYS). Не https -- пусто.
+// маршруты (цикл 4). tab -- ключ вкладки (router|tunnels|diag|events|manage),
+// open -- слой (routes, agentcfg, cabinet, …) или "". Настройки -- вкладка
+// manage, а не слой: старые open=settings/open=admin мини-апп переводит на
+// неё сам. Ключи -- адреса мини-аппа (miniapp/src/nav.js, TABS и
+// OPEN_OVERLAYS). Не https -- пусто.
 func MiniAppRouterTabURL(base string, routerUserID int64, tab, open string) string {
 	u := MiniAppRouterURL(base, routerUserID)
 	if u == "" {

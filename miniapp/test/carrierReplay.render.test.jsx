@@ -22,7 +22,7 @@ vi.mock('../src/useCommand.js', () => ({
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
-async function mount(traffic) {
+async function mount(traffic, reserveOnlyAlert = false) {
   mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
   mocks.checks = { ...structuredClone(SNAP.events), traffic }
   const root = document.createElement('div')
@@ -30,7 +30,7 @@ async function mount(traffic) {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <RouterDetail id={56} panelURL="https://awg.example.com" openSheet={() => {}} onTab={() => {}} />
+        <RouterDetail id={56} panelURL="https://awg.example.com" reserveOnlyAlert={reserveOnlyAlert} openSheet={() => {}} onTab={() => {}} />
       </AppContext.Provider>,
       root,
     ),
@@ -50,7 +50,7 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
   })
 
   it('агент назвал несущего: зелёная ветка через vpn-hip, 117 мс, резерва нет', async () => {
-    const root = await mount({ ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', reserve_tunnel_ids: [] })
+    const root = await mount({ ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', reserve_tunnel_ids: [] }, true)
     const svg = root.querySelector('.traffic-path').textContent
     expect(svg).toContain('vpn-hip')
     expect(svg).not.toContain('VPN-ТУННЕЛЬ МОЛЧИТ')

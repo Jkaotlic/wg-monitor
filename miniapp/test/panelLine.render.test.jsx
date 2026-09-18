@@ -4,8 +4,9 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
 // v0.41: адрес панели awg-manager строкой под именем роутера -- в «Моих
-// роутерах», в боковой колонке и в шапке роутера. Нажатие открывает панель
-// во внешнем браузере и НЕ открывает роутер (строка сама -- кнопка).
+// роутерах», в боковой колонке и в шапке роутера. В шапке это ссылка на
+// панель; в строках списка -- просто текст: строка сама кнопка, и ссылку в
+// кнопку не вкладываем (ревью 18.09).
 const mocks = vi.hoisted(() => ({ opened: [] }))
 
 vi.mock('../src/telegram.js', async (importOriginal) => ({
@@ -39,16 +40,19 @@ const cleanup = (root) => {
 }
 
 describe('адрес панели под именем роутера', () => {
-  it('«Мои роутеры»: хост у роутера с адресом, нажатие открывает панель, а не роутер', async () => {
+  it('«Мои роутеры»: хост у роутера с адресом -- текстом, нажатие открывает роутер', async () => {
     mocks.opened = []
     const picked = []
     const root = await mount(<FleetOverlay routers={ROUTERS} currentID={1} onPick={(id) => picked.push(id)} onClose={() => {}} />)
     const lines = root.querySelectorAll('.panel-line')
     expect(lines).toHaveLength(1)
     expect(lines[0].textContent).toBe('awg.example.com')
+    expect(lines[0].getAttribute('role')).toBe(null)
+    expect(lines[0].tagName).toBe('SPAN')
+    expect(root.querySelector('button [role="link"], button button')).toBe(null)
     await act(async () => lines[0].click())
-    expect(mocks.opened).toEqual(['https://awg.example.com/'])
-    expect(picked).toEqual([])
+    expect(mocks.opened).toEqual([])
+    expect(picked).toEqual([1])
     // Янтарная плашка «резерв не работает» вместо красной «тревоги».
     expect(root.textContent).toContain('резерв не работает')
     expect(root.querySelector('.stub-park')).toBe(null)
@@ -61,22 +65,28 @@ describe('адрес панели под именем роутера', () => {
     cleanup(root)
   })
 
-  it('боковая колонка: хост под именем, янтарная точка', async () => {
+  it('боковая колонка: хост под именем текстом, янтарная точка', async () => {
     mocks.opened = []
     const picked = []
     const root = await mount(<Sidebar mode="web" routers={ROUTERS} currentID={2} onPick={(id) => picked.push(id)} onPark={() => {}} onLogout={() => {}} />)
     const line = root.querySelector('.side-row .panel-line')
     expect(line.textContent).toBe('awg.example.com')
+    expect(line.getAttribute('role')).toBe(null)
     await act(async () => line.click())
-    expect(mocks.opened).toEqual(['https://awg.example.com/'])
-    expect(picked).toEqual([])
+    expect(mocks.opened).toEqual([])
+    expect(picked).toEqual([1])
     expect(root.querySelector('.side-dot-warn')).toBeTruthy()
     cleanup(root)
   })
 
   it('шапка широкого экрана: хост под именем и без шестерёнки', async () => {
     const root = await mount(<WideHeader router={ROUTERS[0]} tab="router" onTab={() => {}} />)
-    expect(root.querySelector('.main-head .panel-line').textContent).toBe('awg.example.com')
+    const link = root.querySelector('.main-head .panel-line')
+    expect(link.textContent).toBe('awg.example.com')
+    expect(link.tagName).toBe('BUTTON')
+    mocks.opened = []
+    await act(async () => link.click())
+    expect(mocks.opened).toEqual(['https://awg.example.com/'])
     expect(root.querySelector('.main-gear')).toBe(null)
     cleanup(root)
     const plain = await mount(<WideHeader router={ROUTERS[1]} tab="router" onTab={() => {}} />)

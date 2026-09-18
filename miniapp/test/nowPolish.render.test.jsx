@@ -41,6 +41,8 @@ async function mount() {
   const events = structuredClone(SNAP.events)
   // Одна служебная проверка проваливается -- она обязана встать над спойлером.
   events.checks = events.checks.map((c) => (c.check_name === 'dns' ? { ...c, status: 'fail' } : c))
+  // Сторож своего DNS «не следит» (серый) -- это не поломка, он остаётся в спойлере.
+  events.checks.push({ check_name: 'resolver_guard', status: 'ok', ts: events.checks[0].ts, details: { idle: true } })
   mocks.checks = { ...events, traffic: { ...events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' } }
   const sheets = []
   const root = document.createElement('div')
@@ -80,6 +82,9 @@ describe('«Сейчас» без повторов', () => {
     expect(spoiler.open).toBe(false)
     expect(spoiler.querySelectorAll('.checks-status-bad, .checks-status-danger')).toHaveLength(0)
     expect(failing.compareDocumentPosition(spoiler) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Над спойлером -- только красное и жёлтое; серое «не следит» -- внутри.
+    expect(failing.querySelectorAll('.checks-status-muted')).toHaveLength(0)
+    expect(spoiler.querySelectorAll('.checks-status-muted')).toHaveLength(1)
     cleanup(root)
   })
 

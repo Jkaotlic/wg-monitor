@@ -9,7 +9,7 @@ import {
 } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
 import { routerHeadline } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -552,7 +552,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 }
 
 
-export function RouterDetail({ id, panelURL, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -618,8 +618,12 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
   // сломанное пряталось в спойлере вместе с исправным, и спойлер приходилось
   // насильно раскрывать при каждой новой поломке.
   const otherChecks = orderChecks(checks ?? [])
-  const okChecks = otherChecks.filter((c) => checkState(c).tone === 'ok')
-  const failingChecks = otherChecks.filter((c) => checkState(c).tone !== 'ok')
+  // Над спойлером -- только красное и жёлтое. Серое («сторож не следит»,
+  // незнакомый статус) -- не поломка и остаётся внутри вместе с исправным.
+  const isFailing = (c) => ['danger', 'warn'].includes(checkState(c).tone)
+  const okChecks = otherChecks.filter((c) => !isFailing(c))
+  const okCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
+  const failingChecks = otherChecks.filter(isFailing)
 
   if (error) return <p class="state state-error">{error}</p>
   if (router == null) return <p class="state">Загрузка…</p>
@@ -638,7 +642,9 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
-  const headline = routerHeadline({ router, traffic, incidents, tunnels })
+  // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
+  // нет» говорим только по слову сервера (он видит политики целиком).
+  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
   // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
   // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
@@ -725,25 +731,21 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
 
   // Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не
   // было нигде, и человек узнавал ответ в момент падения.
+  const backup = backupCopy({ backupLine, carrierDown: path.tunnel === 'down' })
   const backupBlock = (
     <div class="card row" style="margin-top:12px">
       <div>
-        <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
+        <div class="row-title">
+          <Quoted text={backup.title} />
+        </div>
         <div class="row-note">
-          <Quoted
-            text={
-              backupLine
-                ? backupLine.name
-                  ? `«${backupLine.name}» подхватит, если этот замолчит`
-                  : 'второй VPN-туннель подхватит, если один замолчит'
-                : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
-            }
-          />
+          <Quoted text={backup.note} />
         </div>
       </div>
-      <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
+      <span class={backup.tone === 'ok' ? 'dot dot-ok' : 'dot dot-warn'} />
     </div>
   )
+
 
   const incidentsBlock =
     incidents.length > 0 ? (
@@ -755,7 +757,7 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
               key={inc.check_name}
               routerID={id}
               incident={inc}
-              whySuppressed={i === 0 && headline.tone === 'danger'}
+              whySuppressed={inc.check_name === headline.check && headline.tone === 'danger'}
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
@@ -815,7 +817,7 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
         {okChecks.length > 0 && (
           <details class="checks-spoiler">
             <summary class="section-title checks-spoiler-summary">
-              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {okChecks.length} в норме
+              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {okCount} в норме
             </summary>
             <ul class="card list-reset">{okChecks.map(checkRow)}</ul>
           </details>

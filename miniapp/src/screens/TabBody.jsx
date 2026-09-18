@@ -19,6 +19,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         <RouterDetail
           id={nav.routerID}
           panelURL={current?.panel_url}
+          reserveOnlyAlert={current?.reserve_only_alert}
           openSheet={openSheet}
           onTab={(tab) => dispatch({ type: 'tab', tab })}
         />

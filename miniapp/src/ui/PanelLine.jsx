@@ -7,35 +7,20 @@ import { panelHost, panelLink } from '../settings.js'
 // адреса, нет и строки.
 //
 // nested -- строка стоит внутри строки-кнопки (список роутеров, боковая
-// колонка). Кнопку в кнопку вкладывать нельзя, поэтому там это span с ролью
-// ссылки, и нажатие не всплывает до строки: иначе вместо панели открылся бы
-// роутер.
+// колонка). Ссылку в кнопку не вкладываем: там хост -- просто текст, а
+// нажатие открывает роутер, как и вся строка. Ссылкой на панель адрес
+// служит в шапке роутера и первым пунктом «Управления».
 export function PanelLine({ url, nested = false }) {
   const link = panelLink(url)
   if (!link) return null
   const host = panelHost(link)
+  if (nested) return <span class="panel-line panel-line-text">{host}</span>
   const open = (e) => {
     e.stopPropagation()
     e.preventDefault()
     openExternal(link)
   }
   const title = `Открыть панель awg-manager: ${host}`
-  if (nested) {
-    return (
-      <span
-        role="link"
-        tabIndex={0}
-        class="panel-line"
-        title={title}
-        onClick={open}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') open(e)
-        }}
-      >
-        {host}
-      </span>
-    )
-  }
   return (
     <button type="button" class="panel-line" title={title} onClick={open}>
       {host}
