@@ -52,19 +52,24 @@ func TestPanelScope(t *testing.T) {
 	}
 }
 
-// Настройки говорят «панель известна» и «публичная/частная», но не адрес и не
-// хост: адрес -- секрет того же класса, что dyn-DNS роутера.
-func TestMiniappSettingsTellsPanelKnownWithoutAddress(t *testing.T) {
+// Настройки отдают владельцу и админу адрес панели ссылкой (panel_url) рядом
+// с признаками panel_known/panel_scope: «Управление» открывает по ней админку
+// awg-manager (решение оператора 18.09, отменяет 14.09). Ключ панели и
+// логин/пароль из адреса -- по-прежнему нет.
+func TestMiniappSettingsGivesPanelURLToOwnerAndAdmin(t *testing.T) {
 	d, ownedID, _, ownerTG := seedMiniappFleet(t)
 	setAWGMURL(t, d, ownedID, "https://panel.example.com/admin")
+	if _, err := d.SQL().Exec(`UPDATE users SET awgm_auth=? WHERE id=?`, "Basic ZXhhbXBsZQ==", ownedID); err != nil {
+		t.Fatal(err)
+	}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
 
 	for _, who := range []int64{ownerTG, 999} {
 		rec, resp := miniappSettingsFor(t, h, ownedID, who)
-		if !resp.PanelKnown || resp.PanelScope != "public" {
-			t.Errorf("tg %d: panel_known=%v panel_scope=%q", who, resp.PanelKnown, resp.PanelScope)
+		if !resp.PanelKnown || resp.PanelScope != "public" || resp.PanelURL != "https://panel.example.com/admin" {
+			t.Errorf("tg %d: panel_known=%v panel_scope=%q panel_url=%q", who, resp.PanelKnown, resp.PanelScope, resp.PanelURL)
 		}
-		for _, forbidden := range []string{"awgm_url", "awgm_auth", "panel_host", "panel.example.com", "/admin"} {
+		for _, forbidden := range []string{"awgm_url", "awgm_auth", "Basic ZXhhbXBsZQ==", "panel_host"} {
 			if strings.Contains(rec.Body.String(), forbidden) {
 				t.Errorf("tg %d: в ответе настроек %q: %s", who, forbidden, rec.Body.String())
 			}
@@ -89,13 +94,16 @@ func TestMiniappSettingsOmitsPanelWhenURLMissingOrInvalid(t *testing.T) {
 	for _, raw := range []string{"", "javascript:alert(1)"} {
 		setAWGMURL(t, d, ownedID, raw)
 		rec, _ := miniappSettingsFor(t, h, ownedID, ownerTG)
-		if strings.Contains(rec.Body.String(), "panel_known") {
-			t.Errorf("адрес %q: ключ panel_known в ответе: %s", raw, rec.Body.String())
+		for _, key := range []string{"panel_known", "panel_url"} {
+			if strings.Contains(rec.Body.String(), key) {
+				t.Errorf("адрес %q: ключ %s в ответе: %s", raw, key, rec.Body.String())
+			}
 		}
 	}
 }
 
-// Оператору роутера строки панели нет вовсе (решение оператора № 9).
+// Оператору роутера строки панели нет вовсе (решение оператора № 9): ни
+// признаков, ни адреса.
 func TestMiniappSettingsHidesPanelFromOperator(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	setAWGMURL(t, d, ownedID, "https://panel.example.com")
@@ -107,7 +115,7 @@ func TestMiniappSettingsHidesPanelFromOperator(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("оператор: код %d", rec.Code)
 	}
-	if resp.PanelKnown || strings.Contains(rec.Body.String(), "panel_") {
+	if resp.PanelKnown || resp.PanelURL != "" || strings.Contains(rec.Body.String(), "panel_") || strings.Contains(rec.Body.String(), "panel.example.com") {
 		t.Errorf("оператор получил признак панели: %s", rec.Body.String())
 	}
 }

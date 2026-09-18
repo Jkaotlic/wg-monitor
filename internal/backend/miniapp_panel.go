@@ -9,6 +9,10 @@ import (
 // panelAddress -- адрес панели awg-manager роутера, пригодный для перехода:
 // непустой и прошедший ТОТ ЖЕ валидатор, что у дашборда. Второго валидатора не
 // заводим: он разошёлся бы с первым.
+//
+// С 18.09 адрес уезжает владельцу и админу ссылкой panel_url, поэтому
+// логин/пароль, если их вписали в адрес (https://user:pass@host), срезаются:
+// ссылка -- для браузера, креды панели в приложение не попадают никогда.
 func panelAddress(stored *string) (string, bool) {
 	if stored == nil {
 		return "", false
@@ -17,14 +21,22 @@ func panelAddress(stored *string) (string, bool) {
 	if raw == "" || validateDashboardAWGMURL(raw) != nil {
 		return "", false
 	}
+	if u, err := url.Parse(raw); err == nil && u.User != nil {
+		u.User = nil
+		raw = u.String()
+	}
 	return raw, true
 }
 
-// PanelKnown -- сохранён ли у роутера годный адрес панели. Для бота: кнопку
-// панели он рисует только тогда, когда мини-апп сможет её открыть.
-func PanelKnown(stored *string) bool {
-	_, ok := panelAddress(stored)
-	return ok
+// miniappPanelURLFor -- ссылка на панель для строки списка и настроек: только
+// админу и владельцу роутера (role "admin"/"owner"). Оператор роутера адреса
+// не получает (решение оператора № 9).
+func miniappPanelURLFor(role string, stored *string) string {
+	if role != "owner" && role != "admin" {
+		return ""
+	}
+	addr, _ := panelAddress(stored)
+	return addr
 }
 
 // panelScope отвечает на вопрос «откроется ли эта кнопка из кафе». Частный

@@ -2,7 +2,10 @@
 // компонентам. Причина: слоёв стало четыре (таб, оверлей, шит и выбранный
 // роутер), а кнопка "назад" у Telegram одна, и решать, что она закрывает,
 // должно одно место.
-export const TABS = ['router', 'tunnels', 'diag', 'events']
+// «Управление» (v0.41) -- пятая вкладка вместо шестерёнки в шапке и строки
+// «Администрирование» внизу «Сейчас»: настройки роутера и его обслуживание
+// стали функцией для всех, а не спрятанным входом.
+export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
 
 // Таб "Маршруты" стал табом "Туннели": маршруты уехали внутрь туннеля, потому
 // что оператор сначала спрашивает "какой VPN-туннель поднят", и только потом --
@@ -15,11 +18,23 @@ export function normalizeTab(tab) {
   return TAB_ALIASES[tab] ?? tab
 }
 
+// Слои, ставшие вкладкой. Настройки (?open=settings) и «Обслуживание и
+// доступы» (?open=admin) переехали во вкладку «Управление»; ссылки на них
+// живут в уже отправленных уведомлениях месяцами и обязаны вести туда же.
+// 'manage' -- возврат слоя («Ход работы» перенаправления) во вкладку.
+export const OVERLAY_TABS = { settings: 'manage', admin: 'manage', manage: 'manage' }
+
+// Старый возврат слоёв парка «в Обслуживание» ведёт теперь к списку роутеров:
+// Парк живёт там.
+export function normalizeReturn(returnTo) {
+  return returnTo === 'admin' ? 'fleet' : returnTo
+}
+
 // Оверлеи, которые можно открыть по адресу. Все они -- слои над выбранным
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']
+export const OPEN_OVERLAYS = ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']
 
 // Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
 // ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес
@@ -79,6 +94,7 @@ const TAB_LABELS = {
   tunnels: 'VPN-туннели',
   diag: 'Проверки',
   events: 'Что было',
+  manage: 'Управление',
 }
 
 export function tabLabel(tab) {
@@ -134,6 +150,9 @@ export function navReducer(state, action) {
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
       const overlay = action.overlay ?? null
+      if (OVERLAY_TABS[overlay] && state.routerID != null) {
+        return { ...withoutParams(state), tab: OVERLAY_TABS[overlay], overlay: null, sheet: null }
+      }
       const next = { ...withoutParams(state), overlay }
       return overlay && action.params ? { ...next, overlayParams: action.params } : next
     }
@@ -168,7 +187,13 @@ export function navReducer(state, action) {
       // returnParams -- параметры слоя, куда возвращаемся: экран сервера
       // возвращает на список, и списку нужен его собственный returnTo.
       const params = state.overlayParams
-      const next = { ...withoutParams(state), overlay: params?.returnTo ?? null }
+      const target = normalizeReturn(params?.returnTo ?? null)
+      // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
+      // есть вкладка -- иначе «назад» оставил бы пустую основную область.
+      if (OVERLAY_TABS[target] && state.routerID != null) {
+        return { ...withoutParams(state), tab: OVERLAY_TABS[target], overlay: null }
+      }
+      const next = { ...withoutParams(state), overlay: target }
       return next.overlay && params?.returnParams ? { ...next, overlayParams: params.returnParams } : next
     }
     default:

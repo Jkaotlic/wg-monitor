@@ -3,19 +3,16 @@ import { describe, it, expect, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
-// Секция «Панель роутера» на экране настроек: кнопка просит билет и открывает
-// его во внешнем браузере; без адреса кнопки нет вовсе.
-const mocks = vi.hoisted(() => ({ settings: null, opened: [], ticketCalls: 0, ticket: null }))
+// Секция «Панель роутера» -- первой во вкладке «Управление» (v0.41): хост
+// строкой, нажатие открывает панель напрямую во внешнем браузере; без адреса
+// ссылки нет вовсе; оператору роутера секции нет.
+const mocks = vi.hoisted(() => ({ settings: null, opened: [] }))
 
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterSettings: () => Promise.resolve(mocks.settings),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [] }),
   fetchRouterVersions: () => Promise.resolve(null),
-  createPanelTicket: () => {
-    mocks.ticketCalls++
-    return mocks.ticket instanceof Error ? Promise.reject(mocks.ticket) : Promise.resolve(mocks.ticket)
-  },
 }))
 
 vi.mock('../src/telegram.js', async (importOriginal) => ({
@@ -23,13 +20,13 @@ vi.mock('../src/telegram.js', async (importOriginal) => ({
   openExternal: (url) => mocks.opened.push(url),
 }))
 
-const { SettingsScreen } = await import('../src/screens/SettingsScreen.jsx')
+const { SettingsSections } = await import('../src/screens/SettingsScreen.jsx')
 
 async function mount() {
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
-    render(<SettingsScreen routerID={2} routerName="home" openSheet={() => {}} onClose={() => {}} />, root)
+    render(<SettingsSections routerID={2} routerName="home" openSheet={() => {}} />, root)
   })
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0))
@@ -37,36 +34,37 @@ async function mount() {
   return root
 }
 
-const panelSection = (root) => [...root.querySelectorAll('section')].find((s) => s.querySelector('.section-title')?.textContent === 'Панель роутера')
-const openButton = (root) => [...root.querySelectorAll('button')].find((b) => b.textContent === 'Открыть панель роутера')
+const sections = (root) => [...root.querySelectorAll('section')]
+const panelSection = (root) => sections(root).find((s) => s.querySelector('.section-title')?.textContent === 'Панель роутера')
 
 describe('«Панель роутера»', () => {
-  it('кнопка берёт билет и открывает его во внешнем браузере', async () => {
-    mocks.settings = { role: 'owner', panel_known: true, panel_scope: 'public' }
+  it('первая секция: хост, нажатие открывает адрес во внешнем браузере', async () => {
+    mocks.settings = { role: 'owner', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
     mocks.opened = []
-    mocks.ticketCalls = 0
-    mocks.ticket = { open_path: '/v1/panel/' + 'cd'.repeat(32), expires_in_sec: 60 }
     const root = await mount()
-
-    expect(panelSection(root).textContent).toContain('известна')
-    expect(mocks.ticketCalls).toBe(0) // билет не выдаётся заранее
-    await act(async () => openButton(root).click())
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0))
-    })
-    expect(mocks.ticketCalls).toBe(1)
-    expect(mocks.opened).toEqual([window.location.origin + '/v1/panel/' + 'cd'.repeat(32)])
-    expect(panelSection(root).textContent).toContain('Панель откроется во внешнем браузере')
+    expect(sections(root)[0]).toBe(panelSection(root))
+    const btn = panelSection(root).querySelector('.panel-open')
+    expect(btn.textContent).toContain('awg.example.com')
+    await act(async () => btn.click())
+    expect(mocks.opened).toEqual(['https://awg.example.com/'])
     render(null, root)
     root.remove()
   })
 
-  it('адреса нет -- строка «не сохранён» и ни одной кнопки', async () => {
+  it('частный адрес -- подсказка про домашнюю сеть', async () => {
+    mocks.settings = { role: 'admin', panel_known: true, panel_scope: 'private', panel_url: 'http://198.51.100.1:2222' }
+    const root = await mount()
+    expect(panelSection(root).textContent).toContain('откроется только из домашней сети')
+    render(null, root)
+    root.remove()
+  })
+
+  it('адреса нет -- строка «не сохранён» и ни одной ссылки', async () => {
     mocks.settings = { role: 'owner' }
     mocks.opened = []
     const root = await mount()
     expect(panelSection(root).textContent).toContain('Мы не знаем адрес панели этого роутера')
-    expect(openButton(root)).toBeUndefined()
+    expect(panelSection(root).querySelector('.panel-open')).toBe(null)
     render(null, root)
     root.remove()
   })
@@ -79,18 +77,19 @@ describe('«Панель роутера»', () => {
     root.remove()
   })
 
-  it('сервер отказал -- говорим словами, браузер не открываем', async () => {
-    mocks.settings = { role: 'owner', panel_known: true, panel_scope: 'public' }
-    mocks.opened = []
-    mocks.ticket = new Error('409')
+  it('«Агент на роутере» -- в «Что стоит на роутере», а не в порогах', async () => {
+    mocks.settings = { role: 'operator', agent_version: 'v0.41.0', silence_after_sec: 120 }
     const root = await mount()
-    await act(async () => openButton(root).click())
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0))
-    })
-    expect(mocks.opened).toEqual([])
-    expect(panelSection(root).textContent).toContain('Не удалось открыть панель. Попробуйте ещё раз.')
+    const byTitle = (t) => sections(root).find((s) => s.querySelector('.section-title')?.textContent === t)
+    expect(byTitle('Что стоит на роутере').textContent).toContain('Агент на роутере')
+    expect(byTitle('Что стоит на роутере').textContent).toContain('v0.41.0')
+    expect(byTitle('Опрос и тревоги').textContent).not.toContain('Агент на роутере')
     render(null, root)
     root.remove()
+  })
+
+  it('клиента билетов больше нет', async () => {
+    const real = await vi.importActual('../src/api.js')
+    expect('createPanelTicket' in real).toBe(false)
   })
 })

@@ -2,11 +2,14 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func TestHydraRouteCheckStoppedWithNDMSRoutesDoesNotFail(t *testing.T) {
@@ -164,4 +167,86 @@ func newHydraRouteCheckServer(t *testing.T, fx hydraRouteFixtures) *httptest.Ser
 		})
 	}
 	return httptest.NewServer(mux)
+}
+
+func hydraRoutePolicyFixtures() hydraRouteFixtures {
+	return hydraRouteFixtures{
+		statusJSON: `{"success":true,"data":{"installed":true,"running":true}}`,
+		dnsJSON: `{"success":true,"data":[
+			{"id":"hr:yt","name":"YT","enabled":true,"backend":"hydraroute","hrRouteMode":"policy","hrPolicyName":"HydraRoute","domains":["example.com"]}
+		]}`,
+		staticJSON: `{"success":true,"data":[]}`,
+		systemJSON: `{"success":true,"data":{"activeBackend":"ndms","singbox":{"installed":false}}}`,
+	}
+}
+
+// Сводка политик кладётся в details как есть; читатель получает уже
+// прочитанный список правил, а не ходит за ним второй раз.
+func TestHydraRouteCheckAddsPolicies(t *testing.T) {
+	srv := newHydraRouteCheckServer(t, hydraRoutePolicyFixtures())
+	defer srv.Close()
+	var gotRules int
+	want := []wire.PolicyBrief{{
+		Name: "HydraRoute", ActiveTunnelID: "awg14", ViaVPN: true, DNS: 1, HRNeo: 1,
+		Links: []wire.PolicyBriefLink{{TunnelID: "awg14", Role: "active"}, {TunnelID: "awg10", Role: "fallback"}},
+	}}
+	check := HydraRouteCheck{
+		Client: awgmgr.New(srv.URL),
+		Policies: func(_ context.Context, dns []awgmgr.DNSRoute) ([]wire.PolicyBrief, error) {
+			gotRules = len(dns)
+			return want, nil
+		},
+	}
+	got := check.Run(context.Background(), Deps{})
+	if got.Status != "ok" {
+		t.Fatalf("status = %q", got.Status)
+	}
+	if gotRules != 1 {
+		t.Errorf("читателю политик передано %d правил, хотим 1", gotRules)
+	}
+	if !reflect.DeepEqual(got.Details["policies"], want) {
+		t.Errorf("policies = %#v", got.Details["policies"])
+	}
+	if _, ok := got.Details["policies_error"]; ok {
+		t.Errorf("policies_error при удачном чтении: %v", got.Details["policies_error"])
+	}
+}
+
+// Ошибка чтения политик -- строка в details, проверка не падает: HydraRoute
+// от этого не сломан.
+func TestHydraRouteCheckPoliciesErrorKeepsCheckOK(t *testing.T) {
+	srv := newHydraRouteCheckServer(t, hydraRoutePolicyFixtures())
+	defer srv.Close()
+	check := HydraRouteCheck{
+		Client: awgmgr.New(srv.URL),
+		Policies: func(context.Context, []awgmgr.DNSRoute) ([]wire.PolicyBrief, error) {
+			return nil, errors.New("policy-interfaces: HTTP 500")
+		},
+	}
+	got := check.Run(context.Background(), Deps{})
+	if got.Status != "ok" {
+		t.Fatalf("status = %q, хотим ok", got.Status)
+	}
+	if got.Details["policies_error"] != "policy-interfaces: HTTP 500" {
+		t.Errorf("policies_error = %v", got.Details["policies_error"])
+	}
+	if _, ok := got.Details["policies"]; ok {
+		t.Error("policies при ошибке чтения")
+	}
+}
+
+// Старая сборка без политик (читатель вернул nil, nil) -- поля нет вовсе.
+func TestHydraRouteCheckNoPoliciesNoField(t *testing.T) {
+	srv := newHydraRouteCheckServer(t, hydraRoutePolicyFixtures())
+	defer srv.Close()
+	check := HydraRouteCheck{
+		Client:   awgmgr.New(srv.URL),
+		Policies: func(context.Context, []awgmgr.DNSRoute) ([]wire.PolicyBrief, error) { return nil, nil },
+	}
+	got := check.Run(context.Background(), Deps{})
+	for _, k := range []string{"policies", "policies_error"} {
+		if _, ok := got.Details[k]; ok {
+			t.Errorf("ключ %s у сборки без политик", k)
+		}
+	}
 }

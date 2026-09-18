@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelOpenURL } from '../src/settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelHost, panelLink, agentRow } from '../src/settings.js'
 
 // Пороги живут в backend.yaml и больше нигде: экран печатает то, что прислал
 // сервер (miniappSettingsResp), а не числа из макета.
@@ -16,7 +16,10 @@ describe('thresholdRows', () => {
     expect(byKey.silence.value).toBe('2 мин без отчёта')
     expect(byKey.alert.value).toBe('3 проверки подряд')
     expect(byKey.recovery.value).toBe('2 проверки подряд')
-    expect(byKey.agent.value).toBe('v0.16.0')
+    // Версия агента -- не порог: она в «Что стоит на роутере» (agentRow).
+    expect(byKey.agent).toBeUndefined()
+    expect(agentRow({ agent_version: 'v0.16.0' })).toEqual({ key: 'agent', title: 'Агент на роутере', value: 'v0.16.0' })
+    expect(agentRow({})).toBe(null)
   })
 
   // У мобильного роутера «молчит» и «выключен» -- разные события, и второе
@@ -203,44 +206,42 @@ describe('пороги без ключей конфига', () => {
   })
 })
 
-// Панель роутера: сервер присылает только признаки, адреса на экране нет и
-// быть не может. Переход -- по одноразовому билету во внешнем браузере.
+// Панель роутера (v0.41): сервер отдаёт адрес владельцу и админу, экран
+// показывает хост и открывает панель напрямую во внешнем браузере.
 describe('panelRow', () => {
-  it('публичный адрес: «известна» и кнопка без оговорок', () => {
-    expect(panelRow({ panel_known: true, panel_scope: 'public' })).toEqual({ known: true, value: 'известна', hint: '' })
+  it('публичный адрес: хост и ссылка без оговорок', () => {
+    expect(panelRow({ panel_url: 'https://awg.example.com/', panel_scope: 'public' })).toEqual({
+      known: true,
+      url: 'https://awg.example.com/',
+      host: 'awg.example.com',
+      hint: '',
+    })
   })
 
-  it('частный адрес: кнопка остаётся, но говорим про домашнюю сеть', () => {
-    expect(panelRow({ panel_known: true, panel_scope: 'private' })).toEqual({
-      known: true,
-      value: 'известна',
-      hint: 'Адрес панели частный: она откроется только из домашней сети роутера.',
-    })
+  it('частный адрес: подсказка про домашнюю сеть', () => {
+    const row = panelRow({ panel_url: 'http://198.51.100.1:2222', panel_scope: 'private' })
+    expect(row.known).toBe(true)
+    expect(row.host).toBe('198.51.100.1:2222')
+    expect(row.hint).toBe('откроется только из домашней сети')
   })
 
   // «Не опубликована наружу» запрещено: пустой адрес означает «у нас не
   // сохранён», а не «не опубликована».
-  it('адреса нет: одна строка и никакой кнопки', () => {
-    const row = panelRow({})
-    expect(row).toEqual({ known: false, value: 'адрес не сохранён', hint: 'Мы не знаем адрес панели этого роутера, поэтому открыть её из приложения нельзя.' })
+  it('адреса нет: «не знаем» и никакой ссылки', () => {
+    const row = panelRow({ panel_known: true })
+    expect(row).toEqual({ known: false, url: '', host: '', hint: 'Мы не знаем адрес панели этого роутера, поэтому открыть её из приложения нельзя.' })
     expect(row.hint).not.toContain('опубликован')
-  })
-
-  it('в строке нет ни адреса, ни хоста', () => {
-    expect(JSON.stringify(panelRow({ panel_known: true, panel_scope: 'public' }))).not.toMatch(/https?:|\.[a-z]/)
   })
 })
 
-// tg.openLink принимает только абсолютный адрес, а сервер отдаёт путь: адрес
-// бэкенда за релеем знает браузер, а не сам бэкенд.
-describe('panelOpenURL', () => {
-  it('путь билета становится адресом того же сайта', () => {
-    expect(panelOpenURL('/v1/panel/' + 'ab'.repeat(32), 'https://wgm.example.com')).toBe('https://wgm.example.com/v1/panel/' + 'ab'.repeat(32))
-  })
-
-  it('чужой адрес вместо пути не принимается', () => {
-    expect(panelOpenURL('https://evil.example.com/x', 'https://wgm.example.com')).toBe('')
-    expect(panelOpenURL('//evil.example.com/v1/panel/x', 'https://wgm.example.com')).toBe('')
-    expect(panelOpenURL('', 'https://wgm.example.com')).toBe('')
+describe('panelLink и panelHost', () => {
+  it('принимают только http(s)', () => {
+    expect(panelLink('javascript:alert(1)')).toBe('')
+    expect(panelLink('ftp://awg.example.com')).toBe('')
+    expect(panelLink('не адрес')).toBe('')
+    expect(panelLink('')).toBe('')
+    expect(panelLink(undefined)).toBe('')
+    expect(panelHost('https://awg.example.com/path?x=1')).toBe('awg.example.com')
+    expect(panelHost('javascript:alert(1)')).toBe('')
   })
 })

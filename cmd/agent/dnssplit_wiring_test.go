@@ -152,3 +152,18 @@ func TestBuildRunner_WiresDNSResetGuards(t *testing.T) {
 		t.Error("DNSChanged не проведён: после сброса проверка раздельного DNS отвечала бы по старым настройкам")
 	}
 }
+
+// Сводка политик в проверке hydraroute проведена: без читателя экран снова
+// угадывает несущий туннель (workrouter, 18.09.2026).
+func TestSingleChecks_HydraRouteReadsPolicies(t *testing.T) {
+	list := buildSingleChecks(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
+	for _, c := range list {
+		if h, ok := c.(checks.HydraRouteCheck); ok {
+			if h.Policies == nil {
+				t.Error("HydraRouteCheck.Policies не проведён")
+			}
+			return
+		}
+	}
+	t.Error("hydraroute нет среди проверок отчёта")
+}

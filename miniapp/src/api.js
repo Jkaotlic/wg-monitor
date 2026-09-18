@@ -100,12 +100,6 @@ export function fetchFleet() {
   return request('/fleet')
 }
 
-// Одноразовый билет на панель роутера: адрес панели в ответ не входит, только
-// путь билета, который открывается во внешнем браузере.
-export function createPanelTicket(id) {
-  return request(`/routers/${id}/panel/ticket`, { method: 'POST' })
-}
-
 // Личная ссылка на веб-управление. Ответ несёт и саму ссылку, и слова про
 // срок с лимитом: своих текстов про «12 часов» клиент не сочиняет.
 export function createWebLink() {

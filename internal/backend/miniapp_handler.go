@@ -68,13 +68,6 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/timeline", reqID(auth(miniappRouterTimelineHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/settings", reqID(auth(miniappRouterSettingsHandler(d))))
-	// Панель роутера по одноразовому билету (miniapp_panel_ticket.go): выдача
-	// в сессии мини-аппа, страница и переход -- во внешнем браузере без
-	// сессии, поэтому под общим лимитом входов.
-	panelTickets := newPanelTicketStore()
-	mux.Handle("POST /v1/miniapp/routers/{id}/panel/ticket", reqID(auth(miniappPanelTicketHandler(d, panelTickets))))
-	mux.Handle("GET /v1/panel/{ticket}", reqID(entranceLimit(panelTicketPageHandler(panelTickets))))
-	mux.Handle("POST /v1/panel/{ticket}", reqID(entranceLimit(panelTicketRedeemHandler(d, panelTickets))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/notify", reqID(auth(miniappNotifyHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/vpn", reqID(auth(miniappVPNAccountsHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/issue", reqID(auth(miniappVPNIssueHandler(d))))
@@ -210,6 +203,15 @@ type miniappRouterSummary struct {
 	// либо красит строку наугад, либо ходит за каждым роутером отдельным
 	// запросом уже после отрисовки.
 	Checks []miniappCheckDot `json:"checks,omitempty"`
+	// ReserveOnlyAlert -- все активные тревоги роутера только по VPN-туннелям,
+	// которые обход сейчас не несут (запасным): обход работает, резерва нет.
+	// Список рисует янтарную «резерв не работает» вместо красной «тревога».
+	// Несущий известен только из сводки политик агента; без неё -- false.
+	// Тревоги и уведомления от этого не меняются.
+	ReserveOnlyAlert bool `json:"reserve_only_alert,omitempty"`
+	// PanelURL -- ссылка на панель awg-manager роутера (прошедший
+	// panelAddress). Только админу и владельцу; оператору роутера -- нет.
+	PanelURL string `json:"panel_url,omitempty"`
 }
 
 // miniappCheckDot -- имя службы и её состояние, без деталей: точке на экране
@@ -231,15 +233,17 @@ var miniappLampChecks = map[string]bool{
 	"tunnels":        true,
 }
 
-// miniappServiceDots читает состояние пяти служб одного роутера.
+// miniappServiceDots читает состояние пяти служб одного роутера и заодно
+// решает, не одни ли запасные VPN-туннели у него в тревоге (ReserveOnlyAlert):
+// обоим ответам нужна одна и та же выборка последних событий.
 //
 // Запрос на роутер: на флоте оператора их восемь, и восемь дешёвых выборок
 // при открытии списка честнее одной общей, которой в репозитории нет. Если
 // флот вырастет до сотен, здесь понадобится один запрос с группировкой.
-func miniappServiceDots(d Deps, routerID int64) []miniappCheckDot {
+func miniappServiceDots(d Deps, routerID int64, incidents []dashboardIncident) ([]miniappCheckDot, bool) {
 	rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, "", time.Now().UTC().Add(-miniappEventsWindow))
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	out := make([]miniappCheckDot, 0, len(miniappLampChecks))
 	for _, row := range rows {
@@ -248,7 +252,79 @@ func miniappServiceDots(d Deps, routerID int64) []miniappCheckDot {
 		}
 		out = append(out, miniappCheckDot{CheckName: row.CheckName, Status: row.Status})
 	}
-	return out
+	return out, miniappReserveOnlyAlert(rows, incidents)
+}
+
+// miniappReserveOnlyAlert: тревоги есть, и каждая -- по туннелю, который
+// обход сейчас не несёт, а только лежит в запасе у несущего набора. Несущий --
+// тот же, что называет экран роутера (miniappPolicyCarrier по сводке политик
+// агента); неизвестен (старый агент, sing-box) -- false: не угадываем.
+//
+// Тревога считается «резервной», только если её туннель одновременно:
+// звено несущего набора не в роли active; не активное звено НИ ОДНОГО набора
+// с исполняемыми правилами (второй набор мог идти именно через него); не
+// ведёт своих правил (routes_dns/routes_static); не главный выход. Кроме
+// того, ни один набор с исполняемыми правилами не должен остаться без живого
+// звена -- его правила не идут никуда. Всё прочее -- настоящая тревога.
+func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) bool {
+	if len(incidents) == 0 {
+		return false
+	}
+	var tunnels []miniappTunnel
+	var hd miniappHydraDetails
+	for _, row := range rows {
+		if tu, ok := miniappTunnelFromEvent(row); ok {
+			tunnels = append(tunnels, tu)
+		}
+		if row.CheckName == "hydraroute" {
+			if json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil {
+				return false
+			}
+		}
+	}
+	if hd.SingboxRouterActive {
+		return false
+	}
+	carrier, carrierPolicy := miniappPolicyCarrier(tunnels, hd)
+	if carrier == nil {
+		return false
+	}
+	carrying := map[string]bool{}
+	for i := range hd.Policies {
+		p := &hd.Policies[i]
+		if miniappPolicyExecuted(p, hd) <= 0 {
+			continue
+		}
+		hasActive := false
+		for _, l := range p.Links {
+			if l.Role == "active" {
+				hasActive = true
+			}
+		}
+		if !hasActive {
+			return false
+		}
+		if p.ActiveTunnelID != "" {
+			carrying[p.ActiveTunnelID] = true
+		}
+	}
+	spare := map[string]bool{}
+	for _, l := range carrierPolicy.Links {
+		if l.TunnelID != "" && l.Role != "active" {
+			spare[l.TunnelID] = true
+		}
+	}
+	for _, inc := range incidents {
+		id, ok := strings.CutPrefix(inc.CheckName, miniappTunnelPrefix)
+		if !ok || id == "" || !spare[id] || carrying[id] {
+			return false
+		}
+		t := miniappTunnelByID(tunnels, id)
+		if t == nil || t.IsActiveDefault || t.RoutesDNS+t.RoutesStatic > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary {
@@ -285,11 +361,17 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 		// Пустой слайс, а не nil: клиент делает .map по этому полю, и null
 		// уронил бы экран человека, которому пока не выдали ни одного роутера.
 		resp := miniappRoutersResp{Routers: []miniappRouterSummary{}}
+		// Список роутеров -- из той же сводки, что у дашборда, а адрес панели
+		// в ней уже прошёл safeDashboardAWGMURL; ссылка -- через panelAddress.
+		fill := func(a dashboardSummaryAgent, role string) miniappRouterSummary {
+			row := miniappRouterSummaryFromAgent(a)
+			row.Checks, row.ReserveOnlyAlert = miniappServiceDots(d, a.ID, a.ActiveIncidents)
+			row.PanelURL = miniappPanelURLFor(role, &a.AWGMURL)
+			return row
+		}
 		if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
 			for _, a := range summary.Agents {
-				row := miniappRouterSummaryFromAgent(a)
-				row.Checks = miniappServiceDots(d, a.ID)
-				resp.Routers = append(resp.Routers, row)
+				resp.Routers = append(resp.Routers, fill(a, "admin"))
 			}
 		} else {
 			allowed, err := d.DB.AccessibleRouterIDs(telegramUserID)
@@ -302,11 +384,13 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 				allowedSet[id] = true
 			}
 			for _, a := range summary.Agents {
-				if allowedSet[a.ID] {
-					row := miniappRouterSummaryFromAgent(a)
-					row.Checks = miniappServiceDots(d, a.ID)
-					resp.Routers = append(resp.Routers, row)
+				if !allowedSet[a.ID] {
+					continue
 				}
+				// Роль нужна только ради ссылки на панель: владельцу -- да,
+				// оператору -- нет. Ошибка чтения -- без ссылки, а не без строки.
+				role, _ := d.DB.RouterAccessRole(a.ID, telegramUserID)
+				resp.Routers = append(resp.Routers, fill(a, role))
 			}
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

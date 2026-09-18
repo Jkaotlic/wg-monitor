@@ -28,7 +28,7 @@ async function mount(wide) {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'web', wide }}>
-        <RouterDetail id={1} isAdmin openSheet={() => {}} onTab={() => {}} onOpenAdmin={() => {}} />
+        <RouterDetail id={1} openSheet={() => {}} onTab={() => {}} />
       </AppContext.Provider>,
       root,
     ),
@@ -46,7 +46,8 @@ describe('«Сейчас» на широком экране', () => {
     expect(main.querySelector('.stat-grid')).toBeTruthy()
     expect(side.textContent).toContain('Активные тревоги')
     expect(side.textContent).toContain('Быстрые действия')
-    expect(side.textContent).toContain('Администрирование')
+    // «Администрирование» уехало во вкладку «Управление» (v0.41).
+    expect(root.textContent).not.toContain('Администрирование')
     expect(main.textContent).not.toContain('Быстрые действия')
     // Имя роутера -- в шапке основной области, в герое не дублируется.
     expect(root.querySelector('.hero h1')).toBe(null)

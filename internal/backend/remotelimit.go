@@ -151,12 +151,12 @@ func remoteRateKey(remote string) string {
 	return remote
 }
 
-// pathSecret -- длинная шестнадцатеричная строка в пути: так выглядит билет на
-// панель роутера (/v1/panel/<64 hex>) и любой будущий секрет в адресе.
+// pathSecret -- длинная шестнадцатеричная строка в пути: так выглядит любой
+// секрет в адресе (одноразовый билет, токен).
 var pathSecret = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
 
 // redactPathSecrets прячет секреты в пути перед записью в журнал: отказ по
-// лимиту не тратит билет, и путь целиком в журнале был бы рабочей ссылкой.
+// лимиту не тратит секрет, и путь целиком в журнале был бы рабочей ссылкой.
 func redactPathSecrets(path string) string {
 	return pathSecret.ReplaceAllString(path, "***")
 }

@@ -753,31 +753,43 @@ func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
 	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
+		t.Fatal(err)
+	}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: &dashboardActionSink{}})
 
-	for _, path := range []string{
-		fmt.Sprintf("/v1/miniapp/routers/%d/settings", ownedID),
-		fmt.Sprintf("/v1/miniapp/routers/%d", ownedID),
-		"/v1/miniapp/routers",
-	} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: код %d тело %s", path, rec.Code, rec.Body.String())
-		}
-		body := rec.Body.Bytes()
-		for _, secret := range []string{awgmURL, awgmAuth, sshHost, expectedMAC, "-1009876543210"} {
-			if bytes.Contains(body, []byte(secret)) {
-				t.Errorf("%s: утекло значение %q: %s", path, secret, body)
+	settingsPath := fmt.Sprintf("/v1/miniapp/routers/%d/settings", ownedID)
+	for _, who := range []int64{999, 100, 555} {
+		for _, path := range []string{settingsPath, fmt.Sprintf("/v1/miniapp/routers/%d", ownedID), "/v1/miniapp/routers"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", who))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("tg %d %s: код %d тело %s", who, path, rec.Code, rec.Body.String())
 			}
-		}
-		// Ни значений, ни имён полей: имя поля в ответе означает, что
-		// значение приедет туда завтра, когда его кто-нибудь заполнит.
-		for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id"} {
-			if bytes.Contains(body, []byte(field)) {
-				t.Errorf("%s: есть поле %q -- секреты уедут в него завтра", path, field)
+			body := rec.Body.Bytes()
+			// Адрес панели -- ссылка panel_url владельцу и админу в списке и в
+			// настройках (решение оператора 18.09). Оператору -- нигде.
+			panelAllowed := who != 555 && (path == settingsPath || path == "/v1/miniapp/routers")
+			if panelAllowed != bytes.Contains(body, []byte(`"panel_url":"`+awgmURL+`"`)) {
+				t.Errorf("tg %d %s: panel_url разрешён=%v, тело %s", who, path, panelAllowed, body)
+			}
+			secrets := []string{awgmAuth, sshHost, expectedMAC, "-1009876543210"}
+			if !panelAllowed {
+				secrets = append(secrets, awgmURL, "panel_url")
+			}
+			for _, secret := range secrets {
+				if bytes.Contains(body, []byte(secret)) {
+					t.Errorf("tg %d %s: утекло %q: %s", who, path, secret, body)
+				}
+			}
+			// Ни значений, ни имён полей: имя поля в ответе означает, что
+			// значение приедет туда завтра, когда его кто-нибудь заполнит.
+			for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id"} {
+				if bytes.Contains(body, []byte(field)) {
+					t.Errorf("tg %d %s: есть поле %q -- секреты уедут в него завтра", who, path, field)
+				}
 			}
 		}
 	}

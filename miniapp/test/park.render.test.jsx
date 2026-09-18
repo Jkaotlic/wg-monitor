@@ -75,7 +75,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
 })
 
 const { ParkSection } = await import('../src/screens/ParkSection.jsx')
-const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+const { FleetOverlay } = await import('../src/screens/FleetOverlay.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { ApiError } = await import('../src/api.js')
 const { AppContext } = await import('../src/appContext.js')
@@ -358,12 +358,12 @@ describe('«Парк»: обновление агента', () => {
 })
 
 describe('устаревший текст про дашборд', () => {
-  it('в «Обслуживании и доступах» больше нет «пока живут в браузерном дашборде»', async () => {
+  it('в Парке на «Моих роутерах» нет «пока живут в браузерном дашборде»', async () => {
     reset()
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<AdminOverlay routerID={11} isAdmin onClose={() => {}} openSheet={() => {}} />, root)
+      render(<FleetOverlay routers={[]} currentID={11} isAdmin onPick={() => {}} onClose={() => {}} openSheet={() => {}} />, root)
     })
     await flush()
     expect(root.textContent).not.toContain('пока живут в браузерном')
@@ -613,13 +613,13 @@ describe('«Парк»: уведомлять меня', () => {
     cleanup(root)
   })
 
-  it('AdminOverlay пробрасывает переход на роутер', async () => {
+  it('«Мои роутеры» пробрасывают переход на роутер из Парка', async () => {
     reset()
     const opened = []
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<AdminOverlay routerID={15} isAdmin onClose={() => {}} openSheet={() => {}} onOpenRouter={(id) => opened.push(id)} />, root)
+      render(<FleetOverlay routers={[]} currentID={15} isAdmin onClose={() => {}} openSheet={() => {}} onPick={(id) => opened.push(id)} />, root)
     })
     await flush()
     await act(async () => buttons(rowOf(root, 'bronya'), 'Открыть роутер')[0].click())

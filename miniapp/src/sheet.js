@@ -32,8 +32,13 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 //
 // confirmStrict -- набор сверяется строго, как на сервере (только пробелы по
 // краям): раскатка бэкенда сравнивает версию без поблажек регистра и дефиса.
-export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', confirmStrict = false, errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '' }) {
-  return { title, body, buttonLabel, danger, confirmPhrase, confirmStrict, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, args: {} }
+//
+// choices -- лист выбора вместо «точно?»: несколько кнопок-вариантов
+// столбиком ([{ value, label, danger }]), нажатие сразу выполняет perform с
+// выбранным value третьим аргументом. Так «Не беспокоить…» в карточке
+// тревоги прячет пять вариантов за одной кнопкой.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', confirmStrict = false, errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '', choices = [] }) {
+  return { title, body, buttonLabel, danger, confirmPhrase, confirmStrict, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, choices, args: {} }
 }
 
 export function initialFieldValues(fields) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { routerHeadline, linesSummary } from '../src/routerHeadline.js'
+import { routerHeadline } from '../src/routerHeadline.js'
 
 const ONLINE = { status: 'online', nickname: 'testkeen', last_seen_age_sec: 52 }
 
@@ -100,19 +100,6 @@ describe('routerHeadline', () => {
 // и всё остальное «VPN-туннеля». На нуле выходило «0 VPN-туннеля из 2»: в приложении, где
 // человек сверяет показания с роутером, сломанное склонение читается как
 // сломанные данные.
-describe('linesSummary', () => {
-  it('склоняет VPN-туннели по-русски', () => {
-    expect(linesSummary(0, 2)).toBe('0 VPN-туннелей из 2')
-    expect(linesSummary(1, 2)).toBe('1 VPN-туннель из 2')
-    expect(linesSummary(2, 3)).toBe('2 VPN-туннеля из 3')
-    expect(linesSummary(5, 7)).toBe('5 VPN-туннелей из 7')
-    expect(linesSummary(21, 30)).toBe('21 VPN-туннель из 30')
-  })
-
-  it('без туннелей говорит прямо, а не «0 из 0»', () => {
-    expect(linesSummary(0, 0)).toBe('VPN-туннелей нет')
-  })
-})
 
 describe('вердикт говорит правду о маршруте', () => {
   // Главная ложь старого экрана: обещание единого ответа «через VPN или

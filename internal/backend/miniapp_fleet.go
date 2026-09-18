@@ -107,9 +107,10 @@ type miniappFleetRouter struct {
 	// инцидентов). Считает сервер, чтобы лист, итог и строка парка не
 	// расходились с решением «отложено» (final review M1). Без omitempty.
 	Away bool `json:"away"`
-	// PanelAddressKnown -- у роутера записан адрес панели. Самого адреса в
-	// приложении нет (TestMiniappFleetNeverLeaksRouterSecrets): листу
-	// оживления нужно только решить, спрашивать ли его (bronya).
+	// PanelAddressKnown -- у роутера записан годный адрес панели (тот же
+	// panelAddress, что у ссылки panel_url). Сводке парка самого адреса не
+	// нужно (TestMiniappFleetNeverLeaksRouterSecrets): листу оживления надо
+	// только решить, спрашивать ли его (bronya).
 	PanelAddressKnown bool `json:"panel_address_known"`
 	// Revive -- оживление агента; null, когда его не ставили. Без omitempty.
 	Revive *miniappFleetRevive `json:"revive"`
@@ -262,7 +263,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			if i, ok := usersByID[a.ID]; ok {
 				row.Away, _, _ = miniappWakeWindow(d, &users[i], "self_update", now)
-				row.PanelAddressKnown = users[i].AWGMURL != nil && strings.TrimSpace(*users[i].AWGMURL) != ""
+				_, row.PanelAddressKnown = panelAddress(users[i].AWGMURL)
 			}
 			for _, inc := range a.ActiveIncidents {
 				row.Incidents = append(row.Incidents, inc.CheckName)

@@ -1,6 +1,4 @@
 import { FleetOverlay } from './FleetOverlay.jsx'
-import { SettingsScreen } from './SettingsScreen.jsx'
-import { AdminOverlay } from './AdminOverlay.jsx'
 import { RoutesTab } from './RoutesTab.jsx'
 import { AgentConfigScreen } from './AgentConfigScreen.jsx'
 import { DNSResetScreen } from './DNSResetScreen.jsx'
@@ -14,7 +12,7 @@ import { SelfhostedScreen } from './SelfhostedScreen.jsx'
 import { SelfhostedInstanceScreen } from './SelfhostedInstanceScreen.jsx'
 import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
-import { FLEET_OVERLAYS } from '../nav.js'
+import { FLEET_OVERLAYS, normalizeReturn } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
 
 export function routerContext(routers, routerID) {
@@ -25,11 +23,15 @@ export function routerContext(routers, routerID) {
   return { current, asleep }
 }
 
-// Подпись «назад» у слоя парка -- куда он вернёт: в Обслуживание роутера,
-// на список своих серверов или к сводке роутеров (широкий экран без роутера).
+// Подпись «назад» у слоя парка -- куда он вернёт: к списку роутеров (там
+// Парк), во вкладку «Управление», на список своих серверов или к сводке
+// роутеров (широкий экран без роутера). Старый возврат 'admin' ведёт к
+// списку: «Обслуживания» как слоя больше нет.
 export function returnLabel(returnTo) {
-  if (returnTo === 'admin') return 'Обслуживание'
-  if (returnTo === 'selfhosted') return 'Свои серверы'
+  const to = normalizeReturn(returnTo)
+  if (to === 'fleet') return 'Мои роутеры'
+  if (to === 'manage') return 'Управление'
+  if (to === 'selfhosted') return 'Свои серверы'
   return 'Роутеры'
 }
 
@@ -43,15 +45,36 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   // Слои парка знают, откуда их открыли (overlayParams.returnTo), и туда же
   // возвращают. В параметрах -- только номер задания, заголовок и версия.
   const params = nav.overlayParams ?? {}
-  const returnTo = params.returnTo ?? null
+  const returnTo = normalizeReturn(params.returnTo ?? null)
   const leave = () => dispatch({ type: 'overlay', overlay: returnTo })
   const layerOpener = (from) => (overlay, extra = {}) => dispatch({ type: 'overlay', overlay, params: { ...extra, returnTo: from } })
   // Новый роутер появляется в списке оболочки только после переспроса: без
   // него «Открыть роутер» открыл бы пустоту.
   const reloadRouters = () => Promise.resolve(refreshRouters ? refreshRouters() : undefined)
 
+  // Экраны роутера глубже «Управления» закрываются обратно во вкладку.
+  const toManage = () => dispatch({ type: 'overlay', overlay: 'manage' })
+
+  // «Мои роутеры» на телефоне: у админа под списком -- Парк (v0.41; раньше
+  // он жил в «Обслуживании» конкретного роутера). Слои парка возвращают
+  // сюда же.
   if (nav.overlay === 'fleet') {
-    return <FleetOverlay routers={routers} currentID={nav.routerID} onPick={(id) => dispatch({ type: 'router', id })} onClose={close} shortcut={!nav.sheet} />
+    return (
+      <FleetOverlay
+        routers={routers}
+        currentID={nav.routerID}
+        onPick={(id) => dispatch({ type: 'router', id })}
+        onClose={close}
+        shortcut={!nav.sheet}
+        isAdmin={isAdmin}
+        openSheet={openSheet}
+        openLayer={layerOpener('fleet')}
+        onOpenConnection={(id) => {
+          dispatch({ type: 'router', id })
+          dispatch({ type: 'overlay', overlay: 'agentconn' })
+        }}
+      />
+    )
   }
 
   if (FLEET_OVERLAYS.includes(nav.overlay)) {
@@ -124,28 +147,6 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
 
   if (nav.routerID == null) return null
   switch (nav.overlay) {
-    case 'settings':
-      return <SettingsScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={close} />
-    case 'admin':
-      return (
-        <AdminOverlay
-          routerID={nav.routerID}
-          routerName={current?.nickname}
-          isAdmin={isAdmin}
-          onClose={close}
-          openSheet={openSheet}
-          openLayer={layerOpener('admin')}
-          onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
-          onOpenAgentConnection={() => dispatch({ type: 'overlay', overlay: 'agentconn' })}
-          onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
-          onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
-          onOpenRouter={(id) => dispatch({ type: 'router', id })}
-          onOpenRouterConnection={(id) => {
-            dispatch({ type: 'router', id })
-            dispatch({ type: 'overlay', overlay: 'agentconn' })
-          }}
-        />
-      )
     // Кабинеты VPN роутера -- слой с адресом (?open=cabinet): обновление
     // страницы возвращает сюда же. Вкладка кабинета и выбранный вариант в
     // адрес не пишутся.
@@ -159,11 +160,10 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           <RoutesTab routerID={nav.routerID} asleep={asleep} openSheet={openSheet} rebindFrom={params.rebindFrom ?? ''} />
         </Overlay>
       )
-    // Настройки агента, подключение агента и сброс DNS лежат слоем глубже
-    // обслуживания: закрытие возвращает туда, откуда экран открыли, а не на
-    // таб роутера.
+    // Настройки агента, подключение агента, сброс DNS и пакеты лежат слоем
+    // глубже «Управления»: закрытие возвращает во вкладку, а не на «Сейчас».
     case 'agentcfg':
-      return <AgentConfigScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
+      return <AgentConfigScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={toManage} />
     case 'agentconn':
       // Адрес с open=agentconn может открыть и не-админ: слова вместо пустоты.
       if (!isAdmin) {
@@ -173,9 +173,9 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           </Overlay>
         )
       }
-      return <AgentConnectionScreen routerID={nav.routerID} routerName={current?.nickname} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
+      return <AgentConnectionScreen routerID={nav.routerID} routerName={current?.nickname} onClose={toManage} />
     case 'dnsreset':
-      return <DNSResetScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
+      return <DNSResetScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={toManage} />
     case 'packages':
       // Как и подключение агента: адрес может открыть и не-админ.
       if (!isAdmin) {
@@ -185,7 +185,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           </Overlay>
         )
       }
-      return <PackagesScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
+      return <PackagesScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} onClose={toManage} />
     default:
       return null
   }

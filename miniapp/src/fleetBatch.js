@@ -226,7 +226,7 @@ export function batchSummary(state) {
     }))
   if (skipped.length) lines.push({ id: 'skipped', text: skippedLine(skipped) })
   if (kind === 'doctor' && withProblems) {
-    lines.push({ id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Настройки» → «Осмотр роутера».' })
+    lines.push({ id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Управление» → «Осмотр роутера».' })
   }
   return { headline, lines }
 }

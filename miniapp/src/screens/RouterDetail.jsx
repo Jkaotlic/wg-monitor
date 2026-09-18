@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useState } from 'preact/hooks'
 import {
   fetchRouter,
   fetchRouterChecks,
@@ -9,8 +9,8 @@ import {
 } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState } from '../trafficPath.js'
-import { routerHeadline, linesSummary } from '../routerHeadline.js'
+import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
+import { routerHeadline } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -18,12 +18,12 @@ import { Stat } from '../ui/Stat.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
-import { ListRow } from '../ui/ListRow.jsx'
+import { PanelLine } from '../ui/PanelLine.jsx'
 import { tunnelHealth } from './tunnelHealth.js'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
-import { confirmSheet } from '../sheet.js'
+import { confirmSheet, localSheet } from '../sheet.js'
 import { AppContext } from '../appContext.js'
 import {
   ACTION_LABELS,
@@ -47,6 +47,18 @@ const SILENCE_OPTIONS = [
   { ttl: '4h', labelKey: 'silence4h' },
   { ttl: '24h', labelKey: 'silence24h' },
 ]
+
+// Пять вариантов «не беспокоить» -- за одной кнопкой с листом (спека C2):
+// раньше пять кнопок стояли в карточке тревоги рядом с починкой и спорили с
+// ней за внимание. Порядок -- от мягкого к окончательному; «Больше не
+// напоминать» -- опасное, оно одно красное.
+export function silenceChoices() {
+  return [
+    ...SILENCE_OPTIONS.map((o) => ({ value: o.ttl, label: ACTION_LABELS[o.labelKey] })),
+    { value: 'ack', label: ACTION_LABELS.ack },
+    { value: 'mute', label: ACTION_LABELS.mute, danger: true },
+  ]
+}
 
 // Локаль прибита к ru-RU, как в остальных экранах: с локалью браузера
 // русский интерфейс показывал время тревоги как «8/21/26, 9:40 AM» --
@@ -86,7 +98,7 @@ function isSuppressed(incident) {
 //     because "the button appears to do nothing for 90 seconds" is exactly
 //     the confusion this task exists to remove -- better to say so up front
 //     and let the caller choose to queue it anyway.
-function CommandButton({ routerID, action, args = {}, label, busyLabel, mutatingText, asleep, wrapClass, onDone, openSheet, sheetTitle }) {
+function CommandButton({ routerID, action, args = {}, label, busyLabel, mutatingText, asleep, wrapClass, btnClass = 'btn btn-primary', onDone, openSheet, sheetTitle }) {
   const { busy, result, error, run } = useCommand(routerID)
 
   // Подтверждение и ход выполнения переехали в нижний шит: раньше каждая
@@ -117,7 +129,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 
   return (
     <div class={wrapClass}>
-      <button class="btn btn-primary" disabled={busy} onClick={handleClick}>
+      <button class={btnClass} disabled={busy} onClick={handleClick}>
         {busy ? (busyLabel ?? 'Выполняю…') : label}
       </button>
       {busy && <p class="state">Ждём ответа от роутера…</p>}
@@ -137,21 +149,10 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 // в тот момент, когда его меньше всего.
 function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false }) {
   const [repairOpen, setRepairOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(false)
   const [history, setHistory] = useState(null)
   const [historyTruncated, setHistoryTruncated] = useState(false)
   const [historyError, setHistoryError] = useState(null)
-
-  function runAction(call) {
-    setBusy(true)
-    setError(null)
-    call()
-      .then((data) => onUpdate(data.incident))
-      .catch((err) => setError(err.message))
-      .finally(() => setBusy(false))
-  }
 
   function toggleHistory() {
     const next = !expanded
@@ -169,6 +170,28 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
 
   const suppressed = isSuppressed(incident)
   const { what, why } = incidentCopy(incident.check_name)
+
+  // Лист «Не беспокоить»: выбор уходит на сервер, карточка обновляется его
+  // ответом. Без листа (экран без оболочки) -- вариантов нет вовсе: пять
+  // кнопок в карточке и были тем, от чего уходили.
+  function askSilence() {
+    if (!openSheet) return
+    openSheet(
+      localSheet({
+        title: ACTION_LABELS.silenceGroup,
+        body: `«${what}» — когда напомнить снова? Роутер это не меняет: только уведомления.`,
+        choices: silenceChoices(),
+        perform: (_typed, _values, choice) => {
+          if (choice === 'ack') return ackIncident(routerID, incident.check_name)
+          if (choice === 'mute') return muteIncident(routerID, incident.check_name)
+          return silenceIncident(routerID, incident.check_name, choice)
+        },
+        onDone: (data) => {
+          if (data?.incident) onUpdate(data.incident)
+        },
+      }),
+    )
+  }
 
   // tunnel_<id> incidents get a restart button; the four plain checks
   // (external_reach/dns/hydraroute/awg_manager) have no per-router command
@@ -188,14 +211,31 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           ack/mute only control whether this incident nags again, they never
           touch the router, so a muted tunnel incident must not lose the one
           button that can actually fix it. */}
-      {/* Починка идёт первой и выглядит главной: она уводит трафик на резерв,
-          перевыпускает конфиг и возвращает VPN-туннель на место. Перезапуск остаётся
-          рядом как ручной инструмент -- он бесполезен, когда мертва удалённая
-          сторона, но полезен, когда подвис сам туннель. */}
+      {/* Починка и перезапуск -- пара одного размера (спека C2), акцент --
+          только у починки: она уводит трафик на резерв, перевыпускает конфиг и
+          возвращает VPN-туннель на место. Перезапуск -- ручной инструмент:
+          бесполезен, когда мертва удалённая сторона, полезен, когда подвис
+          сам туннель. */}
       {tunnelID && (
-        <button class="btn btn-accent repair-open" onClick={() => setRepairOpen(true)}>
-          Починить
-        </button>
+        <div class="incident-pair">
+          <button class="btn btn-accent repair-open" onClick={() => setRepairOpen(true)}>
+            Починить
+          </button>
+          <CommandButton
+            routerID={routerID}
+            action="tunnel_restart"
+            args={{ tunnel_id: tunnelID }}
+            label={ACTION_LABELS.restartTunnel}
+            busyLabel="Перезапускаю…"
+            mutatingText={`Перезапустить ${checkLabel(incident.check_name)}? Связь через него на несколько секунд прервётся.`}
+            asleep={asleep}
+            wrapClass="restart-block"
+            btnClass="btn btn-ghost"
+            onDone={onDone}
+            openSheet={openSheet}
+            sheetTitle={ACTION_LABELS.restartTunnel}
+          />
+        </div>
       )}
       {repairOpen && (
         <RepairScreen
@@ -206,22 +246,6 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
             setRepairOpen(false)
             onDone?.()
           }}
-        />
-      )}
-
-      {tunnelID && (
-        <CommandButton
-          routerID={routerID}
-          action="tunnel_restart"
-          args={{ tunnel_id: tunnelID }}
-          label={ACTION_LABELS.restartTunnel}
-          busyLabel="Перезапускаю…"
-          mutatingText={`Перезапустить ${checkLabel(incident.check_name)}? Связь через него на несколько секунд прервётся.`}
-          asleep={asleep}
-          wrapClass="restart-block"
-          onDone={onDone}
-          openSheet={openSheet}
-          sheetTitle={ACTION_LABELS.restartTunnel}
         />
       )}
 
@@ -241,37 +265,14 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
         </span>
       ) : (
         <div class="incident-actions">
-          <span class="incident-actions-label">{ACTION_LABELS.silenceGroup}</span>
-          {SILENCE_OPTIONS.map((opt) => (
-            <button
-              key={opt.ttl}
-              class="btn btn-ghost"
-              disabled={busy}
-              onClick={() => runAction(() => silenceIncident(routerID, incident.check_name, opt.ttl))}
-            >
-              {ACTION_LABELS[opt.labelKey]}
-            </button>
-          ))}
-          <button
-            class="btn btn-ghost"
-            disabled={busy}
-            onClick={() => runAction(() => ackIncident(routerID, incident.check_name))}
-          >
-            {ACTION_LABELS.ack}
-          </button>
-          <button
-            class="btn btn-danger"
-            disabled={busy}
-            onClick={() => runAction(() => muteIncident(routerID, incident.check_name))}
-          >
-            {ACTION_LABELS.mute}
+          <button class="btn btn-ghost" onClick={askSilence}>
+            {ACTION_LABELS.silenceGroup}…
           </button>
         </div>
       )}
 
-      {error && <p class="state state-error">{error}</p>}
-
-      <button class="btn btn-ghost incident-history-toggle" onClick={toggleHistory}>
+      {/* История -- справка, а не действие: тихая ссылка, не кнопка. */}
+      <button type="button" class="link-quiet incident-history-toggle" onClick={toggleHistory}>
         {expanded ? 'Скрыть историю' : 'История за 24ч'}
       </button>
 
@@ -490,10 +491,6 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
     <section class="section">
       <h2 class="section-title">Проверить сейчас</h2>
       <div class="card">
-        <p class="traffic-detail">
-          Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через VPN-туннель обхода и напрямую.
-        </p>
-
         {singboxMode && (
           <p class="compare-note compare-note-caution">
             На этом роутере маршрут выбирается для каждого сайта отдельно (sing-box) — два адреса ниже не складываются в
@@ -539,13 +536,23 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
         {!busy && !singboxMode && bothIPs && !sameIP && (
           <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через VPN-туннель.</p>
         )}
+
+        {/* Меньше текста до кнопки (спека C3): как устроена проверка --
+            для того, кто спросит, а не для каждого, кто пришёл нажать. */}
+        <details class="compare-how">
+          <summary>Как это работает</summary>
+          <p class="traffic-detail">
+            Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через VPN-туннель обхода и напрямую.
+            Разные адреса — трафик идёт через VPN-туннель; одинаковые — мимо него. Ничего на роутере не меняет.
+          </p>
+        </details>
       </div>
     </section>
   )
 }
 
 
-export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -603,61 +610,20 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   }
 
   // Служебные проверки в общем порядке (checksOrder владеет им). Строки
-  // `tunnel_*` rows that `checks[]` also carries are filtered there -- they are the
-  // antennas and the Туннели block above, and listing them here as well would show
-  // every tunnel three times. Computed up here (ahead of the error/loading early
-  // returns below) because the disclosure state hooks that follow must run on
-  // every render in the same order -- see the rules-of-hooks note below.
+  // `tunnel_*` отфильтрованы там же -- они уже есть на схеме и во вкладке
+  // «VPN-туннели», и третий раз их здесь не показываем.
+  //
+  // v0.41 (спека C1): проваленные проверки -- отдельным списком над
+  // спойлером, всегда на виду; в спойлере остаются только исправные. Раньше
+  // сломанное пряталось в спойлере вместе с исправным, и спойлер приходилось
+  // насильно раскрывать при каждой новой поломке.
   const otherChecks = orderChecks(checks ?? [])
-  const otherChecksOkCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
-  // Sorted names of the currently-failing internal checks -- a signature the
-  // effect below compares across renders to detect the set *growing*, as
-  // opposed to just being non-empty (see that effect for why "non-empty" is
-  // not the right question to ask on every render).
-  const otherChecksFailing = otherChecks
-    .filter((c) => c.status !== 'ok')
-    .map((c) => c.check_name)
-    .sort()
-  const otherChecksFailingKey = otherChecksFailing.join(',')
-
-  // §3.6: these four checks are the system's own plumbing vocabulary, not
-  // something the router's owner opens this screen to read -- so the spoiler
-  // defaults to collapsed unless something is already failing on first load.
-  //
-  // This used to be `open={otherChecksNeedAttention}` with `otherChecksNeedAttention`
-  // recomputed fresh every render. That is provably unsafe: Preact's generic prop
-  // diff for `<details>` compares the new `open` value against the *vnode's own
-  // previous* prop value, not the live DOM (unlike its special-cased `value`/
-  // `checked`). A native click on <summary> flips the DOM `open` attribute directly,
-  // bypassing Preact entirely -- so if the reader collapses the spoiler while
-  // `hydraroute` is failing, and `dns` *also* starts failing on a later refresh,
-  // the recomputed boolean is still `true === true` from Preact's point of view and
-  // it leaves the (now closed) DOM alone. A newly-red check would sit hidden behind
-  // a spoiler the reader has every reason to believe they already dealt with.
-  //
-  // The fix: make this a genuinely controlled disclosure. `spoilerOpen` is real
-  // component state, and `onToggle` mirrors every native toggle (collapse OR
-  // expand, mouse or keyboard) back into that state -- so Preact's tracked
-  // previous `open` prop always matches what's actually on screen, and the
-  // desync above cannot happen. The effect below is the other half: it compares
-  // the failing-check signature across renders and forces `spoilerOpen` back to
-  // `true` whenever the set *grew*, even if the reader had manually collapsed it
-  // -- a new problem overrides a manual dismissal. A refresh that reports the
-  // exact same check(s) still failing does not touch `spoilerOpen`, so a reader
-  // who already closed it is not re-annoyed by every poll.
-  const [spoilerOpen, setSpoilerOpen] = useState(otherChecksFailing.length > 0)
-  const prevFailingRef = useRef(new Set(otherChecksFailing))
-
-  useEffect(() => {
-    const prevFailing = prevFailingRef.current
-    const grew = otherChecksFailing.some((name) => !prevFailing.has(name))
-    if (grew) setSpoilerOpen(true)
-    prevFailingRef.current = new Set(otherChecksFailing)
-    // otherChecksFailingKey is the primitive form of otherChecksFailing (a new
-    // array/closure every render) and is the real dependency here -- comparing
-    // the array itself would rerun this every render regardless of content.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otherChecksFailingKey])
+  // Над спойлером -- только красное и жёлтое. Серое («сторож не следит»,
+  // незнакомый статус) -- не поломка и остаётся внутри вместе с исправным.
+  const isFailing = (c) => ['danger', 'warn'].includes(checkState(c).tone)
+  const okChecks = otherChecks.filter((c) => !isFailing(c))
+  const okCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
+  const failingChecks = otherChecks.filter(isFailing)
 
   if (error) return <p class="state state-error">{error}</p>
   if (router == null) return <p class="state">Загрузка…</p>
@@ -676,19 +642,24 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
-  const headline = routerHeadline({ router, traffic, incidents, tunnels })
+  // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
+  // нет» говорим только по слову сервера (он видит политики целиком).
+  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
-  // Резерв -- любой работающий VPN-туннель, кроме того, что несёт обход сейчас.
-  // Когда несущий не назван (раздельная маршрутизация, выбирают правила),
-  // резерв есть, если живых больше одного, но назвать его -- угадать.
-  const running = tunnels.filter((t) => t.run_state === 'running')
-  const backupLine = path.via
-    ? running.find((t) => (t.name || t.tunnel_id) !== path.via)
-    : running.length > 1
-      ? { tunnel_id: '' }
-      : undefined
-  const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
-  const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
+  // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
+  // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
+  // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
+  // говорить про тот же несущий туннель, что и она.
+  const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via })
+  // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
+  // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
+  // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
+  const liveCount = tunnels.filter(
+    (t) =>
+      tunnelStateLabel(t) === 'работает' &&
+      t.status !== 'fail' &&
+      !incidents.some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
+  ).length
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -698,18 +669,21 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
     <Hero cold={headline.cold}>
       <StateTag tone={headline.tone}>{headline.tag}</StateTag>
       {!wide && <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>}
+      {/* Адрес панели awg-manager (владельцу и админу): нажатие открывает её
+          во внешнем браузере. На широком экране он стоит в шапке. */}
+      {!wide && <PanelLine url={panelURL} />}
       <p class="traffic-detail" style="margin-top:6px">
         <Quoted text={headline.verdict} />
       </p>
       <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
-      <div class="hero-bar">
-        <span>
-          {headline.stale
-            ? 'показания на момент последнего отчёта'
-            : linesSummary(liveCount, tunnels.length)}
-        </span>
-        {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
-      </div>
+      {/* Число туннелей -- только в плитке «VPN-туннели» ниже (спека C1):
+          здесь оно повторяло плитку. Остаётся лишь оговорка про устаревшие
+          показания молчащего роутера. */}
+      {headline.stale && (
+        <div class="hero-bar">
+          <span>показания на момент последнего отчёта</span>
+        </div>
+      )}
     </Hero>
   )
 
@@ -747,7 +721,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? `поднято из ${tunnels.length} настроенных`
+              ? `${liveCount === 1 ? 'работает' : 'работают'} из ${tunnels.length} настроенных`
               : 'роутер не сообщил ни одного'
         }
         tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
@@ -757,25 +731,21 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
   // Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не
   // было нигде, и человек узнавал ответ в момент падения.
+  const backup = backupCopy({ backupLine, carrierDown: path.tunnel === 'down' })
   const backupBlock = (
     <div class="card row" style="margin-top:12px">
       <div>
-        <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
+        <div class="row-title">
+          <Quoted text={backup.title} />
+        </div>
         <div class="row-note">
-          <Quoted
-            text={
-              backupLine
-                ? backupLine.name
-                  ? `«${backupLine.name}» подхватит, если этот замолчит`
-                  : 'второй VPN-туннель подхватит, если один замолчит'
-                : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
-            }
-          />
+          <Quoted text={backup.note} />
         </div>
       </div>
-      <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
+      <span class={backup.tone === 'ok' ? 'dot dot-ok' : 'dot dot-warn'} />
     </div>
   )
+
 
   const incidentsBlock =
     incidents.length > 0 ? (
@@ -787,7 +757,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
               key={inc.check_name}
               routerID={id}
               incident={inc}
-              whySuppressed={i === 0 && headline.tone === 'danger'}
+              whySuppressed={inc.check_name === headline.check && headline.tone === 'danger'}
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
@@ -800,7 +770,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
   const tunnelsNavBlock = (
     <div style="margin-top:20px">
-      <NavCard title="VPN-туннели и резерв" note={`${tunnels.length} шт.`} onClick={() => onTab?.('tunnels')} />
+      <NavCard title="VPN-туннели и резерв" onClick={() => onTab?.('tunnels')} />
     </div>
   )
 
@@ -823,51 +793,37 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
   const compareBlock = <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
 
+  const checkRow = (c) => {
+    const st = checkState(c)
+    return (
+      <li key={c.check_name} class="row checks-row">
+        <span class="row-title">{checkLabel(c.check_name)}</span>
+        <span class={`checks-status checks-status-${st.tone}`}>
+          {st.label} · {formatDateTime(c.ts)}
+        </span>
+      </li>
+    )
+  }
+
   const checksBlock =
     otherChecks.length > 0 ? (
       <section class="section">
-        {/* Controlled disclosure: `open` is driven by `spoilerOpen` state, and
-            `onToggle` mirrors every native toggle back into it, so Preact's
-            tracked previous `open` prop never desyncs from the live DOM (see
-            the long comment above `spoilerOpen`'s declaration). The effect up
-            there forces this back open whenever the failing-check set grows,
-            even if the reader had manually collapsed it. */}
-        <details
-          class="checks-spoiler"
-          open={spoilerOpen}
-          onToggle={(e) => setSpoilerOpen(e.currentTarget.open)}
-        >
-          <summary class="section-title checks-spoiler-summary">
-            Прочие проверки — {otherChecksOkCount} в норме
-          </summary>
-          <ul class="card list-reset">
-            {otherChecks.map((c) => {
-              const s = checkState(c)
-              return (
-                <li key={c.check_name} class="row checks-row">
-                  <span class="row-title">{checkLabel(c.check_name)}</span>
-                  <span class={`checks-status checks-status-${s.tone}`}>
-                    {s.label} · {formatDateTime(c.ts)}
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
-        </details>
+        {failingChecks.length > 0 && (
+          <>
+            <h2 class="section-title">Проверки не в порядке</h2>
+            <ul class="card list-reset checks-failing">{failingChecks.map(checkRow)}</ul>
+          </>
+        )}
+        {okChecks.length > 0 && (
+          <details class="checks-spoiler">
+            <summary class="section-title checks-spoiler-summary">
+              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {okCount} в норме
+            </summary>
+            <ul class="card list-reset">{okChecks.map(checkRow)}</ul>
+          </details>
+        )}
       </section>
     ) : null
-
-  const adminBlock = isAdmin ? (
-    <Section title="Администрирование">
-      <ul class="card list-reset">
-        <ListRow
-          title="Обслуживание и доступы"
-          sub="парк, обновление агентов, владелец и операторы"
-          onClick={onOpenAdmin}
-        />
-      </ul>
-    </Section>
-  ) : null
 
   if (!wide) {
     // Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
@@ -884,14 +840,13 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         {quickBlock}
         {compareBlock}
         {checksBlock}
-        {adminBlock}
       </div>
     )
   }
 
   // Широкий экран: слева -- что происходит (схема пути, плитки, резерв,
   // сравнение выходов, прочие проверки), справа -- что с этим делать
-  // (тревоги, быстрые действия, обслуживание). Порядок внутри колонок тот же.
+  // (тревоги, быстрые действия). Порядок внутри колонок тот же.
   return (
     <div class="screen now-grid">
       <div class="now-main">
@@ -905,7 +860,6 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       <div class="now-side">
         {incidentsBlock}
         {quickBlock}
-        {adminBlock}
       </div>
     </div>
   )

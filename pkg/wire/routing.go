@@ -127,6 +127,26 @@ type RoutePolicySummary struct {
 	ViaVPN bool `json:"via_vpn,omitempty"`
 }
 
+// PolicyBrief -- сжатая RoutePolicySummary для ежеминутной проверки
+// hydraroute (details["policies"]). Полный снимок живёт только в команде
+// route_status, а экрану нужен ответ «кто несёт обход прямо сейчас» без
+// отдельного запроса: какое звено цепочки активно и что лежит в запасе.
+type PolicyBrief struct {
+	Name           string            `json:"name"`
+	ActiveTunnelID string            `json:"active_tunnel_id"`
+	ViaVPN         bool              `json:"via_vpn"`
+	DNS            int               `json:"dns"`
+	HRNeo          int               `json:"hr_neo"`
+	Links          []PolicyBriefLink `json:"links"`
+}
+
+// PolicyBriefLink -- звено цепочки: наш туннель (пусто -- WAN или другой
+// выход мимо VPN) и его роль, как у RoutePolicyInterface.Role.
+type PolicyBriefLink struct {
+	TunnelID string `json:"tunnel_id"`
+	Role     string `json:"role"`
+}
+
 // SingboxRouterStatus reports awg-manager's sing-box router method (a third
 // routing mechanism alongside NDMS default-route and HR-Neo). When Enabled,
 // sing-box routes per its own policy/deviceMode using the tunnels as outbounds,
