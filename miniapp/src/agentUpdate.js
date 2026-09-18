@@ -147,8 +147,10 @@ export function agentUpdateSheetText(router, backendVersion) {
   return { title: `Обновить агент на «${name}»?`, body: parts.join(' ') }
 }
 
+// Назначенное обновление не исключает роутер, если оно устарело
+// (pending_stale, решает сервер): свежая версия его вытеснит.
 export function fleetUpdateTargets(fleet) {
-  return (fleet?.routers ?? []).filter((r) => r?.agent_behind && !r?.pending_version)
+  return (fleet?.routers ?? []).filter((r) => r?.agent_behind && (!r?.pending_version || r?.pending_stale))
 }
 
 export function fleetUpdateSheetText(fleet) {

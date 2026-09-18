@@ -320,3 +320,15 @@ describe('downgrade_rejected у «Обновить агент» и «Обнов�
     expect(fleetUpdateErrorText(err)).toBe('На роутере агент новее — поставьте версию через «Другая версия…».')
   })
 })
+
+describe('устаревшее назначенное обновление', () => {
+  it('роутер с назначенной старой версией попадает в «Обновить всех отставших»', async () => {
+    const { fleetUpdateTargets } = await import('../src/agentUpdate.js')
+    const fleet = { routers: [
+      { nickname: 'stale', agent_behind: true, pending_version: 'v0.37.0', pending_stale: true },
+      { nickname: 'same', agent_behind: true, pending_version: 'v0.42.0' },
+      { nickname: 'free', agent_behind: true, pending_version: '' },
+    ] }
+    expect(fleetUpdateTargets(fleet).map((r) => r.nickname)).toEqual(['stale', 'free'])
+  })
+})

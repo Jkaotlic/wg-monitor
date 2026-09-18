@@ -83,6 +83,9 @@ type miniappFleetRouter struct {
 	Incidents      []string `json:"incidents,omitempty"`
 	AgentVersion   string   `json:"agent_version,omitempty"`
 	PendingVersion string   `json:"pending_version,omitempty"`
+	// PendingStale -- назначенная версия старше версии бэкенда: «Обновить всех
+	// отставших» её вытеснит (agentDeployCore). Считает сервер, не клиент.
+	PendingStale bool `json:"pending_stale,omitempty"`
 	// Версии из снимка (router_versions), а не из горячих событий: снимок
 	// переживает рестарт бэкенда, а кэш версий не переживал.
 	AwgmgrVersion   string `json:"awgmgr_version,omitempty"`
@@ -288,6 +291,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
 				}
 			}
+			row.PendingStale = a.PendingVersion != "" && isVersionDowngrade(a.PendingVersion, serverVersion)
 			if a.PendingVersion != "" && strings.TrimSpace(a.PendingSince) != "" {
 				since := a.PendingSince
 				row.PendingSince = &since

@@ -786,3 +786,33 @@ func TestMiniappFleetWatchdogLastScanAtNullBeforeFirstScan(t *testing.T) {
 		t.Fatalf("до первого обхода ждали last_scan_at:null: %s", rec.Body.String())
 	}
 }
+
+// pending_stale: назначенное обновление старше версии бэкенда -- «Обновить
+// всех отставших» его переназначит, и клиент обязан посчитать такой роутер.
+// Решает сервер: второе сравнение версий в клиенте разошлось бы с первым.
+func TestMiniappFleetMarksStalePendingDeploy(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	old := serverVersion
+	SetVersion("v0.42.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+	for id, pending := range map[int64]string{ownedID: "v0.37.0", otherID: "v0.42.0"} {
+		if err := d.Users().UpdateLastSeenAgentVersion(id, "v0.36.0"); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Users().MarkPendingDeploy(id, pending, "2026-09-17T08:40:44Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range fleetResponse(t, fleetRequest(t, h, 999)).Routers {
+		rows[r.ID] = r
+	}
+	if !rows[ownedID].PendingStale {
+		t.Errorf("назначена v0.37 при бэкенде v0.42 -- устаревшее: %+v", rows[ownedID])
+	}
+	if rows[otherID].PendingStale {
+		t.Errorf("назначена версия бэкенда -- не устаревшее: %+v", rows[otherID])
+	}
+}
