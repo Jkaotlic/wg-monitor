@@ -256,7 +256,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                       : 'назад, канал живой'
                 }
               />
-              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.policyName ? `общий набор «${view.policyName}»` : undefined} />
+              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
             </div>
           </Hero>
         </Section>

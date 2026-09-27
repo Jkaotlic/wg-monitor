@@ -29,3 +29,16 @@ describe('MINI-09', () => {
     expect(rows[0].rules).toBe(26)
   })
 })
+
+// review v0.46, п. 6: подпись под «несёт N» обязана описывать то же N.
+describe('review п.6: подпись числа назначений', () => {
+  it('свои правила есть -- подпись называет и набор, и свои', () => {
+    const v = tunnelsView(SNAP)
+    expect(v.active.rulesNote).toBe('26 из набора «HydraRoute», 5 своих')
+  })
+  it('своих нет -- как раньше, общий набор', () => {
+    const v = tunnelsView({ ...SNAP, counts: {} })
+    expect(v.active.rules).toBe(26)
+    expect(v.active.rulesNote).toBe('общий набор «HydraRoute»')
+  })
+})

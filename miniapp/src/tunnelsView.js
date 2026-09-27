@@ -58,6 +58,14 @@ function lineTitle(name) {
   return clean === '' ? 'VPN-туннель без имени' : clean
 }
 
+function rulesNote(row, policy) {
+  const name = policy?.name ?? ''
+  const viaPolicy = row?.policyRules ?? (policy?.dns ?? 0)
+  const own = row ? row.total - row.policyRules : 0
+  if (own > 0) return name ? `${viaPolicy} из набора «${name}», ${own} своих` : `${viaPolicy} из общего набора, ${own} своих`
+  return name ? `общий набор «${name}»` : ''
+}
+
 export function tunnelsView(snapshot) {
   const empty = { active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
@@ -73,6 +81,7 @@ export function tunnelsView(snapshot) {
   if (!policy) return { ...empty, unused: [] }
 
   const activeTunnel = byID.get(policy.active_tunnel_id)
+  const activeRow = tunnelRows(snapshot).find((r) => r.id === activeTunnel.id)
   const active = {
     id: activeTunnel.id,
     name: activeTunnel.name || activeTunnel.id,
@@ -90,7 +99,10 @@ export function tunnelsView(snapshot) {
     // у политики поля static нет (wire.RoutePolicySummary), статические
     // маршруты агент считает на туннель (MINI-09). Число -- то же, что в
     // строке туннеля раскладки (tunnelRows).
-    rules: tunnelRows(snapshot).find((r) => r.id === activeTunnel.id)?.total ?? (policy.dns ?? 0),
+    rules: activeRow?.total ?? (policy.dns ?? 0),
+    // Подпись описывает то же число (review v0.46, п. 6): «общий набор» --
+    // только когда своих правил у туннеля нет.
+    rulesNote: rulesNote(activeRow, policy),
   }
 
   const chain = (policy.interfaces ?? []).map((link) => {
