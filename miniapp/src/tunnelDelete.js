@@ -47,6 +47,9 @@ export function tunnelList(snapshot) {
 // подхвата), и чинят его перезапуском, а не включением.
 function stateLabel(live, t) {
   if (live === 'down' && !tunnelSwitchedOff(t)) return 'не отвечает'
+  // Проверки не загрузились (withCheckVerdict): роутер сказал «поднят»,
+  // неизвестна проверка (review v0.46, п. 5).
+  if (t?.verdict_unknown) return 'поднят, проверка не пришла: сервер не ответил'
   return tunnelLiveLabel(live)
 }
 

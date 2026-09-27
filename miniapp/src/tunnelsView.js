@@ -21,10 +21,15 @@ function chainRole(link, tunnel, activeTunnelID) {
   const live = tunnelLive(tunnel ?? {})
   // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict):
   // трафик в него уходит и теряется -- «Работает сейчас» было бы неправдой.
-  if (link.tunnel_id && link.tunnel_id === activeTunnelID) return live === 'down' ? 'activeDown' : 'active'
+  if (link.tunnel_id && link.tunnel_id === activeTunnelID) {
+    if (live === 'down') return 'activeDown'
+    // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
+    // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
+    return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
+  }
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
-  if (live === 'unknown') return 'unknown'
+  if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
   return 'down'
 }
 
@@ -39,6 +44,10 @@ const ROLE_NOTE = {
   down: 'включён',
   off: 'выключен',
   unknown: 'роутер не сказал',
+  // Роутер сказал «поднят», но проверки с сервера не пришли (review v0.46,
+  // п. 5): неизвестна проверка, а не слово роутера.
+  activeUnknown: 'проверка не пришла: сервер не ответил',
+  checkUnknown: 'поднят, проверка не пришла: сервер не ответил',
 }
 
 // Имя VPN-туннеля глазами человека. Пустое имя -- это отсутствие имени, а не повод
@@ -75,6 +84,7 @@ export function tunnelsView(snapshot) {
     code: activeTunnel.id,
     iface: activeTunnel.iface ?? '',
     live: tunnelLive(activeTunnel),
+    checkUnknown: Boolean(activeTunnel.verdict_unknown),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
     // Правила политики + свои DNS и статические маршруты туннеля (counts):
     // у политики поля static нет (wire.RoutePolicySummary), статические

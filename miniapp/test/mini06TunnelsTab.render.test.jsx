@@ -43,8 +43,9 @@ describe('MINI-06: вкладка туннелей', () => {
     mocks.checks = () => Promise.reject(new Error('сервер не ответил'))
     const root = await mount()
     expect(root.textContent).toContain('vymysel-nl')
-    // Строка туннеля: «состояние неизвестно», а не «работает».
-    expect(root.textContent).toMatch(/vymysel-nlсостояние неизвестно/)
+    // Строка туннеля: неизвестна проверка (сервер не ответил), а не «работает».
+    expect(root.textContent).toMatch(/vymysel-nlподнят, проверка не пришла: сервер не ответил/)
+    expect(root.textContent).not.toContain('роутер не сказал')
     render(null, root)
     root.remove()
   })
