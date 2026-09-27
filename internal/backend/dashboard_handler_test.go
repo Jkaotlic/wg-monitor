@@ -990,12 +990,21 @@ func (s *dashboardActionSink) RecordResult(int64, wire.CommandResult) error {
 	return nil
 }
 
+// CommandByID -- как настоящая очередь (SEC-02): известны команды из карты
+// commands, поставленные в очередь (enqueued) и уже отвеченные (results).
 func (s *dashboardActionSink) CommandByID(_ int64, cmdID string) (wire.Command, bool) {
-	if s.commands == nil {
-		return wire.Command{}, false
+	if cmd, ok := s.commands[cmdID]; ok {
+		return cmd, true
 	}
-	cmd, ok := s.commands[cmdID]
-	return cmd, ok
+	for _, c := range s.enqueued {
+		if c.ID == cmdID {
+			return c, true
+		}
+	}
+	if _, ok := s.results[cmdID]; ok {
+		return wire.Command{ID: cmdID}, true
+	}
+	return wire.Command{}, false
 }
 
 func (s *dashboardActionSink) Enqueue(userID int64, cmd wire.Command) error {

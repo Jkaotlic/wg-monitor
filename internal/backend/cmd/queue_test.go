@@ -235,8 +235,10 @@ func TestQueue_CommandByIDReturnsDequeuedCommand(t *testing.T) {
 	if err := q.Enqueue(7, cmd); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	if _, ok := q.CommandByID(7, "update-1"); ok {
-		t.Fatal("command must not be visible before agent dequeues it")
+	// SEC-02: ждущая в очереди команда тоже известна -- гейт роли на опросе
+	// результата опирается на её действие с момента постановки.
+	if got, ok := q.CommandByID(7, "update-1"); !ok || got.Action != "self_update" {
+		t.Fatalf("pending command must be visible: %+v ok=%v", got, ok)
 	}
 	if _, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond); !ok {
 		t.Fatal("dequeue failed")
