@@ -24,7 +24,9 @@ func TestFallbackIPBusyKeepsHTTPErrorType(t *testing.T) {
 	defer busy.Close()
 	// Основной клиент -- закрытый порт: транспортная ошибка, как у DNS-отказа.
 	dead := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return nil, errors.New("dial tcp: lookup backend: no such host") },
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return nil, errors.New("dial tcp: lookup backend: no such host")
+		},
 	}}
 	ctx := context.Background()
 

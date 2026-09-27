@@ -79,13 +79,13 @@ func (c *Client) DiagFresh(ctx context.Context) error {
 		return fmt.Errorf("HTTP_%d: awgmgr diagnostics/stream: %s", resp.StatusCode, snippet(body))
 	}
 
-	switch outcome, msg := readDiagStream(resp.Body); outcome {
+	switch outcome, msg, sawEvent := readDiagStream(resp.Body); outcome {
 	case diagStreamDone:
 		return nil
 	case diagStreamError:
 		return fmt.Errorf("DIAG_STREAM_ERROR: %s", msg)
 	default: // diagStreamCut
-		return c.waitForDiagIdle(ctx)
+		return c.waitForDiagIdle(ctx, sawEvent)
 	}
 }
 
@@ -109,7 +109,10 @@ const (
 // readDiagStream reads SSE frames (event: <type>\ndata: <json>\n\n) until it
 // sees a terminal "done" or "error" event, or the stream ends without one
 // (diagStreamCut — the connection dropped, not the run: see DiagFresh).
-func readDiagStream(body io.Reader) (diagStreamOutcome, string) {
+//
+// sawEvent -- поток успел отдать хотя бы одно событие: прогон этого вызова
+// зарегистрирован (CHK-06).
+func readDiagStream(body io.Reader) (outcome diagStreamOutcome, msg string, sawEvent bool) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	var event string
@@ -118,11 +121,12 @@ func readDiagStream(body io.Reader) (diagStreamOutcome, string) {
 		switch {
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			sawEvent = true
 		case strings.HasPrefix(line, "data:"):
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			switch event {
 			case "done":
-				return diagStreamDone, ""
+				return diagStreamDone, "", true
 			case "error":
 				msg := data
 				var payload struct {
@@ -131,11 +135,11 @@ func readDiagStream(body io.Reader) (diagStreamOutcome, string) {
 				if jerr := json.Unmarshal([]byte(data), &payload); jerr == nil && payload.Message != "" {
 					msg = payload.Message
 				}
-				return diagStreamError, msg
+				return diagStreamError, msg, true
 			}
 		}
 	}
-	return diagStreamCut, ""
+	return diagStreamCut, "", sawEvent
 }
 
 // waitForDiagIdle polls /api/diagnostics/status every diagStatusPollInterval
@@ -143,7 +147,13 @@ func readDiagStream(body io.Reader) (diagStreamOutcome, string) {
 // awg-manager runs the diagnostic pass in context.Background(), independent
 // of any client connection, so this is purely "has it finished yet?" — not a
 // trigger.
-func (c *Client) waitForDiagIdle(ctx context.Context) error {
+//
+// CHK-06: машина состояний awg-manager -- idle|running (живой openapi.yaml,
+// DiagnosticsStatusData.status), отдельного "done" нет. Поэтому "idle"
+// значит «прогон закончен», только если прогон этого вызова точно начался:
+// поток успел отдать событие (started) или опрос видел "running". Иначе
+// поток мог оборваться до регистрации прогона, и отчёт остался прежним.
+func (c *Client) waitForDiagIdle(ctx context.Context, started bool) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -154,9 +164,20 @@ func (c *Client) waitForDiagIdle(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if status != "running" {
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "running":
+			started = true
+			continue
+		case "done", "completed", "complete", "finished", "success":
 			return nil
+		case "error", "failed", "fail":
+			return fmt.Errorf("DIAG_STREAM_ERROR: diagnostic run ended with status %q", status)
+		case "idle":
+			if started {
+				return nil
+			}
 		}
+		return fmt.Errorf("DIAG_UNCONFIRMED: diagnostic run completion not confirmed (status %q, run start not seen) — the last report may be stale", status)
 	}
 }
 

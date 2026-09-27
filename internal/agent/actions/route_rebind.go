@@ -59,10 +59,10 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 	// модель маршрутизации, а не перенести правило; менять порядок звеньев
 	// умеет route_policy_promote. Найдено на живом роутере 20.08.2026, где
 	// флагом defaultRoute помечены все четыре туннеля разом.
-	policyOwnsBinding := hrPoliciesWithOwnChain(ctx, c)
+	policyOwnsBinding, policiesErr := hrPoliciesWithOwnChain(ctx, c)
 
 	hrTouched := false
-	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, dstDNSBindID, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces, policyOwnsBinding)
+	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, dstDNSBindID, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces, policyOwnsBinding, policiesErr)
 	res.Static = rebindStatic(ctx, c, srcAliases, dstIface, srcIsOther, knownIfaces)
 
 	if err := c.RoutingRefresh(ctx); err != nil {
@@ -133,7 +133,7 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 //
 // Returns: total category result, the HRNeo sub-count (subset of total),
 // and whether any hydraroute rule was actually written.
-func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface, dstDNSBindID string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool, policyOwnsBinding map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
+func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface, dstDNSBindID string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool, policyOwnsBinding map[string]bool, policiesErr error) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
 	all, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		total.Failed = 1
@@ -150,6 +150,16 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 		if !didChange && srcIsOther && len(r.Routes) == 0 && !(isMovableHRNeoFallthrough(r) && defaultIface != "") {
 			newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstDNSBindID, Fallback: "auto"}}
 			didChange = true
+		}
+		if !didChange && !srcIsOther && policiesErr != nil && isMovableHRNeoFallthrough(r) {
+			// AGENT-08: политики не прочитались -- чья привязка у правила,
+			// неизвестно. Вслепую не трогаем, итог -- partial с причиной.
+			msg := fmt.Sprintf("dns/skip id=%s: routing/access-policies unreadable, policy rule left as is: %v", r.ID, policiesErr)
+			total.Failed++
+			total.Errors = append(total.Errors, msg)
+			hrNeo.Failed++
+			hrNeo.Errors = append(hrNeo.Errors, msg)
+			continue
 		}
 		if !didChange && !srcIsOther {
 			// Привязка правила политики принадлежит политике: у неё своя
@@ -183,14 +193,17 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 }
 
 // hrPoliciesWithOwnChain -- имена политик, у которых есть собственная цепочка
-// интерфейсов. Лучшее усилие: если политики не читаются (старая сборка, сбой),
-// множество пустое, и поведение остаётся прежним -- перенос по-прежнему
-// дописывает интерфейс правилу, как делал до модели политик.
-func hrPoliciesWithOwnChain(ctx context.Context, c *awgmgr.Client) map[string]bool {
+// интерфейсов. Старая сборка без ручки (404) -- множество пустое, поведение
+// прежнее: перенос дописывает интерфейс правилу, как до модели политик.
+// Любой другой сбой -- ошибка (AGENT-08): «не прочитались» не значит «нет».
+func hrPoliciesWithOwnChain(ctx context.Context, c *awgmgr.Client) (map[string]bool, error) {
 	out := map[string]bool{}
 	policies, err := c.AccessPolicies(ctx)
 	if err != nil {
-		return out
+		if awgmgr.IsEndpointMissing(err) {
+			return out, nil
+		}
+		return out, err
 	}
 	for _, p := range policies {
 		if len(p.Interfaces) == 0 {
@@ -201,7 +214,7 @@ func hrPoliciesWithOwnChain(ctx context.Context, c *awgmgr.Client) map[string]bo
 			out[name] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
 func isMovableHRNeoFallthrough(r awgmgr.DNSRoute) bool {

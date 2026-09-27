@@ -296,3 +296,25 @@ func TestClient_SendReport_ErrorsOnMalformedResponseBody(t *testing.T) {
 		t.Fatalf("error should identify report response decode, got %v", err)
 	}
 }
+
+// AGENT-11 (ревью): 4xx отчёта (кроме 401/403, 408, 429) -- явный отказ
+// бэкенда, ErrReportRejected; 5xx -- нет.
+func TestSendReportClassifiesExplicitRejection(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		want   bool
+	}{{422, true}, {400, true}, {429, false}, {408, false}, {503, false}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+		}))
+		c := NewClient(srv.URL, "token", "v0.46.0", 5*time.Second)
+		_, err := c.SendReport(context.Background(), wire.Report{})
+		srv.Close()
+		if err == nil {
+			t.Fatalf("%d: want error", tc.status)
+		}
+		if got := errors.Is(err, ErrReportRejected); got != tc.want {
+			t.Fatalf("%d: ErrReportRejected = %v, want %v (%v)", tc.status, got, tc.want, err)
+		}
+	}
+}

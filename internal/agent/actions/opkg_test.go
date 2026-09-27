@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -533,5 +535,168 @@ func TestOpkg_DisableFeed_ThenSmartUpgrade(t *testing.T) {
 	}
 	if len(payload.FailedFeeds) != 0 {
 		t.Errorf("payload.FailedFeeds should be empty after repair; got %v", payload.FailedFeeds)
+	}
+}
+
+// AGENT-14: срок действия команды (300 с) убивал `opkg upgrade` SIGKILL'ом
+// посреди установки -- пакеты оставались наполовину распакованными. Теперь
+// установка не привязана к сроку команды (у неё свой потолок), а
+// обновление списков и оценка места -- по-прежнему.
+func TestOpkg_SmartUpgrade_UpgradeSurvivesActionDeadline(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var upgradeCtxErr error
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "opkg" && args[0] == "update":
+			return []byte("Updated list of available packages in /opt/var/opkg-lists/entware\n"), nil
+		case name == "opkg" && args[0] == "list-upgradable":
+			return []byte("curl - 8.1 - 8.2\n"), nil
+		case name == "opkg" && args[0] == "info":
+			return []byte("Package: curl\nInstalled-Size: 100\n"), nil
+		case name == "df":
+			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 100000 100000 50% /opt\n"), nil
+		case name == "opkg" && args[0] == "upgrade":
+			cancel() // срок команды истёк посреди установки
+			time.Sleep(20 * time.Millisecond)
+			upgradeCtxErr = ctx.Err()
+			return []byte("Upgrading curl on root from 8.1 to 8.2...\n"), nil
+		}
+		return nil, nil
+	})
+	status, out, _ := o.SmartUpgrade(parent)
+	if upgradeCtxErr != nil {
+		t.Fatalf("opkg upgrade was cancelled by the action deadline (%v): a SIGKILL mid-install", upgradeCtxErr)
+	}
+	if status != "ok" {
+		t.Fatalf("status=%q out=%q", status, out)
+	}
+}
+
+// AGENT-14: cron-обновление (скрипт opkg_cron) берёт mkdir-замок в /tmp, а
+// агент -- свой файл. Два opkg одновременно ломают базу пакетов. Теперь
+// агент берёт и общий замок cron: занят -- "locked", opkg не запускается.
+func TestOpkg_SmartUpgrade_RespectsCronLock(t *testing.T) {
+	called := false
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	})
+	o.SharedLockDir = filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+	if err := os.Mkdir(o.SharedLockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, out, _ := o.SmartUpgrade(context.Background())
+	if status != "locked" {
+		t.Fatalf("status=%q, want locked while cron upgrade runs; out=%q", status, out)
+	}
+	if called {
+		t.Fatal("opkg ran while the cron upgrade holds the lock")
+	}
+	if _, err := os.Stat(o.SharedLockDir); err != nil {
+		t.Fatal("the cron lock must be left to its owner")
+	}
+
+	// Свободен -- агент берёт его на время работы и отпускает.
+	_ = os.Remove(o.SharedLockDir)
+	var heldDuring bool
+	o.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		_, err := os.Stat(o.SharedLockDir)
+		heldDuring = heldDuring || err == nil
+		return nil, nil
+	}
+	if st, out, _ := o.SmartUpgrade(context.Background()); st != "ok" {
+		t.Fatalf("status=%q out=%q", st, out)
+	}
+	if !heldDuring {
+		t.Fatal("agent did not hold the shared cron lock while running opkg")
+	}
+	if _, err := os.Stat(o.SharedLockDir); !os.IsNotExist(err) {
+		t.Fatal("shared cron lock not released")
+	}
+}
+
+// Общий замок работает, только пока путь у агента и в cron-скрипте один.
+func TestOpkgCronScriptUsesSharedLockDir(t *testing.T) {
+	m := &OpkgCronManager{}
+	if !strings.Contains(m.scriptText(), "LOCK="+OpkgCronSharedLockDir+"\n") {
+		t.Fatalf("cron script lock differs from OpkgCronSharedLockDir %q", OpkgCronSharedLockDir)
+	}
+}
+
+// AGENT-14 (ревью): замок в /tmp, брошенный после kill -9, висел до
+// перезагрузки или двух часов. Теперь владелец пишет в него свой pid:
+// владелец мёртв -- замок снимается и берётся; жив -- «занято»; pid нет
+// (старый cron-скрипт) и замок свежий -- честно «владелец неизвестен».
+func TestOpkg_SharedLockOwnerPid(t *testing.T) {
+	newRunner := func(t *testing.T) (*OpkgRunner, *bool) {
+		ran := false
+		o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			ran = true
+			return nil, nil
+		})
+		o.SharedLockDir = filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+		return o, &ran
+	}
+	lockWithPid := func(t *testing.T, dir string, pid int) {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if pid > 0 {
+			if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("owner alive", func(t *testing.T) {
+		o, ran := newRunner(t)
+		lockWithPid(t, o.SharedLockDir, os.Getpid())
+		st, out, _ := o.SmartUpgrade(context.Background())
+		if st != "locked" || *ran || !strings.Contains(out, "идёт") {
+			t.Fatalf("status=%q ran=%v out=%q", st, *ran, out)
+		}
+	})
+	t.Run("owner dead", func(t *testing.T) {
+		o, ran := newRunner(t)
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		lockWithPid(t, o.SharedLockDir, cmd.Process.Pid)
+		var pidDuring string
+		o.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			*ran = true
+			b, _ := os.ReadFile(filepath.Join(o.SharedLockDir, "pid"))
+			pidDuring = strings.TrimSpace(string(b))
+			return nil, nil
+		}
+		if st, out, _ := o.SmartUpgrade(context.Background()); st != "ok" || !*ran {
+			t.Fatalf("a lock of a dead owner must be taken over: status=%q out=%q", st, out)
+		}
+		if pidDuring != strconv.Itoa(os.Getpid()) {
+			t.Fatalf("lock must carry our pid while held, got %q", pidDuring)
+		}
+		if _, err := os.Stat(o.SharedLockDir); !os.IsNotExist(err) {
+			t.Fatal("lock not released")
+		}
+	})
+	t.Run("no pid, fresh", func(t *testing.T) {
+		o, ran := newRunner(t)
+		lockWithPid(t, o.SharedLockDir, 0)
+		st, out, _ := o.SmartUpgrade(context.Background())
+		if st != "locked" || *ran || strings.Contains(out, "идёт обновление") || !strings.Contains(out, "неизвест") {
+			t.Fatalf("status=%q ran=%v out=%q", st, *ran, out)
+		}
+	})
+}
+
+// Cron-скрипт тоже пишет свой pid в замок и снимает замок вместе с ним.
+func TestOpkgCronScriptWritesPidIntoLock(t *testing.T) {
+	s := (&OpkgCronManager{}).scriptText()
+	for _, want := range []string{`echo $$ > "$LOCK/pid"`, `rm -f "$LOCK/pid"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("cron script missing %q", want)
+		}
 	}
 }

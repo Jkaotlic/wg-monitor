@@ -50,6 +50,11 @@ func (h HydraRouteCheck) Run(ctx context.Context, _ Deps) wire.Check {
 		if mechs.hrneoRequired() {
 			return Fail("hydraroute", start, "required by active HR-Neo routes but not installed", details)
 		}
+		if mechErr != nil {
+			// CHK-07: правила не прочитались -- нужен ли HydraRoute,
+			// неизвестно; «ok» было бы неправдой, тревога -- догадкой.
+			return Unverified("hydraroute", start, "routing rules unreadable: cannot tell whether HydraRoute is needed", details)
+		}
 		return OK("hydraroute", start, details)
 	}
 	if !st.Running {

@@ -1,6 +1,7 @@
 package dnswatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/actions"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 )
 
 // ndmcTimeout bounds one ndmc call: a hung ndmc must not stall the loop.
@@ -137,6 +139,9 @@ type Watcher struct {
 
 	mu   sync.Mutex
 	snap Snapshot
+
+	lastSaved   []byte // CHK-03: последнее записанное состояние
+	stateWrites int    // сколько раз файл писался (для тестов)
 }
 
 // New builds a watcher; it reads nothing and changes nothing until Tick/Run.
@@ -509,6 +514,13 @@ func (w *Watcher) toFallback(ctx context.Context, prev State, now time.Time, pro
 		return
 	}
 	w.noLive = false
+	// CHK-03: набор -- под лимит DoT-строк KeenOS; сверх него строки не
+	// встанут, а сторож повторял бы их каждую минуту.
+	if trimmed, dropped := trimToDoTLimit(set, lines, dnsref.KeeneticDoTLimit); len(dropped) > 0 {
+		set = trimmed
+		w.log.Warn("dns watchdog: fallback set trimmed to the KeenOS DoT limit",
+			"limit", dnsref.KeeneticDoTLimit, "dropped", w.maskAll(dropped))
+	}
 
 	// Lines an earlier switch left behind (cleanup leftovers) are the
 	// watchdog's own: they join this switch's applied lines instead of
@@ -808,6 +820,12 @@ func (w *Watcher) readUpstreams(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("show running-config: %w", err)
 	}
+	// CHK-04: пустой вывод с кодом 0 бывает у ndmc -- это «не прочитано», а
+	// не «на роутере нет строк». Иначе своя строка «пропадала», сторож уходил
+	// в idle и стирал запись о запасных строках.
+	if strings.TrimSpace(string(out)) == "" {
+		return nil, errors.New("show running-config: empty output")
+	}
 	return actions.ParseDNSProxyUpstreams(string(out)), nil
 }
 
@@ -852,6 +870,12 @@ func (w *Watcher) save(p persisted) {
 		w.log.Error("dns watchdog: state encode", "err", err)
 		return
 	}
+	// CHK-03: без перемен файл не переписывается -- тик раз в минуту иначе
+	// давал 1440 записей во флеш в сутки.
+	if w.lastSaved != nil && bytes.Equal(body, w.lastSaved) {
+		return
+	}
+	w.stateWrites++
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		w.log.Error("dns watchdog: state write", "path", tmp, "err", err)
@@ -859,7 +883,9 @@ func (w *Watcher) save(p persisted) {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		w.log.Error("dns watchdog: state rename", "path", path, "err", err)
+		return
 	}
+	w.lastSaved = body
 }
 
 func (w *Watcher) load() (persisted, error) {

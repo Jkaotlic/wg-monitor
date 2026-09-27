@@ -62,3 +62,22 @@ func Fail(name string, start time.Time, errMsg string, details map[string]any) w
 		Details:    out,
 	}
 }
+
+// Unverified -- проверка ничего не проверила (нечего опросить, настройки не
+// прочитались). На проводе статус только ok|fail: бэкенд
+// (canonicalizeReportedChecks) на любом другом отвергает ВЕСЬ отчёт вместе с
+// пульсом, и роутер выглядел бы мёртвым. Поэтому -- ok с пометкой
+// details.unverified=true и причиной details.unverified_reason: старый бэкенд
+// видит прежнее ok, новый пропускает такое мимо FSM и показывает
+// «не проверено» (CHK-02).
+func Unverified(name string, start time.Time, reason string, details map[string]any) wire.Check {
+	out := make(map[string]any, len(details)+2)
+	for k, v := range details {
+		out[k] = v
+	}
+	out["unverified"] = true
+	out["unverified_reason"] = reason
+	c := OK(name, start, out)
+	slog.Info("check unverified", "name", name, "reason", reason)
+	return c
+}

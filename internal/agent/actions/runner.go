@@ -52,6 +52,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -153,6 +154,10 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"self_update":           600 * time.Second,
 	"firmware_install":      600 * time.Second,
 	"diag_now":              75 * time.Second,
+	// dns_reset: до восьми снятий и восьми постановок через ndmc, сохранение
+	// и два чтения running-config -- на медленном роутере дольше 45 с
+	// (AGENT-03), а обрыв посередине оставил бы DNS наполовину.
+	"dns_reset": 120 * time.Second,
 	// awgm_update: до 30с цикла "checking" + до 5 минут опроса после apply --
 	// бюджет с запасом шире (fix round 1, п.3), чтобы actionTimeout не срубил
 	// действие раньше, чем оно успеет сказать своё «не вернулся за 5 минут»
@@ -763,6 +768,17 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "exec not configured", payload
 		}
 		dryRun, _ := cmd.Args["dry_run"].(bool)
+		if !dryRun {
+			// AGENT-04: сторож DNS держит роутер (запасные серверы, переход
+			// или уборка) -- его строки живут только в текущем конфиге.
+			// Сброс снёс бы их и сохранил конфиг, а сторож потом убирал бы
+			// уже эталонные строки. Отказ до любых команд.
+			if hold, err := dnswatchcfg.Hold(r.DNSWatchdogStatePath); err != nil {
+				return "err", fmt.Sprintf("dns_reset: не удалось прочитать состояние сторожа DNS, сбрасывать DNS небезопасно: %v", err), payload
+			} else if hold != "" {
+				return "err", "dns_reset: сторож DNS сейчас держит роутер на запасных DNS-серверах или не закончил уборку после них. Сбросить DNS можно, когда он вернётся на свой сервер, или после перезагрузки роутера", payload
+			}
+		}
 		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{
 			DryRun: dryRun,
 			// Свой резолвер оператора сбросом не сносим: иначе «починить DNS»

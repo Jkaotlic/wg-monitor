@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -273,8 +275,13 @@ func TestReporter_AuthReject_RecordsBreadcrumb(t *testing.T) {
 	if err := json.Unmarshal(body, &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.ConsecutiveAuthRejects != 2 {
-		t.Fatalf("ConsecutiveAuthRejects = %d, want 2", st.ConsecutiveAuthRejects)
+	// AGENT-10: первый отказ пишется сразу, повторы -- не чаще раза в
+	// reporterStatePersistEvery, поэтому на диске 1, а в памяти 2.
+	if st.ConsecutiveAuthRejects != 1 {
+		t.Fatalf("ConsecutiveAuthRejects on disk = %d, want 1 (first reject persisted, repeat throttled)", st.ConsecutiveAuthRejects)
+	}
+	if r.consecutiveAuthRejects != 2 {
+		t.Fatalf("ConsecutiveAuthRejects in memory = %d, want 2", r.consecutiveAuthRejects)
 	}
 	if st.LastAuthErrorAt.IsZero() {
 		t.Fatal("LastAuthErrorAt should be set after a 401")
@@ -333,5 +340,124 @@ func TestReporterFreshStartIsNotResumed(t *testing.T) {
 	defer s.mu.Unlock()
 	if s.last.Resumed {
 		t.Fatalf("fresh start should not be Resumed: %+v", s.last)
+	}
+}
+
+// AGENT-11: метка «отчитался» -- по ней скрипт замены решает, не откатить ли
+// новый бинарь. Пишется только после УСПЕШНОГО отчёта и один раз за процесс
+// (не лишняя запись во флеш на каждый отчёт).
+func TestReporterWritesReportOKMarkerOnceAfterSuccess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "report-ok")
+	s := &stubSender{err: errors.New("backend down")}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "v0.46.0", Interval: time.Hour, ReportOKPath: marker})
+
+	r.sendOnce(context.Background())
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("marker must not appear after a failed report, stat err=%v", err)
+	}
+
+	s.err = nil
+	r.sendOnce(context.Background())
+	body, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker missing after a successful report: %v", err)
+	}
+	if !strings.Contains(string(body), "v0.46.0") {
+		t.Fatalf("marker = %q, want the agent version", body)
+	}
+
+	_ = os.Remove(marker)
+	r.sendOnce(context.Background())
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("marker must be written once per process, not on every report")
+	}
+}
+
+// AGENT-10: файл состояния переписывался на каждый отчёт -- 1440 записей во
+// флеш в сутки. Теперь -- не чаще раза в reporterStatePersistEvery, кроме
+// значимых перемен (первый отказ авторизации, выздоровление) и выхода.
+// Порог «вернулся после сна» (30 мин) при этом держится: сохранённое время
+// отстаёт не больше чем на reporterStatePersistEvery, а на выходе пишется
+// точное.
+func TestReporterThrottlesStateWritesButKeepsResumedAccuracy(t *testing.T) {
+	if reporterStatePersistEvery > 5*time.Minute {
+		t.Fatalf("reporterStatePersistEvery = %v: stale state would skew the %v resumed threshold", reporterStatePersistEvery, ResumedThreshold)
+	}
+	statePath := filepath.Join(t.TempDir(), "reporter-state.json")
+	s := &stubSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour, StatePath: statePath})
+
+	for i := 0; i < 10; i++ {
+		r.sendOnce(context.Background())
+	}
+	if r.stateWrites != 1 {
+		t.Fatalf("10 routine reports wrote the state %d times, want 1", r.stateWrites)
+	}
+
+	// Первый отказ авторизации -- значимая перемена, пишется сразу.
+	s.err = fmt.Errorf("%w: status=401", ErrUnauthorized)
+	r.sendOnce(context.Background())
+	r.sendOnce(context.Background())
+	if r.stateWrites != 2 {
+		t.Fatalf("first auth reject must persist at once, repeats are throttled: writes=%d, want 2", r.stateWrites)
+	}
+	// Выздоровление -- тоже сразу.
+	s.err = nil
+	r.sendOnce(context.Background())
+	if r.stateWrites != 3 {
+		t.Fatalf("recovery must persist at once: writes=%d, want 3", r.stateWrites)
+	}
+
+	// Выход Run пишет точное время последнего отчёта.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	r.mu.Lock()
+	want := r.lastReportAt
+	r.mu.Unlock()
+	body, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st reporterState
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.LastReportAt.Equal(want) {
+		t.Fatalf("state on exit = %v, want the exact last report %v", st.LastReportAt, want)
+	}
+}
+
+// AGENT-11 (ревью): явный отказ бэкенда (4xx: токен, форма отчёта) кладёт
+// метку report-rejected -- по ней скрипт замены откатывает бинарь, который
+// бэкенд не принимает. Сеть и 5xx метку не ставят: авария бэкенда -- не
+// повод откатывать.
+func TestReporterWritesRejectedMarkerOnlyOnExplicit4xx(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401", fmt.Errorf("%w: status=401", ErrUnauthorized), true},
+		{"422", fmt.Errorf("%w: status=422", ErrReportRejected), true},
+		{"5xx", errors.New("backend returned 503: busy"), false},
+		{"network", errors.New("dial tcp 203.0.113.9:443: connect: connection refused"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ok, rej := filepath.Join(dir, "report-ok"), filepath.Join(dir, "report-rejected")
+			r := NewReporter(ReporterConfig{Sender: &stubSender{err: tc.err}, Version: "v0.46.0", Interval: time.Hour, ReportOKPath: ok, ReportRejectedPath: rej})
+			r.sendOnce(context.Background())
+			_, err := os.Stat(rej)
+			if got := err == nil; got != tc.want {
+				t.Fatalf("report-rejected present = %v, want %v", got, tc.want)
+			}
+			if _, err := os.Stat(ok); err == nil {
+				t.Fatal("report-ok must not appear on a failed report")
+			}
+		})
 	}
 }

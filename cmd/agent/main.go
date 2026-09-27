@@ -110,8 +110,12 @@ func main() {
 		Deps:        deps,
 		AwgClient:   awgClient,
 		StatePath:   cfg.State.ResolvedPath(),
-		ConfigPath:  *configPath,
-		BackendURL:  cfg.Backend.URL,
+		// AGENT-11: метка первого успешного отчёта -- скрипт замены бинаря
+		// без неё откатывает обновление.
+		ReportOKPath:       actions.SelfUpdateReportOKPath(),
+		ReportRejectedPath: actions.SelfUpdateReportRejectedPath(),
+		ConfigPath:         *configPath,
+		BackendURL:         cfg.Backend.URL,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -123,8 +127,12 @@ func main() {
 	// with Resumed=true within seconds.
 	opkg := &actions.OpkgRunner{
 		LockPath: "/opt/var/wg-monitor/opkg.lock",
-		LockTTL:  8 * time.Minute,
-		Exec:     actions.DefaultExec,
+		// Установка отвязана от срока команды и может идти до 20 минут
+		// (AGENT-14): замок не должен протухнуть посреди неё.
+		LockTTL: 25 * time.Minute,
+		Exec:    actions.DefaultExec,
+		// Общий замок с cron-обновлением пакетов (AGENT-14).
+		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks)
 	loop := cmdloop.New(client, runner, 30)

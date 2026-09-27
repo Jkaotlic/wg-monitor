@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
@@ -64,6 +65,30 @@ type DNSResetOpts struct {
 // например дописать порт :853, -- и это то же самое по смыслу. Форма в коде
 // была бы допущением о чужой прошивке, молча протухающим при её обновлении.
 func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
+	status, output = dnsReset(ctx, exec, opts)
+	// AGENT-05: вывод уходит на бэкенд -- секретные пути DoH (свой резолвер,
+	// приватные NextDNS/AdGuard) не покидают роутер. Маскируется весь
+	// транскрипт целиком: адрес повторяется и в командах, и в ответах ndmc.
+	return status, maskDoHSecretPaths(output)
+}
+
+// dohURLPattern -- https-адрес с путём; хост оставляем, путь решаем отдельно.
+var dohURLPattern = regexp.MustCompile(`https://([^/\s"'<>]+)(/[^\s"'<>]*)`)
+
+// maskDoHSecretPaths заменяет путь DoH-адреса на /***, кроме общепринятого
+// публичного /dns-query: он секретом не является и человеку понятнее видеть
+// его как есть. Тот же вид, что у маски в agent_config ("https://<host>/***").
+func maskDoHSecretPaths(s string) string {
+	return dohURLPattern.ReplaceAllStringFunc(s, func(m string) string {
+		sub := dohURLPattern.FindStringSubmatch(m)
+		if sub[2] == "/" || sub[2] == "/dns-query" {
+			return m
+		}
+		return "https://" + sub[1] + dnsWatchdogMaskedPath
+	})
+}
+
+func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
 		return "err", fmt.Sprintf("read running-config failed: %v\n%s", err, strings.TrimSpace(string(rc)))
@@ -128,12 +153,18 @@ func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		"remove existing dns-proxy upstreams", remove,
 		"apply reference upstreams", reference)
 
+	// AGENT-03: сначала подтверждение по факту, потом сохранение -- и только
+	// если эталон встал. Иначе сохранилось бы «старые сняты, новые не
+	// встали», и роутер остался бы без DNS и после перезагрузки. Без
+	// сохранения перезагрузка вернёт прежние настройки.
+	missing := confirmDNSReferenceApplied(ctx, exec, &b, reference)
+	failures += missing
 	b.WriteString("\nsave:\n")
-	if !ndmcStep(ctx, exec, &b, "system configuration save") {
+	if missing > 0 {
+		b.WriteString("  ✗ конфиг не сохранён: эталон не подтвердился. Изменения живут до перезагрузки — после неё вернутся прежние DNS-настройки.\n")
+	} else if !ndmcStep(ctx, exec, &b, "system configuration save") {
 		failures++
 	}
-
-	failures += confirmDNSReferenceApplied(ctx, exec, &b, reference)
 
 	if len(plain) > 0 {
 		fmt.Fprintf(&b, "\nNOTE: %d per-interface name-server entr(y/ies) left untouched "+

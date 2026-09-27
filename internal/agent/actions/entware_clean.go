@@ -19,6 +19,8 @@ const (
 	defaultEntwareCleanMinFreeKB         = int64(2 * 1024)
 	defaultEntwareCleanMinMemAvailableKB = int64(64 * 1024)
 	defaultEntwareCleanMaxLogKB          = int64(64)
+	// entwareCleanInstallMinKB -- места под скрипт (~4 КБ) и crontab с запасом.
+	entwareCleanInstallMinKB = int64(64)
 
 	entwareCleanBegin = "# wg-monitor entware cleanup begin"
 	entwareCleanEnd   = "# wg-monitor entware cleanup end"
@@ -43,8 +45,11 @@ func (m *EntwareCleanManager) Install(ctx context.Context, schedule string) (wir
 	if err != nil {
 		return wire.EntwareCleanStatus{}, err
 	}
-	if free < m.minFreeKB() {
-		return wire.EntwareCleanStatus{}, fmt.Errorf("not enough free space on /opt: free %d KB, need at least %d KB", free, m.minFreeKB())
+	// AGENT-13: чистка нужнее всего на забитом /opt, поэтому отказ -- только
+	// когда не лезет даже сам скрипт с crontab (entwareCleanInstallMinKB).
+	// MinFreeKB остаётся порогом «мало места» в статусе, а не запретом.
+	if free < entwareCleanInstallMinKB {
+		return wire.EntwareCleanStatus{}, fmt.Errorf("not enough free space on /opt: free %d KB, need at least %d KB for the cleanup script", free, entwareCleanInstallMinKB)
 	}
 	if _, err := ensureCronInstalled(ctx, m.exec); err != nil {
 		return wire.EntwareCleanStatus{}, err
@@ -384,9 +389,8 @@ case "$free" in
   ''|*[!0-9]*) log "status=skipped_bad_df free=$free"; trim_log; exit 0 ;;
 esac
 if [ "$free" -lt "$MIN_FREE_KB" ]; then
-  log "status=skipped_low_space free_kb=$free min_free_kb=$MIN_FREE_KB"
-  trim_log
-  exit 0
+  # Мало места -- чистим всё равно: удаление места не требует (AGENT-13).
+  log "status=low_space free_kb=$free min_free_kb=$MIN_FREE_KB cleaning anyway"
 fi
 
 before="$(mem_available_kb)"

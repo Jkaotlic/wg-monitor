@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -56,8 +57,9 @@ type agentConfigFile struct {
 		IntervalSec int `yaml:"interval_sec"`
 	} `yaml:"agent"`
 	AwgManager struct {
-		BaseURL string `yaml:"base_url"`
-		Login   string `yaml:"login"`
+		BaseURL  string `yaml:"base_url"`
+		URLAlias string `yaml:"url"`
+		Login    string `yaml:"login"`
 	} `yaml:"awg_manager"`
 	ExternalReach struct {
 		Enabled       bool `yaml:"enabled"`
@@ -158,6 +160,13 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 	}
 	var before agentConfigFile
 	_ = yaml.Unmarshal(raw, &before) // doc already parsed: the same bytes
+	for _, ch := range changes {
+		if ch.section == "awg_manager" && ch.key == "base_url" {
+			if err := awgmBaseURLChangeAllowed(awgmCurrentBaseURL(before), ch.value); err != nil {
+				return "", err
+			}
+		}
+	}
 	applied := make([]string, 0, len(changes))
 	for _, ch := range changes {
 		if err := setConfigValue(&doc, ch.section, ch.key, ch.value, ch.tag); err != nil {
@@ -199,6 +208,51 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 	}
 	scheduleURLUpdateRestart()
 	return "config updated (" + strings.Join(applied, ", ") + "); restarting agent", nil
+}
+
+// awgmCurrentBaseURL -- адрес awg-manager, которым агент пользуется сейчас:
+// та же цепочка, что AwgManagerConfig.URL (base_url, затем url, затем
+// адрес по умолчанию).
+func awgmCurrentBaseURL(f agentConfigFile) string {
+	if s := strings.TrimSpace(f.AwgManager.BaseURL); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(f.AwgManager.URLAlias); s != "" {
+		return s
+	}
+	return "http://127.0.0.1:2222"
+}
+
+// awgmBaseURLChangeAllowed -- AGENT-06. На awgm_base_url агент шлёт логин и
+// пароль awg-manager. Команда приходит с бэкенда, и смена адреса на чужой
+// хост увела бы пароль наружу. Удалённо разрешено: пусто (адрес по
+// умолчанию), тот же хост (порт, схема и путь -- можно), loopback и частные
+// сети (RFC1918, ULA) -- панель живёт на самом роутере или в его LAN.
+// Любой другой адрес меняется только руками в config.yaml на роутере.
+func awgmBaseURLChangeAllowed(current, next string) error {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return nil
+	}
+	nu, err := url.Parse(next)
+	if err != nil || nu.Hostname() == "" {
+		return fmt.Errorf("update_agent_config: awgm_base_url must be an absolute http(s) URL")
+	}
+	host := strings.ToLower(nu.Hostname())
+	if host == "localhost" {
+		return nil
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return nil
+		}
+	}
+	if cu, err := url.Parse(strings.TrimSpace(current)); err == nil && cu.Hostname() != "" &&
+		strings.EqualFold(cu.Hostname(), host) {
+		return nil
+	}
+	return fmt.Errorf("update_agent_config: awgm_base_url may only move to the same host, loopback or a private network — the awg-manager password is sent there; change it in config.yaml on the router")
 }
 
 // refuseStrandingWatchdog: the watchdog's switches live only in the router's
@@ -311,6 +365,9 @@ func validateAgentConfigString(arg, s string) error {
 		u, err := url.Parse(s)
 		if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			return fmt.Errorf("update_agent_config: awgm_base_url must be an absolute http(s) URL")
+		}
+		if u.User != nil {
+			return fmt.Errorf("update_agent_config: awgm_base_url must not carry credentials")
 		}
 	case "awgm_login":
 		if len(s) > 64 {

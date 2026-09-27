@@ -77,6 +77,8 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		matrix = nil
 	}
 
+	carrier := newTunnelCarrierLookup(ctx, t.Client, activeDefaultID)
+
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
 	// On error (above) we emit "tunnels=fail"; on success here we emit
@@ -101,9 +103,63 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
 		// «не знаем», а не «правил нет».
 		rc.Unknown = routeCounts == nil
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix))
+		out = append(out, evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier))
 	}
 	return out
+}
+
+// tunnelCarrierLookup -- несёт ли туннель трафик в обход правил DNS/static:
+// звено цепочки политики доступа или назначенный выход awg-manager
+// (routeTag). Политики читаются лениво -- только когда туннель вот-вот
+// «заглушат» как неиспользуемый. known=false -- не удалось узнать.
+type tunnelCarrierLookup func(tu awgmgr.Tunnel) (carrier, known bool)
+
+func newTunnelCarrierLookup(ctx context.Context, c *awgmgr.Client, activeDefaultID string) tunnelCarrierLookup {
+	var (
+		loaded  bool
+		links   map[string]bool
+		linksOK bool
+	)
+	return func(tu awgmgr.Tunnel) (bool, bool) {
+		if activeDefaultID != "" && tu.ID == activeDefaultID {
+			return true, true
+		}
+		if !loaded {
+			loaded = true
+			links, linksOK = accessPolicyLinks(ctx, c)
+		}
+		if !linksOK {
+			return false, false
+		}
+		for _, alias := range []string{tu.NDMSName, tu.InterfaceName, tu.ID} {
+			if k := strings.ToLower(strings.TrimSpace(alias)); k != "" && links[k] {
+				return true, true
+			}
+		}
+		return false, true
+	}
+}
+
+// accessPolicyLinks -- все имена звеньев цепочек политик доступа (в нижнем
+// регистре). Старая сборка без ручки (404) -- цепочек нет, это известно.
+// Любой другой сбой -- неизвестно.
+func accessPolicyLinks(ctx context.Context, c *awgmgr.Client) (map[string]bool, bool) {
+	policies, err := c.AccessPolicies(ctx)
+	if err != nil {
+		if awgmgr.IsEndpointMissing(err) {
+			return map[string]bool{}, true
+		}
+		return nil, false
+	}
+	out := map[string]bool{}
+	for _, p := range policies {
+		for _, e := range p.Interfaces {
+			if k := strings.ToLower(strings.TrimSpace(e.Name)); k != "" {
+				out[k] = true
+			}
+		}
+	}
+	return out, true
 }
 
 // routeCounts is the per-iface tally embedded in tunnel_* check details.
@@ -206,7 +262,7 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string) string
 // one is the live egress, so consumers get both `is_active_default` (the answer)
 // and `active_default_known` (whether there IS an answer) rather than being left
 // to guess from intent.
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix) wire.Check {
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix, carrier tunnelCarrierLookup) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -304,10 +360,29 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 		return OK(name, start, details)
 	}
 	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) {
-		details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
-		return OK(name, start, details)
+		switch used, known := tunnelCarrierVerdict(tu, carrier); {
+		case !known:
+			// Ревью CHK-01: политики не прочитались -- несёт ли туннель
+			// трафик, неизвестно. Одна ошибка чтения не роняет туннель в
+			// fail: ok + unverified с причиной и настоящими претензиями.
+			details["unverified_problems"] = strings.Join(reasons, "; ")
+			return Unverified(name, start, "access policies unreadable: cannot tell whether this rule-less tunnel carries traffic", details)
+		case !used:
+			details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
+			return OK(name, start, details)
+		}
 	}
 	return Fail(name, start, strings.Join(reasons, "; "), details)
+}
+
+// tunnelCarrierVerdict -- CHK-01: туннель без правил всё равно может нести
+// трафик (звено политики, назначенный выход). known=false -- политики не
+// прочитались.
+func tunnelCarrierVerdict(tu awgmgr.Tunnel, carrier tunnelCarrierLookup) (used, known bool) {
+	if carrier == nil {
+		return false, true
+	}
+	return carrier(tu)
 }
 
 // dropStaleHandshakeReason убирает из причин только «рукопожатие устарело».
@@ -381,14 +456,26 @@ func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.
 	if matrix == nil {
 		return false
 	}
-	if _, ok := matrix.BestLatency(tunnelID); !ok {
-		return false
+	// Устаревшая ячейка ничего не доказывает: она могла быть снята до
+	// обрыва. Свежесть меряем по времени САМОЙ ячейки (CHK-05): общая
+	// отметка матрицы свежа, пока обновляются соседи.
+	for _, c := range matrix.Cells {
+		if c.TunnelID == tunnelID && c.OK && matrixCellFresh(matrix, c, now) {
+			return true
+		}
 	}
-	// Устаревшая матрица ничего не доказывает: она могла быть снята до
-	// обрыва. Свежесть меряем по её же отметке времени.
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
+	return false
+}
+
+// matrixCellFresh -- ячейка снята не раньше matrixFreshWindow назад. Время
+// ячейки (ts) главнее; нет ts или он в незнакомом виде -- общая отметка
+// матрицы (updatedAt), как было до CHK-05.
+func matrixCellFresh(matrix *awgmgr.MonitoringMatrix, c awgmgr.MatrixCell, now time.Time) bool {
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(c.TS))
 	if err != nil {
-		return false
+		if ts, err = time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt)); err != nil {
+			return false
+		}
 	}
 	return now.Sub(ts) <= matrixFreshWindow
 }
@@ -405,12 +492,12 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 	if matrix == nil {
 		return false
 	}
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
-	if err != nil || now.Sub(ts) > matrixFreshWindow {
-		return false
-	}
 	own, othersAlive := 0, false
 	for _, c := range matrix.Cells {
+		// CHK-05: в счёт идут только свежие ячейки -- и свои, и соседей.
+		if !matrixCellFresh(matrix, c, now) {
+			continue
+		}
 		if c.TunnelID == tunnelID {
 			if c.OK {
 				return false

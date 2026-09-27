@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -31,6 +32,9 @@ func (o *OpkgRunner) HrneoUpdate(ctx context.Context) (status, output string) {
 		return "err", "clear stale lock: " + err.Error()
 	}
 	if err := o.takeLock(); err != nil {
+		if errors.Is(err, errOpkgCronBusy) {
+			return "locked", opkgCronBusyText
+		}
 		return "err", "acquire lock: " + err.Error()
 	}
 	defer o.releaseLock()

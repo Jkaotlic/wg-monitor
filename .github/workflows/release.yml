@@ -163,6 +163,21 @@ jobs:
           sha256sum * > checksums.txt
           cat checksums.txt
 
+      # AGENT-02: подпись доказывает «выпущено нами», но не «какой выпуск».
+      # Строка "<sha256(тег)>  VERSION-<тег>" привязывает подписанный файл к
+      # тегу: старый подписанный выпуск под новым тегом агент (>= v0.46)
+      # отвергнет. Формат строки как у файлов — старые агенты ищут по имени
+      # файла и её не замечают. Тег через env, не выражением в shell.
+      - name: Bind tag into checksums
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          cd dist
+          test -n "$RELEASE_TAG"
+          tag_sum=$(printf '%s' "$RELEASE_TAG" | sha256sum | cut -d' ' -f1)
+          printf '%s  VERSION-%s\n' "$tag_sum" "$RELEASE_TAG" >> checksums.txt
+          cat checksums.txt
+
       - name: Sign checksums
         env:
           WG_MONITOR_RELEASE_SIGNING_SEED_B64: ${{ secrets.WG_MONITOR_RELEASE_SIGNING_SEED_B64 }}

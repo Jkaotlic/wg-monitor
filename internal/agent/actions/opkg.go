@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -42,7 +43,24 @@ type OpkgRunner struct {
 	// Sleep -- пауза перед проверкой «HydraRoute работает» после перезапуска.
 	// nil -- настоящий таймер; тесты подставляют мгновенную.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// SharedLockDir -- mkdir-замок, который берёт cron-скрипт обновления
+	// (opkg_cron.go, LOCK=...). Агент берёт его же на время своих opkg-
+	// операций (AGENT-14): два opkg разом ломают базу пакетов. Пусто -- не
+	// брать (тесты); сборка агента ставит OpkgCronSharedLockDir.
+	SharedLockDir string
+	sharedHeld    bool
 }
+
+// OpkgCronSharedLockDir -- тот же путь, что LOCK в скрипте opkg_cron.
+const OpkgCronSharedLockDir = "/tmp/wg-monitor-opkg-auto-upgrade.lock"
+
+// opkgSharedLockStale -- замок cron старше этого считается брошенным
+// (скрипт убит -9 и не успел снять): cron-прогон столько не длится.
+const opkgSharedLockStale = 2 * time.Hour
+
+// opkgUpgradeHardCap -- потолок самой установки. Она отвязана от срока
+// команды: SIGKILL посреди распаковки ломает пакеты (AGENT-14).
+var opkgUpgradeHardCap = 20 * time.Minute
 
 // configRoot returns ConfigRoot or the production default.
 func (o *OpkgRunner) configRoot() string {
@@ -99,6 +117,9 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, p
 		return "err", "clear stale lock: " + err.Error(), payload
 	}
 	if err := o.takeLock(); err != nil {
+		if text, busy := opkgLockBusyText(err); busy {
+			return "locked", text, payload
+		}
 		return "err", "acquire lock: " + err.Error(), payload
 	}
 	defer o.releaseLock()
@@ -153,7 +174,11 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, p
 		}
 	}
 
-	upgradeOut, err := o.Exec(ctx, "opkg", "upgrade")
+	// AGENT-14: установка отвязана от срока команды -- SIGKILL посреди
+	// распаковки оставляет пакеты сломанными. Свой потолок у неё есть.
+	upCtx, cancelUp := context.WithTimeout(context.WithoutCancel(ctx), opkgUpgradeHardCap)
+	upgradeOut, err := o.Exec(upCtx, "opkg", "upgrade")
+	cancelUp()
 	if err != nil {
 		return "err", "opkg upgrade failed: " + err.Error() + "\n" + string(upgradeOut), payload
 	}
@@ -431,6 +456,9 @@ func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, ou
 		return "err", "clear stale lock: " + err.Error(), payload
 	}
 	if err := o.takeLock(); err != nil {
+		if text, busy := opkgLockBusyText(err); busy {
+			return "locked", text, payload
+		}
 		return "err", "acquire lock: " + err.Error(), payload
 	}
 
@@ -524,6 +552,9 @@ func (o *OpkgRunner) DryRun(ctx context.Context) (status, output string) {
 		return "err", "clear stale lock: " + err.Error()
 	}
 	if err := o.takeLock(); err != nil {
+		if text, busy := opkgLockBusyText(err); busy {
+			return "locked", text
+		}
 		return "err", "acquire lock: " + err.Error()
 	}
 	defer o.releaseLock()
@@ -570,12 +601,40 @@ func (o *OpkgRunner) releaseStaleLock() error {
 	return nil
 }
 
+// errOpkgCronBusy -- общий замок держит живой владелец (AGENT-14).
+var errOpkgCronBusy = errors.New("opkg lock is held by a running owner")
+
+// errOpkgLockUnknownOwner -- замок свежий, но pid в нём нет (старый
+// cron-скрипт): жив ли владелец, неизвестно.
+var errOpkgLockUnknownOwner = errors.New("opkg lock is held, owner unknown")
+
+// opkgCronBusyText -- владелец замка жив.
+const opkgCronBusyText = "на роутере идёт другое обновление пакетов (по расписанию) — повторите через несколько минут"
+
+// opkgLockUnknownOwnerText -- владелец неизвестен; говорим как есть.
+const opkgLockUnknownOwnerText = "замок обновления пакетов занят, но чей — неизвестно (старый скрипт по расписанию не пишет свой номер процесса). Он снимется сам через 2 часа или после перезагрузки роутера"
+
+// opkgLockBusyText -- текст для человека, если err -- «замок занят».
+func opkgLockBusyText(err error) (string, bool) {
+	switch {
+	case errors.Is(err, errOpkgCronBusy):
+		return opkgCronBusyText, true
+	case errors.Is(err, errOpkgLockUnknownOwner):
+		return opkgLockUnknownOwnerText, true
+	}
+	return "", false
+}
+
 func (o *OpkgRunner) takeLock() error {
 	if err := os.MkdirAll(parentDir(o.LockPath), 0o755); err != nil {
 		return err
 	}
+	if err := o.takeSharedLock(); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(o.LockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
+		o.releaseSharedLock()
 		return err
 	}
 	_, _ = fmt.Fprintf(f, "pid=%d\n", os.Getpid())
@@ -594,6 +653,71 @@ func (o *OpkgRunner) releaseLock() {
 	if err := os.Remove(o.LockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// best-effort: nothing meaningful to do; next call will see stale-lock.
 	}
+	o.releaseSharedLock()
+}
+
+// takeSharedLock берёт mkdir-замок cron-скрипта (AGENT-14) и пишет в него
+// свой pid. Занят: pid есть и процесс жив -- errOpkgCronBusy; pid есть, а
+// процесса нет (kill -9) -- замок снимается и берётся; pid нет (старый
+// cron-скрипт) -- брошенным считается только старше opkgSharedLockStale,
+// иначе errOpkgLockUnknownOwner.
+func (o *OpkgRunner) takeSharedLock() error {
+	if o.SharedLockDir == "" {
+		return nil
+	}
+	err := os.Mkdir(o.SharedLockDir, 0o755)
+	if errors.Is(err, os.ErrExist) {
+		switch pid, alive := opkgLockOwner(o.SharedLockDir); {
+		case pid > 0 && alive:
+			return errOpkgCronBusy
+		case pid > 0:
+			_ = os.RemoveAll(o.SharedLockDir)
+			err = os.Mkdir(o.SharedLockDir, 0o755)
+		default:
+			st, serr := os.Stat(o.SharedLockDir)
+			if serr != nil || o.now().Sub(st.ModTime()) <= opkgSharedLockStale {
+				return errOpkgLockUnknownOwner
+			}
+			_ = os.RemoveAll(o.SharedLockDir)
+			err = os.Mkdir(o.SharedLockDir, 0o755)
+		}
+	}
+	if errors.Is(err, os.ErrExist) {
+		return errOpkgCronBusy // кто-то успел взять между снятием и взятием
+	}
+	if err != nil {
+		return err
+	}
+	_ = os.WriteFile(filepath.Join(o.SharedLockDir, "pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644)
+	o.sharedHeld = true
+	return nil
+}
+
+// opkgLockOwner -- pid владельца из замка и жив ли он. pid 0 -- не записан.
+func opkgLockOwner(dir string) (pid int, alive bool) {
+	b, err := os.ReadFile(filepath.Join(dir, "pid"))
+	if err != nil {
+		return 0, false
+	}
+	pid, err = strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, processAlive(pid)
+}
+
+// processAlive -- сигнал 0: процесс существует (EPERM -- тоже существует).
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func (o *OpkgRunner) releaseSharedLock() {
+	if !o.sharedHeld {
+		return
+	}
+	o.sharedHeld = false
+	_ = os.RemoveAll(o.SharedLockDir)
 }
 
 // parentDir returns filepath.Dir without importing path/filepath at the top

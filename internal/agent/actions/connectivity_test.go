@@ -198,3 +198,46 @@ func TestPickConnectivityTunnelIfaceUsesHydraRoutePolicyInterfaceInsteadOfFirstD
 		t.Fatalf("iface=%q label=%q, want nwg5/actual-policy", iface, label)
 	}
 }
+
+// AGENT-15: правило HR-Neo в режиме политики идёт через АКТИВНОЕ звено
+// цепочки политики (первое доступное по порядку), а не через первый туннель
+// с defaultRoute: этот флаг стоит у всех (память failover-not-automatic,
+// routetag-direct-is-split). Проба «через туннель» обязана идти тем же путём.
+func TestPickConnectivityTunnelIfaceUsesActivePolicyLink(t *testing.T) {
+	for _, tc := range []struct {
+		name, ifaces, want string
+	}{
+		{"first link up", `[{"name":"OpkgTun14","up":true},{"name":"OpkgTun10","up":true}]`, "opkgtun14"},
+		{"first link down -> fallback link", `[{"name":"OpkgTun14","up":false},{"name":"OpkgTun10","up":true}]`, "opkgtun10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+					{"id":"awg10","name":"vpn-nl","interfaceName":"opkgtun10","ndmsName":"OpkgTun10","enabled":true,"status":"running","defaultRoute":true},
+					{"id":"awg14","name":"vpn-reserve","interfaceName":"opkgtun14","ndmsName":"OpkgTun14","enabled":true,"status":"running","defaultRoute":true}
+				]}}`))
+			})
+			mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"success":true,"data":[
+					{"id":"hr:YOUTUBE","name":"YOUTUBE","enabled":true,"backend":"hydraroute","domains":["geosite:YOUTUBE"],"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute"}
+				]}`))
+			})
+			mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"success":true,"data":[
+					{"name":"HydraRoute","interfaces":[{"name":"OpkgTun10","order":1},{"name":"OpkgTun14","order":0}]}
+				]}`))
+			})
+			mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"success":true,"data":` + tc.ifaces + `}`))
+			})
+			c := awgmgrFake(t, mux)
+			iface, _ := pickConnectivityTunnelIface(context.Background(), c, []connectivityTarget{
+				{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+			})
+			if iface != tc.want {
+				t.Fatalf("iface=%q, want %q (active link of the policy chain)", iface, tc.want)
+			}
+		})
+	}
+}
