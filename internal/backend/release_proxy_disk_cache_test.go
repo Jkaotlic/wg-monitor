@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 	"testing"
 )
 
@@ -82,5 +83,45 @@ func TestReleaseProxy_RejectsBinaryWithWrongChecksum(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "v0.46.0", "wg-monitor-agent-linux-arm64")); !os.IsNotExist(err) {
 		t.Fatalf("подменённый бинарь попал в кэш: %v", err)
+	}
+}
+
+// Кэш вытесняет по последней отдаче, а не по времени скачивания: выпуск,
+// который парк качает прямо сейчас, не выбрасывается ради свежескачанного.
+func TestReleaseProxy_PruneKeepsRecentlyServedVersion(t *testing.T) {
+	h, _, dir := releaseCacheEnv(t, "binary", map[string]string{"wg-monitor-agent-linux-arm64": sha("binary")})
+	old := time.Now().Add(-48 * time.Hour)
+	for i, v := range []string{"v0.40.0", "v0.41.0", "v0.42.0"} {
+		p := filepath.Join(dir, v)
+		if err := os.MkdirAll(p, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "wg-monitor-agent-linux-arm64"), []byte("binary"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		at := old.Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serve := func(v string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/"+v+"/wg-monitor-agent-linux-arm64", nil)
+		req.SetPathValue("version", v)
+		req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if c := serve("v0.40.0"); c != http.StatusOK { // самый старый, но его только что качали
+		t.Fatalf("из кэша: %d", c)
+	}
+	if c := serve("v0.46.0"); c != http.StatusOK { // новый -- скачивание и чистка
+		t.Fatalf("новый: %d", c)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "v0.40.0")); err != nil {
+		t.Fatalf("вытеснен выпуск, который только что отдавали: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "v0.41.0")); !os.IsNotExist(err) {
+		t.Fatalf("давно не отдававшийся выпуск остался: %v", err)
 	}
 }

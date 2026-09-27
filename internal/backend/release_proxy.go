@@ -165,8 +165,8 @@ func fillReleaseCache(ctx context.Context, path, version, asset, u string) (int,
 // на Raspberry Pi, и копить все бинари всех версий незачем.
 const releaseCacheKeepVersions = 3
 
-// pruneReleaseCache оставляет keep самых свежих (по времени изменения)
-// каталогов версий. Ошибки не мешают раздаче: кэш -- удобство.
+// pruneReleaseCache оставляет keep каталогов версий, отданных последними
+// (время каталога двигает каждая отдача, serveReleaseCacheFile). Ошибки не мешают раздаче: кэш -- удобство.
 func pruneReleaseCache(root string, keep int) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -207,6 +207,10 @@ func serveReleaseCacheFile(w http.ResponseWriter, r *http.Request, path string) 
 	if err != nil || !st.Mode().IsRegular() {
 		return false
 	}
+	// Отметка отдачи -- время каталога выпуска: чистка вытесняет по
+	// последней отдаче, и выпуск, который парк качает сейчас, остаётся.
+	now := time.Now()
+	_ = os.Chtimes(filepath.Dir(path), now, now)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeContent(w, r, "", st.ModTime(), f)
 	return true
