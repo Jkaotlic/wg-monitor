@@ -123,7 +123,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
 
         {!running && !view.loading ? (
           <button class="btn btn-accent repair-start" onClick={start} disabled={starting}>
-            <Quoted text={starting ? 'Начинаю…' : view.done ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
+            <Quoted text={starting ? 'Начинаю…' : view.done && view.scope === 'this' ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
           </button>
         ) : null}
       </div>

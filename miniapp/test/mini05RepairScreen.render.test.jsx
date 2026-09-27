@@ -61,3 +61,14 @@ describe('review п.2: первый опрос /repair не удался', () =>
     root.remove()
   })
 })
+
+describe('review п.3: чужая законченная починка', () => {
+  it('кнопка называет этот туннель, а не «ещё раз»', async () => {
+    mocks.status = () => Promise.resolve({ job_id: 'j-1', state: 'success', running: false, steps: [] })
+    const root = await mount()
+    expect(root.querySelector('.repair-start').textContent).toContain('Починить «vymysel-nl»')
+    expect(root.querySelector('.repair-start').textContent).not.toContain('ещё раз')
+    render(null, root)
+    root.remove()
+  })
+})
