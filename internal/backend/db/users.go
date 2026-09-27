@@ -492,6 +492,36 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	return nil
 }
 
+// TunnelsInventoryOKAt -- время последнего отчёта роутера с tunnels=ok
+// (GHOST-01). ok=false -- отметки нет (не было или до миграции).
+func (u *UsersRepo) TunnelsInventoryOKAt(id int64) (time.Time, bool, error) {
+	var v sql.NullString
+	err := u.d.db.QueryRow(`SELECT tunnels_inventory_ok_at FROM users WHERE id = ?`, id).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil || !v.Valid || v.String == "" {
+		return time.Time{}, false, err
+	}
+	t, err := parseEventTS(v.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
+// SetTunnelsInventoryOKAt двигает отметку только вперёд: запоздавший
+// повтор старого отчёта её не откатывает.
+func (u *UsersRepo) SetTunnelsInventoryOKAt(id int64, ts time.Time) error {
+	_, err := u.d.db.Exec(TunnelsInventoryOKAtSQL, ts.UTC(), id, ts.UTC())
+	return err
+}
+
+// TunnelsInventoryOKAtSQL -- та же запись для транзакции приёма отчёта:
+// аргументы (ts, user_id, ts).
+const TunnelsInventoryOKAtSQL = `UPDATE users SET tunnels_inventory_ok_at = ?
+	 WHERE id = ? AND (tunnels_inventory_ok_at IS NULL OR tunnels_inventory_ok_at < ?)`
+
 // AgentMetadata -- то, что правит дашборд в карточке роутера. Пустое поле
 // (0 для чисел) -- «не менять».
 type AgentMetadata struct {

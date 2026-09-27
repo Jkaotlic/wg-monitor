@@ -549,8 +549,8 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 		case miniappTunnelsInventoryCheck:
 			if row.Status == "ok" {
 				inventoryTS, haveInventory = row.TS, true
-			} else if ts, ok, err := d.DB.Events().LatestEventTSWithStatus(routerID, miniappTunnelsInventoryCheck, "ok", time.Now().UTC().Add(-miniappEventsWindow)); err == nil && ok {
-				inventoryTS, haveInventory = ts, true
+			} else {
+				inventoryTS, haveInventory = miniappLastInventoryOK(d, routerID)
 			}
 		}
 	}
@@ -565,6 +565,26 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 		out = append(out, row)
 	}
 	return out
+}
+
+// miniappLastInventoryOK -- время последнего отчёта с tunnels=ok. Берётся у
+// роутера (users.tunnels_inventory_ok_at, пишет приём отчёта): выборка по
+// events при долгом отказе awg-manager проходит назад все строки
+// tunnels=fail -- статуса в индексе нет, замер на живой базе 400-550 мс на
+// роутер, а зовут её и для каждой строки списка. Отметки нет (до миграции)
+// -- один раз старая выборка, и результат запоминается.
+func miniappLastInventoryOK(d Deps, routerID int64) (time.Time, bool) {
+	if ts, ok, err := d.DB.Users().TunnelsInventoryOKAt(routerID); err == nil && ok {
+		return ts, true
+	}
+	ts, ok, err := d.DB.Events().LatestEventTSWithStatus(routerID, miniappTunnelsInventoryCheck, "ok", time.Now().UTC().Add(-miniappEventsWindow))
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	if err := d.DB.Users().SetTunnelsInventoryOKAt(routerID, ts); err != nil && d.Logger != nil {
+		d.Logger.Warn("miniapp: tunnels inventory time not saved", "router_id", routerID, "err", err)
+	}
+	return ts, true
 }
 
 // miniappTimelineEvent is one row of the router's timeline: what changed and

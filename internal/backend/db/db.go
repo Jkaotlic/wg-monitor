@@ -97,6 +97,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate revive_intents.generation: %w", err)
 	}
+	if err := migrateTunnelsInventoryOKAt(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users.tunnels_inventory_ok_at: %w", err)
+	}
 	if err := migrateReviveNotifiedAutoError(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate revive_intents.notified_auto_error: %w", err)
@@ -256,6 +260,14 @@ func migratePendingAttempts(d *sql.DB) error {
 func migrateReviveGeneration(d *sql.DB) error {
 	return addColumnIfMissing(d, "revive_intents", "generation",
 		`ALTER TABLE revive_intents ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`)
+}
+
+// migrateTunnelsInventoryOKAt -- время последнего отчёта с tunnels=ok
+// (GHOST-01): экран судит по нему о призраках удалённых туннелей, не
+// проходя events назад по строкам tunnels=fail.
+func migrateTunnelsInventoryOKAt(d *sql.DB) error {
+	return addColumnIfMissing(d, "users", "tunnels_inventory_ok_at",
+		`ALTER TABLE users ADD COLUMN tunnels_inventory_ok_at TIMESTAMP`)
 }
 
 // migrateReviveNotifiedAutoError -- причина последнего отказа авто-оживления,

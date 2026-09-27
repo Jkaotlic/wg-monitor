@@ -784,6 +784,20 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
 			return
 		}
+		// GHOST-01: время последнего успешного инвентаря туннелей -- у
+		// роутера, той же транзакцией. Экран судит по нему о призраках, не
+		// проходя events назад по строкам tunnels=fail.
+		for _, c := range rep.Checks {
+			if c.Name == miniappTunnelsInventoryCheck && c.Status == "ok" {
+				if _, err := tx.ExecContext(r.Context(), db.TunnelsInventoryOKAtSQL, ts, uid, ts); err != nil {
+					tx.Rollback()
+					d.Logger.Warn("update tunnels inventory time", "nickname", nick, "err", err)
+					writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update tunnels inventory time")
+					return
+				}
+				break
+			}
+		}
 		// INSERT OR IGNORE — idempotent on (user_id, check_name, ts) per
 		// uq_events_user_check_ts (API-01). Agent retry on transient TCP error
 		// no longer duplicates the report's events.
