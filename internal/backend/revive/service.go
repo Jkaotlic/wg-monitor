@@ -76,6 +76,9 @@ type Outcome struct {
 	Finished   bool
 	Success    bool
 	AuthFailed bool
+	// RootAuthFailed -- из них отказал именно вход root в терминал (а не
+	// панель): только тогда сохранённый пароль root стирается (REV-04).
+	RootAuthFailed bool
 	// CredentialsVerified -- вход в терминал роутера этим паролем прошёл
 	// (шаг config_written достигнут), даже если установка потом не удалась.
 	// Только тогда пароль ручного оживления сохраняется (REV-03).

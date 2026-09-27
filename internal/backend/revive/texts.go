@@ -34,6 +34,7 @@ const (
 	reasonRevived         = "агент ожил"
 	reasonAliveItself     = "агент снова на связи сам"
 	reasonAuthFailed      = "пароль не подошёл"
+	reasonPanelAuthFailed = "вход в панель роутера не подошёл"
 	reasonExpired         = "срок оживления вышел"
 	reasonNoStoredEntry   = "пароль на сервере не найден — поставьте оживление заново"
 	reasonEntryUnreadable = "пароль на сервере не расшифровывается — поставьте оживление заново"

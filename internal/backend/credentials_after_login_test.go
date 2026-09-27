@@ -90,3 +90,20 @@ func TestReviveEngine_OutcomeReportsVerifiedLogin(t *testing.T) {
 		}
 	}
 }
+
+// REV-04: движок различает отказ входа root и отказ панели.
+func TestReviveEngine_RootAuthDistinctFromPanelAuth(t *testing.T) {
+	store := provision.NewStore()
+	e := NewReviveEngine(ReviveEngineDeps{Provision: provision.Deps{Store: store}})
+	mk := func(hint string) string {
+		job := store.Create(provision.KindRepairReinstall, "bronya", provision.Template(provision.KindRepairReinstall))
+		store.Update(job.ID, func(j *provision.Job) { j.State, j.Hint = provision.StateFailed, hint })
+		return job.ID
+	}
+	if out, _ := e.Outcome(mk(provision.HintRootAuthFailed)); !out.AuthFailed || !out.RootAuthFailed {
+		t.Fatalf("root: %+v", out)
+	}
+	if out, _ := e.Outcome(mk(provision.HintAuthFailed)); !out.AuthFailed || out.RootAuthFailed {
+		t.Fatalf("панель: %+v", out)
+	}
+}

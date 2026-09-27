@@ -122,8 +122,15 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	// unauthorized, 401, 403...) -- у relay нет кода ошибки. Сигнал поэтому
 	// не полностью структурный: посторонний текст с «401» внутри даст ложный
 	// «пароль не подошёл», а новая формулировка отказа входа -- пропуск.
+	//
+	// REV-04: отказ входа root (HintRootAuthFailed) и отказ панели
+	// (HintAuthFailed: 401 -- сменили ключ) различаются: пароль root стирается
+	// только по первому.
+	if job.Hint == provision.HintRootAuthFailed {
+		return revive.Outcome{Finished: true, AuthFailed: true, RootAuthFailed: true, Text: "пароль не подошёл"}, true
+	}
 	if job.Hint == provision.HintAuthFailed {
-		return revive.Outcome{Finished: true, AuthFailed: true, Text: "пароль не подошёл"}, true
+		return revive.Outcome{Finished: true, AuthFailed: true, Text: "вход в панель роутера не подошёл"}, true
 	}
 	return revive.Outcome{Finished: true, CredentialsVerified: verified, Text: reviveStepText(reviveFailedStep(job.Steps))}, true
 }

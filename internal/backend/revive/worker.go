@@ -326,9 +326,15 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	switch {
 	case out.Success:
 		s.finish(ctx, routerID, running, StatusDone, reasonRevived, func(st bool) string { return noticeRevived(nick, out.Version, st) }, in.Generation)
-	case out.AuthFailed:
+	case out.AuthFailed && out.RootAuthFailed:
 		s.forgetRejectedCredentials(routerID)
 		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, func(bool) string { return noticeAuthFailed(nick) }, in.Generation)
+	case out.AuthFailed:
+		// REV-04: отказала панель (401 -- сменили ключ или логин), а не вход
+		// root. Повторять с теми же данными бессмысленно -- закрываем сразу,
+		// но сохранённый пароль root не трогаем: он может быть верным.
+		reason := orText(out.Text, reasonPanelAuthFailed)
+		s.finish(ctx, routerID, running, StatusFailed, reason, func(st bool) string { return noticeFailed(nick, reason, st) }, in.Generation)
 	default:
 		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false, in.Generation)
 	}

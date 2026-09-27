@@ -251,7 +251,7 @@ func TestAuthFailure_ForgetsSameStoredPassword(t *testing.T) {
 	env.saveFixture(t)
 	env.seedWaiting(t) // тот же пароль фикстуры
 	env.probe.script(awgmstate.Reachable)
-	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, AuthFailed: true} })
+	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, AuthFailed: true, RootAuthFailed: true} })
 	for i := 0; i < 4 && len(env.engine.calls()) == 0; i++ {
 		env.clock.Advance(DefaultConfirmGap)
 		env.tick(t)
@@ -272,7 +272,7 @@ func TestAuthFailure_KeepsDifferentStoredPassword(t *testing.T) {
 	}
 	env.seedWaiting(t)
 	env.probe.script(awgmstate.Reachable)
-	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, AuthFailed: true} })
+	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, AuthFailed: true, RootAuthFailed: true} })
 	for i := 0; i < 4 && len(env.engine.calls()) == 0; i++ {
 		env.clock.Advance(DefaultConfirmGap)
 		env.tick(t)
