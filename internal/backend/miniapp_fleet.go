@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -114,6 +115,11 @@ type miniappFleetRouter struct {
 	// инцидентов). Считает сервер, чтобы лист, итог и строка парка не
 	// расходились с решением «отложено» (final review M1). Без omitempty.
 	Away bool `json:"away"`
+	// Stale -- то же, что в сводке (dashboardSummaryAgent.Stale): отчёт
+	// устарел по порогам offline/sleeping, независимо от тревог. Без omitempty.
+	Stale bool `json:"stale"`
+	// Reach -- см. dashboardSummaryAgent.Reach.
+	Reach string `json:"reach"`
 	// PanelAddressKnown -- у роутера записан годный адрес панели (тот же
 	// panelAddress, что у ссылки panel_url). Сводке парка самого адреса не
 	// нужно (TestMiniappFleetNeverLeaksRouterSecrets): листу оживления надо
@@ -282,7 +288,9 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				AgentVersion:   a.AgentVersion,
 				PendingVersion: a.PendingVersion,
 				NotifyMuted:    mutedByAdmin[a.ID],
-				Away:           a.Status == "sleeping" || a.Status == "offline",
+				Away:           fleetAwayFromSummary(a),
+				Stale:          a.Stale,
+				Reach:          a.Reach,
 			}
 			_, row.RootPasswordSaved = savedCreds[a.ID]
 			if i, ok := usersByID[a.ID]; ok {
@@ -310,6 +318,10 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				// не должна пропадать из строки.
 				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind || verdict.TooOld) {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
+					if st.Version == "" {
+						// Сдались: «занят, повторим» уже неправда (DEP-01).
+						row.PendingLastErrorText = givenUpReasonText(st.LastError, st.Attempts)
+					}
 				}
 			}
 			row.PendingStale = a.PendingVersion != "" && isVersionDowngrade(a.PendingVersion, serverVersion)
@@ -340,6 +352,9 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			if i, ok := usersByID[a.ID]; ok && resp.ReviveEnabled {
 				row.AutoReviveBlocked = autoReviveBlockedText(&users[i], row.RootPasswordSaved, row.Revive, now)
+				if row.AutoReviveBlocked == "" && row.RootPasswordSaved && agentLongNotUpdated(&users[i], serverVersion, now) {
+					row.AutoReviveBlocked = autoReviveStateBlockedText(reviveSvc, a.ID, now)
+				}
 			}
 			resp.Routers = append(resp.Routers, row)
 		}
@@ -403,6 +418,12 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// fleetAwayFromSummary -- «не на связи» по reach (связь без учёта тревог):
+// status "alert" у молчащего роутера не значит, что до него дойдёт команда.
+func fleetAwayFromSummary(a dashboardSummaryAgent) bool {
+	return a.Reach == "sleeping" || a.Reach == "offline"
+}
+
 func miniappFleetReviveFrom(v *revive.IntentView) *miniappFleetRevive {
 	out := &miniappFleetRevive{
 		Status:        v.Status,
@@ -436,9 +457,52 @@ func miniappFleetIncidentFrom(incidents []dashboardIncident) *miniappFleetIncide
 }
 
 const (
-	autoReviveBlockedNoRoot  = "для авто-оживления нужен пароль root"
-	autoReviveBlockedNoPanel = "для авто-оживления нужен внешний адрес панели"
+	autoReviveBlockedNoRoot      = "для авто-оживления нужен пароль root"
+	autoReviveBlockedNoPanel     = "для авто-оживления нужен внешний адрес панели"
+	autoReviveBlockedUnreadable  = "сохранённый пароль root не расшифровывается — введите его заново"
+	autoReviveBlockedByAdmin     = "авто-оживление снял админ — вернётся, когда пароль сохранят заново"
+	autoReviveBlockedCooldownFmt = "авто-оживление повторит через %s — после прошлой попытки ждём сутки"
 )
+
+// autoReviveBlocker -- то, что сервис оживления знает сверх пароля и адреса
+// (REV-05). Необязательное: подменные сервисы тестов его не реализуют.
+type autoReviveBlocker interface {
+	AutoBlock(routerID int64, now time.Time) (revive.AutoOutcome, time.Time, error)
+}
+
+// autoReviveStateBlockedText -- причина из состояния оживления: пароль не
+// расшифровывается, админ снял, сутки после прошлого итога.
+func autoReviveStateBlockedText(svc any, routerID int64, now time.Time) string {
+	b, ok := svc.(autoReviveBlocker)
+	if !ok {
+		return ""
+	}
+	out, retryAt, err := b.AutoBlock(routerID, now)
+	if err != nil {
+		return ""
+	}
+	switch out {
+	case revive.AutoUnreadable:
+		return autoReviveBlockedUnreadable
+	case revive.AutoCancelledByAdmin:
+		return autoReviveBlockedByAdmin
+	case revive.AutoCooldown:
+		return fmt.Sprintf(autoReviveBlockedCooldownFmt, autoReviveWaitText(retryAt.Sub(now)))
+	}
+	return ""
+}
+
+// autoReviveWaitText -- «5 ч» / «40 мин»: относительное время не зависит от
+// часового пояса телефона.
+func autoReviveWaitText(d time.Duration) string {
+	if d < time.Minute {
+		d = time.Minute
+	}
+	if d >= time.Hour {
+		return fmt.Sprintf("%d ч", int((d+30*time.Minute)/time.Hour))
+	}
+	return fmt.Sprintf("%d мин", int(d/time.Minute))
+}
 
 // autoReviveBlockedText -- почему авто-проход не оживит «давно не
 // обновлявшийся» роутер. Те же условия, что у revive.AutoSchedule: пароль

@@ -138,6 +138,15 @@ func canonicalizeReportedChecks(checks []wire.Check) (string, bool) {
 			return "check name too long", false
 		case strings.ContainsAny(name, " \t\r\n"):
 			return "check name must not contain whitespace", false
+		case status == "unknown":
+			// Защита на всякий случай: «не смог проверить» по контракту
+			// v0.46 -- ok с details.unverified. Прямой "unknown" не роняет
+			// весь отчёт (и heartbeat с ним), а приводится к той же форме.
+			checks[i].Status = "ok"
+			if checks[i].Details == nil {
+				checks[i].Details = map[string]any{}
+			}
+			checks[i].Details["unverified"] = true
 		case status != "ok" && status != "fail":
 			return "check status must be ok or fail", false
 		}
@@ -360,7 +369,18 @@ type Deps struct {
 	// the same cfg.State.MuteCutoffHour the bot uses.
 	MuteCutoffHour    int
 	BackendUpdatePath string
-	PublicBaseURL     string
+	// ReleaseCacheDir -- каталог дискового кэша бинарей выпуска (SEC-01):
+	// проверенный по подписанным суммам бинарь отдаётся отсюда без слота
+	// раздачи. Пусто -- без кэша, как раньше (через память и слот).
+	ReleaseCacheDir string
+
+	// Крючки тестов (nil в работе): подменить чтение роутера в приёме
+	// отчёта (BUG-01) и вклиниться между чтением и записью правки карточки
+	// (DEP-02). Полями, а не глобальными переменными: тест не трогает
+	// общее состояние пакета.
+	testReportUserByID    func(uid int64) (*db.User, error)
+	testDashboardEditRead func()
+	PublicBaseURL         string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the
@@ -557,6 +577,14 @@ const resolverGuardWatchdogOff = "watchdog_off"
 
 // resolverGuardNotReady: the watchdog has not read the router's settings yet
 // (after an agent start, or while running-config is unreadable).
+// checkUnverified -- агент не смог проверить (v0.46: ok с
+// details.unverified=true). Это не наблюдение: автомат тревог им не
+// двигается ни в какую сторону.
+func checkUnverified(c wire.Check) bool {
+	v, ok := c.Details["unverified"].(bool)
+	return ok && v
+}
+
 func resolverGuardNotReady(c wire.Check) bool {
 	if !strings.EqualFold(strings.TrimSpace(c.Name), resolverGuardCheck) || c.Status != "ok" {
 		return false
@@ -685,6 +713,15 @@ func commandVersionArg(cmd wire.Command) string {
 	}
 }
 
+// reportUserByID -- чтение роутера в приёме отчёта; тест подставляет ошибку
+// базы через Deps.testReportUserByID, не ломая проверку токена перед ним.
+func reportUserByID(d Deps, uid int64) (*db.User, error) {
+	if d.testReportUserByID != nil {
+		return d.testReportUserByID(uid)
+	}
+	return d.DB.Users().GetByID(uid)
+}
+
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -717,7 +754,21 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
-		user, _ := d.DB.Users().GetByID(uid)
+		// BUG-01: без строки роутера отчёт не принимаем вслепую -- nil давал
+		// «свежий» отчёт (FSM двигался прошлым) и статический порог
+		// мобильному. Удалённый роутер -- 401, как у проверки токена; прочая
+		// ошибка (база занята) -- 503, агент пришлёт следующий отчёт.
+		user, err := reportUserByID(d, uid)
+		if err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			d.Logger.Warn("report: router lookup failed", "nickname", nick, "err", err)
+			w.Header().Set("Retry-After", "5")
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "router lookup failed")
+			return
+		}
 		thresholds := thresholdsForUser(d.Thresholds, d.MobileFailThreshold, user)
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
@@ -761,6 +812,20 @@ func reportHandler(d Deps) http.HandlerFunc {
 			d.Logger.Warn("update last_seen", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
 			return
+		}
+		// GHOST-01: время последнего успешного инвентаря туннелей -- у
+		// роутера, той же транзакцией. Экран судит по нему о призраках, не
+		// проходя events назад по строкам tunnels=fail.
+		for _, c := range rep.Checks {
+			if c.Name == miniappTunnelsInventoryCheck && c.Status == "ok" && !checkUnverified(c) {
+				if _, err := tx.ExecContext(r.Context(), db.TunnelsInventoryOKAtSQL, ts, uid, ts); err != nil {
+					tx.Rollback()
+					d.Logger.Warn("update tunnels inventory time", "nickname", nick, "err", err)
+					writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update tunnels inventory time")
+					return
+				}
+				break
+			}
 		}
 		// INSERT OR IGNORE — idempotent on (user_id, check_name, ts) per
 		// uq_events_user_check_ts (API-01). Agent retry on transient TCP error
@@ -870,6 +935,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 					"nickname", nick, "check", c.Name,
 					"req_id", RequestIDFromContext(r.Context()),
 				)
+				continue
+			}
+			if checkUnverified(c) {
+				d.Logger.Info("skip unverified check",
+					"nickname", nick, "check", c.Name, "req_id", RequestIDFromContext(r.Context()))
 				continue
 			}
 			if resolverGuardNotReady(c) {

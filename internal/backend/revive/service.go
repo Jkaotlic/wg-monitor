@@ -76,8 +76,15 @@ type Outcome struct {
 	Finished   bool
 	Success    bool
 	AuthFailed bool
-	Version    string
-	Text       string
+	// RootAuthFailed -- из них отказал именно вход root в терминал (а не
+	// панель): только тогда сохранённый пароль root стирается (REV-04).
+	RootAuthFailed bool
+	// CredentialsVerified -- вход в терминал роутера этим паролем прошёл
+	// (шаг config_written достигнут), даже если установка потом не удалась.
+	// Только тогда пароль ручного оживления сохраняется (REV-03).
+	CredentialsVerified bool
+	Version             string
+	Text                string
 }
 
 // LaunchError -- отказ запуска. Permanent -- повторять бессмысленно
@@ -100,11 +107,21 @@ type Notifier interface {
 	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
 }
 
+// AdminNotifier -- весть только админу, без получателей роутера (REV-02:
+// отказ авто-оживления владельцу ни к чему -- он его не ставил, а экран
+// «Парк» видит только админ).
+type AdminNotifier interface {
+	SendAdmin(ctx context.Context, text string) error
+}
+
 type Config struct {
 	DB       *db.DB
 	Key      []byte
 	Engine   Engine
 	Notifier Notifier
+	// AdminNotifier -- куда идут вести об авто-оживлении, кроме успеха; nil
+	// -- никуда (владельцу они не уходят в любом случае).
+	AdminNotifier AdminNotifier
 	// Probe -- опрос панели; nil -- NewProber(ProbeTimeout).Probe.
 	Probe func(ctx context.Context, awgmURL string) string
 	Now   func() time.Time

@@ -237,7 +237,9 @@ func TestMiniappCommandStrangerGets404BeforeExistence(t *testing.T) {
 // contract as wizardCmdResultHandler's timeout branch.
 func TestMiniappCommandResultNotReadyIs404(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
-	sink := &dashboardActionSink{}
+	// Команда поставлена и ещё без ответа (SEC-02: неизвестная -- 404
+	// not_found, это другой случай).
+	sink := &dashboardActionSink{commands: map[string]wire.Command{"deadbeef": {ID: "deadbeef", Action: "diag_now"}}}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
 
 	req := httptest.NewRequest(http.MethodGet,

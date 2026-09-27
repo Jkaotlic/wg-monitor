@@ -17,6 +17,10 @@ const (
 	ReviveExpired   = "expired"
 )
 
+// ReviveRequestedBySystem -- requested_by намерения авто-оживления (не админ).
+// Telegram-номера положительны, поэтому -1 ни с кем не совпадёт.
+const ReviveRequestedBySystem int64 = -1
+
 // ErrReviveRunning -- переставить намерение нельзя: переустановка уже идёт с
 // прежним паролем, и подмена секрета посреди неё ничего бы не дала.
 var ErrReviveRunning = errors.New("revive: переустановка уже идёт")
@@ -114,9 +118,10 @@ ON CONFLICT(user_id) DO UPDATE SET
     expires_at = excluded.expires_at, attempts = 0, last_error = '',
     last_probe_at = NULL, last_probe_state = '', reachable_since = NULL,
     reachable_probes = 0, requested_by = excluded.requested_by,
+    notified_auto_error = CASE WHEN excluded.requested_by = ? THEN revive_intents.notified_auto_error ELSE '' END,
     generation = revive_intents.generation + 1
 WHERE revive_intents.status <> 'running'`,
-		in.RouterID, in.TargetVersion, in.CreatedAt.UTC(), in.CreatedAt.UTC(), in.ExpiresAt.UTC(), in.RequestedBy)
+		in.RouterID, in.TargetVersion, in.CreatedAt.UTC(), in.CreatedAt.UTC(), in.ExpiresAt.UTC(), in.RequestedBy, ReviveRequestedBySystem)
 	if err != nil {
 		return err
 	}
@@ -134,6 +139,23 @@ ON CONFLICT(user_id) DO UPDATE SET nonce = excluded.nonce, ciphertext = excluded
 		return err
 	}
 	return tx.Commit()
+}
+
+// NotifiedAutoError -- причина последнего отказа авто-оживления, о котором
+// админу уже сказали (REV-02). Ручная постановка сбрасывает её (put), успех
+// -- SetNotifiedAutoError(""). Нет строки -- "".
+func (r *ReviveRepo) NotifiedAutoError(routerID int64) (string, error) {
+	var v string
+	err := r.d.db.QueryRow(`SELECT notified_auto_error FROM revive_intents WHERE user_id = ?`, routerID).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+func (r *ReviveRepo) SetNotifiedAutoError(routerID int64, reason string) error {
+	_, err := r.d.db.Exec(`UPDATE revive_intents SET notified_auto_error = ? WHERE user_id = ?`, reason, routerID)
+	return err
 }
 
 // Get -- намерение роутера или nil, если его не ставили.

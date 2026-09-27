@@ -40,8 +40,16 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 // LatestPerUserAll returns one (user_id → MAX(ts)) entry per user that has at
 // least one event. Used by the heartbeat watcher to replace its N+1 loop
 // (PERF-03/DB-09). Users with no events at all are absent from the map.
+//
+// PERF-01: зовётся каждые 30 с. Прежний GROUP BY по events проходил индекс
+// целиком (2 млн строк: 1,19 с на живой базе при пуле в одно соединение, и всё
+// это время база занята). Коррелированный подзапрос по users -- один поиск
+// MAX(ts) по индексу (user_id, ts) на роутер: 0,0 с. События роутера, которого
+// уже нет в users, сюда больше не попадают -- их никто и не спрашивал.
+const latestPerUserAllQuery = `SELECT u.id, (SELECT MAX(e.ts) FROM events e WHERE e.user_id = u.id) FROM users u`
+
 func (e *EventsRepo) LatestPerUserAll() (map[int64]time.Time, error) {
-	rows, err := e.d.db.Query(`SELECT user_id, MAX(ts) FROM events GROUP BY user_id`)
+	rows, err := e.d.db.Query(latestPerUserAllQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +99,31 @@ func (e *EventsRepo) LatestEvent(userID int64, checkName string) (EventRow, bool
 	}
 	r.TS = t
 	return r, true, nil
+}
+
+// LatestEventTSWithStatus -- время самой свежей строки (userID, checkName)
+// с заданным статусом не раньше since. Точечная выборка по уникальному
+// индексу (user_id, check_name, ts) в обратном порядке: обычно первая же
+// строка подходит. ok=false -- такой строки в окне нет.
+func (e *EventsRepo) LatestEventTSWithStatus(userID int64, checkName, status string, since time.Time) (time.Time, bool, error) {
+	var tsStr string
+	err := e.d.db.QueryRow(
+		`SELECT ts FROM events
+		  WHERE user_id = ? AND check_name = ? AND ts >= ? AND status = ?
+		  ORDER BY ts DESC LIMIT 1`,
+		userID, checkName, since.UTC(), status,
+	).Scan(&tsStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	t, err := parseEventTS(tsStr)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
 }
 
 // LatestEventsByPrefix returns the most recent event for each distinct

@@ -132,6 +132,7 @@ func TestDashboardCommandResultFitsUnderRelayCut(t *testing.T) {
 func TestMiniappCommandResultFitsUnderRelayCut(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	sink := &holdRecorder{}
+	sink.commands = map[string]wire.Command{"deadbeef": {ID: "deadbeef", Action: "diag_now"}}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
 	for _, q := range []string{"", "?wait_sec=25", "?wait_sec=30"} {
 		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/commands/deadbeef%s", ownedID, q), nil)

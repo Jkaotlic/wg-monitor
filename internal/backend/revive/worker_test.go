@@ -85,7 +85,7 @@ func TestTick_AuthFailureFailsImmediately(t *testing.T) {
 	env.panel(t, http.StatusUnauthorized)
 	env.seedWaiting(t)
 	env.engine.set(func(f *fakeEngine) {
-		f.outcome = Outcome{Finished: true, AuthFailed: true, Text: "пароль не подошёл"}
+		f.outcome = Outcome{Finished: true, AuthFailed: true, RootAuthFailed: true, Text: "пароль не подошёл"}
 	})
 	env.tick(t)
 	env.tick(t) // запуск

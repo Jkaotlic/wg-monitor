@@ -355,10 +355,17 @@ type dashboardSummaryTotals struct {
 }
 
 type dashboardSummaryAgent struct {
-	ID               int64               `json:"id"`
-	Nickname         string              `json:"nickname"`
-	Kind             string              `json:"kind"`
-	Status           string              `json:"status"`
+	ID       int64  `json:"id"`
+	Nickname string `json:"nickname"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status"`
+	// Stale -- отчёт устарел по тем же порогам, что offline/sleeping, и
+	// независимо от тревог: status "alert" у молчащего роутера не значит, что
+	// он на связи (MINI-01). Без omitempty: false тоже ответ.
+	Stale bool `json:"stale"`
+	// Reach -- каким был бы status без тревог: online | sleeping | offline
+	// по возрасту отчёта и порогам static/mobile. Фронт берёт его, если есть.
+	Reach            string              `json:"reach"`
 	ExpectedExitIP   string              `json:"expected_exit_ip"`
 	AWGIface         string              `json:"awg_iface"`
 	LastSeenAt       *time.Time          `json:"last_seen_at,omitempty"`
@@ -793,11 +800,11 @@ func parseDashboardReleaseRankNumber(s string) (int, bool) {
 }
 
 func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time, policy dashboardStatusPolicy) dashboardSummaryAgent {
-	status := "online"
 	age := dashboardLastSeenAge(user, now)
-	if len(incidents) > 0 {
-		status = "alert"
-	} else if age == nil {
+	// Сначала -- что говорит возраст отчёта; тревога перекрывает status, но
+	// не stale.
+	status := "online"
+	if age == nil {
 		status = "offline"
 	} else if user.IsMobile() {
 		gap := time.Duration(*age) * time.Second
@@ -808,6 +815,11 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		}
 	} else if time.Duration(*age)*time.Second >= policy.StaticStaleAfter {
 		status = "offline"
+	}
+	reach := status
+	stale := status != "online"
+	if len(incidents) > 0 {
+		status = "alert"
 	}
 
 	var lastSeenAge *int64
@@ -821,6 +833,8 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		Nickname:        user.Nickname,
 		Kind:            user.Kind,
 		Status:          status,
+		Stale:           stale,
+		Reach:           reach,
 		ExpectedExitIP:  user.ExpectedExitIP,
 		AWGIface:        user.AWGIface,
 		LastSeenAt:      utcTimePtr(user.LastSeenAt),
@@ -950,7 +964,10 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		if err := d.DB.Users().UpdateDeployInfo(nickname, dashboardEditDeployInfo(*current, req)); err != nil {
+		if d.testDashboardEditRead != nil {
+			d.testDashboardEditRead() // крючок теста гонки DEP-02
+		}
+		if err := d.DB.Users().UpdateAgentMetadata(nickname, dashboardEditMetadata(req)); err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {
 				writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 				return
@@ -965,36 +982,22 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-// dashboardEditDeployInfo builds a full DeployInfo from the edit request,
-// preserving system-managed fields and keeping current values for blank
-// overwrite-semantics fields (ring/deploy_mode/awgm_*/expected_mac).
-func dashboardEditDeployInfo(current db.User, req dashboardEditAgentReq) db.DeployInfo {
-	return db.DeployInfo{
-		Kind:                req.Kind,
-		ThreadID:            req.TelegramThreadID,
-		SSHHost:             strings.TrimSpace(req.SSHHost),
-		SSHPort:             req.SSHPort,
-		SSHUser:             strings.TrimSpace(req.SSHUser),
-		Arch:                strings.TrimSpace(req.Arch),
-		LastDeployedVersion: stringValue(current.LastDeployedVersion),
-		PendingVersion:      stringValue(current.PendingVersion),
-		PendingSince:        stringValue(current.PendingSince),
-		LastDeploy:          stringValue(current.LastDeploy),
-		Ring:                firstNonEmptyTrimmed(req.Ring, stringValue(current.Ring)),
-		DeployMode:          firstNonEmptyTrimmed(req.DeployMode, stringValue(current.DeployMode)),
-		AWGMURL:             firstNonEmptyTrimmed(req.AWGMURL, stringValue(current.AWGMURL)),
-		AWGMAuth:            firstNonEmptyTrimmed(req.AWGMAuth, stringValue(current.AWGMAuth)),
-		ExpectedMAC:         firstNonEmptyTrimmed(req.ExpectedMAC, stringValue(current.ExpectedMAC)),
+// dashboardEditMetadata -- правка из запроса; пустое поле -- «не менять»
+// (UpdateAgentMetadata сливает с текущим значением в самой записи, DEP-02).
+func dashboardEditMetadata(req dashboardEditAgentReq) db.AgentMetadata {
+	return db.AgentMetadata{
+		Kind:        req.Kind,
+		ThreadID:    req.TelegramThreadID,
+		SSHHost:     strings.TrimSpace(req.SSHHost),
+		SSHPort:     req.SSHPort,
+		SSHUser:     strings.TrimSpace(req.SSHUser),
+		Arch:        strings.TrimSpace(req.Arch),
+		Ring:        strings.TrimSpace(req.Ring),
+		DeployMode:  strings.TrimSpace(req.DeployMode),
+		AWGMURL:     strings.TrimSpace(req.AWGMURL),
+		AWGMAuth:    strings.TrimSpace(req.AWGMAuth),
+		ExpectedMAC: strings.TrimSpace(req.ExpectedMAC),
 	}
-}
-
-func firstNonEmptyTrimmed(values ...string) string {
-	for _, v := range values {
-		if t := strings.TrimSpace(v); t != "" {
-			return t
-		}
-	}
-	return ""
 }
 
 func validateDashboardAWGMURL(raw string) error {

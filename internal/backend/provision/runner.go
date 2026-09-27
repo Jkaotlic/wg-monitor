@@ -407,6 +407,11 @@ func hintFor(step string, relayErr error) string {
 // закрывается сразу, без повторов. Текст видит дашборд -- не менять.
 const HintAuthFailed = "root-пароль или awgm-логин не подошёл"
 
+// HintRootAuthFailed -- терминал роутера отказал во входе root (REV-04).
+// Отдельно от HintAuthFailed: только по этой подсказке оживление стирает
+// сохранённый пароль root; 401 панели (сменили ключ) пароля root не касается.
+const HintRootAuthFailed = "root-пароль не подошёл"
+
 // terminalConnectHint distinguishes the two relay-reported terminal_connected
 // failure classes the design spec calls out by keying off relayErr's text —
 // there is no structured error code from the relay to switch on instead
@@ -421,6 +426,11 @@ func terminalConnectHint(relayErr error) string {
 	switch {
 	case strings.Contains(msg, "session_active") || strings.Contains(msg, "active session"):
 		return "AWG Manager terminal занят — закрой сессию в web-UI и повтори"
+	// Раньше панели: «root_auth_failed» содержит и «auth_failed». Тексты --
+	// отказ входа в терминал (Login incorrect от login(1)) и явная метка relay.
+	case strings.Contains(msg, "root_auth_failed") || strings.Contains(msg, "login incorrect") ||
+		strings.Contains(msg, "root login failed"):
+		return HintRootAuthFailed
 	case strings.Contains(msg, "auth_failed") || strings.Contains(msg, "success=false") ||
 		strings.Contains(msg, "unauthorized") || strings.Contains(msg, "401") || strings.Contains(msg, "403"):
 		return HintAuthFailed

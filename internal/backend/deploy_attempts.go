@@ -68,6 +68,17 @@ func deployFailureText(raw string) string {
 	}
 }
 
+// givenUpReasonText -- причина СДАЧИ обновления (DEP-01). Занятость прокси
+// попытку не тратит и сдачей кончиться не может; если она осталась последней
+// записанной причиной, попытки кончились на другом (потерянные команды), и
+// «повторим» было бы ложью -- повтора после сдачи нет.
+func givenUpReasonText(lastError string, attempts int) string {
+	if strings.TrimSpace(lastError) == "" || isReleaseProxyBusyFailure(lastError) {
+		return lostAttemptsText(attempts)
+	}
+	return deployFailureText(lastError)
+}
+
 // lostAttemptsText -- причина, когда агент брал команду, но ни разу не
 // ответил, а версия так и не сменилась.
 func lostAttemptsText(attempts int) string {
@@ -209,11 +220,7 @@ func giveUpIfExhausted(d Deps, uid int64, nickname string) bool {
 	if st.Version == "" || st.Attempts < pendingDeployMaxAttempts {
 		return false
 	}
-	reason := lostAttemptsText(st.Attempts)
-	if strings.TrimSpace(st.LastError) != "" {
-		reason = deployFailureText(st.LastError)
-	}
-	giveUpPendingDeploy(d, uid, nickname, st.Version, reason)
+	giveUpPendingDeploy(d, uid, nickname, st.Version, givenUpReasonText(st.LastError, st.Attempts))
 	return true
 }
 

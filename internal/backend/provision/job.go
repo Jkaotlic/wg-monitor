@@ -73,7 +73,11 @@ type Job struct {
 	Version  string   `json:"version,omitempty"`
 	Hint     string   `json:"hint,omitempty"`
 	Tail     string   `json:"tail,omitempty"`
-	ended    time.Time
+	// Target -- что именно чинит задание, если у вида задания есть цель
+	// (починка линии: имя проверки «tunnel_<id>»). Экрану нужно отличать
+	// починку своего VPN-туннеля от починки соседнего (MINI-05).
+	Target string `json:"target,omitempty"`
+	ended  time.Time
 }
 
 // jobTTL is how long a terminal (success/failed) Job is retained after it

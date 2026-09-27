@@ -65,24 +65,24 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 
 	if !now.Before(in.ExpiresAt) {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, noticeExpired(u.Nickname, in.ExpiresAt), generation)
+		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, func(st bool) string { return noticeExpired(u.Nickname, in.ExpiresAt, st) }, generation)
 		return
 	}
 	if s.agentFresh(u, now) && !s.needsReinstall(u) {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, noticeAliveItself(u.Nickname), generation)
+		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, func(st bool) string { return noticeAliveItself(u.Nickname, st) }, generation)
 		return
 	}
 	if in.Attempts >= s.cfg.MaxAttempts {
 		reason := orText(in.LastError, reasonUnknownFailure)
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusFailed, reason, noticeGaveUp(u.Nickname, in.Attempts, reason), generation)
+		s.finish(ctx, routerID, waiting, StatusFailed, reason, func(st bool) string { return noticeGaveUp(u.Nickname, in.Attempts, reason, st) }, generation)
 		return
 	}
 	awgmURL := strings.TrimSpace(derefString(u.AWGMURL))
 	if awgmURL == "" {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusFailed, reasonNoAWGMURL, noticeFailed(u.Nickname, reasonNoAWGMURL), generation)
+		s.finish(ctx, routerID, waiting, StatusFailed, reasonNoAWGMURL, func(st bool) string { return noticeFailed(u.Nickname, reasonNoAWGMURL, st) }, generation)
 		return
 	}
 
@@ -226,7 +226,7 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	}
 	if !s.panelURLSafe(strings.TrimSpace(derefString(u.AWGMURL))) {
 		s.logger.Warn("оживление: адрес панели небезопасен, запуск отменён", "router_id", in.RouterID)
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonUnsafeAWGMURL, noticeFailed(nick, reasonUnsafeAWGMURL), in.Generation)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonUnsafeAWGMURL, func(st bool) string { return noticeFailed(nick, reasonUnsafeAWGMURL, st) }, in.Generation)
 		return
 	}
 
@@ -237,13 +237,13 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 		return
 	}
 	if !found {
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoStoredEntry, noticeFailed(nick, reasonNoStoredEntry), in.Generation)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoStoredEntry, func(st bool) string { return noticeFailed(nick, reasonNoStoredEntry, st) }, in.Generation)
 		return
 	}
 	creds, err := s.box.Open(in.RouterID, nonce, ct)
 	if err != nil {
 		s.logger.Warn("оживление: секрет не расшифрован", "router_id", in.RouterID)
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonEntryUnreadable, noticeFailed(nick, reasonEntryUnreadable), in.Generation)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonEntryUnreadable, func(st bool) string { return noticeFailed(nick, reasonEntryUnreadable, st) }, in.Generation)
 		return
 	}
 
@@ -316,15 +316,52 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	}
 	nick := s.nickname(routerID)
 	running := []string{StatusRunning}
+	// REV-03: пароль, которым вход прошёл, сохраняется для авто-оживления --
+	// до finish, который сотрёт секрет намерения. Авто-оживление взяло его из
+	// сохранённого же -- переписывать нечего (и saved_at не двигаем: по нему
+	// autoBlockedBy судит об отмене админа).
+	if out.CredentialsVerified && in.RequestedBy != RequestedBySystem {
+		s.saveVerifiedSecret(routerID)
+	}
 	switch {
 	case out.Success:
-		s.finish(ctx, routerID, running, StatusDone, reasonRevived, noticeRevived(nick, out.Version), in.Generation)
-	case out.AuthFailed:
+		s.finish(ctx, routerID, running, StatusDone, reasonRevived, func(st bool) string { return noticeRevived(nick, out.Version, st) }, in.Generation)
+	case out.AuthFailed && out.RootAuthFailed:
 		s.forgetRejectedCredentials(routerID)
-		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, noticeAuthFailed(nick), in.Generation)
+		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, func(bool) string { return noticeAuthFailed(nick) }, in.Generation)
+	case out.AuthFailed:
+		// REV-04: отказала панель (401 -- сменили ключ или логин), а не вход
+		// root. Повторять с теми же данными бессмысленно -- закрываем сразу,
+		// но сохранённый пароль root не трогаем: он может быть верным.
+		reason := orText(out.Text, reasonPanelAuthFailed)
+		s.finish(ctx, routerID, running, StatusFailed, reason, func(st bool) string { return noticeFailed(nick, reason, st) }, in.Generation)
 	default:
 		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false, in.Generation)
 	}
+}
+
+// saveVerifiedSecret кладёт секрет намерения в router_credentials как есть
+// (шифртекст тот же ключ и тот же AAD). Ошибка -- в журнал: оживление идёт
+// своим ходом, пароль можно ввести снова.
+func (s *Service) saveVerifiedSecret(routerID int64) {
+	nonce, ct, ok, err := s.cfg.DB.Revive().Secret(routerID)
+	if err != nil || !ok {
+		return
+	}
+	creds, err := s.box.Open(routerID, nonce, ct)
+	if err != nil || !creds.Usable() {
+		return
+	}
+	nonce, ct, err = s.box.Seal(routerID, creds)
+	creds = Secrets{}
+	if err != nil {
+		return
+	}
+	if err := s.cfg.DB.RouterCredentials().Put(routerID, nonce, ct, s.now()); err != nil {
+		s.logger.Warn("оживление: проверенный пароль не сохранён", "router_id", routerID, "err", err)
+		return
+	}
+	s.logger.Info("пароль, которым прошёл вход, сохранён зашифрованным", "router_id", routerID)
 }
 
 // attemptFailed -- неудачная попытка: окончательная -> failed сразу;
@@ -333,9 +370,9 @@ func (s *Service) attemptFailed(ctx context.Context, routerID int64, nick string
 	running := []string{StatusRunning}
 	switch {
 	case permanent:
-		s.finish(ctx, routerID, running, StatusFailed, reason, noticeFailed(nick, reason), generation)
+		s.finish(ctx, routerID, running, StatusFailed, reason, func(st bool) string { return noticeFailed(nick, reason, st) }, generation)
 	case attempts >= s.cfg.MaxAttempts:
-		s.finish(ctx, routerID, running, StatusFailed, reason, noticeGaveUp(nick, attempts, reason), generation)
+		s.finish(ctx, routerID, running, StatusFailed, reason, func(st bool) string { return noticeGaveUp(nick, attempts, reason, st) }, generation)
 	default:
 		s.backToWaiting(routerID, reason, s.now(), generation)
 	}
@@ -407,7 +444,7 @@ const notifySendTimeout = 5 * time.Second
 //
 // forgetJob -- безусловно, ДО записи (Fix round 2, Important B; тем же
 // доводом, что у backToWaiting).
-func (s *Service) finish(ctx context.Context, routerID int64, from []string, to, reason, notice string, generation int64) {
+func (s *Service) finish(ctx context.Context, routerID int64, from []string, to, reason string, notice func(stored bool) string, generation int64) {
 	s.forgetJob(routerID)
 	if s.testBeforeFinishWrite != nil {
 		s.testBeforeFinishWrite()
@@ -417,6 +454,12 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 			s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
 			return
 		}
+	}
+	// Кто ставил -- читаем до закрытия: вести авто-оживления идут иначе
+	// (REV-02). Ошибка чтения -- как ручное: прежний путь.
+	auto := false
+	if cur, err := s.cfg.DB.Revive().Get(routerID); err == nil && cur != nil && cur.Generation == generation {
+		auto = cur.RequestedBy == RequestedBySystem
 	}
 	ok, err := s.cfg.DB.Revive().Finish(routerID, from, to, reason, s.now(), generation)
 	if err != nil {
@@ -428,7 +471,11 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 		return
 	}
 	s.logger.Info("оживление агента закрыто, секрет стёрт", "router_id", routerID, "status", to)
-	if s.cfg.Notifier == nil || notice == "" {
+	if notice == nil {
+		return
+	}
+	text := notice(s.credentialsStored(routerID))
+	if text == "" {
 		return
 	}
 	// Fix round 2, Minor #2: строка уже терминальная и секрет уже стёрт --
@@ -437,9 +484,58 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 	// не даст повторить уведомление никогда, оно было бы потеряно навсегда.
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifySendTimeout)
 	defer cancel()
-	if _, err := s.cfg.Notifier.Send(sendCtx, routerID, notice, ""); err != nil {
+	if auto {
+		s.notifyAuto(sendCtx, routerID, to, reason, text)
+		return
+	}
+	if s.cfg.Notifier == nil {
+		return
+	}
+	if _, err := s.cfg.Notifier.Send(sendCtx, routerID, text, ""); err != nil {
 		s.logger.Warn("оживление: уведомление не доставлено", "router_id", routerID, "err", err)
 	}
+}
+
+// notifyAuto -- итог авто-оживления (REV-02). Ожил -- всем получателям, как
+// обычно, и серия отказов начинается заново. Всё остальное -- только админу
+// (владелец оживления не ставил, экран «Парк» видит только админ) и одной
+// вестью на серию одинаковых причин: авто-проход повторяет раз в сутки, и
+// одно и то же каждый день -- шум.
+func (s *Service) notifyAuto(ctx context.Context, routerID int64, to, reason, text string) {
+	if to == StatusDone && reason == reasonRevived {
+		if err := s.cfg.DB.Revive().SetNotifiedAutoError(routerID, ""); err != nil {
+			s.logger.Warn("авто-оживление: серия отказов не сброшена", "router_id", routerID, "err", err)
+		}
+		if s.cfg.Notifier != nil {
+			if _, err := s.cfg.Notifier.Send(ctx, routerID, text, ""); err != nil {
+				s.logger.Warn("оживление: уведомление не доставлено", "router_id", routerID, "err", err)
+			}
+		}
+		return
+	}
+	prev, err := s.cfg.DB.Revive().NotifiedAutoError(routerID)
+	if err != nil {
+		s.logger.Warn("авто-оживление: прошлая весть не прочитана", "router_id", routerID, "err", err)
+		return
+	}
+	if prev == reason || s.cfg.AdminNotifier == nil {
+		return
+	}
+	if err := s.cfg.AdminNotifier.SendAdmin(ctx, text); err != nil {
+		s.logger.Warn("авто-оживление: весть админу не доставлена", "router_id", routerID, "err", err)
+		return
+	}
+	if err := s.cfg.DB.Revive().SetNotifiedAutoError(routerID, reason); err != nil {
+		s.logger.Warn("авто-оживление: отметка вести не записана", "router_id", routerID, "err", err)
+	}
+}
+
+// credentialsStored -- хранится ли пароль root роутера (router_credentials).
+// Ошибка чтения -- «хранится»: сказать «стёрт» про пароль, который может
+// лежать в базе, хуже, чем промолчать о стирании.
+func (s *Service) credentialsStored(routerID int64) bool {
+	_, _, _, ok, err := s.cfg.DB.RouterCredentials().Get(routerID)
+	return ok || err != nil
 }
 
 func (s *Service) nickname(routerID int64) string {

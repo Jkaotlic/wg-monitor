@@ -189,9 +189,14 @@ func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
 }
 
 type miniappRouterSummary struct {
-	ID             int64      `json:"id"`
-	Nickname       string     `json:"nickname"`
-	Status         string     `json:"status"`
+	ID       int64  `json:"id"`
+	Nickname string `json:"nickname"`
+	Status   string `json:"status"`
+	// Stale -- см. dashboardSummaryAgent.Stale: отчёт устарел, даже если
+	// status "alert". Экран считает устаревшим stale || offline || sleeping.
+	Stale bool `json:"stale"`
+	// Reach -- см. dashboardSummaryAgent.Reach.
+	Reach          string     `json:"reach"`
 	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
 	LastSeenAgeSec *int64     `json:"last_seen_age_sec,omitempty"`
 	// AgentVersion и Kind -- для поиска и фильтров списка (спека цикла 2,
@@ -247,6 +252,9 @@ func miniappServiceDots(d Deps, routerID int64, incidents []dashboardIncident) (
 	if err != nil {
 		return nil, false
 	}
+	// Те же строки, что видит экран роутера (LIST-01): без призраков
+	// удалённых туннелей и устаревшего resolver_guard.
+	rows = miniappCurrentRows(d, routerID, rows)
 	out := make([]miniappCheckDot, 0, len(miniappLampChecks))
 	for _, row := range rows {
 		if !miniappLampChecks[row.CheckName] {
@@ -334,6 +342,8 @@ func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary
 		ID:              a.ID,
 		Nickname:        a.Nickname,
 		Status:          a.Status,
+		Stale:           a.Stale,
+		Reach:           a.Reach,
 		LastSeenAt:      a.LastSeenAt,
 		LastSeenAgeSec:  a.LastSeenAgeSec,
 		AgentVersion:    a.AgentVersion,
@@ -488,43 +498,9 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
 			return
 		}
-		// Every agent report carries agent_heartbeat, and all checks of one
-		// report share one timestamp. A resolver_guard row strictly older
-		// than the heartbeat row is not from the latest report — the check
-		// stopped coming (watchdog switched off, or its incident closed as
-		// watchdog_off) and its last row would otherwise sit here answering
-		// "на запасных"/"работает" for up to 30 days after it stopped being
-		// true.
-		//
-		// Tunnels are not judged by the heartbeat: when awg-manager does not
-		// answer, the agent sends tunnels=fail and no tunnel rows at all, and
-		// the last known tunnels must stay on screen. They are judged by the
-		// inventory instead -- an OK "tunnels" row lists what is on the router
-		// in that report, so a tunnel_* row strictly older than it did not come
-		// with it: the tunnel is gone (deleted, or replaced by the config
-		// wizard). Before this, deleted tunnels stayed for 30 days and the
-		// screen named a removed tunnel as the egress (vvarg, 15.09.2026).
-		var heartbeatTS, inventoryTS time.Time
-		haveHeartbeat, haveInventory := false, false
-		for _, row := range rows {
-			switch row.CheckName {
-			case "agent_heartbeat":
-				heartbeatTS, haveHeartbeat = row.TS, true
-			case miniappTunnelsInventoryCheck:
-				if row.Status == "ok" {
-					inventoryTS, haveInventory = row.TS, true
-				}
-			}
-		}
 		resp := miniappRouterEventsResp{Tunnels: []miniappTunnel{}}
 		byCheck := make(map[string]db.EventRow, len(rows))
-		for _, row := range rows {
-			if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
-				continue
-			}
-			if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
-				continue
-			}
+		for _, row := range miniappCurrentRows(d, routerID, rows) {
 			byCheck[row.CheckName] = row
 			resp.Checks = append(resp.Checks, miniappCheckStatus{
 				CheckName: row.CheckName,
@@ -542,6 +518,93 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// miniappCurrentRows отбрасывает из «последних строк каждой проверки» те,
+// что уже не про текущий роутер. Одна функция на экран роутера и на список
+// роутеров (LIST-01): иначе список и экран расходятся.
+//
+// Every agent report carries agent_heartbeat, and all checks of one report
+// share one timestamp. A resolver_guard row strictly older than the heartbeat
+// row is not from the latest report -- the check stopped coming (watchdog
+// switched off, or its incident closed as watchdog_off) and its last row would
+// otherwise sit here answering "на запасных"/"работает" for up to 30 days.
+//
+// Tunnels are not judged by the heartbeat: when awg-manager does not answer,
+// the agent sends tunnels=fail and no tunnel rows at all, and the last known
+// tunnels must stay on screen. They are judged by the inventory instead -- an
+// OK "tunnels" row lists what is on the router in that report, so a tunnel_*
+// row strictly older than it did not come with it: the tunnel is gone. The
+// inventory is the latest OK "tunnels" row, looked up separately (GHOST-01):
+// the latest row of any status is "fail" exactly when awg-manager is down, and
+// judging by it switched the filter off and brought deleted tunnels back
+// (vvarg, 15.09.2026). Lookup error -- no filter, as before.
+func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRow {
+	var heartbeatTS, inventoryTS time.Time
+	haveHeartbeat, haveInventory := false, false
+	for _, row := range rows {
+		switch row.CheckName {
+		case "agent_heartbeat":
+			heartbeatTS, haveHeartbeat = row.TS, true
+		case miniappTunnelsInventoryCheck:
+			if row.Status == "ok" && !miniappRowUnverified(row.DetailsJSON) {
+				inventoryTS, haveInventory = row.TS, true
+			} else {
+				inventoryTS, haveInventory = miniappLastInventoryOK(d, routerID)
+			}
+		}
+	}
+	out := make([]db.EventRow, 0, len(rows))
+	for _, row := range rows {
+		if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
+			continue
+		}
+		if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
+			continue
+		}
+		if row.Status == "ok" && miniappRowUnverified(row.DetailsJSON) {
+			// Агент не смог проверить: экран пишет «не проверено», а не
+			// «работает».
+			row.Status = miniappStatusUnknown
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// miniappStatusUnknown -- статус «не проверено» для экрана.
+const miniappStatusUnknown = "unknown"
+
+// miniappRowUnverified -- details несут unverified=true (агент v0.46 не смог
+// проверить). Разбор только когда слово вообще есть в строке.
+func miniappRowUnverified(details string) bool {
+	if !strings.Contains(details, `"unverified"`) {
+		return false
+	}
+	var d struct {
+		Unverified bool `json:"unverified"`
+	}
+	return json.Unmarshal([]byte(details), &d) == nil && d.Unverified
+}
+
+// miniappLastInventoryOK -- время последнего отчёта с tunnels=ok. Берётся у
+// роутера (users.tunnels_inventory_ok_at, пишет приём отчёта): выборка по
+// events при долгом отказе awg-manager проходит назад все строки
+// tunnels=fail -- статуса в индексе нет, замер на живой базе 400-550 мс на
+// роутер, а зовут её и для каждой строки списка. Отметки нет (до миграции)
+// -- один раз старая выборка, и результат запоминается.
+func miniappLastInventoryOK(d Deps, routerID int64) (time.Time, bool) {
+	if ts, ok, err := d.DB.Users().TunnelsInventoryOKAt(routerID); err == nil && ok {
+		return ts, true
+	}
+	ts, ok, err := d.DB.Events().LatestEventTSWithStatus(routerID, miniappTunnelsInventoryCheck, "ok", time.Now().UTC().Add(-miniappEventsWindow))
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	if err := d.DB.Users().SetTunnelsInventoryOKAt(routerID, ts); err != nil && d.Logger != nil {
+		d.Logger.Warn("miniapp: tunnels inventory time not saved", "router_id", routerID, "err", err)
+	}
+	return ts, true
 }
 
 // miniappTimelineEvent is one row of the router's timeline: what changed and

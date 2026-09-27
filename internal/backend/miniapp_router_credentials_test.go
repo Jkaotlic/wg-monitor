@@ -133,17 +133,6 @@ func TestMiniappProvisionSavesRootPassword(t *testing.T) {
 	assertNoReviveSecrets(t, "журнал", env.logs.String())
 }
 
-func TestMiniappReviveSavesRootPassword(t *testing.T) {
-	env := newAdminOpsEnv(t, withRealRevive(t))
-	body := reviveBody("router-owned", map[string]any{"awgm_url": "https://router.example.com"})
-	rec := miniappDo(t, env.h, http.MethodPost, revivePath(env.ownedID), body, 999)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("оживление: код %d (%s)", rec.Code, rec.Body.String())
-	}
-	assertFixtureStored(t, env.d, env.ownedID)
-	assertNoReviveSecrets(t, "журнал", env.logs.String())
-}
-
 // Без ключа оживления хранить нечем: запрос проходит, строки нет.
 func TestMiniappReinstallWithoutReviveKeySavesNothing(t *testing.T) {
 	env, _ := reinstallEnv(t)
