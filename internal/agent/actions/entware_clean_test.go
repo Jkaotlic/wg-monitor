@@ -207,3 +207,47 @@ func newTestEntwareCleanManager(t *testing.T) *EntwareCleanManager {
 		},
 	}
 }
+
+// AGENT-13: чистка отказывалась ровно тогда, когда нужнее всего: установка
+// -- при /opt < 2 МБ, а сам скрипт -- «skipped_low_space». Удаление файлов
+// места не требует. Теперь скрипт чистит при любом свободном месте, а
+// установке нужно лишь место под сам скрипт и crontab.
+func TestEntwareCleanWorksWhenOptIsNearlyFull(t *testing.T) {
+	m := newTestEntwareCleanManager(t)
+	var installedCrontab string
+	m.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		switch {
+		case key == "df -k /opt":
+			// 900 КБ свободно -- меньше прежних 2 МБ.
+			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 199100 900 99% /opt\n"), nil
+		case key == "sh -c test -x "+cronInitScript:
+			return nil, nil
+		case key == "cat /proc/meminfo":
+			return []byte("MemTotal:         250000 kB\nMemAvailable:      72000 kB\n"), nil
+		case key == "crontab -l":
+			return []byte(installedCrontab), nil
+		case name == "crontab" && len(args) == 1:
+			b, err := os.ReadFile(args[0])
+			if err != nil {
+				return nil, err
+			}
+			installedCrontab = string(b)
+			return nil, nil
+		case key == "/opt/etc/init.d/S10cron start":
+			return nil, nil
+		default:
+			return nil, errors.New("unexpected exec: " + key)
+		}
+	}
+	if _, err := m.Install(context.Background(), "05:15"); err != nil {
+		t.Fatalf("install refused on a nearly full /opt: %v", err)
+	}
+	script, err := os.ReadFile(m.ScriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(script), "skipped_low_space") {
+		t.Fatalf("cleanup script still skips cleaning on low space:\n%s", script)
+	}
+}
