@@ -88,19 +88,26 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   }, [result])
 
   // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
+  // Сбой загрузки не глотается (MINI-06): без вердикта проверок поднятый
+  // интерфейс -- «состояние неизвестно», а не «работает».
+  const [checksFailed, setChecksFailed] = useState(false)
   useEffect(() => {
     let alive = true
     fetchRouterChecks(routerID)
       .then((ev) => {
-        if (alive) setChecks(ev)
+        if (!alive) return
+        setChecks(ev)
+        setChecksFailed(false)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setChecksFailed(true)
+      })
     return () => {
       alive = false
     }
   }, [routerID, result])
 
-  const shown = withCheckVerdict(snapshot, checks)
+  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
   const view = tunnelsView(shown)
   const list = tunnelList(shown)
   const phase = snapshotState({ busy, error, result, snapshot })
