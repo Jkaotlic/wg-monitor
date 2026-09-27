@@ -926,7 +926,9 @@ is_running() {
 	if command -v pgrep >/dev/null 2>&1 && pgrep -x wg-monitor >/dev/null 2>&1; then
 		return 0
 	fi
-	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
+	# Only the agent binary itself: the swap script lives in
+	# /opt/var/wg-monitor/ and would otherwise match "wg-monitor".
+	ps 2>/dev/null | grep -v self-update-swap | grep -E "(^|[[:space:]])` + binPath + `([[:space:]]|$)" >/dev/null 2>&1
 }
 # Poll every 5 s: crash within the first 60 s (12 ticks) rolls back; with
 # report markers keep watching up to 300 s for report-ok / report-rejected.

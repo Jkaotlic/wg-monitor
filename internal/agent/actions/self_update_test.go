@@ -340,7 +340,7 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 		"is_running()",
 		"pidof wg-monitor >/dev/null 2>&1",
 		"pgrep -x wg-monitor >/dev/null 2>&1",
-		"ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1",
+		"ps 2>/dev/null | grep -v self-update-swap | grep -E \"(^|[[:space:]])/opt/bin/wg-monitor([[:space:]]|$)\" >/dev/null 2>&1",
 		"! is_running; then",
 		"mv /opt/bin/wg-monitor.bak /opt/bin/wg-monitor",
 		"/opt/etc/init.d/S99wg-monitor start",

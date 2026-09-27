@@ -20,6 +20,9 @@ type swapScenario struct {
 	diesAtTick     int // 0 -- не умирает
 	okAtTick       int // 0 -- метки report-ok нет
 	rejectedAtTick int
+	// psOnly -- ни pidof, ни pgrep нет (только ps): в выводе ps всегда есть
+	// сам скрипт замены из каталога /opt/var/wg-monitor, а агент -- пока жив.
+	psOnly bool
 }
 
 func runSwapScenario(t *testing.T, sc swapScenario) (rolledBack bool) {
@@ -54,9 +57,17 @@ i=$((n-2))
 		tickAction(sc.okAtTick, `touch "`+okMarker+`"`) +
 		tickAction(sc.rejectedAtTick, `touch "`+rejMarker+`"`) + "exit 0\n"
 	running := "#!/bin/sh\n[ -f \"$D/running\" ]\n"
+	ps := "#!/bin/sh\nexit 0\n"
+	if sc.psOnly {
+		running = "#!/bin/sh\nexit 1\n"
+		ps = "#!/bin/sh\necho '  PID USER       VSZ STAT COMMAND'\n" +
+			"echo '   99 root      1000 S    sh /opt/var/wg-monitor/self-update-swap.sh'\n" +
+			"[ -f \"$D/running\" ] && echo '  456 root     20000 S    " + bin + " -config /opt/etc/wg-monitor/config.yaml'\n" +
+			"exit 0\n"
+	}
 	for name, body := range map[string]string{
 		"sleep": sleepShim, "pidof": running, "pgrep": running,
-		"ps":      "#!/bin/sh\nexit 0\n",
+		"ps":      ps,
 		"killall": "#!/bin/sh\nrm -f \"$D/running\"\nexit 0\n",
 	} {
 		must(os.WriteFile(filepath.Join(shims, name), []byte(body), 0o755))
@@ -93,6 +104,10 @@ func TestSelfUpdateSwapScriptRollbackRules(t *testing.T) {
 		{"dies after 60s is not the update's crash-on-start", swapScenario{requireReport: true, diesAtTick: 20}, false},
 		{"pre-marker target: alive 60s is enough", swapScenario{rejectedAtTick: 3}, false},
 		{"pre-marker target dies", swapScenario{diesAtTick: 5}, true},
+		// Ревью: запасной ps-путь находил строку самого скрипта замены
+		// (/opt/var/wg-monitor/...) и считал упавший агент живым.
+		{"ps fallback: agent dies, script itself is not the agent", swapScenario{requireReport: true, diesAtTick: 4, psOnly: true}, true},
+		{"ps fallback: agent alive and reporting", swapScenario{requireReport: true, okAtTick: 3, psOnly: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := runSwapScenario(t, tc.sc); got != tc.want {
