@@ -30,16 +30,13 @@ func TestReportUserLookupErrorIsNotIngestedBlind(t *testing.T) {
 	tok := "5555555555555555555555555555555555555555555555555555555555555555"
 	uid, _ := d.Users().InsertWithKind("mobile-fox", tok, "198.51.100.7", "awg0", db.KindMobile)
 
-	orig := reportUserByID
-	reportUserByID = func(Deps, int64) (*db.User, error) { return nil, errors.New("database is locked") }
-	defer func() { reportUserByID = orig }()
-
 	disp := &fakeDisp{db: d}
 	mux := NewMux(Deps{
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:         d,
-		Dispatcher: disp,
-		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:                 d,
+		Dispatcher:         disp,
+		Thresholds:         state.Thresholds{Fail: 3, Recovery: 2},
+		testReportUserByID: func(int64) (*db.User, error) { return nil, errors.New("database is locked") },
 	})
 	body, _ := json.Marshal(wire.Report{
 		Timestamp: time.Now().UTC(),

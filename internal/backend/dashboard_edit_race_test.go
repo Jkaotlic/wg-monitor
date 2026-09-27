@@ -25,15 +25,12 @@ func TestDashboardEditAgentDoesNotResurrectClearedPending(t *testing.T) {
 	if err := d.Users().MarkPendingDeploy(u.ID, "v0.46.0", "2026-09-27T10:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	dashboardEditAfterRead = func() {
+	h := NewMux(Deps{DB: d, DashboardToken: "secret", testDashboardEditRead: func() {
 		// Отчёт агента в щели: версия встала, отметка снята.
 		if err := d.Users().UpdateLastSeenAgentVersion(u.ID, "v0.46.0"); err != nil {
 			t.Error(err)
 		}
-	}
-	defer func() { dashboardEditAfterRead = nil }()
-
-	h := NewMux(Deps{DB: d, DashboardToken: "secret"})
+	}})
 	req := httptest.NewRequest(http.MethodPut, "/v1/dashboard/agents/client-g",
 		strings.NewReader(`{"awgm_url":"https://new.router.example"}`))
 	req.Header.Set("Authorization", "Bearer secret")

@@ -925,10 +925,6 @@ func validateAgentEdit(req *dashboardEditAgentReq) *repairStartError {
 // awgm_*/expected_mac unconditionally, which would otherwise wipe them on a
 // partial edit. Pair with the update_backend_url command to "resurrect" an
 // agent after its domain changes.
-// dashboardEditAfterRead -- крючок теста гонки DEP-02: зовётся между чтением
-// строки и записью правки. nil в работе.
-var dashboardEditAfterRead func()
-
 func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
@@ -968,8 +964,8 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		if dashboardEditAfterRead != nil {
-			dashboardEditAfterRead()
+		if d.testDashboardEditRead != nil {
+			d.testDashboardEditRead() // крючок теста гонки DEP-02
 		}
 		if err := d.DB.Users().UpdateAgentMetadata(nickname, dashboardEditMetadata(req)); err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {

@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"time"
 	"testing"
+	"time"
 )
 
 func releaseCacheEnv(t *testing.T, body string, sums map[string]string) (http.HandlerFunc, *atomic.Int32, string) {

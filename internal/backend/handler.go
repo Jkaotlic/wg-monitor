@@ -364,7 +364,14 @@ type Deps struct {
 	// проверенный по подписанным суммам бинарь отдаётся отсюда без слота
 	// раздачи. Пусто -- без кэша, как раньше (через память и слот).
 	ReleaseCacheDir string
-	PublicBaseURL   string
+
+	// Крючки тестов (nil в работе): подменить чтение роутера в приёме
+	// отчёта (BUG-01) и вклиниться между чтением и записью правки карточки
+	// (DEP-02). Полями, а не глобальными переменными: тест не трогает
+	// общее состояние пакета.
+	testReportUserByID    func(uid int64) (*db.User, error)
+	testDashboardEditRead func()
+	PublicBaseURL         string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the
@@ -689,9 +696,14 @@ func commandVersionArg(cmd wire.Command) string {
 	}
 }
 
-// reportUserByID -- чтение роутера в приёме отчёта. Переменная, чтобы тест
-// мог подставить ошибку базы, не ломая проверку токена перед ним.
-var reportUserByID = func(d Deps, uid int64) (*db.User, error) { return d.DB.Users().GetByID(uid) }
+// reportUserByID -- чтение роутера в приёме отчёта; тест подставляет ошибку
+// базы через Deps.testReportUserByID, не ломая проверку токена перед ним.
+func reportUserByID(d Deps, uid int64) (*db.User, error) {
+	if d.testReportUserByID != nil {
+		return d.testReportUserByID(uid)
+	}
+	return d.DB.Users().GetByID(uid)
+}
 
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
