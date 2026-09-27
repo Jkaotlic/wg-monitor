@@ -262,8 +262,10 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		writeJSONError(w, http.StatusBadRequest, "no_awgm_url", "awgm_url is required and must be an absolute http(s) URL")
 		return
 	}
-	rootPassword := strings.TrimSpace(req.RootPassword)
-	if rootPassword == "" {
+	// PROV-02: пустоту проверяем по обрезанному, в задание уходит набранное
+	// как есть -- пароль root с пробелом по краю тоже пароль (как в мини-аппе).
+	rootPassword := req.RootPassword
+	if strings.TrimSpace(rootPassword) == "" {
 		writeJSONError(w, http.StatusBadRequest, "root_password_required",
 			"router root password is required (used once for the terminal login, never stored)")
 		return
