@@ -143,6 +143,39 @@ func (s *Service) AutoSchedule(ctx context.Context, routerID int64) (AutoOutcome
 	return AutoScheduled, nil
 }
 
+// AutoBlock -- что из состояния базы мешает авто-постановке прямо сейчас
+// (REV-05, строка «Парк»): нечитаемый сохранённый пароль, отмена админа или
+// сутки после прошлого итога (retryAt -- когда пройдут). Про отсутствие
+// пароля, адрес и свежесть агента решает вызывающий. Пусто -- не мешает
+// ничего; идущее или ждущее намерение -- тоже пусто: строка оживления сама
+// о нём говорит.
+func (s *Service) AutoBlock(routerID int64, now time.Time) (AutoOutcome, time.Time, error) {
+	if !s.Enabled() {
+		return "", time.Time{}, nil
+	}
+	nonce, ct, savedAt, ok, err := s.cfg.DB.RouterCredentials().Get(routerID)
+	if err != nil || !ok {
+		return "", time.Time{}, err
+	}
+	creds, err := s.box.Open(routerID, nonce, ct)
+	usable := err == nil && creds.Usable()
+	creds = Secrets{}
+	if !usable {
+		return AutoUnreadable, time.Time{}, nil
+	}
+	cur, err := s.cfg.DB.Revive().Get(routerID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	switch out := autoBlockedBy(cur, savedAt, now); out {
+	case AutoCooldown:
+		return out, cur.UpdatedAt.Add(AutoRetryAfter), nil
+	case AutoCancelledByAdmin:
+		return out, time.Time{}, nil
+	}
+	return "", time.Time{}, nil
+}
+
 // autoBlockedBy -- мешает ли уже записанное намерение авто-постановке.
 func autoBlockedBy(cur *db.ReviveIntent, savedAt, now time.Time) AutoOutcome {
 	if cur == nil {
