@@ -99,11 +99,15 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	if !ok {
 		return revive.Outcome{}, false
 	}
+	// REV-03: вход в терминал прошёл, если шаг config_written начался
+	// (маркер пишет установщик уже после входа) -- даже когда установка
+	// потом упала.
+	verified := reviveLoginPassed(job.Steps)
 	switch job.State {
 	case provision.StateRunning:
 		return revive.Outcome{}, true
 	case provision.StateSuccess:
-		return revive.Outcome{Finished: true, Success: true, Version: job.Version}, true
+		return revive.Outcome{Finished: true, Success: true, CredentialsVerified: true, Version: job.Version}, true
 	}
 	// Ошибка входа узнаётся СТРОГО по job.Hint == provision.HintAuthFailed --
 	// структурному полю, которое runner.go проставляет сам после разбора
@@ -118,10 +122,26 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	// unauthorized, 401, 403...) -- у relay нет кода ошибки. Сигнал поэтому
 	// не полностью структурный: посторонний текст с «401» внутри даст ложный
 	// «пароль не подошёл», а новая формулировка отказа входа -- пропуск.
-	if job.Hint == provision.HintAuthFailed {
-		return revive.Outcome{Finished: true, AuthFailed: true, Text: "пароль не подошёл"}, true
+	//
+	// REV-04: отказ входа root (HintRootAuthFailed) и отказ панели
+	// (HintAuthFailed: 401 -- сменили ключ) различаются: пароль root стирается
+	// только по первому.
+	if job.Hint == provision.HintRootAuthFailed {
+		return revive.Outcome{Finished: true, AuthFailed: true, RootAuthFailed: true, Text: "пароль не подошёл"}, true
 	}
-	return revive.Outcome{Finished: true, Text: reviveStepText(reviveFailedStep(job.Steps))}, true
+	if job.Hint == provision.HintAuthFailed {
+		return revive.Outcome{Finished: true, AuthFailed: true, Text: "вход в панель роутера не подошёл"}, true
+	}
+	return revive.Outcome{Finished: true, CredentialsVerified: verified, Text: reviveStepText(reviveFailedStep(job.Steps))}, true
+}
+
+func reviveLoginPassed(steps []provision.Step) bool {
+	for _, st := range steps {
+		if st.Name == provision.StepConfigWritten {
+			return st.Status != provision.StepPending
+		}
+	}
+	return false
 }
 
 // reviveBackendVersion -- «пусто = версия бэкенда на момент запуска». Сборка

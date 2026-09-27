@@ -13,10 +13,14 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // цели. Id VPN-туннеля живёт в параметрах слоя, в адрес пишется только
   // open=routes.
   const openRebind = (tunnelID) => dispatch({ type: 'overlay', overlay: 'routes', params: { rebindFrom: tunnelID } })
+  // key -- номер роутера: переход A→B пересоздаёт вкладку, и ни состояние,
+  // ни поздний ответ по A не переезжают на экран B (MINI-04).
+  const key = nav.routerID
   switch (nav.tab) {
     case 'router':
       return (
         <RouterDetail
+          key={key}
           id={nav.routerID}
           panelURL={current?.panel_url}
           reserveOnlyAlert={current?.reserve_only_alert}
@@ -27,6 +31,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
     case 'tunnels':
       return (
         <TunnelsTab
+          key={key}
           routerID={nav.routerID}
           asleep={asleep}
           onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
@@ -38,13 +43,14 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         />
       )
     case 'diag':
-      return <DiagTab routerID={nav.routerID} asleep={asleep} />
+      return <DiagTab key={key} routerID={nav.routerID} asleep={asleep} />
     // Экраны глубже «Управления» (настройки и подключение агента, сброс DNS,
     // пакеты) -- слои с адресом; закрываются обратно во вкладку. «Ход
     // работы» перенаправления возвращает сюда же (returnTo 'manage').
     case 'manage':
       return (
         <ManageTab
+          key={key}
           routerID={nav.routerID}
           routerName={current?.nickname}
           isAdmin={isAdmin}
@@ -58,6 +64,6 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         />
       )
     default:
-      return <EventsTab routerID={nav.routerID} routerName={current?.nickname} />
+      return <EventsTab key={key} routerID={nav.routerID} routerName={current?.nickname} />
   }
 }

@@ -426,6 +426,14 @@ func (q *Queue) ResultRecordedAt(userID int64, id string) (time.Time, bool) {
 func (q *Queue) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	// SEC-02: ещё не выданная команда тоже известна. Без этого гейт роли на
+	// опросе результата пропускал ожидание, пока команда стояла в очереди,
+	// и отдавал ответ, пришедший за время этого ожидания.
+	for _, c := range q.pending[userID] {
+		if c.ID == cmdID {
+			return c, true
+		}
+	}
 	if bucket, ok := q.issued[userID]; ok {
 		if entry, ok := bucket[cmdID]; ok {
 			return entry.cmd, true

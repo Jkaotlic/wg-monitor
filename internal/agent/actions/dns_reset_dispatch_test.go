@@ -117,3 +117,39 @@ func TestDispatchDNSResetDryRunTouchesNothing(t *testing.T) {
 		t.Errorf("это был не предпросмотр:\n%s", res.Output)
 	}
 }
+
+// AGENT-04: сброс DNS и сторож DNS правят одни и те же строки dns-proxy.
+// Пока сторож держит роутер на запасных (или не закончил уборку), сброс
+// снёс бы его строки и сохранил конфиг, а сторож потом «убирал» бы уже
+// эталонные строки. Боевой сброс отказывает, ничего не трогая; предпросмотр
+// можно (он ничего не меняет).
+func TestDispatchDNSResetRefusesWhileWatchdogHolds(t *testing.T) {
+	for _, state := range []string{`{"mode":"fallback"}`, `{"mode":"primary","pending":"return"}`, `{"mode":"primary","leftover":["x"]}`} {
+		f := &replayDNSExec{configs: []string{sampleRunningConfig, configAfterApplyWithPorts()}}
+		r := &Runner{Exec: f.exec, DNSWatchdogStatePath: writeWatchdogState(t, state)}
+		res := r.Execute(context.Background(), wire.Command{ID: "c1", Action: "dns_reset"})
+		if res.Status != "err" {
+			t.Fatalf("%s: status = %q, want err\n%s", state, res.Status, res.Output)
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("%s: сброс что-то выполнил при держащем стороже: %v", state, f.calls)
+		}
+		if !strings.Contains(res.Output, "сторож DNS") {
+			t.Fatalf("%s: человеку не сказано почему:\n%s", state, res.Output)
+		}
+
+		dry := &replayDNSExec{configs: []string{sampleRunningConfig}}
+		r.Exec = dry.exec
+		res = r.Execute(context.Background(), wire.Command{ID: "c2", Action: "dns_reset", Args: map[string]any{"dry_run": true}})
+		if res.Status == "err" {
+			t.Fatalf("%s: предпросмотр отказал зря:\n%s", state, res.Output)
+		}
+	}
+
+	// Сторож спокоен -- сброс идёт.
+	f := &replayDNSExec{configs: []string{sampleRunningConfig, configAfterApplyWithPorts()}}
+	r := &Runner{Exec: f.exec, DNSWatchdogStatePath: writeWatchdogState(t, `{"mode":"primary"}`)}
+	if res := r.Execute(context.Background(), wire.Command{ID: "c3", Action: "dns_reset"}); res.Status == "err" {
+		t.Fatalf("спокойный сторож не должен мешать сбросу:\n%s", res.Output)
+	}
+}

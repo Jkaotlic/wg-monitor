@@ -83,12 +83,19 @@ func miniappAgentReinstallHandler(d Deps) http.HandlerFunc {
 			writeMiniappOpsError(w, http.StatusBadRequest, "root_password_required")
 			return
 		}
+		// REV-03: пароль сохраняется только после входа в терминал
+		// (config_written) -- непроверенный не затирает рабочий сохранённый.
+		stored := revive.StoredCredentials{
+			RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
+		}
+		routerID := u.ID
 		jobID, version, serr := startRepairReinstall(r.Context(), d, u.Nickname, u, reinstallInput{
 			RootPassword: req.RootPassword,
 			AWGMLogin:    strings.TrimSpace(req.AWGMLogin),
 			AWGMPassword: req.AWGMPassword,
 			AWGMAPIKey:   req.AWGMAPIKey,
 			Version:      miniappAgentVersionOrServer(req.Version),
+			AfterCommit:  func() { rememberRouterCredentials(d, routerID, stored, "reinstall", adminID) },
 		})
 		if serr != nil {
 			if d.Logger != nil {
@@ -97,9 +104,6 @@ func miniappAgentReinstallHandler(d Deps) http.HandlerFunc {
 			writeMiniappStartError(w, serr)
 			return
 		}
-		rememberRouterCredentials(d, u.ID, revive.StoredCredentials{
-			RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
-		}, "reinstall", adminID)
 		if d.Logger != nil {
 			d.Logger.Info("miniapp agent reinstall started", "router_id", u.ID, "nickname", u.Nickname, "job_id", jobID,
 				"version", version, "credentials", miniappCredentialKinds(req.RootPassword, req.AWGMLogin, req.AWGMPassword, req.AWGMAPIKey), "by", adminID)

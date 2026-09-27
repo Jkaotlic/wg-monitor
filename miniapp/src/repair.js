@@ -27,14 +27,52 @@ function foldState(steps, names, jobDone) {
   return jobDone ? 'skipped' : 'pending'
 }
 
-export function repairView(job) {
-  const steps = job?.steps ?? []
-  const done = job?.state === 'success' || job?.state === 'failed'
+// checkName -- туннель этого экрана (tunnel_<id>). С v0.46 сервер называет
+// туннель починки (check_name в ответе /repair): своя -- scope 'this', чужая
+// -- 'other'. Законченная чужая починка к этому туннелю отношения не имеет:
+// для него починки не было, и её шаги/ошибка здесь не рисуются.
+// Старый сервер туннель не называет: тогда своим считается только задание,
+// запущенное с этого экрана (ownJobID), остальное -- починка роутера
+// ('router'), а не этого туннеля.
+// pollFailed -- опрос хода не удался. Пока ответа нет вовсе, «узнаю…» с
+// вечно спрятанной кнопкой запирало бы человека (review v0.46, п. 2): тогда
+// честно говорим, что не узнали, и кнопку показываем.
+export function repairView(job, { checkName = '', ownJobID = '', pollFailed = false } = {}) {
+  const unknown = job == null && pollFailed
+  const loading = job == null && !pollFailed
+  const empty = job != null && !job.job_id && !job.state
+  const running = Boolean(job?.running)
+  let scope = 'router'
+  if (job != null && !empty) {
+    if (job.check_name && checkName) scope = job.check_name === checkName ? 'this' : 'other'
+    else if (ownJobID && job.job_id === ownJobID) scope = 'this'
+  }
+  // Чужая законченная починка -- для этого туннеля «не было».
+  const foreignDone = scope === 'other' && !running
+  // Пустой ответ -- починки не было; раньше экран писал над ним «Чиню».
+  const idle = empty || foreignDone
+  const steps = foreignDone ? [] : (job?.steps ?? [])
+  const done = !foreignDone && (job?.state === 'success' || job?.state === 'failed')
   const failed = steps.find((s) => s.status === 'failed')
+  let title
+  if (loading) title = 'Узнаю, идёт ли починка…'
+  else if (unknown) title = 'Не удалось узнать, идёт ли починка'
+  else if (idle) title = 'Починки ещё не было'
+  else if (scope === 'other') title = 'Сейчас чинится другой VPN-туннель'
+  else if (scope === 'router') {
+    if (running) title = 'На роутере идёт починка'
+    else if (done) title = job.state === 'success' ? 'Последняя починка на роутере: готово' : 'Последняя починка на роутере: не получилось'
+    else title = 'Последняя починка на роутере'
+  } else if (running) title = 'Поднимаю связь'
+  else if (done) title = job.state === 'success' ? 'Готово' : 'Не получилось'
+  else title = 'Чиню'
   return {
-    title: done ? (job.state === 'success' ? 'Готово' : 'Не получилось') : 'Чиню',
+    title,
+    loading,
+    idle,
+    scope,
     done,
-    ok: job?.state === 'success',
+    ok: done && job?.state === 'success',
     note: failed?.detail ?? '',
     steps: [
       { key: 'failover', label: LABELS.failover, state: foldState(steps, ['failover'], done) },

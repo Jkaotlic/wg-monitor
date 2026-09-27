@@ -149,6 +149,7 @@ func (d Deps) Start(req StartReq) (string, error) {
 		return "", ErrAlreadyRunning
 	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
+	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
 	go d.run(job.ID, req, sc)
 	return job.ID, nil
 }

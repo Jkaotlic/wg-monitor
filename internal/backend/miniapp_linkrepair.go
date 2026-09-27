@@ -101,8 +101,10 @@ func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusAccepted)
+		tunnelID, _ := strings.CutPrefix(check, miniappTunnelPrefix)
 		_ = json.NewEncoder(w).Encode(miniappReplaceResp{
 			JobID: jobID, State: string(provision.StateRunning), Running: true,
+			CheckName: check, TunnelID: tunnelID,
 		})
 	}
 }
@@ -133,8 +135,11 @@ func miniappRepairStatusHandler(d Deps) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(miniappReplaceResp{})
 			return
 		}
+		resp := miniappReplaceJobResp(job)
+		resp.CheckName = job.Target
+		resp.TunnelID, _ = strings.CutPrefix(job.Target, miniappTunnelPrefix)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(miniappReplaceJobResp(job))
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 

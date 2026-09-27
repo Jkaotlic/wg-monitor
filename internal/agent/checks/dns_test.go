@@ -541,8 +541,9 @@ func TestDNS_CanceledProbe_YieldsInconclusiveNotFailure(t *testing.T) {
 	defer cancel()
 
 	got := chk.Run(ctx, Deps{})
-	if got.Status != "ok" {
-		t.Fatalf("a canceled/timed-out probe must be inconclusive, not a check failure; got %+v", got)
+	// CHK-02: единственный адрес не опрошен -- «не проверено», не «ok».
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("a canceled/timed-out probe must be inconclusive (ok+unverified), not a check failure; got %+v", got)
 	}
 	if got.Details["failed_count"] != 0 {
 		t.Fatalf("canceled probe must not increment failed_count, got details=%+v", got.Details)
@@ -669,5 +670,67 @@ func TestProbeInconclusive_BeforeDeadlineStillCounts(t *testing.T) {
 	defer cancel()
 	if probeInconclusive(ctx, errors.New("connection refused")) {
 		t.Fatal("живой бюджет: отказ резолвера обязан считаться отказом")
+	}
+}
+
+// CHK-02: проверка, которая ничего не проверила, не говорит «ok». Живой
+// роутер 27.09 слал dns=ok с {"discovery_error":"ndmc show running-config:
+// exit status 1","endpoints":0}. Уходит ok + details.unverified: бэкенд
+// принимает только ok|fail, а новый пропускает такое мимо FSM («не проверено»).
+func TestDNS_DiscoveryErrorWithNothingToProbeIsUnverified(t *testing.T) {
+	chk := DNS{
+		TestDomain: "example.com",
+		EndpointProvider: func(context.Context) ([]keenetic.DNSEndpoint, error) {
+			return nil, errors.New("ndmc show running-config: exit status 1")
+		},
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("want ok+unverified when discovery failed and nothing was probed: %+v", got)
+	}
+	if got.Details["discovery_error"] == nil {
+		t.Fatalf("discovery_error lost: %+v", got.Details)
+	}
+}
+
+// CHK-02: порог считался от всех адресов, включая пропущенные. Один реально
+// опрошенный и мёртвый резолвер при двух пропущенных давал «ok».
+func TestDNS_ThresholdCountsOnlyProbedEndpoints(t *testing.T) {
+	deadHost, deadPort := deadTCPAddr(t)
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "dot", Host: deadHost, Port: deadPort},
+			{Type: "plain", Host: "198.51.100.11", Port: 53, NDMSName: "Wireguard1"},
+			{Type: "plain", Host: "198.51.100.12", Port: 53, NDMSName: "Wireguard2"},
+		},
+		TestDomain:      "example.com",
+		PerProbeTimeout: 500 * time.Millisecond,
+		IfaceDialFn:     func(_ string) *net.Dialer { return &net.Dialer{} },
+		IfaceMapProvider: func(context.Context) (map[string]string, error) {
+			return map[string]string{}, nil // оба туннельных апстрима пропускаются
+		},
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Details["skipped_count"] != 2 || got.Details["failed_count"] != 1 {
+		t.Fatalf("setup: skipped=%v failed=%v", got.Details["skipped_count"], got.Details["failed_count"])
+	}
+	if got.Status != "fail" {
+		t.Fatalf("the only probed resolver is dead, want fail: %+v", got)
+	}
+}
+
+func TestDNS_AllEndpointsSkippedIsUnverified(t *testing.T) {
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "plain", Host: "198.51.100.11", Port: 53, NDMSName: "Wireguard1"},
+		},
+		TestDomain: "example.com",
+		IfaceMapProvider: func(context.Context) (map[string]string, error) {
+			return map[string]string{}, nil
+		},
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("want ok+unverified when every endpoint was skipped: %+v", got)
 	}
 }

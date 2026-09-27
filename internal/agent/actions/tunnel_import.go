@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -206,6 +207,48 @@ func normalizeImportBackend(s string) string {
 	}
 }
 
+// tunnelByConfAddress -- запасной поиск заменяемого туннеля по адресу из
+// конфига (провайдер перевыпустил конфиг под другим именем). AGENT-09:
+// адрес вроде 10.8.0.2 выдают многие провайдеры, поэтому совпадение
+// засчитывается, только если оно единственное и сервер тот же (или сервер
+// туннеля неизвестен). Иначе nil -- будет создан новый туннель, чужой не
+// тронут.
+func tunnelByConfAddress(tunnels []awgmgr.Tunnel, confAddress, confEndpoint string) *awgmgr.Tunnel {
+	if confAddress == "" {
+		return nil
+	}
+	var match *awgmgr.Tunnel
+	for i := range tunnels {
+		if normalizeWGAddress(tunnels[i].Address) != confAddress {
+			continue
+		}
+		if match != nil {
+			return nil // неоднозначно
+		}
+		match = &tunnels[i]
+	}
+	if match == nil {
+		return nil
+	}
+	have, want := endpointHost(match.Endpoint), endpointHost(confEndpoint)
+	if have != "" && want != "" && !strings.EqualFold(have, want) {
+		return nil
+	}
+	t := *match
+	return &t
+}
+
+func endpointHost(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(ep); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(ep, "[]")
+}
+
 func shouldRecreateTunnelForBackend(t awgmgr.Tunnel, requestedBackend string) bool {
 	if normalizeImportBackend(requestedBackend) != defaultImportBackend {
 		return false
@@ -236,7 +279,8 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 	rawConf := string(confData)
 
 	// Validate required fields before hitting awg-manager.
-	if _, err := ParseWGConf(rawConf); err != nil {
+	parsedConf, err := ParseWGConf(rawConf)
+	if err != nil {
 		slog.Warn("tunnel import failed", "name", name, "stage", "parse", "err", err)
 		return "", fmt.Errorf("parse conf: %w", err)
 	}
@@ -262,27 +306,22 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 			}
 		}
 		if oldTunnel == nil {
-			confAddress := parseWGConfAddress(rawConf)
-			for _, t := range all.Tunnels {
-				if confAddress != "" && normalizeWGAddress(t.Address) == confAddress {
-					t := t
-					oldTunnel = &t
-					break
-				}
-			}
+			oldTunnel = tunnelByConfAddress(all.Tunnels, parseWGConfAddress(rawConf), parsedConf.Peer.Endpoint)
 		}
 		if oldTunnel != nil && shouldRecreateTunnelForBackend(*oldTunnel, backend) {
-			if err := client.DeleteTunnel(ctx, oldTunnel.ID); err != nil {
-				slog.Warn("tunnel import failed", "name", name, "stage", "delete-old-backend", "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
-				return "", fmt.Errorf("delete old tunnel before nativeWG recreate: %w", err)
-			}
+			// AGENT-09: сначала новый, потом удаление старого. Прежде старый
+			// удалялся первым, и провал импорта оставлял роутер без туннеля.
 			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 			if err != nil {
 				slog.Warn("tunnel import failed", "name", name, "stage", "recreate-nativewg", "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
-				return "", fmt.Errorf("recreate tunnel as nativeWG: %w", err)
+				return "", fmt.Errorf("recreate tunnel as nativeWG (old tunnel %s kept): %w", oldTunnel.ID, err)
 			}
 			newID = newTun.ID
 			fmt.Fprintf(&result, "✅ Туннель %q пересоздан в nativeWG (id=%s)", name, newTun.ID)
+			if err := client.DeleteTunnel(ctx, oldTunnel.ID); err != nil {
+				slog.Warn("tunnel import: old tunnel not deleted", "name", name, "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
+				fmt.Fprintf(&result, "\n⚠️ Старый туннель (id=%s) удалить не удалось: %v", oldTunnel.ID, err)
+			}
 		} else if oldTunnel != nil {
 			newTun, err := client.ReplaceConf(ctx, oldTunnel.ID, rawConf, name, backend)
 			if err != nil {

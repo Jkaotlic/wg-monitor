@@ -228,3 +228,60 @@ func TestDiagFresh_RelogsInWhenSessionExpires(t *testing.T) {
 		t.Fatalf("stream hits: got %d want 2", streamHits)
 	}
 }
+
+// CHK-06: после обрыва потока статус "idle" -- это «прогон закончен»,
+// только если прогон ЭТОГО вызова точно начался: поток успел отдать событие
+// или опрос статуса видел "running". Машина состояний awg-manager -- только
+// idle|running (живой /api/openapi.yaml и роутер: {"status":"idle"}), "done"
+// нет. Поток оборвался до регистрации прогона -> idle ничего не доказывает.
+// error/failed -- ошибка; done/completed по-прежнему успех.
+func TestDiagFresh_CutStreamIdleNeedsConfirmedStart(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		events   string   // что поток отдал до обрыва
+		statuses []string // ответы /api/diagnostics/status по порядку (последний повторяется)
+		ok       bool
+	}{
+		{"event seen then idle", "event: phase\ndata: {}\n\n", []string{"idle"}, true},
+		{"no event, running then idle", "", []string{"running", "idle"}, true},
+		{"no event, idle straight away", "", []string{"idle"}, false},
+		{"no event, empty status", "", []string{""}, false},
+		{"event seen then error", "event: phase\ndata: {}\n\n", []string{"error"}, false},
+		{"event seen then failed", "event: phase\ndata: {}\n\n", []string{"failed"}, false},
+		{"no event, done synonym", "", []string{"done"}, true},
+		{"no event, completed synonym", "", []string{"completed"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hits := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/diagnostics/stream":
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.WriteHeader(200)
+					fmt.Fprint(w, tc.events)
+					w.(http.Flusher).Flush()
+				case "/api/diagnostics/status":
+					st := tc.statuses[len(tc.statuses)-1]
+					if hits < len(tc.statuses) {
+						st = tc.statuses[hits]
+					}
+					hits++
+					_, _ = w.Write([]byte(`{"success":true,"data":{"status":"` + st + `","progress":""}}`))
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer srv.Close()
+			c := New(srv.URL)
+			diagStatusPollInterval = time.Millisecond
+			t.Cleanup(func() { diagStatusPollInterval = defaultDiagStatusPollInterval })
+			err := c.DiagFresh(context.Background())
+			if tc.ok && err != nil {
+				t.Fatalf("DiagFresh: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("must not count as a fresh completed run")
+			}
+		})
+	}
+}

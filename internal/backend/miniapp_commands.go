@@ -439,7 +439,15 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 		// Отказ повторяет постановку для каждого действия: admin-only -- 404
 		// not_found (по коду ответа владельцу незачем узнавать, что действие
 		// существует), owner-only -- 403 owner_only.
-		if cmd, known := d.CommandSink.CommandByID(routerID, cmdID); known {
+		cmd, known := d.CommandSink.CommandByID(routerID, cmdID)
+		if !known && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			// SEC-02: действие неизвестно (очередь знает и ждущие, и
+			// выданные, и отвеченные команды) -- роль проверить не по чему.
+			// Не ждём ответа, который потом нечем было бы загородить.
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		if known {
 			if miniappAdminOnlyActions[cmd.Action] && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
 				writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 				return

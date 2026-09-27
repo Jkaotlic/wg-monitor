@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/releasesig"
 )
 
 type zeroReader struct{}
@@ -214,7 +216,7 @@ func TestSelfUpdateAllowsDowngradeOverrideAndProceedsPastGuard(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc9", "v0.13.0-rc10", true, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "v0.45.0", true, srv.URL)
 	if err == nil {
 		t.Fatal("expected the (unhandled) checksums.txt fetch to fail")
 	}
@@ -228,12 +230,27 @@ func TestSelfUpdateAllowsDowngradeOverrideAndProceedsPastGuard(t *testing.T) {
 
 // --- SelfUpdate: free-space guard wiring ------------------------------------
 
+// selfUpdateAcceptAnySignature -- подпись считается верной: тесты, которым
+// нужна подписанная эпоха (AGENT-01 не пускает старше), но не сама проверка
+// подписи.
+func selfUpdateAcceptAnySignature(t *testing.T) {
+	t.Helper()
+	oldVerify := selfUpdateVerifyChecksumsSignature
+	selfUpdateVerifyChecksumsSignature = func(_, _ []byte) error { return nil }
+	t.Cleanup(func() { selfUpdateVerifyChecksumsSignature = oldVerify })
+}
+
 func selfUpdateFakeChecksumsServer(t *testing.T, assetName, sha string, assetHandler http.HandlerFunc) *httptest.Server {
 	t.Helper()
+	selfUpdateAcceptAnySignature(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/checksums.txt") {
 			_, _ = w.Write([]byte(sha + "  " + assetName + "\n"))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/checksums.txt.sig") {
+			_, _ = w.Write([]byte("test-signature"))
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/"+assetName) {
@@ -266,7 +283,7 @@ func TestSelfUpdateRejectsInsufficientOptSpaceBeforeDownloadingBinary(t *testing
 		})
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "", false, srv.URL)
 	if err == nil {
 		t.Fatal("expected insufficient /opt space to fail")
 	}
@@ -303,7 +320,7 @@ func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
 		})
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "", false, srv.URL)
 	if err == nil {
 		t.Fatal("expected the deliberately-failing asset download to fail")
 	}
@@ -316,15 +333,15 @@ func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
 }
 
 func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor")
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", "/opt/var/wg-monitor/report-rejected", true)
 
 	required := []string{
 		"/opt/etc/init.d/S99wg-monitor start",
 		"is_running()",
 		"pidof wg-monitor >/dev/null 2>&1",
 		"pgrep -x wg-monitor >/dev/null 2>&1",
-		"ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1",
-		"if ! is_running; then",
+		"ps 2>/dev/null | grep -v self-update-swap | grep -E \"(^|[[:space:]])/opt/bin/wg-monitor([[:space:]]|$)\" >/dev/null 2>&1",
+		"! is_running; then",
 		"mv /opt/bin/wg-monitor.bak /opt/bin/wg-monitor",
 		"/opt/etc/init.d/S99wg-monitor start",
 	}
@@ -343,7 +360,7 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 // after 2 s. A crash-after-start (e.g. config parse error) would pass a
 // single 2 s check but fail within the 60 s polling window.
 func TestSelfUpdateSwapScriptPollsForHealthAfterStart(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor")
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", "/opt/var/wg-monitor/report-rejected", true)
 
 	// Must contain a loop that polls for process health after start.
 	if !strings.Contains(script, "while ") && !strings.Contains(script, "for ") {
@@ -751,12 +768,16 @@ func TestSelfUpdate_ChecksumMismatchCleansUpTempFileAndLeavesBinaryUntouched(t *
 		t.Fatal(err)
 	}
 
-	const version = "v0.13.0-rc50" // legacy: no signature required, keeps this scoped to the checksum path
+	selfUpdateAcceptAnySignature(t) // keeps this scoped to the checksum path
+	const version = "v0.40.0"
 	const assetName = "wg-monitor-agent-linux-arm64"
 	artifact := []byte("downloaded-bytes-that-will-not-match-the-advertised-sha")
 	wrongSha := strings.Repeat("0", 64) // well-formed-looking but guaranteed != sha256(artifact)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("test-signature"))
+	})
 	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(wrongSha + "  " + assetName + "\n"))
 	})
@@ -820,5 +841,194 @@ func TestCheckSelfUpdateFreeSpaceStillRefusesWhenTrulyTight(t *testing.T) {
 	}
 	if err := checkSelfUpdateFreeSpace(context.Background()); err == nil {
 		t.Fatal("на пустеющем разделе обновление обязано быть отклонено")
+	}
+}
+
+// AGENT-01: жёсткий пол подписи. Версию, для которой подпись не обязательна
+// (всё ниже v0.13.0-rc128), агент не ставит никогда -- даже с allow_downgrade
+// и даже без известной текущей версии. Иначе бэкенд (или тот, кто им стал)
+// раздаёт неподписанный бинарь всему парку.
+func TestSelfUpdate_RefusesUnsignedLegacyVersionEvenWithAllowDowngrade(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		version, current string
+		allow            bool
+	}{
+		{"v0.12.5", "v0.45.0", true},
+		{"v0.13.0-rc9", "", false},
+		{"v0.13.0-rc127", "v0.13.0-rc10", false},
+	} {
+		_, err := SelfUpdate(context.Background(), tc.version, tc.current, tc.allow, srv.URL)
+		if err == nil {
+			t.Fatalf("%s: expected refusal of an unsigned-era version", tc.version)
+		}
+		if !strings.Contains(err.Error(), "signature") {
+			t.Fatalf("%s: want a signature-floor error, got %v", tc.version, err)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("refusal must happen before any download, got %d requests", hits)
+	}
+}
+
+// AGENT-02: подписанный checksums.txt старого выпуска, выложенный под новым
+// тегом, не проходит -- для тегов с v0.46 строка VERSION-<тег> обязательна.
+func TestSelfUpdate_RequiresVersionBindingForNewTags(t *testing.T) {
+	const assetName = "wg-monitor-agent-linux-arm64"
+	artifact := []byte("agent-binary-bytes")
+	sum := sha256.Sum256(artifact)
+	fileLine := hex.EncodeToString(sum[:]) + "  " + assetName + "\n"
+
+	serve := func(version, checksums string) *httptest.Server {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(checksums))
+		})
+		mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("test-signature"))
+		})
+		mux.HandleFunc("/"+version+"/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(artifact)
+		})
+		return httptest.NewServer(mux)
+	}
+
+	cases := []struct {
+		name, version, checksums string
+		ok                       bool
+	}{
+		{"old signed release replayed", "v0.46.0", fileLine, false},
+		{"another release's binding", "v0.46.0", fileLine + releasesig.VersionBindingLine("v0.44.0") + "\n", false},
+		{"bound release", "v0.46.0", fileLine + releasesig.VersionBindingLine("v0.46.0") + "\n", true},
+		{"pre-binding release", "v0.45.0", fileLine, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			selfUpdateTestHarness(t, "arm64", true)
+			selfUpdateAcceptAnySignature(t)
+			srv := serve(tc.version, tc.checksums)
+			defer srv.Close()
+			_, err := SelfUpdate(context.Background(), tc.version, "", false, srv.URL)
+			if tc.ok && err != nil {
+				t.Fatalf("SelfUpdate: %v", err)
+			}
+			if !tc.ok && (err == nil || !strings.Contains(err.Error(), "VERSION-")) {
+				t.Fatalf("want a VERSION binding refusal, got %v", err)
+			}
+		})
+	}
+}
+
+// AGENT-11: откат после обновления. «Процесс жив 60 с» мало: агент, который
+// жив, но не может отчитаться (сломан конфиг под новую версию, паника в
+// проверке до отправки), считался здоровым навсегда. Новая версия (>= v0.46)
+// после первого успешного отчёта кладёт метку; нет метки за окно -- откат.
+// .bak делается заново каждый раз: не вышло скопировать -- обновление не
+// ставится, иначе откат вернул бы бинарь с позапрошлого обновления.
+func TestSelfUpdateSwapScriptRequiresReportMarkerAndFreshBackup(t *testing.T) {
+	const bin, marker = "/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok"
+	script := selfUpdateSwapScript(bin, marker, "/opt/var/wg-monitor/report-rejected", true)
+	ordered := []string{
+		"rm -f " + bin + ".bak",
+		"if ! cp -p " + bin + " " + bin + ".bak; then",
+		"rm -f " + bin + ".new",
+		"exit 1",
+		"rm -f " + marker,
+		"mv " + bin + ".new " + bin,
+		"/opt/etc/init.d/S99wg-monitor start",
+		"[ -f " + marker + " ]",
+		"mv " + bin + ".bak " + bin,
+	}
+	last := -1
+	for _, want := range ordered {
+		idx := strings.Index(script[last+1:], want)
+		if idx < 0 {
+			t.Fatalf("script missing %q after offset %d:\n%s", want, last, script)
+		}
+		last += idx + len(want)
+	}
+	if strings.Contains(script, "cp -p "+bin+" "+bin+".bak 2>/dev/null\n") {
+		t.Fatalf("backup failure must not be ignored:\n%s", script)
+	}
+
+	legacy := selfUpdateSwapScript(bin, marker, "/opt/var/wg-monitor/report-rejected", false)
+	if strings.Contains(legacy, "[ -f "+marker+" ]") {
+		t.Fatalf("a target without the marker (downgrade below v0.46) must not wait for it:\n%s", legacy)
+	}
+	for _, s := range []string{script, legacy} {
+		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
+			t.Fatalf("swap script is not valid sh: %v\n%s\n%s", err, out, s)
+		}
+	}
+}
+
+func TestSelfUpdateRequiresReportMarkerOnlyForMarkerAwareTargets(t *testing.T) {
+	for v, want := range map[string]bool{"v0.46.0": true, "v0.47.2": true, "v0.45.0": false, "v0.40.0": false} {
+		if got := selfUpdateTargetWritesReportMarker(v); got != want {
+			t.Errorf("%s: writes marker = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// AGENT-12: таймаут -- на простой, а не на всё скачивание. Прежний
+// http.Client{Timeout: 60s} рвал любое скачивание дольше минуты: медленный
+// LTE не обновлялся никогда. Теперь медленный, но идущий поток доезжает, а
+// вставший рвётся по простою; общий потолок -- срок действия команды (ctx).
+func TestSelfUpdateDownloadTimesOutOnStallNotOnTotalDuration(t *testing.T) {
+	oldIdle := selfUpdateIdleTimeout
+	selfUpdateIdleTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { selfUpdateIdleTimeout = oldIdle })
+
+	c := newSelfUpdateHTTPClient()
+	if c.Timeout != 0 {
+		t.Fatalf("client.Timeout = %v: a whole-request cap kills slow-but-steady downloads", c.Timeout)
+	}
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		for i := 0; i < 12; i++ { // ~1.2 s total, 3x the idle timeout
+			_, _ = w.Write(bytes.Repeat([]byte{'x'}, 1024))
+			fl.Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	defer slow.Close()
+	dst := filepath.Join(t.TempDir(), "slow.bin")
+	if _, err := httpGetToFile(context.Background(), c, slow.URL, dst, 1<<20); err != nil {
+		t.Fatalf("slow but steady download must finish: %v", err)
+	}
+	if body, err := httpGetLimited(context.Background(), c, slow.URL, 1<<20); err != nil || len(body) != 12*1024 {
+		t.Fatalf("slow but steady small fetch must finish: len=%d err=%v", len(body), err)
+	}
+
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer stalled.Close()
+	defer close(release)
+	start := time.Now()
+	_, err := httpGetToFile(context.Background(), c, stalled.URL, filepath.Join(t.TempDir(), "stall.bin"), 1<<20)
+	if err == nil {
+		t.Fatal("a stalled download must fail")
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("stall detected after %v, want about the idle timeout", el)
+	}
+	if !isSelfUpdateTransportError(err) {
+		t.Fatalf("a stall must count as a transport error (fallback path), got %v", err)
 	}
 }

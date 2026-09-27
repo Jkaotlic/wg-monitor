@@ -131,7 +131,9 @@ func TestDNSResetEmptyDNSProxyJustAppliesReference(t *testing.T) {
 func TestDNSResetPartialWhenCommandFails(t *testing.T) {
 	f := &fakeDNSExec{
 		runningConfig: sampleRunningConfig,
-		failOn:        map[string]bool{"dns-proxy no tls upstream 8.8.8.8": true},
+		// Эталон встал (AGENT-03: сохраняем только подтверждённый эталон).
+		afterConfig: configAfterApplyWithPorts(),
+		failOn:      map[string]bool{"dns-proxy no tls upstream 8.8.8.8": true},
 	}
 	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
 	if status != "partial" {
@@ -140,7 +142,8 @@ func TestDNSResetPartialWhenCommandFails(t *testing.T) {
 	if !strings.Contains(out, "✗ dns-proxy no tls upstream 8.8.8.8") {
 		t.Errorf("expected failure marker in transcript, got:\n%s", out)
 	}
-	// A failed removal must not abort the rest: reference + save still run.
+	// A failed removal must not abort the rest: reference + save still run
+	// once the reference is confirmed in the config.
 	if f.calls[len(f.calls)-1] != "system configuration save" {
 		t.Errorf("save should still run after a failed removal, last call = %q", f.calls[len(f.calls)-1])
 	}

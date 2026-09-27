@@ -5,7 +5,7 @@
 // сначала "работает ли сейчас", потом "что будет, если ляжет", и только
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
-import { tunnelLive, tunnelSwitchedOff } from './routes.js'
+import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -21,10 +21,15 @@ function chainRole(link, tunnel, activeTunnelID) {
   const live = tunnelLive(tunnel ?? {})
   // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict):
   // трафик в него уходит и теряется -- «Работает сейчас» было бы неправдой.
-  if (link.tunnel_id && link.tunnel_id === activeTunnelID) return live === 'down' ? 'activeDown' : 'active'
+  if (link.tunnel_id && link.tunnel_id === activeTunnelID) {
+    if (live === 'down') return 'activeDown'
+    // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
+    // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
+    return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
+  }
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
-  if (live === 'unknown') return 'unknown'
+  if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
   return 'down'
 }
 
@@ -39,6 +44,10 @@ const ROLE_NOTE = {
   down: 'включён',
   off: 'выключен',
   unknown: 'роутер не сказал',
+  // Роутер сказал «поднят», но проверки с сервера не пришли (review v0.46,
+  // п. 5): неизвестна проверка, а не слово роутера.
+  activeUnknown: 'проверка не пришла: сервер не ответил',
+  checkUnknown: 'поднят, проверка не пришла: сервер не ответил',
 }
 
 // Имя VPN-туннеля глазами человека. Пустое имя -- это отсутствие имени, а не повод
@@ -47,6 +56,14 @@ const ROLE_NOTE = {
 function lineTitle(name) {
   const clean = (name ?? '').trim()
   return clean === '' ? 'VPN-туннель без имени' : clean
+}
+
+function rulesNote(row, policy) {
+  const name = policy?.name ?? ''
+  const viaPolicy = row?.policyRules ?? (policy?.dns ?? 0)
+  const own = row ? row.total - row.policyRules : 0
+  if (own > 0) return name ? `${viaPolicy} из набора «${name}», ${own} своих` : `${viaPolicy} из общего набора, ${own} своих`
+  return name ? `общий набор «${name}»` : ''
 }
 
 export function tunnelsView(snapshot) {
@@ -64,6 +81,7 @@ export function tunnelsView(snapshot) {
   if (!policy) return { ...empty, unused: [] }
 
   const activeTunnel = byID.get(policy.active_tunnel_id)
+  const activeRow = tunnelRows(snapshot).find((r) => r.id === activeTunnel.id)
   const active = {
     id: activeTunnel.id,
     name: activeTunnel.name || activeTunnel.id,
@@ -75,8 +93,18 @@ export function tunnelsView(snapshot) {
     code: activeTunnel.id,
     iface: activeTunnel.iface ?? '',
     live: tunnelLive(activeTunnel),
+    checkUnknown: Boolean(activeTunnel.verdict_unknown),
+    // Проверка пришла, но ничего не проверила (unknown, v0.46).
+    unverified: Boolean(activeTunnel.check_unverified),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
-    rules: (policy.dns ?? 0) + (policy.static ?? 0),
+    // Правила политики + свои DNS и статические маршруты туннеля (counts):
+    // у политики поля static нет (wire.RoutePolicySummary), статические
+    // маршруты агент считает на туннель (MINI-09). Число -- то же, что в
+    // строке туннеля раскладки (tunnelRows).
+    rules: activeRow?.total ?? (policy.dns ?? 0),
+    // Подпись описывает то же число (review v0.46, п. 6): «общий набор» --
+    // только когда своих правил у туннеля нет.
+    rulesNote: rulesNote(activeRow, policy),
   }
 
   const chain = (policy.interfaces ?? []).map((link) => {

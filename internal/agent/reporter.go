@@ -24,6 +24,14 @@ const perCheckTimeout = 10 * time.Second
 // as "back online".
 const ResumedThreshold = 30 * time.Minute
 
+// reporterStatePersistEvery -- как часто рутинный успешный отчёт переписывает
+// файл состояния (AGENT-10: раньше -- каждый отчёт, 1440 записей во флеш в
+// сутки). Сохранённое время отстаёт не больше чем на этот срок -- на фоне
+// ResumedThreshold (30 мин) это допуск, а при штатной остановке Run пишет
+// точное время. Значимые перемены (отказ авторизации, выздоровление)
+// пишутся сразу.
+const reporterStatePersistEvery = 5 * time.Minute
+
 type Sender interface {
 	// SendReport posts a heartbeat report and returns the backend's canonical URL
 	// (empty string if the server did not advertise one).
@@ -54,6 +62,15 @@ type Reporter struct {
 
 	lastAuthErrorAt        time.Time
 	consecutiveAuthRejects int
+
+	reportOKPath    string // AGENT-11: метка «новый бинарь отчитался» для скрипта замены
+	reportOKWritten bool
+	// reportRejectedPath -- метка «бэкенд явно отверг отчёт» (4xx).
+	reportRejectedPath    string
+	reportRejectedWritten bool
+
+	lastPersistAt time.Time // AGENT-10: когда файл состояния писался последний раз
+	stateWrites   int       // сколько раз писался (для тестов)
 }
 
 type ReporterConfig struct {
@@ -67,6 +84,13 @@ type ReporterConfig struct {
 	StatePath   string // e.g. /opt/var/wg-monitor/reporter-state.json; "" disables persistence
 	ConfigPath  string // e.g. /opt/etc/wg-monitor/config.yaml; enables auto URL migration
 	BackendURL  string // current backend URL from config; compared against canonical_url
+	// ReportOKPath -- куда положить метку после первого успешного отчёта
+	// процесса (actions.SelfUpdateReportOKPath). Пусто -- не писать.
+	ReportOKPath string
+	// ReportRejectedPath -- куда положить метку, когда бэкенд явно отверг
+	// отчёт (ErrReportRejected: JSON-ответ 4xx, включая 401/403). Сеть и 5xx её не ставят:
+	// авария бэкенда -- не повод откатывать обновление. Пусто -- не писать.
+	ReportRejectedPath string
 }
 
 func NewReporter(cfg ReporterConfig) *Reporter {
@@ -84,6 +108,9 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		statePath:   cfg.StatePath,
 		configPath:  cfg.ConfigPath,
 		backendURL:  cfg.BackendURL,
+
+		reportOKPath:       cfg.ReportOKPath,
+		reportRejectedPath: cfg.ReportRejectedPath,
 	}
 	r.loadState()
 	return r
@@ -96,6 +123,7 @@ func (r *Reporter) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			r.persistOnExit()
 			return
 		case <-t.C:
 			r.sendOnce(ctx)
@@ -165,6 +193,9 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	canonicalURL, err := r.sender.SendReport(ctx, report)
 	if err != nil {
 		slog.Warn("send report failed", "err", err)
+		if errors.Is(err, ErrReportRejected) {
+			r.markReportRejected()
+		}
 		if errors.Is(err, ErrUnauthorized) {
 			now := time.Now()
 			r.mu.Lock()
@@ -175,8 +206,9 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 				LastAuthErrorAt:        r.lastAuthErrorAt,
 				ConsecutiveAuthRejects: r.consecutiveAuthRejects,
 			}
+			firstReject := r.consecutiveAuthRejects == 1
 			r.mu.Unlock()
-			r.persistState(snap)
+			r.persistStateThrottled(snap, firstReject)
 		}
 		return
 	}
@@ -191,12 +223,49 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	}
 	now := time.Now()
 	r.mu.Lock()
+	recovered := r.consecutiveAuthRejects > 0 || !r.lastAuthErrorAt.IsZero()
 	r.lastReportAt = now
 	r.consecutiveAuthRejects = 0
 	r.lastAuthErrorAt = time.Time{}
 	snap := reporterState{LastReportAt: now}
 	r.mu.Unlock()
-	r.persistState(snap)
+	r.persistStateThrottled(snap, recovered)
+	r.markReportOK()
+}
+
+// markReportRejected -- AGENT-11: бэкенд явно отверг отчёт. Скрипт замены
+// откатывает бинарь, если за 5 минут так и не было успешного отчёта.
+func (r *Reporter) markReportRejected() {
+	if r.reportRejectedPath == "" || r.reportRejectedWritten {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(r.reportRejectedPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(r.reportRejectedPath, []byte(r.version+"\n"), 0o644); err != nil {
+		slog.Debug("report-rejected marker write", "err", err)
+		return
+	}
+	r.reportRejectedWritten = true
+}
+
+// markReportOK -- AGENT-11: после первого успешного отчёта процесса кладёт
+// метку, по которой скрипт замены бинаря решает «обновление живо» (иначе --
+// откат). Один раз за процесс: скрипт стирает метку перед запуском нового
+// бинаря, а лишние записи во флеш не нужны.
+func (r *Reporter) markReportOK() {
+	if r.reportOKPath == "" || r.reportOKWritten {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(r.reportOKPath), 0o755); err != nil {
+		slog.Debug("report-ok marker mkdir", "err", err)
+		return
+	}
+	if err := os.WriteFile(r.reportOKPath, []byte(r.version+"\n"), 0o644); err != nil {
+		slog.Debug("report-ok marker write", "err", err)
+		return
+	}
+	r.reportOKWritten = true
 }
 
 func (r *Reporter) runAll(parent context.Context) []wire.Check {
@@ -261,10 +330,39 @@ func (r *Reporter) loadState() {
 	r.consecutiveAuthRejects = s.ConsecutiveAuthRejects
 }
 
+// persistStateThrottled пишет состояние, если перемена значимая (force), это
+// первая запись процесса или с прошлой прошло reporterStatePersistEvery.
+func (r *Reporter) persistStateThrottled(s reporterState, force bool) {
+	if !force && !r.lastPersistAt.IsZero() && time.Since(r.lastPersistAt) < reporterStatePersistEvery {
+		return
+	}
+	r.persistState(s)
+}
+
+// persistOnExit -- при штатной остановке файл получает точное время
+// последнего отчёта: троттлинг не должен сдвигать порог «вернулся после сна».
+func (r *Reporter) persistOnExit() {
+	r.sendOnceMu.Lock()
+	defer r.sendOnceMu.Unlock()
+	r.mu.Lock()
+	snap := reporterState{
+		LastReportAt:           r.lastReportAt,
+		LastAuthErrorAt:        r.lastAuthErrorAt,
+		ConsecutiveAuthRejects: r.consecutiveAuthRejects,
+	}
+	r.mu.Unlock()
+	if snap.LastReportAt.IsZero() && snap.ConsecutiveAuthRejects == 0 {
+		return
+	}
+	r.persistState(snap)
+}
+
 func (r *Reporter) persistState(s reporterState) {
 	if r.statePath == "" {
 		return
 	}
+	r.lastPersistAt = time.Now()
+	r.stateWrites++
 	if err := os.MkdirAll(filepath.Dir(r.statePath), 0o755); err != nil {
 		slog.Debug("reporter state mkdir", "err", err)
 		return

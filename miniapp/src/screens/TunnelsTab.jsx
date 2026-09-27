@@ -37,6 +37,8 @@ const CHAIN_TITLE = {
   down: 'Не отвечает',
   off: 'Выключен вручную',
   unknown: 'Состояние неизвестно',
+  activeUnknown: 'Назначен несущим, проверка неизвестна',
+  checkUnknown: 'Проверка неизвестна',
 }
 
 // Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
@@ -88,19 +90,26 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   }, [result])
 
   // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
+  // Сбой загрузки не глотается (MINI-06): без вердикта проверок поднятый
+  // интерфейс -- «состояние неизвестно», а не «работает».
+  const [checksFailed, setChecksFailed] = useState(false)
   useEffect(() => {
     let alive = true
     fetchRouterChecks(routerID)
       .then((ev) => {
-        if (alive) setChecks(ev)
+        if (!alive) return
+        setChecks(ev)
+        setChecksFailed(false)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setChecksFailed(true)
+      })
     return () => {
       alive = false
     }
   }, [routerID, result])
 
-  const shown = withCheckVerdict(snapshot, checks)
+  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
   const view = tunnelsView(shown)
   const list = tunnelList(shown)
   const phase = snapshotState({ busy, error, result, snapshot })
@@ -186,7 +195,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Что предложить звену цепочки. Активное трогать нечем -- оно несёт трафик
   // прямо сейчас, и «выключить» на нём не переключатель, а обрыв.
   const chainAction = (c) => {
-    if (c.role === 'active' || c.role === 'unknown') return null
+    if (['active', 'unknown', 'activeUnknown', 'checkUnknown'].includes(c.role)) return null
     if (c.role === 'down' || c.role === 'activeDown') return restartButton(c)
     return toggleButton(c)
   }
@@ -215,12 +224,16 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       )}
 
       {view.active && (
-        <Section title={view.active.live === 'down' ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
+        <Section title={view.active.live === 'down' || view.active.checkUnknown ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
           <Hero>
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
             {view.active.live === 'down' ? (
               <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
+            ) : view.active.checkUnknown ? (
+              <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
+            ) : view.active.unverified ? (
+              <StateTag tone="warn">поднят, не проверено</StateTag>
             ) : (
               <StateTag>VPN-туннель поднят</StateTag>
             )}
@@ -240,10 +253,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                     ? 'роутер не сообщил'
                     : view.active.live === 'down'
                       ? 'назад, но трафик не проходит'
+                      : view.active.checkUnknown
+                        ? 'назад, проверка не пришла'
                       : 'назад, канал живой'
                 }
               />
-              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.policyName ? `общий набор «${view.policyName}»` : undefined} />
+              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
             </div>
           </Hero>
         </Section>

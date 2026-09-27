@@ -41,6 +41,8 @@ func newReviveService(ctx context.Context, cfg *backend.Config, d *db.DB, provis
 			DB: d, Provision: provisionDeps, PublicBaseURL: cfg.PublicBaseURL, PublicIP: cfg.PublicIP, Logger: log,
 		}),
 		Notifier: notify.NewFanout(d, sender, log, cfg.Telegram.AdminUserID),
+		// Вести авто-оживления, кроме успеха, -- только админу (REV-02).
+		AdminNotifier: notify.NewAdminOnly(sender, cfg.Telegram.AdminUserID),
 		// BaseCtx -- carry #5 (мандатное ревью): ctx процесса (отменяется на
 		// SIGINT/SIGTERM), НЕ context.Background(). confirmSoon (run.go)
 		// живёт на этом ctx, и остановка бэкенда обязана оборвать его же, а

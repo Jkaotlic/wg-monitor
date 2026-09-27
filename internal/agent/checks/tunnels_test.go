@@ -171,6 +171,9 @@ func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(
 			]}}`))
 		case "/api/dns-routes/list", "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/routing/access-policies":
+			// CHK-01: туннель не звено ни одной политики -- действительно не нужен.
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		case "/api/monitoring/matrix":
@@ -829,5 +832,118 @@ func TestTunnelsCheck_StaleProbeDoesNotOverrideHandshake(t *testing.T) {
 	defer srv.Close()
 	if c := probeStatuses(t, srv)["tunnel_awg10"]; c.Status != "ok" {
 		t.Fatalf("матрица десятиминутной давности ничего не доказывает: %+v", c)
+	}
+}
+
+// CHK-01: «туннель без правил и с выключенным pingCheck» глушился, даже если
+// он звено политики доступа (несёт трафик политики или её резерв) или
+// назначенный выход awg-manager (routeTag). Мёртвый несущий туннель давал OK.
+func TestTunnelsCheck_DoesNotSuppressDeadTunnelThatCarriesPolicyOrDefault(t *testing.T) {
+	cases := []struct {
+		name, policies, routeTag string
+		policiesStatus           int
+		wantStatus               string
+	}{
+		{"link of a policy chain", `[{"name":"HydraRoute","interfaces":[{"name":"Wireguard1","order":0}]}]`, "", 200, "fail"},
+		{"authoritative default egress", `[]`, "awg10", 200, "fail"},
+		// Ревью: одна ошибка чтения политик не роняет туннель в fail --
+		// ok + unverified с причиной.
+		{"policies unreadable", ``, "", 500, "ok+unverified"},
+		{"really unused", `[{"name":"HydraRoute","interfaces":[{"name":"Wireguard7","order":0}]}]`, "", 200, "ok"},
+		{"old build without policies", ``, "", 404, "ok"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/tunnels/all":
+					_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+						{"id":"awg10","name":"carrier","type":"awg","status":"starting","enabled":true,"defaultRoute":true,"interfaceName":"nwg1","ndmsName":"Wireguard1"}
+					]}}`))
+				case "/api/pingcheck/status":
+					_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+						{"tunnelId":"awg10","status":"disabled","method":"icmp","failCount":0,"failThreshold":3}
+					]}}`))
+				case "/api/dns-routes/list", "/api/static-routes/list":
+					_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+				case "/api/settings/get":
+					_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"` + tc.routeTag + `"}}}`))
+				case "/api/routing/access-policies":
+					if tc.policiesStatus != 200 {
+						w.WriteHeader(tc.policiesStatus)
+						return
+					}
+					_, _ = w.Write([]byte(`{"success":true,"data":` + tc.policies + `}`))
+				case "/api/monitoring/matrix":
+					w.WriteHeader(http.StatusNotFound)
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
+			for _, c := range out {
+				if c.Name == "tunnel_awg10" {
+					if tc.wantStatus == "ok+unverified" {
+						if c.Status != "ok" || c.Details["unverified"] != true || c.Details["unverified_reason"] == nil {
+							t.Fatalf("want ok+unverified with a reason: %+v", c)
+						}
+						return
+					}
+					if c.Details["unverified"] != nil {
+						t.Fatalf("unexpected unverified flag: %+v", c)
+					}
+					if c.Status != tc.wantStatus {
+						t.Fatalf("status=%q, want %q: %+v", c.Status, tc.wantStatus, c)
+					}
+					return
+				}
+			}
+			t.Fatalf("tunnel_awg10 not emitted: %+v", out)
+		})
+	}
+}
+
+// CHK-05: свежесть матрицы мерилась по её общей отметке updatedAt, а не по
+// времени самой ячейки. Устаревшая успешная ячейка мёртвого туннеля при
+// свежей матрице (соседи обновились) «оживляла» его.
+func TestMatrixVerdictUsesCellTimestamp(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-time.Minute).Format(time.RFC3339)
+	stale := now.Add(-30 * time.Minute).Format(time.RFC3339)
+	m := &awgmgr.MonitoringMatrix{
+		UpdatedAt: fresh,
+		Cells: []awgmgr.MatrixCell{
+			{TargetID: "t1", TunnelID: "dead", OK: true, LatencyMs: 40, TS: stale},
+			{TargetID: "t1", TunnelID: "alive", OK: true, LatencyMs: 50, TS: fresh},
+		},
+	}
+	if matrixSaysAlive(m, "dead", now) {
+		t.Fatal("a stale OK cell must not prove the tunnel alive")
+	}
+	if !matrixSaysAlive(m, "alive", now) {
+		t.Fatal("a fresh OK cell proves the tunnel alive")
+	}
+
+	// Устаревшая проваленная ячейка тоже ничего не доказывает.
+	m2 := &awgmgr.MonitoringMatrix{
+		UpdatedAt: fresh,
+		Cells: []awgmgr.MatrixCell{
+			{TargetID: "t1", TunnelID: "x", OK: false, TS: stale},
+			{TargetID: "t1", TunnelID: "alive", OK: true, TS: fresh},
+		},
+	}
+	if matrixSaysDead(m2, "x", now) {
+		t.Fatal("a stale failed cell must not prove the tunnel dead")
+	}
+	m2.Cells[0].TS = fresh
+	if !matrixSaysDead(m2, "x", now) {
+		t.Fatal("a fresh failed cell with a live neighbour proves the tunnel dead")
+	}
+
+	// Сборка без ts у ячеек: прежнее поведение по updatedAt.
+	m3 := &awgmgr.MonitoringMatrix{UpdatedAt: fresh, Cells: []awgmgr.MatrixCell{{TargetID: "t1", TunnelID: "a", OK: true}}}
+	if !matrixSaysAlive(m3, "a", now) {
+		t.Fatal("cells without ts fall back to the matrix updatedAt")
 	}
 }

@@ -492,6 +492,91 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	return nil
 }
 
+// TunnelsInventoryOKAt -- время последнего отчёта роутера с tunnels=ok
+// (GHOST-01). ok=false -- отметки нет (не было или до миграции).
+func (u *UsersRepo) TunnelsInventoryOKAt(id int64) (time.Time, bool, error) {
+	var v sql.NullString
+	err := u.d.db.QueryRow(`SELECT tunnels_inventory_ok_at FROM users WHERE id = ?`, id).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil || !v.Valid || v.String == "" {
+		return time.Time{}, false, err
+	}
+	t, err := parseEventTS(v.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
+// SetTunnelsInventoryOKAt двигает отметку только вперёд: запоздавший
+// повтор старого отчёта её не откатывает.
+func (u *UsersRepo) SetTunnelsInventoryOKAt(id int64, ts time.Time) error {
+	_, err := u.d.db.Exec(TunnelsInventoryOKAtSQL, ts.UTC(), id, ts.UTC())
+	return err
+}
+
+// TunnelsInventoryOKAtSQL -- та же запись для транзакции приёма отчёта:
+// аргументы (ts, user_id, ts).
+const TunnelsInventoryOKAtSQL = `UPDATE users SET tunnels_inventory_ok_at = ?
+	 WHERE id = ? AND (tunnels_inventory_ok_at IS NULL OR tunnels_inventory_ok_at < ?)`
+
+// AgentMetadata -- то, что правит дашборд в карточке роутера. Пустое поле
+// (0 для чисел) -- «не менять».
+type AgentMetadata struct {
+	Kind        string
+	ThreadID    int64
+	SSHHost     string
+	SSHPort     int64
+	SSHUser     string
+	Arch        string
+	Ring        string
+	DeployMode  string
+	AWGMURL     string
+	AWGMAuth    string
+	ExpectedMAC string
+}
+
+// UpdateAgentMetadata -- правка карточки роутера одной записью, без
+// read-modify-write (DEP-02): служебные поля раскатки (last_deployed_version,
+// pending_*, last_deploy) не трогаются вовсе, поэтому отчёт агента, снявший
+// назначенное обновление между чтением и записью правки, не откатывается.
+func (u *UsersRepo) UpdateAgentMetadata(nickname string, m AgentMetadata) error {
+	if m.Kind != "" && !IsValidKind(m.Kind) {
+		return fmt.Errorf("users.UpdateAgentMetadata: invalid kind %q (want static|mobile)", m.Kind)
+	}
+	res, err := u.d.db.Exec(
+		`UPDATE users SET
+		    kind=CASE WHEN ? = '' THEN kind ELSE ? END,
+		    telegram_thread_id=CASE WHEN ? = 0 THEN telegram_thread_id ELSE ? END,
+		    ssh_host=CASE WHEN ? = '' THEN ssh_host ELSE ? END,
+		    ssh_port=CASE WHEN ? = 0 THEN ssh_port ELSE ? END,
+		    ssh_user=CASE WHEN ? = '' THEN ssh_user ELSE ? END,
+		    arch=CASE WHEN ? = '' THEN arch ELSE ? END,
+		    deploy_ring=CASE WHEN ? = '' THEN deploy_ring ELSE ? END,
+		    deploy_mode=CASE WHEN ? = '' THEN deploy_mode ELSE ? END,
+		    awgm_url=CASE WHEN ? = '' THEN awgm_url ELSE ? END,
+		    awgm_auth=CASE WHEN ? = '' THEN awgm_auth ELSE ? END,
+		    expected_mac=CASE WHEN ? = '' THEN expected_mac ELSE ? END
+		  WHERE nickname=?`,
+		m.Kind, m.Kind, m.ThreadID, m.ThreadID, m.SSHHost, m.SSHHost, m.SSHPort, m.SSHPort,
+		m.SSHUser, m.SSHUser, m.Arch, m.Arch, m.Ring, m.Ring, m.DeployMode, m.DeployMode,
+		m.AWGMURL, m.AWGMURL, m.AWGMAuth, m.AWGMAuth, m.ExpectedMAC, m.ExpectedMAC, nickname,
+	)
+	if err != nil {
+		return fmt.Errorf("users.UpdateAgentMetadata: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // MarkPendingDeploy records a wizard-enqueued target version that has not yet
 // been confirmed by the agent heartbeat.
 func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince string) error {

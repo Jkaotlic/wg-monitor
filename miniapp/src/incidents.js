@@ -5,6 +5,36 @@
 // клиенте: как это назвать по-русски и как разложить по дням.
 import { incidentWhatPlain, humanAge } from './labels.js'
 
+// День -- по местным часам человека, а не по UTC (MINI-08): время строк
+// показано местным, и группировать их по UTC значило класть вечернее
+// происшествие во «вчера» (или ночное -- в «завтра»).
+function dayKey(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
+export function localDay(ts) {
+  const d = new Date(ts ?? '')
+  if (Number.isNaN(d.getTime())) return ''
+  return dayKey(d)
+}
+
+// n дней назад от nowMs по местному календарю (переход на летнее время не
+// сдвигает день, в отличие от вычитания 86 400 000).
+function localDayBack(nowMs, n) {
+  const now = new Date(nowMs)
+  return dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - n))
+}
+
+export function dayTitle(day, nowMs = Date.now()) {
+  if (day === localDayBack(nowMs, 0)) return 'Сегодня'
+  if (day === localDayBack(nowMs, 1)) return 'Вчера'
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+}
+
 function hhmm(iso) {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
@@ -38,15 +68,14 @@ export function incidentLine(incident) {
 export function groupIncidentsByDay(incidents = [], days = 7, nowMs = Date.now()) {
   const byDay = new Map()
   for (const inc of incidents) {
-    const day = (inc.from ?? '').slice(0, 10)
+    const day = localDay(inc.from)
     if (!byDay.has(day)) byDay.set(day, [])
     byDay.get(day).push(inc)
   }
 
   const out = []
   for (let i = 0; i < days; i++) {
-    const d = new Date(nowMs - i * 86_400_000)
-    const day = d.toISOString().slice(0, 10)
+    const day = localDayBack(nowMs, i)
     const list = byDay.get(day) ?? []
     out.push({ day, incidents: list, quiet: list.length === 0 })
   }

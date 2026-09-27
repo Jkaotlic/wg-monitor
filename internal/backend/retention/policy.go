@@ -117,10 +117,20 @@ func (p *Policy) prune(ctx context.Context) error {
 	}
 	orphanCutoff := p.now().Add(-7 * 24 * time.Hour).UTC()
 	orphanDeleted := int64(0)
+	// BUG-02: сирота -- состояние удалённого роутера или проверки, которую
+	// роутер больше не шлёт, ПОКА сам отчитывается (удалённый туннель).
+	// Роутер, молчащий дольше недели, своих инцидентов не теряет: иначе по
+	// возвращении -- повторная «первая» тревога, а «починилось» не приходит.
+	// Оба EXISTS -- поиск по индексам events, а не сбор недели событий.
 	if res, err := p.DB.SQL().ExecContext(ctx,
-		`DELETE FROM incident_state WHERE (user_id, check_name) NOT IN (
-		    SELECT user_id, check_name FROM events WHERE ts >= ?
-		 )`, orphanCutoff); err != nil {
+		`DELETE FROM incident_state
+		  WHERE user_id NOT IN (SELECT id FROM users)
+		     OR (EXISTS (SELECT 1 FROM events e
+		                  WHERE e.user_id = incident_state.user_id AND e.ts >= ?)
+		         AND NOT EXISTS (SELECT 1 FROM events e
+		                  WHERE e.user_id = incident_state.user_id
+		                    AND e.check_name = incident_state.check_name
+		                    AND e.ts >= ?))`, orphanCutoff, orphanCutoff); err != nil {
 		p.Logger.Warn("retention: incident_state orphan prune failed", "err", err)
 	} else {
 		orphanDeleted, _ = res.RowsAffected()

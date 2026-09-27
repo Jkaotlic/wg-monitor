@@ -329,6 +329,14 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// DefaultReleaseCacheDir -- кэш бинарей выпуска рядом с базой (SEC-01).
+func DefaultReleaseCacheDir(cfg *Config) string {
+	if cfg == nil || strings.TrimSpace(cfg.DBPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(cfg.DBPath), "release-cache")
+}
+
 func DefaultBackendUpdatePath(cfg *Config) string {
 	if cfg == nil {
 		return ""

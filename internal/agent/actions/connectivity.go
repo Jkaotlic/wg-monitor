@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -235,6 +236,11 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 	if err != nil {
 		return "", ""
 	}
+	var (
+		links       map[string]string
+		linksOK     bool
+		linksLoaded bool
+	)
 	for _, target := range targets {
 		host := connectivityTargetHost(target.URL)
 		if host == "" {
@@ -252,7 +258,26 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 				bind := firstNonEmptyConnectivityRoute(route.Routes[0].Interface, route.Routes[0].TunnelID)
 				iface = connectivityIfaceForBind(bind, ifaceByAlias)
 			} else if hydraRouteUsesPolicyDefault(route) {
-				iface = pickHydraRoutePolicyIface(route, ifaceByAlias)
+				// AGENT-15: у политики своя цепочка -- проба идёт через её
+				// активное звено (первое доступное по порядку), как и трафик.
+				if !linksLoaded {
+					links, linksOK = connectivityPolicyActiveLinks(ctx, c)
+					linksLoaded = true
+				}
+				policy := strings.ToLower(strings.TrimSpace(nonEmptyString(route.HRPolicyName, defaultHydraRoutePolicyName)))
+				if bind, has := links[policy]; linksOK && has {
+					routeName := nonEmptyString(route.Name, route.ID)
+					if bind == "" {
+						return "", fmt.Sprintf("HR-Neo правило %q для %s идёт через политику %q, но ни одно её звено сейчас не доступно; проверять через другой туннель не будем, чтобы не показать ложный OK", routeName, target.Name, route.HRPolicyName)
+					}
+					iface = connectivityIfaceForBindFold(bind, ifaceByAlias)
+					if iface == "" {
+						return "", fmt.Sprintf("HR-Neo правило %q для %s: политика %q сейчас ведёт через %s — это не VPN-туннель, проверка через туннель не про неё", routeName, target.Name, route.HRPolicyName, bind)
+					}
+				}
+				if iface == "" {
+					iface = pickHydraRoutePolicyIface(route, ifaceByAlias)
+				}
 				if iface == "" {
 					iface = strings.TrimSpace(policyDefaultIface)
 				}
@@ -268,6 +293,60 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 		}
 	}
 	return "", ""
+}
+
+// connectivityPolicyActiveLinks -- активное звено каждой политики со своей
+// цепочкой: первое доступное по порядку (как buildPolicySummary в
+// route_status). "" -- доступных звеньев нет. ok=false -- политики или их
+// интерфейсы не прочитались (старая сборка, сбой): тогда прежняя логика.
+func connectivityPolicyActiveLinks(ctx context.Context, c *awgmgr.Client) (map[string]string, bool) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	policies, err := c.AccessPolicies(cctx)
+	if err != nil {
+		return nil, false
+	}
+	ifaces, err := c.PolicyInterfaces(cctx)
+	if err != nil {
+		return nil, false
+	}
+	up := map[string]bool{}
+	for _, pi := range ifaces {
+		up[strings.ToLower(strings.TrimSpace(pi.Name))] = pi.Up
+	}
+	out := map[string]string{}
+	for _, p := range policies {
+		if len(p.Interfaces) == 0 {
+			continue
+		}
+		chain := append([]awgmgr.AccessPolicyInterface(nil), p.Interfaces...)
+		sort.SliceStable(chain, func(i, j int) bool { return chain[i].Order < chain[j].Order })
+		active := ""
+		for _, e := range chain {
+			if up[strings.ToLower(strings.TrimSpace(e.Name))] {
+				active = strings.TrimSpace(e.Name)
+				break
+			}
+		}
+		out[strings.ToLower(strings.TrimSpace(p.Name))] = active
+	}
+	return out, true
+}
+
+// connectivityIfaceForBindFold -- как connectivityIfaceForBind, но звено
+// политики (OpkgTun10) сверяется с псевдонимами туннелей без учёта регистра,
+// и незнакомое имя -- не туннель ("").
+func connectivityIfaceForBindFold(bind string, ifaceByAlias map[string]string) string {
+	bind = strings.TrimSpace(bind)
+	if iface, ok := ifaceByAlias[bind]; ok {
+		return iface
+	}
+	for alias, iface := range ifaceByAlias {
+		if strings.EqualFold(alias, bind) {
+			return iface
+		}
+	}
+	return ""
 }
 
 func pickHydraRoutePolicyIface(route awgmgr.DNSRoute, ifaceByAlias map[string]string) string {

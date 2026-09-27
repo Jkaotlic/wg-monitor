@@ -138,6 +138,14 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	}
 	version = validVersion
 
+	// AGENT-01: жёсткий пол. Версию из эпохи до подписи выпусков агент не
+	// ставит никогда -- allow_downgrade приходит от бэкенда и этот пол не
+	// снимает: иначе скомпрометированный бэкенд раздаёт парку бинарь без
+	// подписи. Проверка до любой сети.
+	if !releasesig.SignatureRequiredForVersion(version) {
+		return "", fmt.Errorf("self_update: refusing %s: releases older than the signature floor are unsigned and never installed", version)
+	}
+
 	if !allowDowngrade && isSelfUpdateDowngrade(version, currentVersion) {
 		return "", fmt.Errorf("self_update: target version %s is older than the running %s — pass allow_downgrade to override", version, currentVersion)
 	}
@@ -163,7 +171,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	primary := &selfUpdateSource{
 		name:   "backend",
 		base:   repoBase,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: newSelfUpdateHTTPClient(),
 	}
 	if len(repoBaseOpt) > 1 && strings.TrimSpace(repoBaseOpt[1]) != "" {
 		primary.fallback, primary.fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
@@ -186,7 +194,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 			}
 			// Наш бэкенд выпуск так и не отдал -- тот же выпуск с GitHub.
 			// Проверка ровно та же: подпись checksums.txt и sha256 бинаря.
-			gh := &selfUpdateSource{name: "github", base: github, client: &http.Client{Timeout: 60 * time.Second}}
+			gh := &selfUpdateSource{name: "github", base: github, client: newSelfUpdateHTTPClient()}
 			if ghErr := selfUpdateFrom(ctx, gh, version, assetName); ghErr != nil {
 				if selfUpdateIsBusy(backendErr) && selfUpdateIsFetchError(ghErr) {
 					// Роутер не виноват: прокси занят, а GitHub отсюда не
@@ -203,7 +211,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	binPath := selfUpdateBinPath
 	tmpPath := binPath + ".new"
 	scriptPath := selfUpdateSwapScriptPath()
-	script := selfUpdateSwapScript(binPath)
+	script := selfUpdateSwapScript(binPath, SelfUpdateReportOKPath(), SelfUpdateReportRejectedPath(), selfUpdateTargetWritesReportMarker(version))
 	if err := writeSelfUpdateSwapScript(scriptPath, script); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("write %s: %w", scriptPath, err)
@@ -259,6 +267,11 @@ func selfUpdateFrom(ctx context.Context, src *selfUpdateSource, version, assetNa
 		if err := selfUpdateVerifyChecksumsSignature(sumsBody, sigBody); err != nil {
 			return fmt.Errorf("verify checksums.txt signature: %w", err)
 		}
+	}
+	// AGENT-02: подписанный файл должен быть именно этого выпуска, а не
+	// старого подписанного, выложенного под новым тегом.
+	if err := releasesig.VerifyVersionBinding(sumsBody, version); err != nil {
+		return err
 	}
 	wantSha, ok := parseChecksum(string(sumsBody), assetName)
 	if !ok {
@@ -596,26 +609,97 @@ func selfUpdateHeadroomKB(totalKB int64) int64 {
 	return h
 }
 
+// AGENT-12: таймауты скачивания. Прежний http.Client{Timeout: 60s} был
+// потолком на ВЕСЬ запрос: бинарь в десятки мегабайт по медленному LTE не
+// успевал никогда. Теперь соединение, TLS и заголовки ответа ограничены
+// каждый своим сроком, тело -- простоем (нет ни байта selfUpdateIdleTimeout),
+// а общий потолок -- ctx команды (actionTimeoutOverrides["self_update"]).
+var (
+	selfUpdateIdleTimeout   = 60 * time.Second
+	selfUpdateHeaderTimeout = 60 * time.Second
+	selfUpdateDialTimeout   = 30 * time.Second
+)
+
+// errSelfUpdateStalled -- тело перестало идти. Текст содержит "timeout":
+// isSelfUpdateTransportError считает это сетевой бедой (запасной IP/GitHub).
+var errSelfUpdateStalled = errors.New("download stalled: no data within the idle timeout")
+
+func newSelfUpdateHTTPClient() *http.Client {
+	return &http.Client{Transport: newSelfUpdateTransport(nil)}
+}
+
+func newSelfUpdateTransport(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if dialContext == nil {
+		dialContext = (&net.Dialer{Timeout: selfUpdateDialTimeout, KeepAlive: 30 * time.Second}).DialContext
+	}
+	t.DialContext = dialContext
+	t.TLSHandshakeTimeout = 30 * time.Second
+	t.ResponseHeaderTimeout = selfUpdateHeaderTimeout
+	return t
+}
+
+// idleBody -- тело ответа, каждое чтение которого продлевает срок простоя.
+type idleBody struct {
+	r     io.Reader
+	timer *time.Timer
+	idle  time.Duration
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if n > 0 {
+		b.timer.Reset(b.idle)
+	}
+	return n, err
+}
+
+// selfUpdateDo выполняет GET с отсечкой по простою тела. Вызывающий обязан
+// вызвать done() после чтения; stalled(err) переводит ошибку чтения,
+// вызванную простоем, в errSelfUpdateStalled.
+func selfUpdateDo(ctx context.Context, c *http.Client, rawURL string) (resp *http.Response, body io.Reader, done func(), stalled func(error) error, err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	idle := selfUpdateIdleTimeout
+	timer := time.AfterFunc(idle, func() { cancel(errSelfUpdateStalled) })
+	done = func() { timer.Stop(); cancel(nil) }
+	stalled = func(e error) error {
+		if e != nil && errors.Is(context.Cause(ctx), errSelfUpdateStalled) {
+			return fmt.Errorf("%w (i/o timeout)", errSelfUpdateStalled)
+		}
+		return e
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		done()
+		return nil, nil, nil, nil, err
+	}
+	resp, err = c.Do(req)
+	if err != nil {
+		err = stalled(err)
+		done()
+		return nil, nil, nil, nil, err
+	}
+	timer.Reset(idle)
+	return resp, &idleBody{r: resp.Body, timer: timer, idle: idle}, done, stalled, nil
+}
+
 func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 	return httpGetLimited(ctx, c, url, maxSelfUpdateArtifactSize)
 }
 
 func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, rbody, done, stalled, err := selfUpdateDo(ctx, c, url)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	defer done()
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return nil, &selfUpdateHTTPError{Status: resp.StatusCode, URL: url, RetryAfter: resp.Header.Get("Retry-After")}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(rbody, maxBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, stalled(err)
 	}
 	if int64(len(body)) > maxBytes {
 		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxBytes)
@@ -628,14 +712,11 @@ func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes in
 // Avoids loading large binaries into RAM — critical for 64 MB agents on
 // MIPSLE routers with ≤64 MB total memory.
 func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxBytes int64) (sha256hex string, err error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	resp, rbody, done, stalled, err := selfUpdateDo(ctx, c, rawURL)
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", err
-	}
+	defer done()
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return "", &selfUpdateHTTPError{Status: resp.StatusCode, URL: rawURL, RetryAfter: resp.Header.Get("Retry-After")}
@@ -648,11 +729,11 @@ func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxB
 	}
 
 	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxBytes+1))
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(rbody, maxBytes+1))
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmp)
-		return "", copyErr
+		return "", stalled(copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmp)
@@ -744,7 +825,7 @@ func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dia
 		timeoutSec = 60
 	}
 	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := newSelfUpdateTransport(nil)
 	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -757,7 +838,10 @@ func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dia
 		}
 		return dial(network, pinnedAddr)
 	}
-	return &http.Client{Timeout: time.Duration(timeoutSec) * time.Second, Transport: transport}, ip
+	// Без общего Timeout (AGENT-12): простой тела режет selfUpdateDo, всё
+	// остальное -- транспорт и ctx команды.
+	transport.ResponseHeaderTimeout = time.Duration(timeoutSec) * time.Second
+	return &http.Client{Transport: transport}, ip
 }
 
 // parseChecksum picks the SHA-256 hex for asset `name` from a checksums.txt
@@ -776,14 +860,63 @@ func parseChecksum(body, name string) (string, bool) {
 	return "", false
 }
 
-func selfUpdateSwapScript(binPath string) string {
+// selfUpdateReportMarkerFromVersion -- с этой версии агент кладёт метку
+// первого успешного отчёта (AGENT-11). Цель старше метку не пишет: скрипт
+// замены для неё проверяет только «процесс жив», иначе откат на старую
+// версию всегда откатывался бы обратно.
+const selfUpdateReportMarkerFromVersion = "v0.46.0-rc0"
+
+// SelfUpdateReportOKPath -- метка «новый бинарь отчитался». Её стирает
+// скрипт замены перед запуском, пишет репортёр после первого успешного
+// отчёта процесса.
+func SelfUpdateReportOKPath() string {
+	return selfUpdateStateDir + "/report-ok"
+}
+
+// SelfUpdateReportRejectedPath -- метка «бэкенд явно отверг отчёт» (4xx:
+// авторизация, проверка формы). Сеть и 5xx её не ставят.
+func SelfUpdateReportRejectedPath() string {
+	return selfUpdateStateDir + "/report-rejected"
+}
+
+func selfUpdateTargetWritesReportMarker(version string) bool {
+	cmp, ok := releasesig.CompareReleaseTags(version, selfUpdateReportMarkerFromVersion)
+	return ok && cmp >= 0
+}
+
+// selfUpdateSwapScript -- замена бинаря и откат (AGENT-11):
+//   - .bak делается заново; не вышло -- новый бинарь не ставится (устаревший
+//     .bak откатил бы на позапрошлую версию);
+//   - откат, если новый процесс упал в первые 60 с;
+//   - для целей с метками (>= v0.46) ещё откат, если бэкенд ЯВНО отверг
+//     отчёты нового бинаря (метка report-rejected: 4xx) и успешного отчёта
+//     (report-ok) так и не было за 5 минут. Нет меток -- бэкенд или сеть
+//     недоступны, это не вина бинаря: он остаётся (иначе авария бэкенда
+//     откатывала бы весь парк).
+func selfUpdateSwapScript(binPath, reportMarker, rejectedMarker string, requireReport bool) string {
+	markers := ""
+	settled := `[ $_i -ge 12 ]`
+	verdict := ""
+	if requireReport {
+		markers = "rm -f " + reportMarker + " " + rejectedMarker + "\n"
+		settled = `[ $_i -ge 12 ] && [ -f ` + reportMarker + ` ]`
+		verdict = `if [ $_rollback -eq 0 ] && [ ! -f ` + reportMarker + ` ] && [ -f ` + rejectedMarker + ` ]; then
+	_rollback=1
+fi
+`
+	}
 	return `#!/bin/sh
 sleep 3
 /opt/etc/init.d/S99wg-monitor stop 2>/dev/null
 killall -9 wg-monitor 2>/dev/null
 sleep 1
-cp -p ` + binPath + ` ` + binPath + `.bak 2>/dev/null
-mv ` + binPath + `.new ` + binPath + `
+rm -f ` + binPath + `.bak
+if ! cp -p ` + binPath + ` ` + binPath + `.bak; then
+	rm -f ` + binPath + `.new
+	/opt/etc/init.d/S99wg-monitor start
+	exit 1
+fi
+` + markers + `mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
 is_running() {
@@ -793,22 +926,28 @@ is_running() {
 	if command -v pgrep >/dev/null 2>&1 && pgrep -x wg-monitor >/dev/null 2>&1; then
 		return 0
 	fi
-	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
+	# Only the agent binary itself: the swap script lives in
+	# /opt/var/wg-monitor/ and would otherwise match "wg-monitor".
+	ps 2>/dev/null | grep -v self-update-swap | grep -E "(^|[[:space:]])` + binPath + `([[:space:]]|$)" >/dev/null 2>&1
 }
-# Poll for 60 s (12 × 5 s) to catch crashes that occur after initial startup.
-_ok=0
+# Poll every 5 s: crash within the first 60 s (12 ticks) rolls back; with
+# report markers keep watching up to 300 s for report-ok / report-rejected.
+_rollback=0
 _i=0
-while [ $_i -lt 12 ]; do
+while [ $_i -lt 60 ]; do
 	sleep 5
-	if ! is_running; then
-		_ok=0
+	_i=$((_i + 1))
+	if [ $_i -le 12 ] && ! is_running; then
+		_rollback=1
 		break
 	fi
-	_ok=1
-	_i=$((_i + 1))
+	if ` + settled + `; then
+		break
+	fi
 done
-if [ $_ok -eq 0 ]; then
+` + verdict + `if [ $_rollback -eq 1 ]; then
 	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
+	killall -9 wg-monitor 2>/dev/null
 	mv ` + binPath + `.bak ` + binPath + `
 	chmod 755 ` + binPath + `
 	/opt/etc/init.d/S99wg-monitor start

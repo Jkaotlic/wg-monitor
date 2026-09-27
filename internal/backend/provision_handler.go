@@ -178,6 +178,30 @@ func registerAgent(d Deps, in registerAgentInput) (wizardEnrollmentResp, *repair
 
 // dashboardHandleRegister -- обёртка дашборда над registerAgent.
 func dashboardHandleRegister(w http.ResponseWriter, r *http.Request, d Deps, req dashboardProvisionReq) {
+	// PROV-01: те же две защиты, что у приглашения мини-аппа. Живой агент
+	// (хоть раз отчитывался) токен не перевыпускает: хеш перепишется, агент
+	// получит 401 и замолчит -- для него «Переустановить». И выпуск -- под
+	// замком: идущая установка этого роутера иначе закоммитила бы на
+	// config_written токен, который регистрация уже переписала.
+	existing, err := lookupExistingUser(d.DB, req.Nickname)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+	if existing != nil && existing.LastSeenAt != nil {
+		writeJSONError(w, http.StatusConflict, "nickname_taken",
+			"agent with this nickname is live — use reinstall instead of re-registering")
+		return
+	}
+	if d.Provision.Store != nil {
+		release, locked := tryProvisionMintLock(d.Provision.Store, req.Nickname)
+		if !locked {
+			writeJSONError(w, http.StatusConflict, "provision_already_running",
+				"provisioning already in progress for this router")
+			return
+		}
+		defer release()
+	}
 	enrollment, serr := registerAgent(d, registerAgentInput{
 		Nickname: req.Nickname, AgentKind: req.AgentKind, AWGMURL: req.AWGMURL, AWGMAuth: req.AWGMAuth,
 		UpdateTopic: true, TelegramGroup: req.TelegramGroup, ThreadID: req.ThreadID,
@@ -238,8 +262,10 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		writeJSONError(w, http.StatusBadRequest, "no_awgm_url", "awgm_url is required and must be an absolute http(s) URL")
 		return
 	}
-	rootPassword := strings.TrimSpace(req.RootPassword)
-	if rootPassword == "" {
+	// PROV-02: пустоту проверяем по обрезанному, в задание уходит набранное
+	// как есть -- пароль root с пробелом по краю тоже пароль (как в мини-аппе).
+	rootPassword := req.RootPassword
+	if strings.TrimSpace(rootPassword) == "" {
 		writeJSONError(w, http.StatusBadRequest, "root_password_required",
 			"router root password is required (used once for the terminal login, never stored)")
 		return
@@ -492,8 +518,8 @@ func dashboardRepairHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		req.RootPassword = strings.TrimSpace(req.RootPassword)
-		if req.RootPassword == "" {
+		// PROV-02: пароль root -- как набран; пустоту судим по обрезанному.
+		if strings.TrimSpace(req.RootPassword) == "" {
 			writeJSONError(w, http.StatusBadRequest, "root_password_required",
 				"router root password is required (used once for the terminal login, never stored)")
 			return
@@ -632,6 +658,10 @@ type reinstallInput struct {
 	AWGMAPIKey     string
 	Version        string
 	AllowDowngrade bool
+	// AfterCommit, если задан, зовётся сразу после коммита токена
+	// (config_written): вход в терминал этим паролем уже прошёл. Мини-апп
+	// сохраняет здесь пароль root (REV-03, как у провижининга).
+	AfterCommit func()
 }
 
 // repairStartError -- отказ запуска переустановки: HTTP-статус и код, которые
@@ -704,8 +734,13 @@ func startRepairReinstall(ctx context.Context, d Deps, nickname string, user *db
 		return "", "", provisionEnrollmentStartError(err)
 	}
 	commit := func() error {
-		_, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID))
-		return err
+		if _, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID)); err != nil {
+			return err
+		}
+		if in.AfterCommit != nil {
+			in.AfterCommit()
+		}
+		return nil
 	}
 
 	job := awgmInstallJob{
@@ -823,7 +858,7 @@ func isVersionDowngrade(target, current string) bool {
 // (versions, pending markers) and metadata this request shape has no fields
 // for (ssh/ring/arch/mac; the engine auto-detects arch and always uses the
 // awgm/relay path, per the provisioning-rework design spec) are preserved
-// from it rather than blanked, matching dashboardEditDeployInfo's merge-safe
+// from it rather than blanked, matching dashboardEditMetadata's merge-safe
 // convention.
 //
 // Takes plain fields rather than dashboardProvisionReq (its only caller until

@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -505,5 +506,53 @@ func TestUpdateAgentConfigTrimsWatchdogEndpointBeforeChecks(t *testing.T) {
 	}
 	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"interval_sec": 90}, path, ""); err != nil {
 		t.Errorf("несвязанная правка при обрезаемом endpoint: want успех, got %v", err)
+	}
+}
+
+// AGENT-06: пароль awg-manager агент шлёт на awgm_base_url. Удалённая смена
+// адреса на чужой хост увела бы пароль наружу -- разрешено только на тот же
+// хост (порт и путь можно) или в loopback/частную сеть.
+func TestUpdateAgentConfigAWGMBaseURLOnlySameHostOrPrivate(t *testing.T) {
+	stubRestart(t)
+	const lanConfig = "awg_manager:\n  base_url: https://router.example.com:2222\n"
+	cases := []struct {
+		name, cfg, newURL string
+		ok                bool
+	}{
+		{"foreign https host", sampleAgentConfig, "https://evil.example.net", false},
+		{"public IP literal", sampleAgentConfig, "https://203.0.113.5:2222", false},
+		{"loopback other port", sampleAgentConfig, "http://127.0.0.1:3000", true},
+		{"localhost", sampleAgentConfig, "http://localhost:2222", true},
+		{"RFC1918 10/8", sampleAgentConfig, "http://10.1.2.3:2222", true},
+		{"RFC1918 192.168/16", sampleAgentConfig, "http://192.168.1.1:2222", true},
+		{"RFC1918 172.16/12", sampleAgentConfig, "http://172.20.0.1", true},
+		{"documentation range is not private", sampleAgentConfig, "http://198.51.100.7", false},
+		{"same public host, new port/path", lanConfig, "https://router.example.com:8443/awg", true},
+		{"same host case-insensitive", lanConfig, "https://Router.Example.com", true},
+		{"lookalike host", lanConfig, "https://router.example.com.evil.example.net", false},
+		{"userinfo trick", sampleAgentConfig, (&url.URL{Scheme: "http", User: url.User("127.0.0.1"), Host: "evil.example.net"}).String(), false},
+		{"credentials even on same host", lanConfig, (&url.URL{Scheme: "https", User: url.User("admin"), Host: "router.example.com"}).String(), false},
+		{"empty resets to default", lanConfig, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := UpdateAgentConfig(context.Background(), map[string]any{"awgm_base_url": tc.newURL}, path, "")
+			if tc.ok && err != nil {
+				t.Fatalf("want accepted, got %v", err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Fatal("want refusal")
+				}
+				raw, _ := os.ReadFile(path)
+				if string(raw) != tc.cfg {
+					t.Fatalf("refused change still rewrote config:\n%s", raw)
+				}
+			}
+		})
 	}
 }
