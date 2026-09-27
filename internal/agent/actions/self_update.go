@@ -138,6 +138,14 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	}
 	version = validVersion
 
+	// AGENT-01: жёсткий пол. Версию из эпохи до подписи выпусков агент не
+	// ставит никогда -- allow_downgrade приходит от бэкенда и этот пол не
+	// снимает: иначе скомпрометированный бэкенд раздаёт парку бинарь без
+	// подписи. Проверка до любой сети.
+	if !releasesig.SignatureRequiredForVersion(version) {
+		return "", fmt.Errorf("self_update: refusing %s: releases older than the signature floor are unsigned and never installed", version)
+	}
+
 	if !allowDowngrade && isSelfUpdateDowngrade(version, currentVersion) {
 		return "", fmt.Errorf("self_update: target version %s is older than the running %s — pass allow_downgrade to override", version, currentVersion)
 	}

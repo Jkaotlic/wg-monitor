@@ -214,7 +214,7 @@ func TestSelfUpdateAllowsDowngradeOverrideAndProceedsPastGuard(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc9", "v0.13.0-rc10", true, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "v0.45.0", true, srv.URL)
 	if err == nil {
 		t.Fatal("expected the (unhandled) checksums.txt fetch to fail")
 	}
@@ -228,12 +228,27 @@ func TestSelfUpdateAllowsDowngradeOverrideAndProceedsPastGuard(t *testing.T) {
 
 // --- SelfUpdate: free-space guard wiring ------------------------------------
 
+// selfUpdateAcceptAnySignature -- подпись считается верной: тесты, которым
+// нужна подписанная эпоха (AGENT-01 не пускает старше), но не сама проверка
+// подписи.
+func selfUpdateAcceptAnySignature(t *testing.T) {
+	t.Helper()
+	oldVerify := selfUpdateVerifyChecksumsSignature
+	selfUpdateVerifyChecksumsSignature = func(_, _ []byte) error { return nil }
+	t.Cleanup(func() { selfUpdateVerifyChecksumsSignature = oldVerify })
+}
+
 func selfUpdateFakeChecksumsServer(t *testing.T, assetName, sha string, assetHandler http.HandlerFunc) *httptest.Server {
 	t.Helper()
+	selfUpdateAcceptAnySignature(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/checksums.txt") {
 			_, _ = w.Write([]byte(sha + "  " + assetName + "\n"))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/checksums.txt.sig") {
+			_, _ = w.Write([]byte("test-signature"))
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/"+assetName) {
@@ -266,7 +281,7 @@ func TestSelfUpdateRejectsInsufficientOptSpaceBeforeDownloadingBinary(t *testing
 		})
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "", false, srv.URL)
 	if err == nil {
 		t.Fatal("expected insufficient /opt space to fail")
 	}
@@ -303,7 +318,7 @@ func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
 		})
 	defer srv.Close()
 
-	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	_, err := SelfUpdate(context.Background(), "v0.40.0", "", false, srv.URL)
 	if err == nil {
 		t.Fatal("expected the deliberately-failing asset download to fail")
 	}
@@ -751,12 +766,16 @@ func TestSelfUpdate_ChecksumMismatchCleansUpTempFileAndLeavesBinaryUntouched(t *
 		t.Fatal(err)
 	}
 
-	const version = "v0.13.0-rc50" // legacy: no signature required, keeps this scoped to the checksum path
+	selfUpdateAcceptAnySignature(t) // keeps this scoped to the checksum path
+	const version = "v0.40.0"
 	const assetName = "wg-monitor-agent-linux-arm64"
 	artifact := []byte("downloaded-bytes-that-will-not-match-the-advertised-sha")
 	wrongSha := strings.Repeat("0", 64) // well-formed-looking but guaranteed != sha256(artifact)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("test-signature"))
+	})
 	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(wrongSha + "  " + assetName + "\n"))
 	})
@@ -820,5 +839,39 @@ func TestCheckSelfUpdateFreeSpaceStillRefusesWhenTrulyTight(t *testing.T) {
 	}
 	if err := checkSelfUpdateFreeSpace(context.Background()); err == nil {
 		t.Fatal("на пустеющем разделе обновление обязано быть отклонено")
+	}
+}
+
+// AGENT-01: жёсткий пол подписи. Версию, для которой подпись не обязательна
+// (всё ниже v0.13.0-rc128), агент не ставит никогда -- даже с allow_downgrade
+// и даже без известной текущей версии. Иначе бэкенд (или тот, кто им стал)
+// раздаёт неподписанный бинарь всему парку.
+func TestSelfUpdate_RefusesUnsignedLegacyVersionEvenWithAllowDowngrade(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		version, current string
+		allow            bool
+	}{
+		{"v0.12.5", "v0.45.0", true},
+		{"v0.13.0-rc9", "", false},
+		{"v0.13.0-rc127", "v0.13.0-rc10", false},
+	} {
+		_, err := SelfUpdate(context.Background(), tc.version, tc.current, tc.allow, srv.URL)
+		if err == nil {
+			t.Fatalf("%s: expected refusal of an unsigned-era version", tc.version)
+		}
+		if !strings.Contains(err.Error(), "signature") {
+			t.Fatalf("%s: want a signature-floor error, got %v", tc.version, err)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("refusal must happen before any download, got %d requests", hits)
 	}
 }
