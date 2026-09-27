@@ -181,7 +181,7 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict } from './labels.js'
+import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount } from './labels.js'
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 
@@ -259,15 +259,18 @@ function awgmRow(check, clock) {
 // Живость туннелей считается по самим туннелям, а не по проверке: проекция
 // tunnels[] и есть ответ роутера про каждый из них, а сводная проверка знает
 // только «всё хорошо / не всё».
-function tunnelsRow(check, tunnels, clock) {
+//
+// Работающий -- по тому же правилу, что плитка «VPN-туннели» (MINI-07,
+// labels.workingTunnelCount): поднят, проверка не провалена, тревоги нет.
+function tunnelsRow(check, tunnels, clock, incidents) {
   const list = Array.isArray(tunnels) ? tunnels : []
   if (list.length === 0) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
-  const alive = list.filter((t) => t.status === 'ok').length
+  const alive = workingTunnelCount(list, incidents)
   return {
     answer: alive === list.length ? 'да' : 'нет',
-    value: `${alive} из ${list.length} на связи`,
+    value: `${alive} из ${list.length} ${alive === 1 ? 'работает' : 'работают'}`,
   }
 }
 
@@ -280,7 +283,7 @@ const ROW_TITLES = {
   agent_heartbeat: 'Роутер отчитался о себе',
 }
 
-export function checkRows({ checks = [], tunnels = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
+export function checkRows({ checks = [], tunnels = [], incidents = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
   const clock = { clockOffsetMs, nowMs }
   const byName = new Map((checks ?? []).map((c) => [c.check_name, c]))
   // Молчащий роутер делает устаревшими ВСЕ показания: то, что показано ниже,
@@ -310,7 +313,7 @@ export function checkRows({ checks = [], tunnels = [], router = null, clockOffse
     else if (key === 'external_reach') body = reachRow(check, clock)
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
-    else body = tunnelsRow(check ?? null, tunnels, clock)
+    else body = tunnelsRow(check ?? null, tunnels, clock, incidents)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({

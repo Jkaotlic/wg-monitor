@@ -47,3 +47,18 @@ describe('MINI-07', () => {
     root.remove()
   })
 })
+
+describe('MINI-07: строка «VPN-туннели на связи» в списке вопросов', () => {
+  it('то же правило, что у плитки', async () => {
+    const { checkRows } = await import('../src/diag.js')
+    const rows = checkRows({
+      checks: [],
+      tunnels: TUNNELS,
+      incidents: INCIDENTS,
+      router: { status: 'alert', stale: false, last_seen_age_sec: 30 },
+    })
+    const row = rows.find((r) => r.key === 'tunnels')
+    expect(row.value).toBe('1 из 3 работает')
+    expect(row.answer).toBe('нет')
+  })
+})
