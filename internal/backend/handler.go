@@ -685,6 +685,10 @@ func commandVersionArg(cmd wire.Command) string {
 	}
 }
 
+// reportUserByID -- чтение роутера в приёме отчёта. Переменная, чтобы тест
+// мог подставить ошибку базы, не ломая проверку токена перед ним.
+var reportUserByID = func(d Deps, uid int64) (*db.User, error) { return d.DB.Users().GetByID(uid) }
+
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -717,7 +721,21 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
-		user, _ := d.DB.Users().GetByID(uid)
+		// BUG-01: без строки роутера отчёт не принимаем вслепую -- nil давал
+		// «свежий» отчёт (FSM двигался прошлым) и статический порог
+		// мобильному. Удалённый роутер -- 401, как у проверки токена; прочая
+		// ошибка (база занята) -- 503, агент пришлёт следующий отчёт.
+		user, err := reportUserByID(d, uid)
+		if err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			d.Logger.Warn("report: router lookup failed", "nickname", nick, "err", err)
+			w.Header().Set("Retry-After", "5")
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "router lookup failed")
+			return
+		}
 		thresholds := thresholdsForUser(d.Thresholds, d.MobileFailThreshold, user)
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
