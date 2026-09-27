@@ -343,6 +343,24 @@
   color: var(--danger);
 }
 
+/* Метка «нет связи с сервером» (MINI-03) -- поверх экрана, вне потока: над
+   оболочкой широкой раскладки (высота 100dvh) она добавляла странице
+   прокрутку. */
+.sync-lost {
+  position: fixed;
+  top: var(--sp-2);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid currentColor;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
 /* ============================================================
    Global reset
    ============================================================ */
