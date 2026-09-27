@@ -36,3 +36,28 @@ describe('MINI-05: экран починки не врёт о ходе', () => {
     expect(v.scope).toBe('this')
   })
 })
+
+// Бэкенд v0.46 кладёт в ответ /repair check_name и tunnel_id (omitempty).
+describe('MINI-05: сервер называет туннель починки', () => {
+  it('тот же туннель -- ход этого туннеля, даже без своего job_id', () => {
+    const v = repairView({ ...RUNNING, check_name: 'tunnel_awg10', tunnel_id: 'awg10' }, { checkName: 'tunnel_awg10' })
+    expect(v.scope).toBe('this')
+    expect(v.title).toBe('Поднимаю связь')
+  })
+  it('другой туннель чинится сейчас -- так и сказано', () => {
+    const v = repairView({ ...RUNNING, check_name: 'tunnel_awg11', tunnel_id: 'awg11' }, { checkName: 'tunnel_awg10' })
+    expect(v.scope).toBe('other')
+    expect(v.title).toContain('другой')
+  })
+  it('другой туннель, починка закончена -- для этого туннеля починки не было', () => {
+    const v = repairView(
+      { job_id: 'j-3', state: 'failed', running: false, check_name: 'tunnel_awg11', tunnel_id: 'awg11', steps: [{ name: 'issue', status: 'failed', detail: 'кабинет не ответил' }] },
+      { checkName: 'tunnel_awg10' },
+    )
+    expect(v.scope).toBe('other')
+    expect(v.done).toBe(false)
+    expect(v.idle).toBe(true)
+    expect(v.note).toBe('')
+    expect(v.steps.every((s) => s.state === 'pending')).toBe(true)
+  })
+})

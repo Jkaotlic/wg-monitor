@@ -72,3 +72,22 @@ describe('review п.3: чужая законченная починка', () => 
     root.remove()
   })
 })
+
+describe('MINI-05: сервер назвал туннель починки', () => {
+  it('идёт починка этого туннеля (check_name совпал) -- «Поднимаю связь»', async () => {
+    mocks.status = () => Promise.resolve({ job_id: 'j-7', state: 'running', running: true, steps: [], check_name: 'tunnel_awg10', tunnel_id: 'awg10' })
+    const root = await mount()
+    expect(root.querySelector('.repair-title').textContent).toBe('Поднимаю связь')
+    render(null, root)
+    root.remove()
+  })
+  it('закончена починка другого туннеля -- чистый экран и кнопка', async () => {
+    mocks.status = () => Promise.resolve({ job_id: 'j-8', state: 'failed', running: false, check_name: 'tunnel_awg11', tunnel_id: 'awg11', steps: [{ name: 'issue', status: 'failed', detail: 'кабинет не ответил' }] })
+    const root = await mount()
+    expect(root.querySelector('.repair-title').textContent).toBe('Починки ещё не было')
+    expect(root.textContent).not.toContain('кабинет не ответил')
+    expect(root.querySelector('.repair-start').textContent).toContain('Починить «vymysel-nl»')
+    render(null, root)
+    root.remove()
+  })
+})
