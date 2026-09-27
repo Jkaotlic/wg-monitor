@@ -62,3 +62,27 @@ func Fail(name string, start time.Time, errMsg string, details map[string]any) w
 		Details:    out,
 	}
 }
+
+// StatusUnknown -- проверка не смогла ничего проверить (нечего опросить,
+// настройки не прочитались). Не «ok» и не «fail»: бэкенд (state.Apply) такой
+// статус не двигает ни к тревоге, ни к «починилось» -- кратковременный сбой
+// чтения не будит людей и не гасит открытую тревогу (CHK-02).
+const StatusUnknown = "unknown"
+
+// Unknown -- результат проверки, которая ничего не проверила; reason кладётся
+// в details["unknown_reason"].
+func Unknown(name string, start time.Time, reason string, details map[string]any) wire.Check {
+	out := make(map[string]any, len(details)+1)
+	for k, v := range details {
+		out[k] = v
+	}
+	out["unknown_reason"] = reason
+	dur := time.Since(start)
+	slog.Info("check inconclusive", "name", name, "reason", reason, "duration_ms", dur.Milliseconds())
+	return wire.Check{
+		Name:       name,
+		Status:     StatusUnknown,
+		DurationMs: dur.Milliseconds(),
+		Details:    out,
+	}
+}

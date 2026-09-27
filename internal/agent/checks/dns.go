@@ -110,27 +110,12 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			"endpoints": 0, "note": "no DNS endpoints discovered/configured",
 		}
 		if endpointProviderErr != nil {
+			// CHK-02: настройки не прочитались -- проверять было нечего, и
+			// «ok» тут было бы неправдой.
 			details["discovery_error"] = endpointProviderErr.Error()
+			return Unknown(c.Name(), start, "dns endpoints could not be read", details)
 		}
 		return OK(c.Name(), start, details)
-	}
-
-	// Порог считается здесь, а не в LoadConfig: число апстримов знает только
-	// этот прогон — они читаются с роутера через EndpointProvider. Формула та
-	// же, что у external_reach (external_reach.go:59-64), с нижним пределом 2,
-	// чтобы один недоступный апстрим из многих не был тревогой. Предел не
-	// может быть больше самого числа апстримов: иначе единственный резолвер
-	// роутера стал бы непадающим. Явно заданное в конфиге значение сильнее
-	// вычисленного.
-	threshold := c.FailThreshold
-	if threshold <= 0 {
-		threshold = (len(endpoints)*2 + 2) / 3
-		if threshold < 2 {
-			threshold = 2
-		}
-		if threshold > len(endpoints) {
-			threshold = len(endpoints)
-		}
 	}
 
 	type epResult struct {
@@ -229,6 +214,26 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 		}
 	}
 
+	// Порог считается здесь, а не в LoadConfig: число апстримов знает только
+	// этот прогон — они читаются с роутера через EndpointProvider. Формула та
+	// же, что у external_reach (external_reach.go:59-64), с нижним пределом 2,
+	// чтобы один недоступный апстрим из многих не был тревогой. Предел не
+	// может быть больше числа РЕАЛЬНО опрошенных апстримов (CHK-02: прежде
+	// считался от всех, и один опрошенный мёртвый при двух пропущенных давал
+	// «ok»). Явно заданное в конфиге значение сильнее вычисленного, но тоже
+	// не больше опрошенных.
+	probed := len(endpoints) - skippedCount
+	threshold := c.FailThreshold
+	if threshold <= 0 {
+		threshold = (probed*2 + 2) / 3
+		if threshold < 2 {
+			threshold = 2
+		}
+	}
+	if threshold > probed {
+		threshold = probed
+	}
+
 	details := map[string]any{
 		"endpoints":        len(endpoints),
 		"failed_count":     failedCount,
@@ -240,6 +245,11 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	}
 	if endpointProviderErr != nil {
 		details["discovery_error"] = endpointProviderErr.Error()
+	}
+	if probed == 0 {
+		// Все адреса пропущены (нет интерфейса, проверка не успела) --
+		// ни один резолвер не опрошен, «ok» было бы неправдой (CHK-02).
+		return Unknown(c.Name(), start, "no DNS endpoint was actually probed", details)
 	}
 	if failedCount >= threshold {
 		return Fail(c.Name(), start,
