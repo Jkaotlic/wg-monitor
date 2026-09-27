@@ -138,6 +138,15 @@ func canonicalizeReportedChecks(checks []wire.Check) (string, bool) {
 			return "check name too long", false
 		case strings.ContainsAny(name, " \t\r\n"):
 			return "check name must not contain whitespace", false
+		case status == "unknown":
+			// Защита на всякий случай: «не смог проверить» по контракту
+			// v0.46 -- ok с details.unverified. Прямой "unknown" не роняет
+			// весь отчёт (и heartbeat с ним), а приводится к той же форме.
+			checks[i].Status = "ok"
+			if checks[i].Details == nil {
+				checks[i].Details = map[string]any{}
+			}
+			checks[i].Details["unverified"] = true
 		case status != "ok" && status != "fail":
 			return "check status must be ok or fail", false
 		}
@@ -568,6 +577,14 @@ const resolverGuardWatchdogOff = "watchdog_off"
 
 // resolverGuardNotReady: the watchdog has not read the router's settings yet
 // (after an agent start, or while running-config is unreadable).
+// checkUnverified -- агент не смог проверить (v0.46: ok с
+// details.unverified=true). Это не наблюдение: автомат тревог им не
+// двигается ни в какую сторону.
+func checkUnverified(c wire.Check) bool {
+	v, ok := c.Details["unverified"].(bool)
+	return ok && v
+}
+
 func resolverGuardNotReady(c wire.Check) bool {
 	if !strings.EqualFold(strings.TrimSpace(c.Name), resolverGuardCheck) || c.Status != "ok" {
 		return false
@@ -800,7 +817,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// роутера, той же транзакцией. Экран судит по нему о призраках, не
 		// проходя events назад по строкам tunnels=fail.
 		for _, c := range rep.Checks {
-			if c.Name == miniappTunnelsInventoryCheck && c.Status == "ok" {
+			if c.Name == miniappTunnelsInventoryCheck && c.Status == "ok" && !checkUnverified(c) {
 				if _, err := tx.ExecContext(r.Context(), db.TunnelsInventoryOKAtSQL, ts, uid, ts); err != nil {
 					tx.Rollback()
 					d.Logger.Warn("update tunnels inventory time", "nickname", nick, "err", err)
@@ -918,6 +935,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 					"nickname", nick, "check", c.Name,
 					"req_id", RequestIDFromContext(r.Context()),
 				)
+				continue
+			}
+			if checkUnverified(c) {
+				d.Logger.Info("skip unverified check",
+					"nickname", nick, "check", c.Name, "req_id", RequestIDFromContext(r.Context()))
 				continue
 			}
 			if resolverGuardNotReady(c) {

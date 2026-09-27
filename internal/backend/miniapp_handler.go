@@ -547,7 +547,7 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 		case "agent_heartbeat":
 			heartbeatTS, haveHeartbeat = row.TS, true
 		case miniappTunnelsInventoryCheck:
-			if row.Status == "ok" {
+			if row.Status == "ok" && !miniappRowUnverified(row.DetailsJSON) {
 				inventoryTS, haveInventory = row.TS, true
 			} else {
 				inventoryTS, haveInventory = miniappLastInventoryOK(d, routerID)
@@ -562,9 +562,29 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 		if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
 			continue
 		}
+		if row.Status == "ok" && miniappRowUnverified(row.DetailsJSON) {
+			// Агент не смог проверить: экран пишет «не проверено», а не
+			// «работает».
+			row.Status = miniappStatusUnknown
+		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// miniappStatusUnknown -- статус «не проверено» для экрана.
+const miniappStatusUnknown = "unknown"
+
+// miniappRowUnverified -- details несут unverified=true (агент v0.46 не смог
+// проверить). Разбор только когда слово вообще есть в строке.
+func miniappRowUnverified(details string) bool {
+	if !strings.Contains(details, `"unverified"`) {
+		return false
+	}
+	var d struct {
+		Unverified bool `json:"unverified"`
+	}
+	return json.Unmarshal([]byte(details), &d) == nil && d.Unverified
 }
 
 // miniappLastInventoryOK -- время последнего отчёта с tunnels=ok. Берётся у
