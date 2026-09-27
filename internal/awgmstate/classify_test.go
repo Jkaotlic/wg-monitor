@@ -33,3 +33,20 @@ func TestClassify(t *testing.T) {
 		})
 	}
 }
+
+// CHK-08: любое «tls» в тексте (имя хоста, путь) давало tls_error --
+// спящий роутер или отказ входа назывались «проблемой сертификата».
+func TestClassifyTLSOnlyForRealTLSErrors(t *testing.T) {
+	for _, tc := range []struct{ msg, want string }{
+		{"dial tcp: lookup tlsrouter.example.com: no such host", DNSError},
+		{"awgm POST https://mytls.example.com/api/auth/login: HTTP 401: unauthorized", AuthError},
+		{"Get \"https://tls-gw.example.com/api/system/info\": dial tcp 203.0.113.7:443: connect: connection refused", Offline},
+		{"Get \"https://router.example.com\": net/http: TLS handshake timeout", TLSError},
+		{"remote error: tls: bad certificate", TLSError},
+		{"http: server gave HTTP response to HTTPS client; first record does not look like a TLS handshake", TLSError},
+	} {
+		if got := Classify(tc.msg); got != tc.want {
+			t.Errorf("Classify(%q) = %q, want %q", tc.msg, got, tc.want)
+		}
+	}
+}

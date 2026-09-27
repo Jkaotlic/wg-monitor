@@ -26,7 +26,11 @@ func Classify(reason string) string {
 	case strings.Contains(s, "certificate is valid for") ||
 		strings.Contains(s, "x509:") ||
 		strings.Contains(s, "hostname") && strings.Contains(s, "certificate") ||
-		strings.Contains(s, "tls"):
+		// CHK-08: только настоящие ошибки TLS («tls: …», «TLS handshake …»,
+		// питоновское «[SSL: …]»), а не любое «tls» в имени хоста или пути.
+		strings.Contains(s, "tls:") ||
+		strings.Contains(s, "tls handshake") ||
+		strings.Contains(s, "[ssl:"):
 		return TLSError
 	case strings.Contains(s, "name or service not known") ||
 		strings.Contains(s, "no such host") ||
