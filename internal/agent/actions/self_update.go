@@ -268,6 +268,11 @@ func selfUpdateFrom(ctx context.Context, src *selfUpdateSource, version, assetNa
 			return fmt.Errorf("verify checksums.txt signature: %w", err)
 		}
 	}
+	// AGENT-02: подписанный файл должен быть именно этого выпуска, а не
+	// старого подписанного, выложенного под новым тегом.
+	if err := releasesig.VerifyVersionBinding(sumsBody, version); err != nil {
+		return err
+	}
 	wantSha, ok := parseChecksum(string(sumsBody), assetName)
 	if !ok {
 		return fmt.Errorf("checksums.txt: no entry for %s", assetName)

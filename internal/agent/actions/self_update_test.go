@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/releasesig"
 )
 
 type zeroReader struct{}
@@ -873,5 +875,53 @@ func TestSelfUpdate_RefusesUnsignedLegacyVersionEvenWithAllowDowngrade(t *testin
 	}
 	if hits != 0 {
 		t.Fatalf("refusal must happen before any download, got %d requests", hits)
+	}
+}
+
+// AGENT-02: подписанный checksums.txt старого выпуска, выложенный под новым
+// тегом, не проходит -- для тегов с v0.46 строка VERSION-<тег> обязательна.
+func TestSelfUpdate_RequiresVersionBindingForNewTags(t *testing.T) {
+	const assetName = "wg-monitor-agent-linux-arm64"
+	artifact := []byte("agent-binary-bytes")
+	sum := sha256.Sum256(artifact)
+	fileLine := hex.EncodeToString(sum[:]) + "  " + assetName + "\n"
+
+	serve := func(version, checksums string) *httptest.Server {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(checksums))
+		})
+		mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("test-signature"))
+		})
+		mux.HandleFunc("/"+version+"/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(artifact)
+		})
+		return httptest.NewServer(mux)
+	}
+
+	cases := []struct {
+		name, version, checksums string
+		ok                       bool
+	}{
+		{"old signed release replayed", "v0.46.0", fileLine, false},
+		{"another release's binding", "v0.46.0", fileLine + releasesig.VersionBindingLine("v0.44.0") + "\n", false},
+		{"bound release", "v0.46.0", fileLine + releasesig.VersionBindingLine("v0.46.0") + "\n", true},
+		{"pre-binding release", "v0.45.0", fileLine, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			selfUpdateTestHarness(t, "arm64", true)
+			selfUpdateAcceptAnySignature(t)
+			srv := serve(tc.version, tc.checksums)
+			defer srv.Close()
+			_, err := SelfUpdate(context.Background(), tc.version, "", false, srv.URL)
+			if tc.ok && err != nil {
+				t.Fatalf("SelfUpdate: %v", err)
+			}
+			if !tc.ok && (err == nil || !strings.Contains(err.Error(), "VERSION-")) {
+				t.Fatalf("want a VERSION binding refusal, got %v", err)
+			}
+		})
 	}
 }

@@ -2,7 +2,9 @@ package releasesig
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +13,11 @@ import (
 const (
 	PublicKeyBase64              = "LG/jAuU0NHT8bP47UZCbSeBkOTOk1vfqEw8+IAjnDrM="
 	signatureRequiredFromVersion = "v0.13.0-rc128"
+	// versionBindingFromVersion -- с этого выпуска (включая любые его -rcN)
+	// подписанный checksums.txt несёт строку-привязку тега (AGENT-02).
+	versionBindingFromVersion = "v0.46.0-rc0"
+	// VersionBindingPrefix -- имя «файла» строки-привязки: VERSION-<тег>.
+	VersionBindingPrefix = "VERSION-"
 )
 
 var releaseSigningPublicKey = mustDecodePublicKey(PublicKeyBase64)
@@ -56,6 +63,46 @@ func SignatureRequiredForVersion(version string) bool {
 		return compareRank(rank, min) >= 0
 	}
 	return true
+}
+
+// VersionBindingLine -- строка checksums.txt, привязывающая подписанный файл
+// к тегу: "<sha256(тег)>  VERSION-<тег>". Формат тот же, что у строк файлов,
+// поэтому старые агенты (ищут по имени файла) её не замечают. Релизный
+// workflow дописывает её перед подписью.
+func VersionBindingLine(tag string) string {
+	sum := sha256.Sum256([]byte(tag))
+	return hex.EncodeToString(sum[:]) + "  " + VersionBindingPrefix + tag
+}
+
+// VersionBindingRequired -- должен ли checksums.txt тега нести привязку.
+// Непонятный тег -- должен (отказ, а не пропуск).
+func VersionBindingRequired(tag string) bool {
+	cmp, ok := CompareReleaseTags(strings.TrimSpace(tag), versionBindingFromVersion)
+	return !ok || cmp >= 0
+}
+
+// VerifyVersionBinding -- AGENT-02. Подпись доказывает, что checksums.txt
+// выпущен нами, но не КАКОЙ это выпуск: без привязки старый подписанный
+// выпуск (с известной дырой) можно выложить под новым тегом. Вызывать ПОСЛЕ
+// проверки подписи. Для тегов до versionBindingFromVersion -- nil.
+func VerifyVersionBinding(checksums []byte, tag string) error {
+	tag = strings.TrimSpace(tag)
+	if !VersionBindingRequired(tag) {
+		return nil
+	}
+	want := VersionBindingLine(tag)
+	wantSum, _, _ := strings.Cut(want, " ")
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != VersionBindingPrefix+tag {
+			continue
+		}
+		if strings.EqualFold(fields[0], wantSum) {
+			return nil
+		}
+		return fmt.Errorf("checksums.txt: %s%s digest mismatch", VersionBindingPrefix, tag)
+	}
+	return fmt.Errorf("checksums.txt: no %s%s line — signed checksums belong to another release", VersionBindingPrefix, tag)
 }
 
 // CompareReleaseTags ranks two release tags in this project's own tag
