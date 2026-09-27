@@ -7,7 +7,10 @@ import { COOKIE_NOT_SAVED_TEXT, SESSION_EXPIRED_TEXT, bootFailure } from './logi
 // роутер, показать список или экран пустого доступа. В Telegram личность
 // доказывает initData, в браузере -- кука веб-управления (GET /session).
 export function useBoot(mode, { onReady } = {}) {
-  const [state, setState] = useState({ status: 'loading', isAdmin: false, telegramUserID: 0, routers: [], notice: '' })
+  // routersAt -- когда список пришёл в последний раз; syncLost -- последнее
+  // обновление не удалось (MINI-03). Раньше сбой опроса глотался, и экран
+  // тихо замерзал на старых данных, выдавая их за текущие.
+  const [state, setState] = useState({ status: 'loading', isAdmin: false, telegramUserID: 0, routers: [], notice: '', routersAt: null, syncLost: false })
   const readyRef = useRef(onReady)
   readyRef.current = onReady
 
@@ -32,7 +35,7 @@ export function useBoot(mode, { onReady } = {}) {
         readyRef.current?.(list, { isAdmin: Boolean(s?.is_admin) })
         // Номер человека в Telegram нужен экрану пустого доступа: его он
         // просит передать администратору, и взять его больше неоткуда.
-        setState({ status: 'ready', isAdmin: Boolean(s?.is_admin), telegramUserID: Number(s?.telegram_user_id) || 0, routers: list, notice: '' })
+        setState({ status: 'ready', isAdmin: Boolean(s?.is_admin), telegramUserID: Number(s?.telegram_user_id) || 0, routers: list, notice: '', routersAt: new Date(), syncLost: false })
       })
       .catch((err) => {
         if (my !== gen.current) return
@@ -53,11 +56,11 @@ export function useBoot(mode, { onReady } = {}) {
     gen.current++
     return dashboardLogout()
       .catch(() => null)
-      .then(() => setState({ status: 'login', isAdmin: false, telegramUserID: 0, routers: [], notice: '' }))
+      .then(() => setState({ status: 'login', isAdmin: false, telegramUserID: 0, routers: [], notice: '', routersAt: null, syncLost: false }))
   }
 
   function setRouters(list) {
-    setState((prev) => ({ ...prev, routers: list ?? [] }))
+    setState((prev) => ({ ...prev, routers: list ?? [], routersAt: new Date(), syncLost: false }))
   }
 
   function refreshRouters() {
@@ -66,7 +69,11 @@ export function useBoot(mode, { onReady } = {}) {
       .then((data) => {
         if (my === gen.current) setRouters(data?.routers ?? [])
       })
-      .catch(() => {})
+      .catch(() => {
+        // Список остаётся прежним -- он честнее пустого, -- но экран обязан
+        // сказать, что он на такое-то время, а не сейчас.
+        if (my === gen.current) setState((prev) => ({ ...prev, syncLost: true }))
+      })
   }
 
   return { ...state, start, expire, logout, setRouters, refreshRouters }

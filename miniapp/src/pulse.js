@@ -31,3 +31,13 @@ export function freshnessLabel(ageSec) {
   const min = Math.floor(ageSec / 60)
   return `проверено ${min} ${pluralRu(min, 'минуту', 'минуты', 'минут')} назад`
 }
+
+// Метка при сбое опроса сервера (MINI-03): показанное -- на время последнего
+// удачного ответа, а не сейчас. Время -- по местным часам человека: он сверяет
+// его со своими часами, а не с UTC.
+export function syncLostText(at) {
+  if (!(at instanceof Date) || Number.isNaN(at.getTime())) return 'нет связи с сервером'
+  const hh = String(at.getHours()).padStart(2, '0')
+  const mm = String(at.getMinutes()).padStart(2, '0')
+  return `нет связи с сервером, данные на ${hh}:${mm}`
+}

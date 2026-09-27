@@ -15,7 +15,7 @@ import { LoginScreen } from './screens/LoginScreen.jsx'
 import { ServerDown } from './ui/ServerDown.jsx'
 import { PhoneLayout } from './ui/PhoneLayout.jsx'
 import { WideLayout } from './ui/WideLayout.jsx'
-import { PULSE_MS } from './pulse.js'
+import { PULSE_MS, syncLostText } from './pulse.js'
 
 // Поле ввода -- не место для Esc-закрытия слоя: человек набирает маршрут или
 // имя и теряет набранное одним промахом. Лист подтверждения ловит Esc сам.
@@ -125,5 +125,19 @@ export function App() {
     body = wide ? <WideLayout mode={mode} {...layout} /> : <PhoneLayout {...layout} />
   }
 
-  return <AppContext.Provider value={{ mode, wide }}>{body}</AppContext.Provider>
+  // Сбой опроса списка не прячется (MINI-03): список остаётся, но над ним
+  // сказано, на какое время он.
+  const syncBanner =
+    boot.status === 'ready' && boot.syncLost ? (
+      <p class="state state-error sync-lost" role="status">
+        {syncLostText(boot.routersAt)}
+      </p>
+    ) : null
+
+  return (
+    <AppContext.Provider value={{ mode, wide }}>
+      {syncBanner}
+      {body}
+    </AppContext.Provider>
+  )
 }
