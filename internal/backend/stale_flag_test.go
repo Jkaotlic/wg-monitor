@@ -112,3 +112,26 @@ func TestDashboardSummaryCarriesStaleFlag(t *testing.T) {
 		t.Fatalf("stale=%v", stale)
 	}
 }
+
+// Строки «Парка» несут тот же stale, что сводка.
+func TestMiniappFleetRowsCarryStaleFlag(t *testing.T) {
+	d, _ := seedSilentAlertRouter(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	rec := fleetRequest(t, h, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var raw struct {
+		Routers []map[string]any `json:"routers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]any{}
+	for _, r := range raw.Routers {
+		got[r["nickname"].(string)] = r["stale"]
+	}
+	if got["router-owned"] != true || got["router-other"] != true {
+		t.Fatalf("stale=%v", got)
+	}
+}
