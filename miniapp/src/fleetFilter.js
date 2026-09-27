@@ -6,6 +6,7 @@
 // неделю показывала бы других роутеров под тем же словом.
 import { sortByUrgency } from './fleet.js'
 import { plainHyphens } from './text.js'
+import { isStale } from './staleness.js'
 
 export const FLEET_FILTERS = [
   { key: 'all', label: 'все' },
@@ -26,8 +27,11 @@ const KIND_WORDS = {
 
 // Роутер без единого отчёта -- «молчит», какой бы статус ни стоял: то же
 // правило, что у сводки широкого экрана (fleet.js, bucket).
+// Молчащая тревога (stale от сервера) -- тоже «молчит»: пока нет связи,
+// тревога -- вчерашняя новость (staleness.js).
 export function filterBucket(router) {
   if (router?.last_seen_age_sec == null) return 'silent'
+  if (router.status === 'alert' && isStale(router)) return 'silent'
   switch (router.status) {
     case 'alert':
       return 'alert'

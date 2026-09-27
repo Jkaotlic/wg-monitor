@@ -10,6 +10,7 @@
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy } from './labels.js'
 import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
+import { isStale } from './staleness.js'
 
 // reserveOnlyAlert -- признак строки /v1/miniapp/routers (reserve_only_alert):
 // все активные тревоги -- по запасным звеньям политики несущего. Знает это
@@ -23,12 +24,13 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   // шапку: число поднятых VPN-туннелей, адрес выхода, состояние служб -- всё это
   // данные на момент последнего отчёта, и показать их как текущие значит
   // соврать. Отличается от cold: холодной шапка бывает и у живого роутера с
-  // тревогой, а его показания как раз свежие.
-  const stale = router?.status === 'offline' || router?.status === 'sleeping'
+  // тревогой, а его показания как раз свежие. Молчащий роутер с открытой
+  // тревогой -- тоже молчащий (staleness.js): тревога не делает его живым.
+  const stale = isStale(router)
 
   // Роутер, который ещё ни разу не выходил на связь. Это не авария (чинить
   // нечего) и не норма -- отдельное состояние со своими словами.
-  if (age == null && (router?.status === 'offline' || router?.status === 'sleeping')) {
+  if (age == null && stale) {
     return {
       tone: 'off',
       cold: true,
@@ -38,7 +40,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
     }
   }
 
-  if (router?.status === 'offline' || router?.status === 'sleeping') {
+  if (stale) {
     return {
       tone: 'danger',
       cold: true,

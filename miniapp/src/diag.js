@@ -182,6 +182,7 @@ export function reportHint(parsed) {
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
 import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict } from './labels.js'
+import { isStale } from './staleness.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -280,7 +281,7 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
   // Молчащий роутер делает устаревшими ВСЕ показания: то, что показано ниже,
   // измерено до того, как он замолчал, и выдавать это за ответ «сейчас»
   // нельзя. Поэтому «не знаем» -- не про поломку проверки, а про давность.
-  const silent = router?.status === 'offline' || router?.status === 'sleeping'
+  const silent = isStale(router)
   const rows = []
   for (const key of ROW_ORDER) {
     if (key === 'agent_heartbeat') {

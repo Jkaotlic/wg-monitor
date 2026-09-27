@@ -4,6 +4,7 @@ import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge } from '../labels.js'
+import { isStale } from '../staleness.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -53,7 +54,7 @@ export function DiagTab({ routerID, asleep }) {
 
   const rows = checkRows(data)
   const age = data.router?.last_seen_age_sec
-  const silent = data.router?.status === 'offline' || data.router?.status === 'sleeping'
+  const silent = isStale(data.router)
   const tunnelsAlive = data.tunnels.filter((t) => t.status === 'ok').length
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
   const exits = exitCompare(

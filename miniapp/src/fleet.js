@@ -8,14 +8,16 @@
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
 // человеку ничего не говорит, фраза говорит.
 import { humanAge, incidentWhatPlain } from './labels.js'
+import { isStale, reachStatus } from './staleness.js'
 
 // Порядок -- по срочности, а не по id.
 const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
 
 export function sortByUrgency(routers = []) {
   return [...routers].sort((a, b) => {
-    const ua = URGENCY[a.status] ?? 99
-    const ub = URGENCY[b.status] ?? 99
+    // Молчащая тревога -- среди молчащих: пока нет связи, чинить её нечем.
+    const ua = URGENCY[reachStatus(a)] ?? 99
+    const ub = URGENCY[reachStatus(b)] ?? 99
     if (ua !== ub) return ua - ub
     return (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru')
   })
@@ -25,20 +27,23 @@ export function fleetRow(router) {
   const age = router?.last_seen_age_sec
   const incidents = router?.active_incidents ?? []
   const never = age == null
+  // Молчание перебивает тревогу: у роутера, который не отчитывается, тревога
+  // -- вчерашняя новость (staleness.js).
+  const status = reachStatus(router)
 
   let pill
   if (never) {
     pill = { tone: 'muted', text: 'ни разу не отвечал' }
-  } else if (router.status === 'alert' && router.reserve_only_alert) {
+  } else if (status === 'alert' && router.reserve_only_alert) {
     // Все тревоги -- по запасным звеньям, несущий жив: обход работает. Красное
     // «тревога» тут гнало бы чинить срочно то, что можно чинить спокойно.
     // Сервер знает несущего, поэтому признак считает он.
     pill = { tone: 'warn', text: 'резерв не работает' }
-  } else if (router.status === 'alert') {
+  } else if (status === 'alert') {
     pill = { tone: 'danger', text: 'тревога' }
-  } else if (router.status === 'offline') {
+  } else if (status === 'offline') {
     pill = { tone: 'danger', text: `нет ответа ${humanAge(age)}` }
-  } else if (router.status === 'sleeping') {
+  } else if (status === 'sleeping') {
     pill = { tone: 'warn', text: `спит ${humanAge(age)}` }
   } else {
     pill = { tone: 'ok', text: 'в порядке' }
@@ -77,8 +82,8 @@ export function batchProgress(state) {
 // тревоги есть что чинить, у молчащего сначала надо вернуть связь.
 function bucket(router) {
   if (router?.last_seen_age_sec == null) return 'silent'
+  if (isStale(router)) return 'silent'
   if (router.status === 'alert') return 'attention'
-  if (router.status === 'offline' || router.status === 'sleeping') return 'silent'
   return 'ok'
 }
 

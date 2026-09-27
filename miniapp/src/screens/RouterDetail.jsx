@@ -5,6 +5,7 @@ import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
 import { routerHeadline } from '../routerHeadline.js'
+import { isStale } from '../staleness.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -647,7 +648,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // dispatch and answer normally. Warning "may take a while" on a router that
   // is actually sitting there answering would be the same false-confidence
   // failure this whole phase exists to avoid, just pointed the other way.
-  const asleep = router.status === 'offline' || router.status === 'sleeping'
+  // v0.46: плюс молчащая тревога (stale от сервера) -- staleness.js.
+  const asleep = isStale(router)
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
