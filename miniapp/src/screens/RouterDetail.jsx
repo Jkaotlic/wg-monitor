@@ -1,10 +1,11 @@
-import { useContext, useEffect, useState } from 'preact/hooks'
+import { useContext, useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, ackIncident, muteIncident, fetchRouterVersions } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
 import { routerHeadline } from '../routerHeadline.js'
+import { isStale } from '../staleness.js'
 import { Hero } from '../ui/Hero.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -13,7 +14,6 @@ import { NavCard } from '../ui/NavCard.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
-import { tunnelHealth } from './tunnelHealth.js'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
@@ -22,15 +22,16 @@ import { AppContext } from '../appContext.js'
 import {
   ACTION_LABELS,
   checkLabel,
-  checkState,
+  checkState as checkStateOf,
+  workingTunnelCount,
+  workingTunnelNote,
+  uncheckedTunnelCount,
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
   legendLabel,
   pingLabel,
   statusLabel,
-  trafficLabel,
-  tunnelStateLabel,
 } from '../labels.js'
 
 // TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
@@ -471,8 +472,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
   const directIP = probeIP(direct)
   const bothIPs = !!(viaIP && directIP)
   const sameIP = bothIPs && viaIP === directIP
-  // traffic.mode is Task 3's own derivation (trafficLabel above reads it the
-  // same way). On a sing-box router, the route is chosen per destination, so
+  // traffic.mode is Task 3's own derivation. On a sing-box router, the route is chosen per destination, so
   // these two probes -- hitting different sites for the via-tunnel and direct
   // checks -- were never guaranteed to take the same path in the first place.
   // Equal or different, neither answer generalizes to "all traffic", so this
@@ -554,6 +554,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   const [tunnels, setTunnels] = useState([])
   const [traffic, setTraffic] = useState(null)
   const [error, setError] = useState(null)
+  const loadSeq = useRef(0)
   // Версии -- один раз на роутер, не с пульсом: сервер отмечает новости
   // показанными, и дёргать его каждые 10 с незачем -- версии меняются раз в дни.
   const [versions, setVersions] = useState(null)
@@ -578,19 +579,30 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // heartbeat is still the real source of truth -- but it costs one cheap
   // request and shows whatever is currently true rather than leaving stale
   // data on screen indefinitely after a button says "done".
+  //
+  // MINI-04: каждый ответ помечен номером запроса, и рисуется только самый
+  // свежий -- поздний ответ по прошлому роутеру (или прошлому такту) не
+  // ложится поверх нового. Удача снимает прошлую ошибку: раньше одна ошибка
+  // навсегда подменяла экран своим текстом.
   function loadData() {
+    const my = ++loadSeq.current
     return Promise.all([fetchRouter(id), fetchRouterChecks(id)])
       .then(([r, c]) => {
+        if (my !== loadSeq.current) return
+        setError(null)
         setRouter(r.router)
         setIncidents(r.incidents ?? [])
         setChecks(c.checks ?? [])
         setTunnels(c.tunnels ?? [])
-        // A backend older than this phase sends no `traffic` at all; trafficLabel
-        // and the traffic path both read a missing one as "unknown", which is
-        // the honest answer rather than a defaulted-away one.
+        // A backend older than this phase sends no `traffic` at all; the
+        // headline and the traffic path both read a missing one as "unknown",
+        // which is the honest answer rather than a defaulted-away one.
         setTraffic(c.traffic ?? null)
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        if (my !== loadSeq.current) return
+        setError(err.message)
+      })
   }
 
   // Экран живёт сам. Раньше данные грузились ровно один раз при входе, и
@@ -598,6 +610,14 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // поданное как настоящее. Опрос идёт только пока вкладка открыта -- Telegram
   // держит мини-апп живым дольше, чем на него смотрят.
   useEffect(() => {
+    // Новый роутер -- чистый экран: показания прошлого под чужим именем
+    // были бы той же ложью, что и поздний ответ.
+    setRouter(null)
+    setIncidents([])
+    setChecks(null)
+    setTunnels([])
+    setTraffic(null)
+    setError(null)
     loadData()
     if (!shouldPulse({ visible: true, routerID: id })) return undefined
     const timer = setInterval(() => {
@@ -627,6 +647,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // сломанное пряталось в спойлере вместе с исправным, и спойлер приходилось
   // насильно раскрывать при каждой новой поломке.
   const otherChecks = orderChecks(checks ?? [])
+  // Молчащий роутер: подписи проверок -- в прошедшем (MINI-02).
+  const checksStale = isStale(router)
+  const checkState = (c) => checkStateOf(c, { stale: checksStale })
   // Над спойлером -- только красное и жёлтое. Серое («сторож не следит»,
   // незнакомый статус) -- не поломка и остаётся внутри вместе с исправным.
   const isFailing = (c) => ['danger', 'warn'].includes(checkState(c).tone)
@@ -634,8 +657,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   const okCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
   const failingChecks = otherChecks.filter(isFailing)
 
-  if (error) return <p class="state state-error">{error}</p>
-  if (router == null) return <p class="state">Загрузка…</p>
+  if (router == null) return error ? <p class="state state-error">{error}</p> : <p class="state">Загрузка…</p>
 
   // Say it before dispatching, not after a timeout: router.status already
   // distinguishes reachability from alerting (dashboard_handler.go:780-796),
@@ -647,7 +669,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // dispatch and answer normally. Warning "may take a while" on a router that
   // is actually sitting there answering would be the same false-confidence
   // failure this whole phase exists to avoid, just pointed the other way.
-  const asleep = router.status === 'offline' || router.status === 'sleeping'
+  // v0.46: плюс молчащая тревога (stale от сервера) -- staleness.js.
+  const asleep = isStale(router)
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
@@ -663,12 +686,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
-  const liveCount = tunnels.filter(
-    (t) =>
-      tunnelStateLabel(t) === 'работает' &&
-      t.status !== 'fail' &&
-      !incidents.some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
-  ).length
+  const liveCount = workingTunnelCount(tunnels, incidents)
+  // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
+  const uncheckedCount = uncheckedTunnelCount(tunnels)
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -692,6 +712,13 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
         <div class="hero-bar">
           <span>показания на момент последнего отчёта</span>
         </div>
+      )}
+      {/* Обновление не удалось, а прошлые данные есть: экран остаётся, но
+          говорит, что он не свежий (MINI-04). */}
+      {error && (
+        <p class="state state-error" role="status">
+          Не удалось обновить: {error}
+        </p>
       )}
     </Hero>
   )
@@ -730,10 +757,10 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? `${liveCount === 1 ? 'работает' : 'работают'} из ${tunnels.length} настроенных`
+              ? workingTunnelNote(liveCount, tunnels.length, uncheckedCount)
               : 'роутер не сообщил ни одного'
         }
-        tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
+        tone={!headline.stale && tunnels.length && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}
       />
     </div>
   )
@@ -842,7 +869,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
         {okChecks.length > 0 && (
           <details class="checks-spoiler">
             <summary class="section-title checks-spoiler-summary">
-              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {okCount} в норме
+              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {checksStale ? 'на момент последнего отчёта' : `${okCount} в норме`}
             </summary>
             <ul class="card list-reset">{okChecks.map(checkRow)}</ul>
           </details>

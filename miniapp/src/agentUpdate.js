@@ -12,6 +12,7 @@
 // (agent_behind, agent_update_warning): второе сравнение версий в клиенте
 // разошлось бы с первым.
 import { pluralRu } from './labels.js'
+import { isStale } from './staleness.js'
 
 export const FLEET_UPDATE_PHRASE = 'обновить'
 
@@ -28,6 +29,7 @@ export function isAway(router) {
   // Сервер (/fleet) отдаёт away тем же правилом, по которому откладывает
   // обновление (final review M1). Порог ниже -- только для ответа без поля.
   if (typeof router?.away === 'boolean') return router.away
+  if (isStale(router)) return true
   if (AWAY_STATUSES.has(router?.status)) return true
   if (router?.status !== 'alert') return false
   const age = router?.last_seen_age_sec

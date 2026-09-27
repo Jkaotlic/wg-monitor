@@ -15,7 +15,7 @@ import { LoginScreen } from './screens/LoginScreen.jsx'
 import { ServerDown } from './ui/ServerDown.jsx'
 import { PhoneLayout } from './ui/PhoneLayout.jsx'
 import { WideLayout } from './ui/WideLayout.jsx'
-import { PULSE_MS } from './pulse.js'
+import { PULSE_MS, syncLostText } from './pulse.js'
 
 // Поле ввода -- не место для Esc-закрытия слоя: человек набирает маршрут или
 // имя и теряет набранное одним промахом. Лист подтверждения ловит Esc сам.
@@ -55,16 +55,20 @@ export function App() {
     return setUnauthorizedHandler(() => boot.expire())
   }, [mode, boot.status])
 
-  // Колонка роутеров на широком экране видна всегда, и слова состояния в ней
-  // не должны застывать на моменте входа: список переспрашивается тем же
-  // пульсом, что экран роутера, и только пока вкладка браузера видна.
+  // Список роутеров переспрашивается тем же пульсом, что экран роутера, и
+  // только пока вкладка видна -- на обеих раскладках. На широкой колонка
+  // видна всегда; на телефоне список и слои тоже берут статус из него, а
+  // метку «нет связи с сервером» может снять только удачный запрос СПИСКА:
+  // любой другой удачный ответ не делает сам список свежее, и снять метку по
+  // нему значило бы снова выдать старое за текущее. Один лёгкий запрос раз в
+  // 10 с (review v0.46, п. 1).
   useEffect(() => {
-    if (!wide || boot.status !== 'ready') return undefined
+    if (boot.status !== 'ready') return undefined
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') boot.refreshRouters()
     }, PULSE_MS)
     return () => clearInterval(timer)
-  }, [wide, boot.status])
+  }, [boot.status])
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
@@ -125,5 +129,19 @@ export function App() {
     body = wide ? <WideLayout mode={mode} {...layout} /> : <PhoneLayout {...layout} />
   }
 
-  return <AppContext.Provider value={{ mode, wide }}>{body}</AppContext.Provider>
+  // Сбой опроса списка не прячется (MINI-03): список остаётся, но над ним
+  // сказано, на какое время он.
+  const syncBanner =
+    boot.status === 'ready' && boot.syncLost ? (
+      <p class="state state-error sync-lost" role="status">
+        {syncLostText(boot.routersAt)}
+      </p>
+    ) : null
+
+  return (
+    <AppContext.Provider value={{ mode, wide }}>
+      {syncBanner}
+      {body}
+    </AppContext.Provider>
+  )
 }

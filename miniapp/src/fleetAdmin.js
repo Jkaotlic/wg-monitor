@@ -8,7 +8,8 @@
 // срок ссылки приходят с сервера. Вторая копия сравнения версий разошлась бы
 // с первой, а второй текст про 12 часов -- с тем, что сказал бот.
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
-import { agentUpdateState } from './agentUpdate.js'
+import { agentUpdateState, isAway } from './agentUpdate.js'
+import { isStale } from './staleness.js'
 
 export const EMPTY_PARK = 'В парке нет ни одного роутера.'
 
@@ -80,10 +81,16 @@ function routerSub(router) {
   const incidents = router?.incidents ?? []
   // Имена тревог -- по-русски и без машинных идентификаторов: в списке парка
   // нет ни снимка маршрутов, ни имён VPN-туннелей, чтобы понять «awg12».
-  if (incidents.length > 0) return incidents.map(incidentWhatPlain).join('; ')
   const age = router?.last_seen_age_sec
+  // Молчащая тревога: сначала -- что роутер молчит (тревога вчерашняя, пока
+  // нет связи), потом -- какая тревога висит (staleness.js, v0.46).
+  const away = age != null && (isStale(router) || isAway(router))
+  if (incidents.length > 0) {
+    const what = incidents.map(incidentWhatPlain).join('; ')
+    return away ? `не на связи ${humanAge(age)} · ${what}` : what
+  }
   if (age == null) return 'отчётов от него ещё не было'
-  if (router?.status === 'sleeping' || router?.status === 'offline') return `не на связи ${humanAge(age)}`
+  if (away) return `не на связи ${humanAge(age)}`
   return `отчёт ${humanAge(age)} назад`
 }
 

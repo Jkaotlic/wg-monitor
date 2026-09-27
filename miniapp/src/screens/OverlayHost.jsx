@@ -14,12 +14,13 @@ import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { FLEET_OVERLAYS, normalizeReturn } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
+import { isStale } from '../staleness.js'
 
 export function routerContext(routers, routerID) {
   const current = routers.find((r) => r.id === routerID)
   // Статус берём из списка флота: экраны табов не грузят карточку роутера
   // сами, а спящему роутеру нужно обещать отложенный ответ, а не мгновенный.
-  const asleep = current?.status === 'offline' || current?.status === 'sleeping'
+  const asleep = isStale(current)
   return { current, asleep }
 }
 

@@ -103,8 +103,9 @@ describe('checkRows', () => {
   ]
   const ROUTER = { status: 'online', last_seen_age_sec: 42 }
   const TUNNELS = [
-    { tunnel_id: 'awg12', status: 'ok' },
-    { tunnel_id: 'awg7', status: 'fail' },
+    // Поля -- как у miniappTunnel: слово роутера и обмен ключами есть.
+    { tunnel_id: 'awg12', status: 'ok', run_state: 'running', enabled: true, handshake_age_sec: 30 },
+    { tunnel_id: 'awg7', status: 'fail', run_state: 'running', enabled: true, handshake_age_sec: 30 },
   ]
 
   const rowsByKey = (rows) => Object.fromEntries(rows.map((r) => [r.key, r]))
@@ -133,7 +134,7 @@ describe('checkRows', () => {
   // считает по ней.
   it('строка туннелей считает по самим туннелям', () => {
     const byKey = rowsByKey(checkRows({ checks: CHECKS, tunnels: TUNNELS, router: ROUTER }))
-    expect(byKey.tunnels.value).toBe('1 из 2 на связи')
+    expect(byKey.tunnels.value).toBe('1 из 2 работает')
     expect(byKey.tunnels.answer).toBe('нет')
   })
 
@@ -159,6 +160,8 @@ describe('checkRows', () => {
       checks: [{ check_name: 'dns', status: 'ok', ts: new Date(Date.now() - 90_000).toISOString() }],
       tunnels: [],
       router: ROUTER,
+      // Часы телефона совпадают с серверными (MINI-10: возраст -- по сдвигу).
+      clockOffsetMs: 0,
     })
     expect(rowsByKey(rows).dns.value).toBe('измерено 1 мин назад')
   })

@@ -40,15 +40,24 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
   const [job, setJob] = useState(null)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
+  // Задание, запущенное отсюда: только его ход -- ход ЭТОГО туннеля.
+  const [ownJobID, setOwnJobID] = useState('')
+  // Сбой опроса больше не глотается (MINI-05): застывшие шаги без слова о
+  // сбое читались бы как «починка стоит».
+  const [pollError, setPollError] = useState('')
 
   useEffect(() => {
     let alive = true
     const poll = () => {
       fetchRepairStatus(routerID)
         .then((j) => {
-          if (alive) setJob(j)
+          if (!alive) return
+          setJob(j)
+          setPollError('')
         })
-        .catch(() => {})
+        .catch((e) => {
+          if (alive) setPollError(e?.message || 'сервер не ответил')
+        })
     }
     poll()
     const timer = setInterval(poll, POLL_MS)
@@ -58,14 +67,17 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
     }
   }, [routerID])
 
-  const view = repairView(job)
+  const view = repairView(job, { checkName, ownJobID, pollFailed: Boolean(pollError) })
   const running = Boolean(job?.running)
 
   function start() {
     setStarting(true)
     setError('')
     startRepair(routerID, checkName)
-      .then((j) => setJob(j))
+      .then((j) => {
+        setJob(j)
+        setOwnJobID(j?.job_id ?? '')
+      })
       .catch((e) => setError(e?.message || 'Починку начать не удалось.'))
       .finally(() => setStarting(false))
   }
@@ -73,7 +85,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
   return (
     <Overlay title="Починка" onClose={onClose}>
       <div class="repair">
-        <p class="repair-title">{running ? 'Поднимаю связь' : view.title}</p>
+        <p class="repair-title">{view.title}</p>
         {running ? (
           <p class="repair-lead">Можно закрыть приложение — я допишу в чат, когда закончу.</p>
         ) : null}
@@ -107,10 +119,11 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
         </div>
 
         {error ? <p class="repair-error">{error}</p> : null}
+        {pollError ? <p class="repair-error">Не удалось узнать ход починки: {pollError}</p> : null}
 
-        {!running ? (
+        {!running && !view.loading ? (
           <button class="btn btn-accent repair-start" onClick={start} disabled={starting}>
-            <Quoted text={starting ? 'Начинаю…' : view.done ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
+            <Quoted text={starting ? 'Начинаю…' : view.done && view.scope === 'this' ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
           </button>
         ) : null}
       </div>

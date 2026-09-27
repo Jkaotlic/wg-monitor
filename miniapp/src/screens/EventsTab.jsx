@@ -1,18 +1,10 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchTimeline } from '../api.js'
 import { groupByDay } from '../events.js'
-import { incidentLine, groupIncidentsByDay } from '../incidents.js'
+import { incidentLine, groupIncidentsByDay, dayTitle } from '../incidents.js'
 import { Quoted } from '../ui/Q.jsx'
 
 const DAYS = 7
-
-function dayTitle(day) {
-  const today = new Date().toISOString().slice(0, 10)
-  if (day === today) return 'Сегодня'
-  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
-  if (day === yesterday) return 'Вчера'
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
-}
 
 function time(ts) {
   return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
@@ -148,7 +140,7 @@ function RawFeed({ data }) {
                   {e.check_name}
                   <u class="ev-code">{e.status}</u>
                 </span>
-                <span class={`ev-dot ev-dot-${e.status === 'ok' ? 'sig' : 'bad'}`} />
+                <span class={`ev-dot ev-dot-${e.status === 'ok' ? 'sig' : e.status === 'unknown' ? 'muted' : 'bad'}`} />
               </li>
             ))}
           </ul>

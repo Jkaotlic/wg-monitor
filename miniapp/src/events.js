@@ -5,10 +5,12 @@
 // и посчитанная по ним длительность была догадкой под видом факта.
 //
 // Функция осталась для режима «как есть», где строки по-прежнему сырые.
+import { localDay } from './incidents.js'
+
 export function groupByDay(events = []) {
   const byDay = new Map()
   for (const e of events) {
-    const day = (e.ts ?? '').slice(0, 10)
+    const day = localDay(e.ts)
     if (!byDay.has(day)) byDay.set(day, [])
     byDay.get(day).push(e)
   }

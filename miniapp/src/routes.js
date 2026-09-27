@@ -43,14 +43,33 @@ export function tunnelSwitchedOff(t) {
 // awg-manager «нет связи», вкладка «работает»). Проваленная проверка ставит
 // в КОПИИ снимка статус «dead» -- дальше вкладка показывает его тем же путём,
 // что и упавший интерфейс. Выключенные настройкой не трогаем.
-export function withCheckVerdict(snapshot, events) {
+//
+// failed -- проверки загрузить не удалось (MINI-06). Тогда «running» у
+// интерфейса ничего не доказывает: раньше сбой загрузки возвращал мёртвому
+// туннелю «работает». Поднятые туннели получают пустой статус -- «состояние
+// неизвестно»; выключенные настройкой остаются выключенными.
+export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
+  if (failed && snapshot && Array.isArray(snapshot.tunnels)) {
+    return {
+      ...snapshot,
+      tunnels: snapshot.tunnels.map((t) =>
+        tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, status: '', verdict_unknown: true } : t,
+      ),
+    }
+  }
   const failing = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
-  if (!snapshot || failing.size === 0 || !Array.isArray(snapshot.tunnels)) return snapshot
+  // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
+  // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
+  const unchecked = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
+  if (!snapshot || (failing.size === 0 && unchecked.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
-    tunnels: snapshot.tunnels.map((t) =>
-      failing.has(t.id) && tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, status: 'dead' } : t,
-    ),
+    tunnels: snapshot.tunnels.map((t) => {
+      if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
+      if (failing.has(t.id)) return { ...t, status: 'dead' }
+      if (unchecked.has(t.id)) return { ...t, check_unverified: true }
+      return t
+    }),
   }
 }
 
@@ -322,7 +341,9 @@ export function policyRows(snapshot) {
     return {
       name: p.name,
       chain,
-      rules: (p.dns ?? 0) + (p.static ?? 0),
+      // Статических маршрутов у политики нет (wire.RoutePolicySummary): они
+      // привязаны к туннелю и живут в counts (MINI-09).
+      rules: p.dns ?? 0,
       hrNeo: p.hr_neo ?? 0,
       viaVPN: Boolean(p.via_vpn),
       egress,

@@ -133,6 +133,9 @@ export function guardVerdict(check) {
   return 'unknown'
 }
 
+export const NOT_CHECKED_LABEL = 'не проверено'
+const NOT_CHECKED = { label: NOT_CHECKED_LABEL, tone: 'muted' }
+
 const GUARD_STATE = {
   ok: { label: 'работает', tone: 'ok' },
   fallback: { label: 'на запасных', tone: 'warn' },
@@ -151,7 +154,20 @@ const GUARD_STATE = {
 // resolver_guard -- жёлтая мини-апп, когда роутер уже работает с запасных
 // (в диагностике это тоже жёлтое), и "не следит"/"ещё не прочитал настройки"
 // вместо "работает": ok у сторожа не всегда значит исправность.
-export function checkState(check) {
+//
+// stale -- роутер молчит (staleness.js, MINI-02): всё в списке измерено до
+// того, как он замолчал. «Работает» в настоящем времени тогда -- ложь, а
+// строка «Отчёты от роутера» -- прямо неправда: отчёты-то и не приходят.
+export function checkState(check, { stale = false } = {}) {
+  // «unknown» (бэкенд v0.46): агент не смог ничего проверить. Не «работает»
+  // и не «не работает» -- серое «не проверено», и в счёт исправных или
+  // сломанных не идёт. Давность этого не меняет: не проверено -- и тогда.
+  if (check.status === 'unknown' && check.check_name !== 'agent_heartbeat') return { ...NOT_CHECKED }
+  if (stale) {
+    if (check.check_name === 'agent_heartbeat') return { label: 'не приходят', tone: 'danger' }
+    if (check.status === 'fail') return { label: 'не работало на момент отчёта', tone: 'danger' }
+    return { label: 'на момент отчёта: в порядке', tone: 'muted' }
+  }
   if (check.check_name === 'resolver_guard') {
     const state = GUARD_STATE[guardVerdict(check)]
     if (state) return state
@@ -214,6 +230,34 @@ export function tunnelStateLabel(t) {
   return 'работает'
 }
 
+// Сколько VPN-туннелей работает -- ОДНО правило для «Сейчас» и «Проверок»
+// (MINI-07; было «3 из 3 на связи» против «1 работает из 3»). Работающий --
+// поднятый интерфейс, чья проверка не провалена и по кому нет тревоги.
+// Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял running с
+// мёртвой удалённой стороной, а одного «проверка ok» мало тем более --
+// она не знает, что роутер туннель остановил.
+//
+// Статус «unknown» (проверка ничего не проверила) -- ни работающий, ни
+// упавший: он считается отдельно (uncheckedTunnelCount).
+export function workingTunnelCount(tunnels = [], incidents = []) {
+  return (tunnels ?? []).filter(
+    (t) =>
+      tunnelStateLabel(t) === 'работает' &&
+      t.status !== 'fail' &&
+      t.status !== 'unknown' &&
+      !(incidents ?? []).some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
+  ).length
+}
+
+export function uncheckedTunnelCount(tunnels = []) {
+  return (tunnels ?? []).filter((t) => t.status === 'unknown').length
+}
+
+export function workingTunnelNote(live, total, unchecked = 0) {
+  const base = `${live === 1 ? 'работает' : 'работают'} из ${total} настроенных`
+  return unchecked > 0 ? `${base} · ${unchecked} ${NOT_CHECKED_LABEL}` : base
+}
+
 // Not sourced from a single bot function: alerts/format.go:1178 (humanAgeSec)
 // and tg/tunnels_panel.go:92 (humanAgeShort) already disagree with each other
 // (no day bucket in either, different remainder handling), and neither is one
@@ -226,49 +270,6 @@ export function humanAge(sec) {
   if (sec < 3600) return `${Math.floor(sec / 60)} мин`
   if (sec < 86400) return `${Math.floor(sec / 3600)} ч`
   return `${Math.floor(sec / 86400)} дн`
-}
-
-// The screen's headline. `unknown` is a real answer, not a failure to compute:
-// an agent older than the routeTag change genuinely cannot tell us, and saying
-// so beats naming whichever tunnel happens to be listed first. Field names
-// verified against miniappTraffic's json tags (miniapp_tunnels.go:123-132):
-// mode, egress_tunnel_id, egress_tunnel_name.
-export function trafficLabel(traffic) {
-  switch (traffic?.mode) {
-    case 'vpn':
-      return {
-        title: 'Трафик идёт через VPN',
-        detail: `Весь исходящий трафик уходит через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}»`,
-      }
-    case 'split':
-      return {
-        title: 'Обход идёт по правилам',
-        detail: traffic.egress_tunnel_name || traffic.egress_tunnel_id
-          ? `Заблокированное — через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}», остальное напрямую`
-          : 'Заблокированное — через VPN-туннели обхода, остальное напрямую',
-      }
-    case 'direct':
-      return {
-        title: 'Трафик идёт напрямую',
-        detail: 'Ни одно правило не ведёт в работающий VPN-туннель — всё уходит напрямую через провайдера',
-      }
-    case 'singbox':
-      return {
-        title: 'Маршрут выбирает sing-box',
-        detail: 'Для каждого сайта отдельно — единого ответа «напрямую или через VPN» тут нет',
-      }
-    default:
-      if (traffic?.reason === 'rules_unreadable') {
-        return {
-          title: 'Куда идёт трафик — неизвестно',
-          detail: 'Правила обхода не удалось прочитать целиком — по ним сейчас не понять, что идёт через VPN',
-        }
-      }
-      return {
-        title: 'Куда идёт трафик — неизвестно',
-        detail: 'Роутер пока не сообщает, какой VPN-туннель основной. Нажмите «Повторить проверку».',
-      }
-  }
 }
 
 // UI action vocabulary for buttons the mini app offers. Not a 1:1 mirror of
