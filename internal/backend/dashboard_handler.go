@@ -920,6 +920,10 @@ func validateAgentEdit(req *dashboardEditAgentReq) *repairStartError {
 // awgm_*/expected_mac unconditionally, which would otherwise wipe them on a
 // partial edit. Pair with the update_backend_url command to "resurrect" an
 // agent after its domain changes.
+// dashboardEditAfterRead -- крючок теста гонки DEP-02: зовётся между чтением
+// строки и записью правки. nil в работе.
+var dashboardEditAfterRead func()
+
 func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
@@ -959,7 +963,10 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		if err := d.DB.Users().UpdateDeployInfo(nickname, dashboardEditDeployInfo(*current, req)); err != nil {
+		if dashboardEditAfterRead != nil {
+			dashboardEditAfterRead()
+		}
+		if err := d.DB.Users().UpdateAgentMetadata(nickname, dashboardEditMetadata(req)); err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {
 				writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 				return
@@ -974,26 +981,21 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-// dashboardEditDeployInfo builds a full DeployInfo from the edit request,
-// preserving system-managed fields and keeping current values for blank
-// overwrite-semantics fields (ring/deploy_mode/awgm_*/expected_mac).
-func dashboardEditDeployInfo(current db.User, req dashboardEditAgentReq) db.DeployInfo {
-	return db.DeployInfo{
-		Kind:                req.Kind,
-		ThreadID:            req.TelegramThreadID,
-		SSHHost:             strings.TrimSpace(req.SSHHost),
-		SSHPort:             req.SSHPort,
-		SSHUser:             strings.TrimSpace(req.SSHUser),
-		Arch:                strings.TrimSpace(req.Arch),
-		LastDeployedVersion: stringValue(current.LastDeployedVersion),
-		PendingVersion:      stringValue(current.PendingVersion),
-		PendingSince:        stringValue(current.PendingSince),
-		LastDeploy:          stringValue(current.LastDeploy),
-		Ring:                firstNonEmptyTrimmed(req.Ring, stringValue(current.Ring)),
-		DeployMode:          firstNonEmptyTrimmed(req.DeployMode, stringValue(current.DeployMode)),
-		AWGMURL:             firstNonEmptyTrimmed(req.AWGMURL, stringValue(current.AWGMURL)),
-		AWGMAuth:            firstNonEmptyTrimmed(req.AWGMAuth, stringValue(current.AWGMAuth)),
-		ExpectedMAC:         firstNonEmptyTrimmed(req.ExpectedMAC, stringValue(current.ExpectedMAC)),
+// dashboardEditMetadata -- правка из запроса; пустое поле -- «не менять»
+// (UpdateAgentMetadata сливает с текущим значением в самой записи, DEP-02).
+func dashboardEditMetadata(req dashboardEditAgentReq) db.AgentMetadata {
+	return db.AgentMetadata{
+		Kind:        req.Kind,
+		ThreadID:    req.TelegramThreadID,
+		SSHHost:     strings.TrimSpace(req.SSHHost),
+		SSHPort:     req.SSHPort,
+		SSHUser:     strings.TrimSpace(req.SSHUser),
+		Arch:        strings.TrimSpace(req.Arch),
+		Ring:        strings.TrimSpace(req.Ring),
+		DeployMode:  strings.TrimSpace(req.DeployMode),
+		AWGMURL:     strings.TrimSpace(req.AWGMURL),
+		AWGMAuth:    strings.TrimSpace(req.AWGMAuth),
+		ExpectedMAC: strings.TrimSpace(req.ExpectedMAC),
 	}
 }
 

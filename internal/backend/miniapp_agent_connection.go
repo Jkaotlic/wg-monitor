@@ -83,7 +83,7 @@ func miniappAgentConnectionPutHandler(d Deps) http.HandlerFunc {
 			writeMiniappStartError(w, serr)
 			return
 		}
-		if err := d.DB.Users().UpdateDeployInfo(u.Nickname, dashboardEditDeployInfo(*u, edit)); err != nil {
+		if err := d.DB.Users().UpdateAgentMetadata(u.Nickname, dashboardEditMetadata(edit)); err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {
 				writeMiniappOpsError(w, http.StatusNotFound, "not_found")
 				return

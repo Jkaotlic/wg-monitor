@@ -492,6 +492,61 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	return nil
 }
 
+// AgentMetadata -- то, что правит дашборд в карточке роутера. Пустое поле
+// (0 для чисел) -- «не менять».
+type AgentMetadata struct {
+	Kind        string
+	ThreadID    int64
+	SSHHost     string
+	SSHPort     int64
+	SSHUser     string
+	Arch        string
+	Ring        string
+	DeployMode  string
+	AWGMURL     string
+	AWGMAuth    string
+	ExpectedMAC string
+}
+
+// UpdateAgentMetadata -- правка карточки роутера одной записью, без
+// read-modify-write (DEP-02): служебные поля раскатки (last_deployed_version,
+// pending_*, last_deploy) не трогаются вовсе, поэтому отчёт агента, снявший
+// назначенное обновление между чтением и записью правки, не откатывается.
+func (u *UsersRepo) UpdateAgentMetadata(nickname string, m AgentMetadata) error {
+	if m.Kind != "" && !IsValidKind(m.Kind) {
+		return fmt.Errorf("users.UpdateAgentMetadata: invalid kind %q (want static|mobile)", m.Kind)
+	}
+	res, err := u.d.db.Exec(
+		`UPDATE users SET
+		    kind=CASE WHEN ? = '' THEN kind ELSE ? END,
+		    telegram_thread_id=CASE WHEN ? = 0 THEN telegram_thread_id ELSE ? END,
+		    ssh_host=CASE WHEN ? = '' THEN ssh_host ELSE ? END,
+		    ssh_port=CASE WHEN ? = 0 THEN ssh_port ELSE ? END,
+		    ssh_user=CASE WHEN ? = '' THEN ssh_user ELSE ? END,
+		    arch=CASE WHEN ? = '' THEN arch ELSE ? END,
+		    deploy_ring=CASE WHEN ? = '' THEN deploy_ring ELSE ? END,
+		    deploy_mode=CASE WHEN ? = '' THEN deploy_mode ELSE ? END,
+		    awgm_url=CASE WHEN ? = '' THEN awgm_url ELSE ? END,
+		    awgm_auth=CASE WHEN ? = '' THEN awgm_auth ELSE ? END,
+		    expected_mac=CASE WHEN ? = '' THEN expected_mac ELSE ? END
+		  WHERE nickname=?`,
+		m.Kind, m.Kind, m.ThreadID, m.ThreadID, m.SSHHost, m.SSHHost, m.SSHPort, m.SSHPort,
+		m.SSHUser, m.SSHUser, m.Arch, m.Arch, m.Ring, m.Ring, m.DeployMode, m.DeployMode,
+		m.AWGMURL, m.AWGMURL, m.AWGMAuth, m.AWGMAuth, m.ExpectedMAC, m.ExpectedMAC, nickname,
+	)
+	if err != nil {
+		return fmt.Errorf("users.UpdateAgentMetadata: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // MarkPendingDeploy records a wizard-enqueued target version that has not yet
 // been confirmed by the agent heartbeat.
 func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince string) error {
