@@ -55,8 +55,8 @@ class TerminalLoginTest(unittest.TestCase):
         with self.assertRaises(relay.RelayError) as ctx:
             relay.login_terminal(object(), dict(self.CFG))
         msg = str(ctx.exception)
-        self.assertIn("root_login_refused", msg)
-        self.assertIn("auth_failed", msg)  # бэкенд узнаёт отказ входа по этой метке
+        self.assertIn("root_auth_failed", msg)  # контракт с бэкендом (HintRootAuthFailed)
+        self.assertIn("auth_failed", msg)  # и прежняя метка отказа авторизации
         self.assertEqual(sent, ["root\n", "wrong\n"])  # скрипт и проба не ушли
 
     def test_second_login_prompt_after_password_is_refusal(self):

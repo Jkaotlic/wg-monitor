@@ -734,10 +734,12 @@ def run_install_bootstrap(cfg):
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
     print("install bootstrap complete for %s at %s (%s)" % (nick, cfg.get("target_version") or "", arch))
 
-# ROOT_LOGIN_REFUSED -- отказ входа root в терминал (AGENT-07). "auth_failed"
-# в тексте -- метка, по которой бэкенд (terminalConnectHint) узнаёт отказ
-# авторизации; "root_login_refused" отличает его от 401 панели awg-manager.
-ROOT_LOGIN_REFUSED = "auth_failed: root_login_refused: router terminal refused the root login (wrong root password?)"
+# ROOT_LOGIN_REFUSED -- отказ входа root в терминал (AGENT-07). Метка
+# "root_auth_failed" -- контракт с бэкендом: по ней (HintRootAuthFailed) он
+# отличает неверный root-пароль от 401 панели awg-manager и только тогда
+# забывает сохранённый пароль. Подстрока "auth_failed" внутри неё же держит
+# и старое распознавание (terminalConnectHint).
+ROOT_LOGIN_REFUSED = "root_auth_failed: router terminal refused the root login (wrong root password?)"
 # Приглашение входа в конце вывода; строку «Last login: ...» не путать.
 LOGIN_PROMPT_AT_END = re.compile(r"(?:^|\n)(?![Ll]ast )[^\n]*login: ?$", re.I)
 SHELL_PROBE_OUTPUT = "__WG_SHELL_OK__"
