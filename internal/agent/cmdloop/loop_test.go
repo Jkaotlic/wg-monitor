@@ -293,3 +293,35 @@ func TestLoop_CtxCancelExitsCleanly(t *testing.T) {
 		t.Fatal("Run did not exit on ctx cancel")
 	}
 }
+
+// AGENT-10: кэш результатов переписывался 2–3 раза на команду (запомнить,
+// «отправлено», «не отправлено», повтор). Защиту от повторного выполнения
+// после перезапуска даёт одна запись -- до отправки; отметка «отправлено»
+// живёт в памяти и попадёт на диск со следующей записью. Худший случай
+// после перезапуска -- лишний повтор уже отправленного результата.
+func TestLoopWritesResultCacheOncePerCommand(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cmd-results.json")
+	cl := &fakeClient{
+		pollSeq: []pollResp{
+			{cmd: &wire.Command{ID: "c1", Action: "route_add"}},
+			{cmd: nil}, // повтор неотправленного -- без записи
+			{cmd: &wire.Command{ID: "c1", Action: "route_add"}}, // дубль из кэша -- без записи
+		},
+		postErrs: []error{errors.New("backend transient"), nil, nil},
+	}
+	l := New(cl, &fakeRunner{}, 1)
+	l.SetResultCachePath(cachePath)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	l.Run(ctx)
+
+	cl.mu.Lock()
+	posts := len(cl.posts)
+	cl.mu.Unlock()
+	if posts != 3 {
+		t.Fatalf("posts=%d, want 3 (failed, retried, dedup)", posts)
+	}
+	if l.cacheWrites != 1 {
+		t.Fatalf("result cache written %d times for one command, want 1", l.cacheWrites)
+	}
+}

@@ -42,6 +42,7 @@ type Loop struct {
 	cacheTTL    time.Duration
 	cacheMax    int
 	cachePath   string
+	cacheWrites int // AGENT-10: сколько раз кэш писался на диск (для тестов)
 }
 
 type cachedResult struct {
@@ -155,8 +156,8 @@ func (l *Loop) cachedResult(id string) (wire.CommandResult, bool) {
 		return wire.CommandResult{}, false
 	}
 	if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
+		// На диск не пишем: просроченное отбрасывает и loadResultCache.
 		delete(l.resultCache, id)
-		l.persistResultCache()
 		return wire.CommandResult{}, false
 	}
 	return cached.result, true
@@ -195,9 +196,12 @@ func (l *Loop) markResultPosted(id string, posted bool) {
 	if !ok {
 		return
 	}
+	// AGENT-10: только в памяти. От повторного выполнения после перезапуска
+	// защищает запись в rememberResult (до отправки); «отправлено» уедет на
+	// диск со следующей записью, а худший случай -- лишний повтор уже
+	// отправленного результата после перезапуска.
 	cached.posted = posted
 	l.resultCache[id] = cached
-	l.persistResultCache()
 }
 
 func (l *Loop) postUnpostedCachedResults(ctx context.Context) {
@@ -210,16 +214,15 @@ func (l *Loop) postUnpostedCachedResults(ctx context.Context) {
 		}
 		if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
 			delete(l.resultCache, id)
-			l.persistResultCache()
 			continue
 		}
 		if perr := l.client.PostResult(ctx, cached.result); perr != nil {
 			slog.Warn("cmdloop retry cached result failed (continuing)", "cmd_id", id, "err", perr)
 			continue
 		}
+		// AGENT-10: отметка в памяти, см. markResultPosted.
 		cached.posted = true
 		l.resultCache[id] = cached
-		l.persistResultCache()
 	}
 }
 
@@ -276,6 +279,7 @@ func (l *Loop) persistResultCache() {
 		return
 	}
 	tmp := l.cachePath + ".tmp"
+	l.cacheWrites++
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		slog.Warn("cmdloop result cache write failed", "path", tmp, "err", err)
 		return

@@ -275,8 +275,13 @@ func TestReporter_AuthReject_RecordsBreadcrumb(t *testing.T) {
 	if err := json.Unmarshal(body, &st); err != nil {
 		t.Fatal(err)
 	}
-	if st.ConsecutiveAuthRejects != 2 {
-		t.Fatalf("ConsecutiveAuthRejects = %d, want 2", st.ConsecutiveAuthRejects)
+	// AGENT-10: первый отказ пишется сразу, повторы -- не чаще раза в
+	// reporterStatePersistEvery, поэтому на диске 1, а в памяти 2.
+	if st.ConsecutiveAuthRejects != 1 {
+		t.Fatalf("ConsecutiveAuthRejects on disk = %d, want 1 (first reject persisted, repeat throttled)", st.ConsecutiveAuthRejects)
+	}
+	if r.consecutiveAuthRejects != 2 {
+		t.Fatalf("ConsecutiveAuthRejects in memory = %d, want 2", r.consecutiveAuthRejects)
 	}
 	if st.LastAuthErrorAt.IsZero() {
 		t.Fatal("LastAuthErrorAt should be set after a 401")
@@ -365,5 +370,63 @@ func TestReporterWritesReportOKMarkerOnceAfterSuccess(t *testing.T) {
 	r.sendOnce(context.Background())
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("marker must be written once per process, not on every report")
+	}
+}
+
+// AGENT-10: файл состояния переписывался на каждый отчёт -- 1440 записей во
+// флеш в сутки. Теперь -- не чаще раза в reporterStatePersistEvery, кроме
+// значимых перемен (первый отказ авторизации, выздоровление) и выхода.
+// Порог «вернулся после сна» (30 мин) при этом держится: сохранённое время
+// отстаёт не больше чем на reporterStatePersistEvery, а на выходе пишется
+// точное.
+func TestReporterThrottlesStateWritesButKeepsResumedAccuracy(t *testing.T) {
+	if reporterStatePersistEvery > 5*time.Minute {
+		t.Fatalf("reporterStatePersistEvery = %v: stale state would skew the %v resumed threshold", reporterStatePersistEvery, ResumedThreshold)
+	}
+	statePath := filepath.Join(t.TempDir(), "reporter-state.json")
+	s := &stubSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour, StatePath: statePath})
+
+	for i := 0; i < 10; i++ {
+		r.sendOnce(context.Background())
+	}
+	if r.stateWrites != 1 {
+		t.Fatalf("10 routine reports wrote the state %d times, want 1", r.stateWrites)
+	}
+
+	// Первый отказ авторизации -- значимая перемена, пишется сразу.
+	s.err = fmt.Errorf("%w: status=401", ErrUnauthorized)
+	r.sendOnce(context.Background())
+	r.sendOnce(context.Background())
+	if r.stateWrites != 2 {
+		t.Fatalf("first auth reject must persist at once, repeats are throttled: writes=%d, want 2", r.stateWrites)
+	}
+	// Выздоровление -- тоже сразу.
+	s.err = nil
+	r.sendOnce(context.Background())
+	if r.stateWrites != 3 {
+		t.Fatalf("recovery must persist at once: writes=%d, want 3", r.stateWrites)
+	}
+
+	// Выход Run пишет точное время последнего отчёта.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	r.mu.Lock()
+	want := r.lastReportAt
+	r.mu.Unlock()
+	body, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st reporterState
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.LastReportAt.Equal(want) {
+		t.Fatalf("state on exit = %v, want the exact last report %v", st.LastReportAt, want)
 	}
 }
