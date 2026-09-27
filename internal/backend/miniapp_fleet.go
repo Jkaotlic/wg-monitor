@@ -311,6 +311,10 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				// не должна пропадать из строки.
 				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind || verdict.TooOld) {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
+					if st.Version == "" {
+						// Сдались: «занят, повторим» уже неправда (DEP-01).
+						row.PendingLastErrorText = givenUpReasonText(st.LastError, st.Attempts)
+					}
 				}
 			}
 			row.PendingStale = a.PendingVersion != "" && isVersionDowngrade(a.PendingVersion, serverVersion)
