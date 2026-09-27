@@ -150,7 +150,13 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "versions lookup failed")
 			return
 		}
-		resp := miniappVersionsBody(r, d, routerID, row, time.Now().UTC())
+		resp, err := miniappVersionsBody(r, d, routerID, row, time.Now().UTC())
+		if err != nil {
+			// VER-01: не знаем, что показывать -- так и говорим, а не
+			// рисуем «всё актуально» со свежей датой.
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update reminders lookup failed")
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -163,7 +169,7 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // спрашиваем, какие из них экран имеет право показать (ListFor), и только
 // показанные помечаем показанными. Иначе «отложить» отменялось бы самим
 // открытием экрана.
-func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) miniappVersionsResp {
+func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) (miniappVersionsResp, error) {
 	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
 	rebootHint := upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion)
 
@@ -185,14 +191,15 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 	// состояние «скрыто/отложено» относится к ТОЙ новости, о которой шла речь,
 	// и прошлая строка не имеет права заслонять новую (см. newsKey).
 	visible := make(map[string]bool)
-	if list, err := reminders.ListFor(routerID, now); err != nil {
+	list, err := reminders.ListFor(routerID, now)
+	if err != nil {
 		if d.Logger != nil {
 			d.Logger.Warn("miniapp: update reminders list failed", "router_id", routerID, "err", err)
 		}
-	} else {
-		for _, rem := range list {
-			visible[newsKey(rem.Component, rem.Version)] = true
-		}
+		return miniappVersionsResp{}, err
+	}
+	for _, rem := range list {
+		visible[newsKey(rem.Component, rem.Version)] = true
 	}
 
 	// Пустые слайсы, а не nil: клиент делает .map по этим полям, и null уронил
@@ -251,7 +258,7 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 			KmodLoaded:     row.KmodLoaded,
 		}
 	}
-	return resp
+	return resp, nil
 }
 
 // miniappUpdateReminderHandler прячет новость: «отложить на неделю» или
