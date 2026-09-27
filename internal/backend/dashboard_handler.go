@@ -1004,15 +1004,6 @@ func dashboardEditMetadata(req dashboardEditAgentReq) db.AgentMetadata {
 	}
 }
 
-func firstNonEmptyTrimmed(values ...string) string {
-	for _, v := range values {
-		if t := strings.TrimSpace(v); t != "" {
-			return t
-		}
-	}
-	return ""
-}
-
 func validateDashboardAWGMURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
