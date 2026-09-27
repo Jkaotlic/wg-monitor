@@ -1,0 +1,51 @@
+// @vitest-environment jsdom
+// MINI-05, проводка: экран починки не пишет «Чиню» над пустым ответом и не
+// молчит о сбое опроса.
+import { describe, it, expect, vi } from 'vitest'
+import { render } from 'preact'
+import { act } from 'preact/test-utils'
+
+const mocks = vi.hoisted(() => ({ status: null }))
+vi.mock('../src/api.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchRepairStatus: () => mocks.status(),
+  startRepair: () => Promise.resolve({ job_id: 'j-9', state: 'running', running: true }),
+}))
+
+const { RepairScreen } = await import('../src/screens/RepairScreen.jsx')
+const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+async function mount() {
+  const root = document.createElement('div')
+  document.body.appendChild(root)
+  await act(async () => render(<RepairScreen routerID={5} checkName="tunnel_awg10" lineName="vymysel-nl" onClose={() => {}} />, root))
+  await flush()
+  return root
+}
+
+describe('MINI-05: экран починки', () => {
+  it('пустой ответ -- кнопка и никакого «Чиню»', async () => {
+    mocks.status = () => Promise.resolve({ running: false })
+    const root = await mount()
+    expect(root.querySelector('.repair-title').textContent).not.toBe('Чиню')
+    expect(root.querySelector('.repair-start')).toBeTruthy()
+    render(null, root)
+    root.remove()
+  })
+
+  it('сбой опроса назван', async () => {
+    mocks.status = () => Promise.reject(new Error('сервер не ответил'))
+    const root = await mount()
+    expect(root.textContent).toContain('Не удалось узнать ход починки')
+    render(null, root)
+    root.remove()
+  })
+
+  it('чужое идущее задание -- починка роутера, не этого туннеля', async () => {
+    mocks.status = () => Promise.resolve({ job_id: 'j-1', state: 'running', running: true, steps: [] })
+    const root = await mount()
+    expect(root.querySelector('.repair-title').textContent).toBe('На роутере идёт починка')
+    render(null, root)
+    root.remove()
+  })
+})

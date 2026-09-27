@@ -27,12 +27,34 @@ function foldState(steps, names, jobDone) {
   return jobDone ? 'skipped' : 'pending'
 }
 
-export function repairView(job) {
+// ownJobID -- задание, запущенное с этого экрана. Сервер отдаёт последнюю
+// починку РОУТЕРА, без имени туннеля (MINI-05): чужое задание может быть
+// починкой другого туннеля, и выдавать его ход за ход этого -- ложь. Такое
+// задание названо починкой роутера (scope 'router'), своё -- 'this'.
+export function repairView(job, { ownJobID = '' } = {}) {
   const steps = job?.steps ?? []
+  const loading = job == null
+  // Пустой ответ -- починки не было; раньше экран писал над ним «Чиню».
+  const idle = !loading && !job.job_id && !job.state
   const done = job?.state === 'success' || job?.state === 'failed'
+  const running = Boolean(job?.running)
   const failed = steps.find((s) => s.status === 'failed')
+  const scope = !loading && !idle && ownJobID && job.job_id === ownJobID ? 'this' : 'router'
+  let title
+  if (loading) title = 'Узнаю, идёт ли починка…'
+  else if (idle) title = 'Починки ещё не было'
+  else if (scope === 'router') {
+    if (running) title = 'На роутере идёт починка'
+    else if (done) title = job.state === 'success' ? 'Последняя починка на роутере: готово' : 'Последняя починка на роутере: не получилось'
+    else title = 'Последняя починка на роутере'
+  } else if (running) title = 'Поднимаю связь'
+  else if (done) title = job.state === 'success' ? 'Готово' : 'Не получилось'
+  else title = 'Чиню'
   return {
-    title: done ? (job.state === 'success' ? 'Готово' : 'Не получилось') : 'Чиню',
+    title,
+    loading,
+    idle,
+    scope,
     done,
     ok: job?.state === 'success',
     note: failed?.detail ?? '',
