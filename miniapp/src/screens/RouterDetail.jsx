@@ -23,7 +23,7 @@ import { AppContext } from '../appContext.js'
 import {
   ACTION_LABELS,
   checkLabel,
-  checkState,
+  checkState as checkStateOf,
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
@@ -628,6 +628,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // сломанное пряталось в спойлере вместе с исправным, и спойлер приходилось
   // насильно раскрывать при каждой новой поломке.
   const otherChecks = orderChecks(checks ?? [])
+  // Молчащий роутер: подписи проверок -- в прошедшем (MINI-02).
+  const checksStale = isStale(router)
+  const checkState = (c) => checkStateOf(c, { stale: checksStale })
   // Над спойлером -- только красное и жёлтое. Серое («сторож не следит»,
   // незнакомый статус) -- не поломка и остаётся внутри вместе с исправным.
   const isFailing = (c) => ['danger', 'warn'].includes(checkState(c).tone)
@@ -844,7 +847,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
         {okChecks.length > 0 && (
           <details class="checks-spoiler">
             <summary class="section-title checks-spoiler-summary">
-              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {okCount} в норме
+              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {checksStale ? 'на момент последнего отчёта' : `${okCount} в норме`}
             </summary>
             <ul class="card list-reset">{okChecks.map(checkRow)}</ul>
           </details>

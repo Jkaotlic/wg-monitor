@@ -151,7 +151,16 @@ const GUARD_STATE = {
 // resolver_guard -- жёлтая мини-апп, когда роутер уже работает с запасных
 // (в диагностике это тоже жёлтое), и "не следит"/"ещё не прочитал настройки"
 // вместо "работает": ok у сторожа не всегда значит исправность.
-export function checkState(check) {
+//
+// stale -- роутер молчит (staleness.js, MINI-02): всё в списке измерено до
+// того, как он замолчал. «Работает» в настоящем времени тогда -- ложь, а
+// строка «Отчёты от роутера» -- прямо неправда: отчёты-то и не приходят.
+export function checkState(check, { stale = false } = {}) {
+  if (stale) {
+    if (check.check_name === 'agent_heartbeat') return { label: 'не приходят', tone: 'danger' }
+    if (check.status === 'fail') return { label: 'не работало на момент отчёта', tone: 'danger' }
+    return { label: 'на момент отчёта: в порядке', tone: 'muted' }
+  }
   if (check.check_name === 'resolver_guard') {
     const state = GUARD_STATE[guardVerdict(check)]
     if (state) return state
