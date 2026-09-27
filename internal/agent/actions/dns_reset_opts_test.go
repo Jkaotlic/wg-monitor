@@ -151,3 +151,33 @@ func TestDNSResetSaysWhatDidNotApply(t *testing.T) {
 		t.Errorf("не сказано, какая именно строка не применилась:\n%s", out)
 	}
 }
+
+// AGENT-05: секретный путь DoH (свой резолвер, приватный NextDNS/AdGuard) не
+// уходит на бэкенд в выводе сброса -- ни в предпросмотре, ни в транскрипте
+// боевого прохода. Хост остаётся: человеку надо видеть, что оставлено/снято.
+func TestDNSResetMasksSecretDoHPaths(t *testing.T) {
+	const cfg = `dns-proxy
+    https upstream https://own.example.com/s3cr3t-own-path dnsm
+    https upstream https://private.example.net/abc123-private-id
+    https upstream https://dns.example.com/dns-query
+    tls upstream 9.9.9.9:853 sni dns.quad9.net
+!
+`
+	for _, dry := range []bool{true, false} {
+		f := &replayDNSExec{configs: []string{cfg, configAfterApplyWithPorts()}}
+		_, out := DNSReset(context.Background(), f.exec, DNSResetOpts{DryRun: dry, KeepHosts: []string{"own.example.com"}})
+		for _, secret := range []string{"s3cr3t-own-path", "abc123-private-id"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("dry=%v: секрет %q утёк в вывод:\n%s", dry, secret, out)
+			}
+		}
+		for _, host := range []string{"own.example.com", "private.example.net"} {
+			if !strings.Contains(out, host) {
+				t.Errorf("dry=%v: хост %q пропал из вывода:\n%s", dry, host, out)
+			}
+		}
+		if !strings.Contains(out, "https://dns.example.com/dns-query") {
+			t.Errorf("dry=%v: публичный путь /dns-query незачем прятать:\n%s", dry, out)
+		}
+	}
+}
