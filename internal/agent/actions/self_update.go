@@ -211,7 +211,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	binPath := selfUpdateBinPath
 	tmpPath := binPath + ".new"
 	scriptPath := selfUpdateSwapScriptPath()
-	script := selfUpdateSwapScript(binPath)
+	script := selfUpdateSwapScript(binPath, SelfUpdateReportOKPath(), selfUpdateTargetWritesReportMarker(version))
 	if err := writeSelfUpdateSwapScript(scriptPath, script); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("write %s: %w", scriptPath, err)
@@ -789,13 +789,46 @@ func parseChecksum(body, name string) (string, bool) {
 	return "", false
 }
 
-func selfUpdateSwapScript(binPath string) string {
+// selfUpdateReportMarkerFromVersion -- с этой версии агент кладёт метку
+// первого успешного отчёта (AGENT-11). Цель старше метку не пишет: скрипт
+// замены для неё проверяет только «процесс жив», иначе откат на старую
+// версию всегда откатывался бы обратно.
+const selfUpdateReportMarkerFromVersion = "v0.46.0-rc0"
+
+// SelfUpdateReportOKPath -- метка «новый бинарь отчитался». Её стирает
+// скрипт замены перед запуском, пишет репортёр после первого успешного
+// отчёта процесса.
+func SelfUpdateReportOKPath() string {
+	return selfUpdateStateDir + "/report-ok"
+}
+
+func selfUpdateTargetWritesReportMarker(version string) bool {
+	cmp, ok := releasesig.CompareReleaseTags(version, selfUpdateReportMarkerFromVersion)
+	return ok && cmp >= 0
+}
+
+// selfUpdateSwapScript -- замена бинаря и откат (AGENT-11):
+//   - .bak делается заново; не вышло -- новый бинарь не ставится (устаревший
+//     .bak откатил бы на позапрошлую версию);
+//   - здоровье = процесс жив 60 с И (для целей с меткой) новый бинарь
+//     успешно отчитался в течение 5 минут; иначе -- откат на .bak.
+func selfUpdateSwapScript(binPath, reportMarker string, requireReport bool) string {
+	healthy := `[ $_i -ge 12 ]`
+	if requireReport {
+		healthy = `[ $_i -ge 12 ] && [ -f ` + reportMarker + ` ]`
+	}
 	return `#!/bin/sh
 sleep 3
 /opt/etc/init.d/S99wg-monitor stop 2>/dev/null
 killall -9 wg-monitor 2>/dev/null
 sleep 1
-cp -p ` + binPath + ` ` + binPath + `.bak 2>/dev/null
+rm -f ` + binPath + `.bak
+if ! cp -p ` + binPath + ` ` + binPath + `.bak; then
+	rm -f ` + binPath + `.new
+	/opt/etc/init.d/S99wg-monitor start
+	exit 1
+fi
+rm -f ` + reportMarker + `
 mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
@@ -808,20 +841,25 @@ is_running() {
 	fi
 	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
 }
-# Poll for 60 s (12 × 5 s) to catch crashes that occur after initial startup.
+# Poll every 5 s for up to 300 s: the process must stay up for 60 s (crash
+# after start) and, when required, the new binary must report successfully.
 _ok=0
 _i=0
-while [ $_i -lt 12 ]; do
+while [ $_i -lt 60 ]; do
 	sleep 5
 	if ! is_running; then
 		_ok=0
 		break
 	fi
-	_ok=1
 	_i=$((_i + 1))
+	if ` + healthy + `; then
+		_ok=1
+		break
+	fi
 done
 if [ $_ok -eq 0 ]; then
 	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
+	killall -9 wg-monitor 2>/dev/null
 	mv ` + binPath + `.bak ` + binPath + `
 	chmod 755 ` + binPath + `
 	/opt/etc/init.d/S99wg-monitor start

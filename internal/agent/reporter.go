@@ -54,6 +54,9 @@ type Reporter struct {
 
 	lastAuthErrorAt        time.Time
 	consecutiveAuthRejects int
+
+	reportOKPath    string // AGENT-11: метка «новый бинарь отчитался» для скрипта замены
+	reportOKWritten bool
 }
 
 type ReporterConfig struct {
@@ -67,6 +70,9 @@ type ReporterConfig struct {
 	StatePath   string // e.g. /opt/var/wg-monitor/reporter-state.json; "" disables persistence
 	ConfigPath  string // e.g. /opt/etc/wg-monitor/config.yaml; enables auto URL migration
 	BackendURL  string // current backend URL from config; compared against canonical_url
+	// ReportOKPath -- куда положить метку после первого успешного отчёта
+	// процесса (actions.SelfUpdateReportOKPath). Пусто -- не писать.
+	ReportOKPath string
 }
 
 func NewReporter(cfg ReporterConfig) *Reporter {
@@ -84,6 +90,8 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		statePath:   cfg.StatePath,
 		configPath:  cfg.ConfigPath,
 		backendURL:  cfg.BackendURL,
+
+		reportOKPath: cfg.ReportOKPath,
 	}
 	r.loadState()
 	return r
@@ -197,6 +205,26 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	snap := reporterState{LastReportAt: now}
 	r.mu.Unlock()
 	r.persistState(snap)
+	r.markReportOK()
+}
+
+// markReportOK -- AGENT-11: после первого успешного отчёта процесса кладёт
+// метку, по которой скрипт замены бинаря решает «обновление живо» (иначе --
+// откат). Один раз за процесс: скрипт стирает метку перед запуском нового
+// бинаря, а лишние записи во флеш не нужны.
+func (r *Reporter) markReportOK() {
+	if r.reportOKPath == "" || r.reportOKWritten {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(r.reportOKPath), 0o755); err != nil {
+		slog.Debug("report-ok marker mkdir", "err", err)
+		return
+	}
+	if err := os.WriteFile(r.reportOKPath, []byte(r.version+"\n"), 0o644); err != nil {
+		slog.Debug("report-ok marker write", "err", err)
+		return
+	}
+	r.reportOKWritten = true
 }
 
 func (r *Reporter) runAll(parent context.Context) []wire.Check {

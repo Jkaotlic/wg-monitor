@@ -110,8 +110,11 @@ func main() {
 		Deps:        deps,
 		AwgClient:   awgClient,
 		StatePath:   cfg.State.ResolvedPath(),
-		ConfigPath:  *configPath,
-		BackendURL:  cfg.Backend.URL,
+		// AGENT-11: метка первого успешного отчёта -- скрипт замены бинаря
+		// без неё откатывает обновление.
+		ReportOKPath: actions.SelfUpdateReportOKPath(),
+		ConfigPath:   *configPath,
+		BackendURL:   cfg.Backend.URL,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -333,5 +335,35 @@ func TestReporterFreshStartIsNotResumed(t *testing.T) {
 	defer s.mu.Unlock()
 	if s.last.Resumed {
 		t.Fatalf("fresh start should not be Resumed: %+v", s.last)
+	}
+}
+
+// AGENT-11: метка «отчитался» -- по ней скрипт замены решает, не откатить ли
+// новый бинарь. Пишется только после УСПЕШНОГО отчёта и один раз за процесс
+// (не лишняя запись во флеш на каждый отчёт).
+func TestReporterWritesReportOKMarkerOnceAfterSuccess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "report-ok")
+	s := &stubSender{err: errors.New("backend down")}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "v0.46.0", Interval: time.Hour, ReportOKPath: marker})
+
+	r.sendOnce(context.Background())
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("marker must not appear after a failed report, stat err=%v", err)
+	}
+
+	s.err = nil
+	r.sendOnce(context.Background())
+	body, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker missing after a successful report: %v", err)
+	}
+	if !strings.Contains(string(body), "v0.46.0") {
+		t.Fatalf("marker = %q, want the agent version", body)
+	}
+
+	_ = os.Remove(marker)
+	r.sendOnce(context.Background())
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("marker must be written once per process, not on every report")
 	}
 }

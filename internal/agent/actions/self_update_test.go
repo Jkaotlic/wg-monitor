@@ -333,7 +333,7 @@ func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
 }
 
 func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor")
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", true)
 
 	required := []string{
 		"/opt/etc/init.d/S99wg-monitor start",
@@ -360,7 +360,7 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 // after 2 s. A crash-after-start (e.g. config parse error) would pass a
 // single 2 s check but fail within the 60 s polling window.
 func TestSelfUpdateSwapScriptPollsForHealthAfterStart(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor")
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", true)
 
 	// Must contain a loop that polls for process health after start.
 	if !strings.Contains(script, "while ") && !strings.Contains(script, "for ") {
@@ -923,5 +923,56 @@ func TestSelfUpdate_RequiresVersionBindingForNewTags(t *testing.T) {
 				t.Fatalf("want a VERSION binding refusal, got %v", err)
 			}
 		})
+	}
+}
+
+// AGENT-11: откат после обновления. «Процесс жив 60 с» мало: агент, который
+// жив, но не может отчитаться (сломан конфиг под новую версию, паника в
+// проверке до отправки), считался здоровым навсегда. Новая версия (>= v0.46)
+// после первого успешного отчёта кладёт метку; нет метки за окно -- откат.
+// .bak делается заново каждый раз: не вышло скопировать -- обновление не
+// ставится, иначе откат вернул бы бинарь с позапрошлого обновления.
+func TestSelfUpdateSwapScriptRequiresReportMarkerAndFreshBackup(t *testing.T) {
+	const bin, marker = "/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok"
+	script := selfUpdateSwapScript(bin, marker, true)
+	ordered := []string{
+		"rm -f " + bin + ".bak",
+		"if ! cp -p " + bin + " " + bin + ".bak; then",
+		"rm -f " + bin + ".new",
+		"exit 1",
+		"rm -f " + marker,
+		"mv " + bin + ".new " + bin,
+		"/opt/etc/init.d/S99wg-monitor start",
+		"[ -f " + marker + " ]",
+		"mv " + bin + ".bak " + bin,
+	}
+	last := -1
+	for _, want := range ordered {
+		idx := strings.Index(script[last+1:], want)
+		if idx < 0 {
+			t.Fatalf("script missing %q after offset %d:\n%s", want, last, script)
+		}
+		last += idx + len(want)
+	}
+	if strings.Contains(script, "cp -p "+bin+" "+bin+".bak 2>/dev/null\n") {
+		t.Fatalf("backup failure must not be ignored:\n%s", script)
+	}
+
+	legacy := selfUpdateSwapScript(bin, marker, false)
+	if strings.Contains(legacy, "[ -f "+marker+" ]") {
+		t.Fatalf("a target without the marker (downgrade below v0.46) must not wait for it:\n%s", legacy)
+	}
+	for _, s := range []string{script, legacy} {
+		if out, err := exec.Command("sh", "-n", "-c", s).CombinedOutput(); err != nil {
+			t.Fatalf("swap script is not valid sh: %v\n%s\n%s", err, out, s)
+		}
+	}
+}
+
+func TestSelfUpdateRequiresReportMarkerOnlyForMarkerAwareTargets(t *testing.T) {
+	for v, want := range map[string]bool{"v0.46.0": true, "v0.47.2": true, "v0.45.0": false, "v0.40.0": false} {
+		if got := selfUpdateTargetWritesReportMarker(v); got != want {
+			t.Errorf("%s: writes marker = %v, want %v", v, got, want)
+		}
 	}
 }
