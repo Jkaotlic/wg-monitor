@@ -65,3 +65,20 @@ func TestMiniappResultUnknownCmdIsNotFoundForNonAdmin(t *testing.T) {
 		t.Fatalf("неизвестная команда выдана за «ещё не готово»: %s", res.Body.String())
 	}
 }
+
+// Ответ не выдаёт, существует ли команда: неизвестная и админская для
+// не-админа -- одно и то же тело 404.
+func TestMiniappResultUnknownAndAdminOnlyLookTheSame(t *testing.T) {
+	_, ownedID, ownerTG, _, h := miniappRealQueueFleet(t)
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &issued)
+	adminOnly := miniappPollResult(t, h, ownedID, ownerTG, issued.CmdID)
+	unknown := miniappPollResult(t, h, ownedID, ownerTG, "no-such-cmd")
+	if adminOnly.Code != http.StatusNotFound || unknown.Code != http.StatusNotFound ||
+		adminOnly.Body.String() != unknown.Body.String() {
+		t.Fatalf("различимы: %d %q против %d %q", adminOnly.Code, adminOnly.Body.String(), unknown.Code, unknown.Body.String())
+	}
+}

@@ -444,7 +444,7 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 			// SEC-02: действие неизвестно (очередь знает и ждущие, и
 			// выданные, и отвеченные команды) -- роль проверить не по чему.
 			// Не ждём ответа, который потом нечем было бы загородить.
-			writeJSONError(w, http.StatusNotFound, "not_found", "command not found")
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 			return
 		}
 		if known {
