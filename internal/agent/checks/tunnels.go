@@ -448,14 +448,26 @@ func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.
 	if matrix == nil {
 		return false
 	}
-	if _, ok := matrix.BestLatency(tunnelID); !ok {
-		return false
+	// Устаревшая ячейка ничего не доказывает: она могла быть снята до
+	// обрыва. Свежесть меряем по времени САМОЙ ячейки (CHK-05): общая
+	// отметка матрицы свежа, пока обновляются соседи.
+	for _, c := range matrix.Cells {
+		if c.TunnelID == tunnelID && c.OK && matrixCellFresh(matrix, c, now) {
+			return true
+		}
 	}
-	// Устаревшая матрица ничего не доказывает: она могла быть снята до
-	// обрыва. Свежесть меряем по её же отметке времени.
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
+	return false
+}
+
+// matrixCellFresh -- ячейка снята не раньше matrixFreshWindow назад. Время
+// ячейки (ts) главнее; нет ts или он в незнакомом виде -- общая отметка
+// матрицы (updatedAt), как было до CHK-05.
+func matrixCellFresh(matrix *awgmgr.MonitoringMatrix, c awgmgr.MatrixCell, now time.Time) bool {
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(c.TS))
 	if err != nil {
-		return false
+		if ts, err = time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt)); err != nil {
+			return false
+		}
 	}
 	return now.Sub(ts) <= matrixFreshWindow
 }
@@ -472,12 +484,12 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 	if matrix == nil {
 		return false
 	}
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
-	if err != nil || now.Sub(ts) > matrixFreshWindow {
-		return false
-	}
 	own, othersAlive := 0, false
 	for _, c := range matrix.Cells {
+		// CHK-05: в счёт идут только свежие ячейки -- и свои, и соседей.
+		if !matrixCellFresh(matrix, c, now) {
+			continue
+		}
 		if c.TunnelID == tunnelID {
 			if c.OK {
 				return false

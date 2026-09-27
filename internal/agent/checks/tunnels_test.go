@@ -892,3 +892,47 @@ func TestTunnelsCheck_DoesNotSuppressDeadTunnelThatCarriesPolicyOrDefault(t *tes
 		})
 	}
 }
+
+// CHK-05: свежесть матрицы мерилась по её общей отметке updatedAt, а не по
+// времени самой ячейки. Устаревшая успешная ячейка мёртвого туннеля при
+// свежей матрице (соседи обновились) «оживляла» его.
+func TestMatrixVerdictUsesCellTimestamp(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-time.Minute).Format(time.RFC3339)
+	stale := now.Add(-30 * time.Minute).Format(time.RFC3339)
+	m := &awgmgr.MonitoringMatrix{
+		UpdatedAt: fresh,
+		Cells: []awgmgr.MatrixCell{
+			{TargetID: "t1", TunnelID: "dead", OK: true, LatencyMs: 40, TS: stale},
+			{TargetID: "t1", TunnelID: "alive", OK: true, LatencyMs: 50, TS: fresh},
+		},
+	}
+	if matrixSaysAlive(m, "dead", now) {
+		t.Fatal("a stale OK cell must not prove the tunnel alive")
+	}
+	if !matrixSaysAlive(m, "alive", now) {
+		t.Fatal("a fresh OK cell proves the tunnel alive")
+	}
+
+	// Устаревшая проваленная ячейка тоже ничего не доказывает.
+	m2 := &awgmgr.MonitoringMatrix{
+		UpdatedAt: fresh,
+		Cells: []awgmgr.MatrixCell{
+			{TargetID: "t1", TunnelID: "x", OK: false, TS: stale},
+			{TargetID: "t1", TunnelID: "alive", OK: true, TS: fresh},
+		},
+	}
+	if matrixSaysDead(m2, "x", now) {
+		t.Fatal("a stale failed cell must not prove the tunnel dead")
+	}
+	m2.Cells[0].TS = fresh
+	if !matrixSaysDead(m2, "x", now) {
+		t.Fatal("a fresh failed cell with a live neighbour proves the tunnel dead")
+	}
+
+	// Сборка без ts у ячеек: прежнее поведение по updatedAt.
+	m3 := &awgmgr.MonitoringMatrix{UpdatedAt: fresh, Cells: []awgmgr.MatrixCell{{TargetID: "t1", TunnelID: "a", OK: true}}}
+	if !matrixSaysAlive(m3, "a", now) {
+		t.Fatal("cells without ts fall back to the matrix updatedAt")
+	}
+}
