@@ -359,22 +359,30 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	if len(reasons) == 0 {
 		return OK(name, start, details)
 	}
-	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) && !tunnelCarriesTraffic(tu, carrier) {
-		details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
-		return OK(name, start, details)
+	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) {
+		switch used, known := tunnelCarrierVerdict(tu, carrier); {
+		case !known:
+			// Ревью CHK-01: политики не прочитались -- несёт ли туннель
+			// трафик, неизвестно. Одна ошибка чтения не роняет туннель в
+			// fail: ok + unverified с причиной и настоящими претензиями.
+			details["unverified_problems"] = strings.Join(reasons, "; ")
+			return Unverified(name, start, "access policies unreadable: cannot tell whether this rule-less tunnel carries traffic", details)
+		case !used:
+			details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
+			return OK(name, start, details)
+		}
 	}
 	return Fail(name, start, strings.Join(reasons, "; "), details)
 }
 
-// tunnelCarriesTraffic -- CHK-01: туннель без правил всё равно может нести
-// трафик (звено политики, назначенный выход). Неизвестно -- считаем, что
-// несёт: глушить падение вслепую нельзя.
-func tunnelCarriesTraffic(tu awgmgr.Tunnel, carrier tunnelCarrierLookup) bool {
+// tunnelCarrierVerdict -- CHK-01: туннель без правил всё равно может нести
+// трафик (звено политики, назначенный выход). known=false -- политики не
+// прочитались.
+func tunnelCarrierVerdict(tu awgmgr.Tunnel, carrier tunnelCarrierLookup) (used, known bool) {
 	if carrier == nil {
-		return false
+		return false, true
 	}
-	used, known := carrier(tu)
-	return used || !known
+	return carrier(tu)
 }
 
 // dropStaleHandshakeReason убирает из причин только «рукопожатие устарело».

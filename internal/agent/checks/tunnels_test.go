@@ -846,7 +846,9 @@ func TestTunnelsCheck_DoesNotSuppressDeadTunnelThatCarriesPolicyOrDefault(t *tes
 	}{
 		{"link of a policy chain", `[{"name":"HydraRoute","interfaces":[{"name":"Wireguard1","order":0}]}]`, "", 200, "fail"},
 		{"authoritative default egress", `[]`, "awg10", 200, "fail"},
-		{"policies unreadable", ``, "", 500, "fail"},
+		// Ревью: одна ошибка чтения политик не роняет туннель в fail --
+		// ok + unverified с причиной.
+		{"policies unreadable", ``, "", 500, "ok+unverified"},
 		{"really unused", `[{"name":"HydraRoute","interfaces":[{"name":"Wireguard7","order":0}]}]`, "", 200, "ok"},
 		{"old build without policies", ``, "", 404, "ok"},
 	}
@@ -882,6 +884,15 @@ func TestTunnelsCheck_DoesNotSuppressDeadTunnelThatCarriesPolicyOrDefault(t *tes
 			out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
 			for _, c := range out {
 				if c.Name == "tunnel_awg10" {
+					if tc.wantStatus == "ok+unverified" {
+						if c.Status != "ok" || c.Details["unverified"] != true || c.Details["unverified_reason"] == nil {
+							t.Fatalf("want ok+unverified with a reason: %+v", c)
+						}
+						return
+					}
+					if c.Details["unverified"] != nil {
+						t.Fatalf("unexpected unverified flag: %+v", c)
+					}
 					if c.Status != tc.wantStatus {
 						t.Fatalf("status=%q, want %q: %+v", c.Status, tc.wantStatus, c)
 					}
