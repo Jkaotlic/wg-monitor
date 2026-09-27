@@ -820,6 +820,12 @@ func (w *Watcher) readUpstreams(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("show running-config: %w", err)
 	}
+	// CHK-04: пустой вывод с кодом 0 бывает у ndmc -- это «не прочитано», а
+	// не «на роутере нет строк». Иначе своя строка «пропадала», сторож уходил
+	// в idle и стирал запись о запасных строках.
+	if strings.TrimSpace(string(out)) == "" {
+		return nil, errors.New("show running-config: empty output")
+	}
 	return actions.ParseDNSProxyUpstreams(string(out)), nil
 }
 
