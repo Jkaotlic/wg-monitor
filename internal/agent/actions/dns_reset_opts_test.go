@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 )
@@ -179,5 +180,49 @@ func TestDNSResetMasksSecretDoHPaths(t *testing.T) {
 		if !strings.Contains(out, "https://dns.example.com/dns-query") {
 			t.Errorf("dry=%v: публичный путь /dns-query незачем прятать:\n%s", dry, out)
 		}
+	}
+}
+
+// AGENT-03: эталон не подтвердился -- конфиг НЕ сохраняется. Иначе старые
+// серверы сняты, новые не встали, и это переживает перезагрузку: роутер
+// остаётся без DNS насовсем. Без сохранения перезагрузка вернёт прежнее.
+func TestDNSResetDoesNotSaveWhenReferenceNotApplied(t *testing.T) {
+	ref := dnsref.ReferenceDoTLines()
+	f := &replayDNSExec{
+		configs: []string{sampleRunningConfig, "! configuration\ndns-proxy\n!\n"},
+		failOn:  map[string]bool{"dns-proxy " + ref[0]: true},
+	}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
+	for _, c := range f.calls {
+		if c == "system configuration save" {
+			t.Fatalf("сохранил конфиг, хотя эталон не встал:\n%s", out)
+		}
+	}
+	if status == "ok" {
+		t.Fatalf("status = ok при несостоявшемся сбросе:\n%s", out)
+	}
+	if !strings.Contains(out, "не сохранён") {
+		t.Fatalf("человеку не сказано, что конфиг не сохранён:\n%s", out)
+	}
+}
+
+// Удачный сброс по-прежнему сохраняется.
+func TestDNSResetSavesWhenReferenceConfirmed(t *testing.T) {
+	f := &replayDNSExec{configs: []string{sampleRunningConfig, configAfterApplyWithPorts()}}
+	_, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
+	saved := false
+	for _, c := range f.calls {
+		saved = saved || c == "system configuration save"
+	}
+	if !saved {
+		t.Fatalf("подтверждённый сброс не сохранён:\n%s", out)
+	}
+}
+
+// AGENT-03: сброс -- десятки вызовов ndmc подряд плюс два чтения конфига;
+// 45 с по умолчанию на медленном роутере обрывают его посередине.
+func TestDNSResetHasLongerActionTimeout(t *testing.T) {
+	if d := actionTimeoutOverrides["dns_reset"]; d < 90*time.Second {
+		t.Fatalf("dns_reset timeout = %v, want >= 90s", d)
 	}
 }

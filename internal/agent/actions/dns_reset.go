@@ -153,12 +153,18 @@ func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		"remove existing dns-proxy upstreams", remove,
 		"apply reference upstreams", reference)
 
+	// AGENT-03: сначала подтверждение по факту, потом сохранение -- и только
+	// если эталон встал. Иначе сохранилось бы «старые сняты, новые не
+	// встали», и роутер остался бы без DNS и после перезагрузки. Без
+	// сохранения перезагрузка вернёт прежние настройки.
+	missing := confirmDNSReferenceApplied(ctx, exec, &b, reference)
+	failures += missing
 	b.WriteString("\nsave:\n")
-	if !ndmcStep(ctx, exec, &b, "system configuration save") {
+	if missing > 0 {
+		b.WriteString("  ✗ конфиг не сохранён: эталон не подтвердился. Изменения живут до перезагрузки — после неё вернутся прежние DNS-настройки.\n")
+	} else if !ndmcStep(ctx, exec, &b, "system configuration save") {
 		failures++
 	}
-
-	failures += confirmDNSReferenceApplied(ctx, exec, &b, reference)
 
 	if len(plain) > 0 {
 		fmt.Fprintf(&b, "\nNOTE: %d per-interface name-server entr(y/ies) left untouched "+
