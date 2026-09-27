@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -619,5 +621,82 @@ func TestOpkgCronScriptUsesSharedLockDir(t *testing.T) {
 	m := &OpkgCronManager{}
 	if !strings.Contains(m.scriptText(), "LOCK="+OpkgCronSharedLockDir+"\n") {
 		t.Fatalf("cron script lock differs from OpkgCronSharedLockDir %q", OpkgCronSharedLockDir)
+	}
+}
+
+// AGENT-14 (ревью): замок в /tmp, брошенный после kill -9, висел до
+// перезагрузки или двух часов. Теперь владелец пишет в него свой pid:
+// владелец мёртв -- замок снимается и берётся; жив -- «занято»; pid нет
+// (старый cron-скрипт) и замок свежий -- честно «владелец неизвестен».
+func TestOpkg_SharedLockOwnerPid(t *testing.T) {
+	newRunner := func(t *testing.T) (*OpkgRunner, *bool) {
+		ran := false
+		o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			ran = true
+			return nil, nil
+		})
+		o.SharedLockDir = filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+		return o, &ran
+	}
+	lockWithPid := func(t *testing.T, dir string, pid int) {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if pid > 0 {
+			if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("owner alive", func(t *testing.T) {
+		o, ran := newRunner(t)
+		lockWithPid(t, o.SharedLockDir, os.Getpid())
+		st, out, _ := o.SmartUpgrade(context.Background())
+		if st != "locked" || *ran || !strings.Contains(out, "идёт") {
+			t.Fatalf("status=%q ran=%v out=%q", st, *ran, out)
+		}
+	})
+	t.Run("owner dead", func(t *testing.T) {
+		o, ran := newRunner(t)
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		lockWithPid(t, o.SharedLockDir, cmd.Process.Pid)
+		var pidDuring string
+		o.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			*ran = true
+			b, _ := os.ReadFile(filepath.Join(o.SharedLockDir, "pid"))
+			pidDuring = strings.TrimSpace(string(b))
+			return nil, nil
+		}
+		if st, out, _ := o.SmartUpgrade(context.Background()); st != "ok" || !*ran {
+			t.Fatalf("a lock of a dead owner must be taken over: status=%q out=%q", st, out)
+		}
+		if pidDuring != strconv.Itoa(os.Getpid()) {
+			t.Fatalf("lock must carry our pid while held, got %q", pidDuring)
+		}
+		if _, err := os.Stat(o.SharedLockDir); !os.IsNotExist(err) {
+			t.Fatal("lock not released")
+		}
+	})
+	t.Run("no pid, fresh", func(t *testing.T) {
+		o, ran := newRunner(t)
+		lockWithPid(t, o.SharedLockDir, 0)
+		st, out, _ := o.SmartUpgrade(context.Background())
+		if st != "locked" || *ran || strings.Contains(out, "идёт обновление") || !strings.Contains(out, "неизвест") {
+			t.Fatalf("status=%q ran=%v out=%q", st, *ran, out)
+		}
+	})
+}
+
+// Cron-скрипт тоже пишет свой pid в замок и снимает замок вместе с ним.
+func TestOpkgCronScriptWritesPidIntoLock(t *testing.T) {
+	s := (&OpkgCronManager{}).scriptText()
+	for _, want := range []string{`echo $$ > "$LOCK/pid"`, `rm -f "$LOCK/pid"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("cron script missing %q", want)
+		}
 	}
 }

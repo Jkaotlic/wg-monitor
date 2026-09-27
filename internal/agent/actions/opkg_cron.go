@@ -345,7 +345,8 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   trim_log
   exit 0
 fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
+echo $$ > "$LOCK/pid"
+trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
 free="$(free_kb)"
 case "$free" in
