@@ -99,11 +99,15 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	if !ok {
 		return revive.Outcome{}, false
 	}
+	// REV-03: вход в терминал прошёл, если шаг config_written начался
+	// (маркер пишет установщик уже после входа) -- даже когда установка
+	// потом упала.
+	verified := reviveLoginPassed(job.Steps)
 	switch job.State {
 	case provision.StateRunning:
 		return revive.Outcome{}, true
 	case provision.StateSuccess:
-		return revive.Outcome{Finished: true, Success: true, Version: job.Version}, true
+		return revive.Outcome{Finished: true, Success: true, CredentialsVerified: true, Version: job.Version}, true
 	}
 	// Ошибка входа узнаётся СТРОГО по job.Hint == provision.HintAuthFailed --
 	// структурному полю, которое runner.go проставляет сам после разбора
@@ -121,7 +125,16 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	if job.Hint == provision.HintAuthFailed {
 		return revive.Outcome{Finished: true, AuthFailed: true, Text: "пароль не подошёл"}, true
 	}
-	return revive.Outcome{Finished: true, Text: reviveStepText(reviveFailedStep(job.Steps))}, true
+	return revive.Outcome{Finished: true, CredentialsVerified: verified, Text: reviveStepText(reviveFailedStep(job.Steps))}, true
+}
+
+func reviveLoginPassed(steps []provision.Step) bool {
+	for _, st := range steps {
+		if st.Name == provision.StepConfigWritten {
+			return st.Status != provision.StepPending
+		}
+	}
+	return false
 }
 
 // reviveBackendVersion -- «пусто = версия бэкенда на момент запуска». Сборка

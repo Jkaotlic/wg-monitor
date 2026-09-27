@@ -316,6 +316,13 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	}
 	nick := s.nickname(routerID)
 	running := []string{StatusRunning}
+	// REV-03: пароль, которым вход прошёл, сохраняется для авто-оживления --
+	// до finish, который сотрёт секрет намерения. Авто-оживление взяло его из
+	// сохранённого же -- переписывать нечего (и saved_at не двигаем: по нему
+	// autoBlockedBy судит об отмене админа).
+	if out.CredentialsVerified && in.RequestedBy != RequestedBySystem {
+		s.saveVerifiedSecret(routerID)
+	}
 	switch {
 	case out.Success:
 		s.finish(ctx, routerID, running, StatusDone, reasonRevived, func(st bool) string { return noticeRevived(nick, out.Version, st) }, in.Generation)
@@ -325,6 +332,30 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	default:
 		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false, in.Generation)
 	}
+}
+
+// saveVerifiedSecret кладёт секрет намерения в router_credentials как есть
+// (шифртекст тот же ключ и тот же AAD). Ошибка -- в журнал: оживление идёт
+// своим ходом, пароль можно ввести снова.
+func (s *Service) saveVerifiedSecret(routerID int64) {
+	nonce, ct, ok, err := s.cfg.DB.Revive().Secret(routerID)
+	if err != nil || !ok {
+		return
+	}
+	creds, err := s.box.Open(routerID, nonce, ct)
+	if err != nil || !creds.Usable() {
+		return
+	}
+	nonce, ct, err = s.box.Seal(routerID, creds)
+	creds = Secrets{}
+	if err != nil {
+		return
+	}
+	if err := s.cfg.DB.RouterCredentials().Put(routerID, nonce, ct, s.now()); err != nil {
+		s.logger.Warn("оживление: проверенный пароль не сохранён", "router_id", routerID, "err", err)
+		return
+	}
+	s.logger.Info("пароль, которым прошёл вход, сохранён зашифрованным", "router_id", routerID)
 }
 
 // attemptFailed -- неудачная попытка: окончательная -> failed сразу;

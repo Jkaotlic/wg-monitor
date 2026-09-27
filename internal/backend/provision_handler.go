@@ -632,6 +632,10 @@ type reinstallInput struct {
 	AWGMAPIKey     string
 	Version        string
 	AllowDowngrade bool
+	// AfterCommit, если задан, зовётся сразу после коммита токена
+	// (config_written): вход в терминал этим паролем уже прошёл. Мини-апп
+	// сохраняет здесь пароль root (REV-03, как у провижининга).
+	AfterCommit func()
 }
 
 // repairStartError -- отказ запуска переустановки: HTTP-статус и код, которые
@@ -704,8 +708,13 @@ func startRepairReinstall(ctx context.Context, d Deps, nickname string, user *db
 		return "", "", provisionEnrollmentStartError(err)
 	}
 	commit := func() error {
-		_, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID))
-		return err
+		if _, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID)); err != nil {
+			return err
+		}
+		if in.AfterCommit != nil {
+			in.AfterCommit()
+		}
+		return nil
 	}
 
 	job := awgmInstallJob{

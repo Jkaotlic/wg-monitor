@@ -191,11 +191,10 @@ func miniappAgentReviveHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		// Решение оператора 18.09: пароль root сохраняется зашифрованным для
-		// авто-оживления (router_credentials) -- отдельно от секрета этого
-		// намерения, который сотрётся с его итогом.
-		rememberRouterCredentials(d, u.ID, revive.StoredCredentials{
-			RootPassword: req.RootPassword, AWGMLogin: req.AWGMLogin, AWGMPassword: req.AWGMPassword, AWGMAPIKey: req.AWGMAPIKey,
-		}, "revive", adminID)
+		// авто-оживления (router_credentials). REV-03: не здесь -- постановка
+		// пароль не проверяет, и неверный затёр бы рабочий сохранённый.
+		// Сохраняет воркер оживления, когда вход в терминал этим паролем
+		// прошёл (Outcome.CredentialsVerified).
 		resp := miniappReviveAccepted(intent)
 		if d.Logger != nil {
 			d.Logger.Info("miniapp agent revive scheduled",

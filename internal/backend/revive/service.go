@@ -76,8 +76,12 @@ type Outcome struct {
 	Finished   bool
 	Success    bool
 	AuthFailed bool
-	Version    string
-	Text       string
+	// CredentialsVerified -- вход в терминал роутера этим паролем прошёл
+	// (шаг config_written достигнут), даже если установка потом не удалась.
+	// Только тогда пароль ручного оживления сохраняется (REV-03).
+	CredentialsVerified bool
+	Version             string
+	Text                string
 }
 
 // LaunchError -- отказ запуска. Permanent -- повторять бессмысленно
