@@ -88,7 +88,7 @@ type ReporterConfig struct {
 	// процесса (actions.SelfUpdateReportOKPath). Пусто -- не писать.
 	ReportOKPath string
 	// ReportRejectedPath -- куда положить метку, когда бэкенд явно отверг
-	// отчёт (ErrUnauthorized, ErrReportRejected). Сеть и 5xx её не ставят:
+	// отчёт (ErrReportRejected: JSON-ответ 4xx, включая 401/403). Сеть и 5xx её не ставят:
 	// авария бэкенда -- не повод откатывать обновление. Пусто -- не писать.
 	ReportRejectedPath string
 }
@@ -193,7 +193,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	canonicalURL, err := r.sender.SendReport(ctx, report)
 	if err != nil {
 		slog.Warn("send report failed", "err", err)
-		if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrReportRejected) {
+		if errors.Is(err, ErrReportRejected) {
 			r.markReportRejected()
 		}
 		if errors.Is(err, ErrUnauthorized) {

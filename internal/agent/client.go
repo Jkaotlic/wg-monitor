@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -102,10 +103,17 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, er
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// Отказом (метка report-rejected -> откат свежего обновления) считается
+		// только ответ самого бэкенда: он всегда отвечает JSON. HTML-страница
+		// прокси перед лежащим бэкендом -- отвал, а не отказ.
+		fromBackend := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json")
 		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
+			if fromBackend {
+				return "", fmt.Errorf("%w (%w)", e, ErrReportRejected)
+			}
 			return "", e
 		}
-		if resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
+		if fromBackend && resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
 			return "", fmt.Errorf("%w: backend returned %d: %s", ErrReportRejected, resp.StatusCode, string(preview))
 		}
 		return "", fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))

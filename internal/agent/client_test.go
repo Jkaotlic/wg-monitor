@@ -305,6 +305,7 @@ func TestSendReportClassifiesExplicitRejection(t *testing.T) {
 		want   bool
 	}{{422, true}, {400, true}, {429, false}, {408, false}, {503, false}} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8") // ответ самого бэкенда
 			w.WriteHeader(tc.status)
 		}))
 		c := NewClient(srv.URL, "token", "v0.46.0", 5*time.Second)

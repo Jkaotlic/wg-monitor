@@ -441,7 +441,8 @@ func TestReporterWritesRejectedMarkerOnlyOnExplicit4xx(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"401", fmt.Errorf("%w: status=401", ErrUnauthorized), true},
+		{"401 from backend", fmt.Errorf("%w (%w)", fmt.Errorf("%w: status=401", ErrUnauthorized), ErrReportRejected), true},
+		{"401 from proxy page", fmt.Errorf("%w: status=401", ErrUnauthorized), false},
 		{"422", fmt.Errorf("%w: status=422", ErrReportRejected), true},
 		{"5xx", errors.New("backend returned 503: busy"), false},
 		{"network", errors.New("dial tcp 203.0.113.9:443: connect: connection refused"), false},
