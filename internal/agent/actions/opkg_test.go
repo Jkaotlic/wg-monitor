@@ -535,3 +535,89 @@ func TestOpkg_DisableFeed_ThenSmartUpgrade(t *testing.T) {
 		t.Errorf("payload.FailedFeeds should be empty after repair; got %v", payload.FailedFeeds)
 	}
 }
+
+// AGENT-14: срок действия команды (300 с) убивал `opkg upgrade` SIGKILL'ом
+// посреди установки -- пакеты оставались наполовину распакованными. Теперь
+// установка не привязана к сроку команды (у неё свой потолок), а
+// обновление списков и оценка места -- по-прежнему.
+func TestOpkg_SmartUpgrade_UpgradeSurvivesActionDeadline(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var upgradeCtxErr error
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "opkg" && args[0] == "update":
+			return []byte("Updated list of available packages in /opt/var/opkg-lists/entware\n"), nil
+		case name == "opkg" && args[0] == "list-upgradable":
+			return []byte("curl - 8.1 - 8.2\n"), nil
+		case name == "opkg" && args[0] == "info":
+			return []byte("Package: curl\nInstalled-Size: 100\n"), nil
+		case name == "df":
+			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 100000 100000 50% /opt\n"), nil
+		case name == "opkg" && args[0] == "upgrade":
+			cancel() // срок команды истёк посреди установки
+			time.Sleep(20 * time.Millisecond)
+			upgradeCtxErr = ctx.Err()
+			return []byte("Upgrading curl on root from 8.1 to 8.2...\n"), nil
+		}
+		return nil, nil
+	})
+	status, out, _ := o.SmartUpgrade(parent)
+	if upgradeCtxErr != nil {
+		t.Fatalf("opkg upgrade was cancelled by the action deadline (%v): a SIGKILL mid-install", upgradeCtxErr)
+	}
+	if status != "ok" {
+		t.Fatalf("status=%q out=%q", status, out)
+	}
+}
+
+// AGENT-14: cron-обновление (скрипт opkg_cron) берёт mkdir-замок в /tmp, а
+// агент -- свой файл. Два opkg одновременно ломают базу пакетов. Теперь
+// агент берёт и общий замок cron: занят -- "locked", opkg не запускается.
+func TestOpkg_SmartUpgrade_RespectsCronLock(t *testing.T) {
+	called := false
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	})
+	o.SharedLockDir = filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+	if err := os.Mkdir(o.SharedLockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status, out, _ := o.SmartUpgrade(context.Background())
+	if status != "locked" {
+		t.Fatalf("status=%q, want locked while cron upgrade runs; out=%q", status, out)
+	}
+	if called {
+		t.Fatal("opkg ran while the cron upgrade holds the lock")
+	}
+	if _, err := os.Stat(o.SharedLockDir); err != nil {
+		t.Fatal("the cron lock must be left to its owner")
+	}
+
+	// Свободен -- агент берёт его на время работы и отпускает.
+	_ = os.Remove(o.SharedLockDir)
+	var heldDuring bool
+	o.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		_, err := os.Stat(o.SharedLockDir)
+		heldDuring = heldDuring || err == nil
+		return nil, nil
+	}
+	if st, out, _ := o.SmartUpgrade(context.Background()); st != "ok" {
+		t.Fatalf("status=%q out=%q", st, out)
+	}
+	if !heldDuring {
+		t.Fatal("agent did not hold the shared cron lock while running opkg")
+	}
+	if _, err := os.Stat(o.SharedLockDir); !os.IsNotExist(err) {
+		t.Fatal("shared cron lock not released")
+	}
+}
+
+// Общий замок работает, только пока путь у агента и в cron-скрипте один.
+func TestOpkgCronScriptUsesSharedLockDir(t *testing.T) {
+	m := &OpkgCronManager{}
+	if !strings.Contains(m.scriptText(), "LOCK="+OpkgCronSharedLockDir+"\n") {
+		t.Fatalf("cron script lock differs from OpkgCronSharedLockDir %q", OpkgCronSharedLockDir)
+	}
+}
