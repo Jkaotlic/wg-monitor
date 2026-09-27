@@ -38,6 +38,10 @@ type miniappReplaceResp struct {
 	// Running -- идёт ли замена прямо сейчас. Экран рисует по нему шаги
 	// вместо кнопки: параллельные замены запрещены.
 	Running bool `json:"running"`
+	// CheckName и TunnelID -- что чинит починка линии (MINI-05): экран
+	// рисует «Чиню» только у этого VPN-туннеля. Замена конфига их не шлёт.
+	CheckName string `json:"check_name,omitempty"`
+	TunnelID  string `json:"tunnel_id,omitempty"`
 }
 
 func miniappReplaceJobResp(job provision.Job) miniappReplaceResp {
