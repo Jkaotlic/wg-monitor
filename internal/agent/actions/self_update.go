@@ -171,7 +171,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	primary := &selfUpdateSource{
 		name:   "backend",
 		base:   repoBase,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: newSelfUpdateHTTPClient(),
 	}
 	if len(repoBaseOpt) > 1 && strings.TrimSpace(repoBaseOpt[1]) != "" {
 		primary.fallback, primary.fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
@@ -194,7 +194,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 			}
 			// Наш бэкенд выпуск так и не отдал -- тот же выпуск с GitHub.
 			// Проверка ровно та же: подпись checksums.txt и sha256 бинаря.
-			gh := &selfUpdateSource{name: "github", base: github, client: &http.Client{Timeout: 60 * time.Second}}
+			gh := &selfUpdateSource{name: "github", base: github, client: newSelfUpdateHTTPClient()}
 			if ghErr := selfUpdateFrom(ctx, gh, version, assetName); ghErr != nil {
 				if selfUpdateIsBusy(backendErr) && selfUpdateIsFetchError(ghErr) {
 					// Роутер не виноват: прокси занят, а GitHub отсюда не
@@ -609,26 +609,97 @@ func selfUpdateHeadroomKB(totalKB int64) int64 {
 	return h
 }
 
+// AGENT-12: таймауты скачивания. Прежний http.Client{Timeout: 60s} был
+// потолком на ВЕСЬ запрос: бинарь в десятки мегабайт по медленному LTE не
+// успевал никогда. Теперь соединение, TLS и заголовки ответа ограничены
+// каждый своим сроком, тело -- простоем (нет ни байта selfUpdateIdleTimeout),
+// а общий потолок -- ctx команды (actionTimeoutOverrides["self_update"]).
+var (
+	selfUpdateIdleTimeout   = 60 * time.Second
+	selfUpdateHeaderTimeout = 60 * time.Second
+	selfUpdateDialTimeout   = 30 * time.Second
+)
+
+// errSelfUpdateStalled -- тело перестало идти. Текст содержит "timeout":
+// isSelfUpdateTransportError считает это сетевой бедой (запасной IP/GitHub).
+var errSelfUpdateStalled = errors.New("download stalled: no data within the idle timeout")
+
+func newSelfUpdateHTTPClient() *http.Client {
+	return &http.Client{Transport: newSelfUpdateTransport(nil)}
+}
+
+func newSelfUpdateTransport(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if dialContext == nil {
+		dialContext = (&net.Dialer{Timeout: selfUpdateDialTimeout, KeepAlive: 30 * time.Second}).DialContext
+	}
+	t.DialContext = dialContext
+	t.TLSHandshakeTimeout = 30 * time.Second
+	t.ResponseHeaderTimeout = selfUpdateHeaderTimeout
+	return t
+}
+
+// idleBody -- тело ответа, каждое чтение которого продлевает срок простоя.
+type idleBody struct {
+	r     io.Reader
+	timer *time.Timer
+	idle  time.Duration
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if n > 0 {
+		b.timer.Reset(b.idle)
+	}
+	return n, err
+}
+
+// selfUpdateDo выполняет GET с отсечкой по простою тела. Вызывающий обязан
+// вызвать done() после чтения; stalled(err) переводит ошибку чтения,
+// вызванную простоем, в errSelfUpdateStalled.
+func selfUpdateDo(ctx context.Context, c *http.Client, rawURL string) (resp *http.Response, body io.Reader, done func(), stalled func(error) error, err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	idle := selfUpdateIdleTimeout
+	timer := time.AfterFunc(idle, func() { cancel(errSelfUpdateStalled) })
+	done = func() { timer.Stop(); cancel(nil) }
+	stalled = func(e error) error {
+		if e != nil && errors.Is(context.Cause(ctx), errSelfUpdateStalled) {
+			return fmt.Errorf("%w (i/o timeout)", errSelfUpdateStalled)
+		}
+		return e
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		done()
+		return nil, nil, nil, nil, err
+	}
+	resp, err = c.Do(req)
+	if err != nil {
+		err = stalled(err)
+		done()
+		return nil, nil, nil, nil, err
+	}
+	timer.Reset(idle)
+	return resp, &idleBody{r: resp.Body, timer: timer, idle: idle}, done, stalled, nil
+}
+
 func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 	return httpGetLimited(ctx, c, url, maxSelfUpdateArtifactSize)
 }
 
 func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, rbody, done, stalled, err := selfUpdateDo(ctx, c, url)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	defer done()
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return nil, &selfUpdateHTTPError{Status: resp.StatusCode, URL: url, RetryAfter: resp.Header.Get("Retry-After")}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(rbody, maxBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, stalled(err)
 	}
 	if int64(len(body)) > maxBytes {
 		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxBytes)
@@ -641,14 +712,11 @@ func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes in
 // Avoids loading large binaries into RAM — critical for 64 MB agents on
 // MIPSLE routers with ≤64 MB total memory.
 func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxBytes int64) (sha256hex string, err error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	resp, rbody, done, stalled, err := selfUpdateDo(ctx, c, rawURL)
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", err
-	}
+	defer done()
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		return "", &selfUpdateHTTPError{Status: resp.StatusCode, URL: rawURL, RetryAfter: resp.Header.Get("Retry-After")}
@@ -661,11 +729,11 @@ func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxB
 	}
 
 	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxBytes+1))
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(rbody, maxBytes+1))
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmp)
-		return "", copyErr
+		return "", stalled(copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmp)
@@ -757,7 +825,7 @@ func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dia
 		timeoutSec = 60
 	}
 	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := newSelfUpdateTransport(nil)
 	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -770,7 +838,10 @@ func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dia
 		}
 		return dial(network, pinnedAddr)
 	}
-	return &http.Client{Timeout: time.Duration(timeoutSec) * time.Second, Transport: transport}, ip
+	// Без общего Timeout (AGENT-12): простой тела режет selfUpdateDo, всё
+	// остальное -- транспорт и ctx команды.
+	transport.ResponseHeaderTimeout = time.Duration(timeoutSec) * time.Second
+	return &http.Client{Transport: transport}, ip
 }
 
 // parseChecksum picks the SHA-256 hex for asset `name` from a checksums.txt

@@ -976,3 +976,59 @@ func TestSelfUpdateRequiresReportMarkerOnlyForMarkerAwareTargets(t *testing.T) {
 		}
 	}
 }
+
+// AGENT-12: таймаут -- на простой, а не на всё скачивание. Прежний
+// http.Client{Timeout: 60s} рвал любое скачивание дольше минуты: медленный
+// LTE не обновлялся никогда. Теперь медленный, но идущий поток доезжает, а
+// вставший рвётся по простою; общий потолок -- срок действия команды (ctx).
+func TestSelfUpdateDownloadTimesOutOnStallNotOnTotalDuration(t *testing.T) {
+	oldIdle := selfUpdateIdleTimeout
+	selfUpdateIdleTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { selfUpdateIdleTimeout = oldIdle })
+
+	c := newSelfUpdateHTTPClient()
+	if c.Timeout != 0 {
+		t.Fatalf("client.Timeout = %v: a whole-request cap kills slow-but-steady downloads", c.Timeout)
+	}
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl := w.(http.Flusher)
+		for i := 0; i < 12; i++ { // ~1.2 s total, 3x the idle timeout
+			_, _ = w.Write(bytes.Repeat([]byte{'x'}, 1024))
+			fl.Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	defer slow.Close()
+	dst := filepath.Join(t.TempDir(), "slow.bin")
+	if _, err := httpGetToFile(context.Background(), c, slow.URL, dst, 1<<20); err != nil {
+		t.Fatalf("slow but steady download must finish: %v", err)
+	}
+	if body, err := httpGetLimited(context.Background(), c, slow.URL, 1<<20); err != nil || len(body) != 12*1024 {
+		t.Fatalf("slow but steady small fetch must finish: len=%d err=%v", len(body), err)
+	}
+
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer stalled.Close()
+	defer close(release)
+	start := time.Now()
+	_, err := httpGetToFile(context.Background(), c, stalled.URL, filepath.Join(t.TempDir(), "stall.bin"), 1<<20)
+	if err == nil {
+		t.Fatal("a stalled download must fail")
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("stall detected after %v, want about the idle timeout", el)
+	}
+	if !isSelfUpdateTransportError(err) {
+		t.Fatalf("a stall must count as a transport error (fallback path), got %v", err)
+	}
+}
