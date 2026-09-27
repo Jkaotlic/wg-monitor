@@ -178,6 +178,30 @@ func registerAgent(d Deps, in registerAgentInput) (wizardEnrollmentResp, *repair
 
 // dashboardHandleRegister -- обёртка дашборда над registerAgent.
 func dashboardHandleRegister(w http.ResponseWriter, r *http.Request, d Deps, req dashboardProvisionReq) {
+	// PROV-01: те же две защиты, что у приглашения мини-аппа. Живой агент
+	// (хоть раз отчитывался) токен не перевыпускает: хеш перепишется, агент
+	// получит 401 и замолчит -- для него «Переустановить». И выпуск -- под
+	// замком: идущая установка этого роутера иначе закоммитила бы на
+	// config_written токен, который регистрация уже переписала.
+	existing, err := lookupExistingUser(d.DB, req.Nickname)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+	if existing != nil && existing.LastSeenAt != nil {
+		writeJSONError(w, http.StatusConflict, "nickname_taken",
+			"agent with this nickname is live — use reinstall instead of re-registering")
+		return
+	}
+	if d.Provision.Store != nil {
+		release, locked := tryProvisionMintLock(d.Provision.Store, req.Nickname)
+		if !locked {
+			writeJSONError(w, http.StatusConflict, "provision_already_running",
+				"provisioning already in progress for this router")
+			return
+		}
+		defer release()
+	}
 	enrollment, serr := registerAgent(d, registerAgentInput{
 		Nickname: req.Nickname, AgentKind: req.AgentKind, AWGMURL: req.AWGMURL, AWGMAuth: req.AWGMAuth,
 		UpdateTopic: true, TelegramGroup: req.TelegramGroup, ThreadID: req.ThreadID,
