@@ -256,49 +256,6 @@ export function humanAge(sec) {
   return `${Math.floor(sec / 86400)} дн`
 }
 
-// The screen's headline. `unknown` is a real answer, not a failure to compute:
-// an agent older than the routeTag change genuinely cannot tell us, and saying
-// so beats naming whichever tunnel happens to be listed first. Field names
-// verified against miniappTraffic's json tags (miniapp_tunnels.go:123-132):
-// mode, egress_tunnel_id, egress_tunnel_name.
-export function trafficLabel(traffic) {
-  switch (traffic?.mode) {
-    case 'vpn':
-      return {
-        title: 'Трафик идёт через VPN',
-        detail: `Весь исходящий трафик уходит через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}»`,
-      }
-    case 'split':
-      return {
-        title: 'Обход идёт по правилам',
-        detail: traffic.egress_tunnel_name || traffic.egress_tunnel_id
-          ? `Заблокированное — через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}», остальное напрямую`
-          : 'Заблокированное — через VPN-туннели обхода, остальное напрямую',
-      }
-    case 'direct':
-      return {
-        title: 'Трафик идёт напрямую',
-        detail: 'Ни одно правило не ведёт в работающий VPN-туннель — всё уходит напрямую через провайдера',
-      }
-    case 'singbox':
-      return {
-        title: 'Маршрут выбирает sing-box',
-        detail: 'Для каждого сайта отдельно — единого ответа «напрямую или через VPN» тут нет',
-      }
-    default:
-      if (traffic?.reason === 'rules_unreadable') {
-        return {
-          title: 'Куда идёт трафик — неизвестно',
-          detail: 'Правила обхода не удалось прочитать целиком — по ним сейчас не понять, что идёт через VPN',
-        }
-      }
-      return {
-        title: 'Куда идёт трафик — неизвестно',
-        detail: 'Роутер пока не сообщает, какой VPN-туннель основной. Нажмите «Повторить проверку».',
-      }
-  }
-}
-
 // UI action vocabulary for buttons the mini app offers. Not a 1:1 mirror of
 // backend action strings (miniapp_actions.go/miniapp_commands.go use
 // "force_recheck", "tunnel_restart", ttl values "1h"/"4h"/"24h" -- a future

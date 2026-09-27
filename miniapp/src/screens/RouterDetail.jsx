@@ -14,7 +14,6 @@ import { NavCard } from '../ui/NavCard.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
-import { tunnelHealth } from './tunnelHealth.js'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
@@ -32,7 +31,6 @@ import {
   legendLabel,
   pingLabel,
   statusLabel,
-  trafficLabel,
 } from '../labels.js'
 
 // TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
@@ -473,8 +471,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
   const directIP = probeIP(direct)
   const bothIPs = !!(viaIP && directIP)
   const sameIP = bothIPs && viaIP === directIP
-  // traffic.mode is Task 3's own derivation (trafficLabel above reads it the
-  // same way). On a sing-box router, the route is chosen per destination, so
+  // traffic.mode is Task 3's own derivation. On a sing-box router, the route is chosen per destination, so
   // these two probes -- hitting different sites for the via-tunnel and direct
   // checks -- were never guaranteed to take the same path in the first place.
   // Equal or different, neither answer generalizes to "all traffic", so this
@@ -596,9 +593,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
         setIncidents(r.incidents ?? [])
         setChecks(c.checks ?? [])
         setTunnels(c.tunnels ?? [])
-        // A backend older than this phase sends no `traffic` at all; trafficLabel
-        // and the traffic path both read a missing one as "unknown", which is
-        // the honest answer rather than a defaulted-away one.
+        // A backend older than this phase sends no `traffic` at all; the
+        // headline and the traffic path both read a missing one as "unknown",
+        // which is the honest answer rather than a defaulted-away one.
         setTraffic(c.traffic ?? null)
       })
       .catch((err) => {

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { routerHeadline } from '../src/routerHeadline.js'
-import { trafficLabel } from '../src/labels.js'
 import { pathState } from '../src/trafficPath.js'
 
 // Главный выход «напрямую» при правилах обхода -- обычная раздельная
@@ -45,19 +44,6 @@ describe('раздельная маршрутизация на главном э
   })
 })
 
-describe('подпись режима трафика', () => {
-  it('раздельная маршрутизация не обещает «весь трафик через»', () => {
-    const l = trafficLabel({ mode: 'split' })
-    expect(l.title).not.toMatch(/неизвестно/i)
-    expect(l.detail).not.toMatch(/Весь исходящий/)
-    expect(l.detail).toContain('напрямую')
-  })
-
-  it('«напрямую» без жаргона про основной маршрут', () => {
-    expect(trafficLabel({ mode: 'direct' }).detail).not.toContain('основной маршрут')
-  })
-})
-
 // snekhaev, 07–15.09.2026: агент не дочитал правила обхода, и экран неделю писал
 // «трафик идёт напрямую, заблокированное не откроется». Бэкенд теперь отвечает
 // unknown с причиной. «Не сообщил, какой VPN-туннель основной» -- тоже неправда
@@ -70,13 +56,6 @@ describe('правила обхода не прочитаны', () => {
     expect(h.tone).toBe('off')
     expect(h.verdict).toMatch(/правила/i)
     expect(h.verdict).not.toMatch(/не сообщил|заново|напрямую/)
-  })
-
-  it('подпись режима -- то же самое', () => {
-    const l = trafficLabel(traffic)
-    expect(l.title).toMatch(/неизвестно/i)
-    expect(l.detail).toMatch(/правила/i)
-    expect(l.detail).not.toMatch(/не сообщает|Повторить|напрямую/)
   })
 
   it('без причины -- прежний ответ «не сообщил»', () => {
