@@ -518,8 +518,8 @@ func dashboardRepairHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		req.RootPassword = strings.TrimSpace(req.RootPassword)
-		if req.RootPassword == "" {
+		// PROV-02: пароль root -- как набран; пустоту судим по обрезанному.
+		if strings.TrimSpace(req.RootPassword) == "" {
 			writeJSONError(w, http.StatusBadRequest, "root_password_required",
 				"router root password is required (used once for the terminal login, never stored)")
 			return
