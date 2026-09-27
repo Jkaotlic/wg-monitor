@@ -229,32 +229,44 @@ func TestDiagFresh_RelogsInWhenSessionExpires(t *testing.T) {
 	}
 }
 
-// CHK-06: после обрыва потока любой статус, кроме "running", считался
-// успехом свежего прогона -- и "error", и пустой, и "idle" (прогон мог не
-// начаться вовсе). Тогда diag_now отдавал старый отчёт как свежий. Успех --
-// только явное завершение.
-func TestDiagFresh_CutStreamOnlyDoneIsSuccess(t *testing.T) {
+// CHK-06: после обрыва потока статус "idle" -- это «прогон закончен»,
+// только если прогон ЭТОГО вызова точно начался: поток успел отдать событие
+// или опрос статуса видел "running". Машина состояний awg-manager -- только
+// idle|running (живой /api/openapi.yaml и роутер: {"status":"idle"}), "done"
+// нет. Поток оборвался до регистрации прогона -> idle ничего не доказывает.
+// error/failed -- ошибка; done/completed по-прежнему успех.
+func TestDiagFresh_CutStreamIdleNeedsConfirmedStart(t *testing.T) {
 	for _, tc := range []struct {
-		status string
-		ok     bool
+		name     string
+		events   string   // что поток отдал до обрыва
+		statuses []string // ответы /api/diagnostics/status по порядку (последний повторяется)
+		ok       bool
 	}{
-		{"done", true},
-		{"completed", true},
-		{"error", false},
-		{"failed", false},
-		{"", false},
-		{"idle", false},
+		{"event seen then idle", "event: phase\ndata: {}\n\n", []string{"idle"}, true},
+		{"no event, running then idle", "", []string{"running", "idle"}, true},
+		{"no event, idle straight away", "", []string{"idle"}, false},
+		{"no event, empty status", "", []string{""}, false},
+		{"event seen then error", "event: phase\ndata: {}\n\n", []string{"error"}, false},
+		{"event seen then failed", "event: phase\ndata: {}\n\n", []string{"failed"}, false},
+		{"no event, done synonym", "", []string{"done"}, true},
+		{"no event, completed synonym", "", []string{"completed"}, true},
 	} {
-		t.Run("status="+tc.status, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
+			hits := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/diagnostics/stream":
 					w.Header().Set("Content-Type", "text/event-stream")
 					w.WriteHeader(200)
-					fmt.Fprint(w, "event: phase\ndata: {}\n\n")
+					fmt.Fprint(w, tc.events)
 					w.(http.Flusher).Flush()
 				case "/api/diagnostics/status":
-					_, _ = w.Write([]byte(`{"success":true,"data":{"status":"` + tc.status + `"}}`))
+					st := tc.statuses[len(tc.statuses)-1]
+					if hits < len(tc.statuses) {
+						st = tc.statuses[hits]
+					}
+					hits++
+					_, _ = w.Write([]byte(`{"success":true,"data":{"status":"` + st + `","progress":""}}`))
 				default:
 					w.WriteHeader(404)
 				}
@@ -268,7 +280,7 @@ func TestDiagFresh_CutStreamOnlyDoneIsSuccess(t *testing.T) {
 				t.Fatalf("DiagFresh: %v", err)
 			}
 			if !tc.ok && err == nil {
-				t.Fatalf("status %q after a cut stream must not count as a fresh completed run", tc.status)
+				t.Fatal("must not count as a fresh completed run")
 			}
 		})
 	}
