@@ -159,6 +159,8 @@ describe('checkRows', () => {
       checks: [{ check_name: 'dns', status: 'ok', ts: new Date(Date.now() - 90_000).toISOString() }],
       tunnels: [],
       router: ROUTER,
+      // Часы телефона совпадают с серверными (MINI-10: возраст -- по сдвигу).
+      clockOffsetMs: 0,
     })
     expect(rowsByKey(rows).dns.value).toBe('измерено 1 мин назад')
   })

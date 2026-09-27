@@ -183,6 +183,7 @@ export function reportHint(parsed) {
 
 import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict } from './labels.js'
 import { isStale } from './staleness.js'
+import { ageByServerClock, clockTime } from './serverClock.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -191,15 +192,18 @@ const ROW_ORDER = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnel
 
 const ANSWER_TONE = { да: 'ok', нет: 'danger', 'не знаем': 'muted' }
 
-function measuredAt(ts) {
+// Возраст -- по часам сервера (serverClock.js, MINI-10); без сдвига -- время
+// словами, а не возраст по часам телефона.
+function measuredAt(ts, clock = {}) {
   if (!ts) return 'измерено — когда, роутер не сказал'
-  const sec = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000))
+  const sec = ageByServerClock(ts, clock)
+  if (sec == null) return Number.isNaN(Date.parse(ts)) ? 'измерено — когда, роутер не сказал' : `измерено ${clockTime(ts)}`
   return `измерено ${humanAge(sec)} назад`
 }
 
-function dnsRow(check) {
+function dnsRow(check, clock) {
   const f = check.facts
-  if (!f || f.resolvers == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts) }
+  if (!f || f.resolvers == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
   const total = f.resolvers
   const alive = total - (f.resolvers_failed ?? 0)
   // Подмена ответов важнее счётчика живых резолверов: резолвер отвечает, но
@@ -218,9 +222,9 @@ function dnsRow(check) {
   }
 }
 
-function reachRow(check) {
+function reachRow(check, clock) {
   const f = check.facts
-  if (!f || f.targets_total == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts) }
+  if (!f || f.targets_total == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
   const total = f.targets_total
   const alive = total - (f.targets_failed ?? 0)
   return {
@@ -229,14 +233,14 @@ function reachRow(check) {
   }
 }
 
-function hydraRow(check) {
+function hydraRow(check, clock) {
   const f = check.facts
   // sing-box отменяет сам вопрос: маршрут выбирает он, а HydraRoute Neo в этот момент
   // ни при чём -- и «нет» здесь было бы враньём о поломке, которой нет.
   if (f?.singbox_router_active) {
     return { answer: 'не нужен', tone: 'muted', value: 'маршрутом занят sing-box' }
   }
-  if (!f || f.routes_hr_neo == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts) }
+  if (!f || f.routes_hr_neo == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
   const n = f.routes_hr_neo
   return {
     answer: check.status === 'ok' ? 'да' : 'нет',
@@ -244,21 +248,21 @@ function hydraRow(check) {
   }
 }
 
-function awgmRow(check) {
+function awgmRow(check, clock) {
   const version = check.facts?.version
   return {
     answer: check.status === 'ok' ? 'да' : 'нет',
-    value: version || measuredAt(check.ts),
+    value: version || measuredAt(check.ts, clock),
   }
 }
 
 // Живость туннелей считается по самим туннелям, а не по проверке: проекция
 // tunnels[] и есть ответ роутера про каждый из них, а сводная проверка знает
 // только «всё хорошо / не всё».
-function tunnelsRow(check, tunnels) {
+function tunnelsRow(check, tunnels, clock) {
   const list = Array.isArray(tunnels) ? tunnels : []
   if (list.length === 0) {
-    return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts) }
+    return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
   const alive = list.filter((t) => t.status === 'ok').length
   return {
@@ -276,7 +280,8 @@ const ROW_TITLES = {
   agent_heartbeat: 'Роутер отчитался о себе',
 }
 
-export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
+export function checkRows({ checks = [], tunnels = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
+  const clock = { clockOffsetMs, nowMs }
   const byName = new Map((checks ?? []).map((c) => [c.check_name, c]))
   // Молчащий роутер делает устаревшими ВСЕ показания: то, что показано ниже,
   // измерено до того, как он замолчал, и выдавать это за ответ «сейчас»
@@ -301,11 +306,11 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
     // проверке: роутер, не приславший её, всё равно прислал сами туннели.
     if (!check && !(key === 'tunnels' && tunnels?.length)) continue
     let body
-    if (key === 'dns') body = dnsRow(check)
-    else if (key === 'external_reach') body = reachRow(check)
-    else if (key === 'hydraroute') body = hydraRow(check)
-    else if (key === 'awg_manager') body = awgmRow(check)
-    else body = tunnelsRow(check ?? null, tunnels)
+    if (key === 'dns') body = dnsRow(check, clock)
+    else if (key === 'external_reach') body = reachRow(check, clock)
+    else if (key === 'hydraroute') body = hydraRow(check, clock)
+    else if (key === 'awg_manager') body = awgmRow(check, clock)
+    else body = tunnelsRow(check ?? null, tunnels, clock)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({
@@ -337,7 +342,7 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
         code: c.check_name,
         answer: silent ? 'не знаем' : g.answer,
         tone: silent ? 'muted' : g.tone,
-        value: measuredAt(c.ts),
+        value: measuredAt(c.ts, clock),
       })
       continue
     }
@@ -347,7 +352,7 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
       code: c.check_name,
       answer: silent ? 'не знаем' : c.status === 'ok' ? 'да' : 'нет',
       tone: silent ? 'muted' : c.status === 'ok' ? 'ok' : 'danger',
-      value: measuredAt(c.ts),
+      value: measuredAt(c.ts, clock),
     })
   }
   return rows

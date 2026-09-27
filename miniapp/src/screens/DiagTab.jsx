@@ -5,6 +5,7 @@ import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge, workingTunnelCount, workingTunnelNote } from '../labels.js'
 import { isStale } from '../staleness.js'
+import { serverClockOffset } from '../serverClock.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -38,6 +39,8 @@ export function DiagTab({ routerID, asleep }) {
           checks: c.checks ?? [],
           tunnels: c.tunnels ?? [],
           incidents: r.incidents ?? [],
+          // Сдвиг часов телефона снимается в момент ответа (MINI-10).
+          clockOffsetMs: serverClockOffset(r.router),
         })
         setError(null)
       })

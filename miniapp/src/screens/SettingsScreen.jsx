@@ -3,8 +3,7 @@ import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVer
 import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
 import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, agentRow } from '../settings.js'
-import { versionsRows, unknownLine, installedRows } from '../versions.js'
-import { humanAge } from '../labels.js'
+import { versionsRows, unknownLine, installedRows, checkedAtText } from '../versions.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import {
   MAINT_TEXTS,
@@ -121,9 +120,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet }) {
   const opkgOut = opkgUpgradeOutcome(opkgResult)
   // Метка времени обязательна рядом с «проверить не удалось»: обещание без
   // неё говорит больше, чем мы знаем.
-  const checkedAgo = versions?.checked_at
-    ? `${humanAge(Math.max(0, Math.floor((Date.now() - new Date(versions.checked_at).getTime()) / 1000)))} назад`
-    : ''
+  const checkedAgo = checkedAtText(versions?.checked_at)
   const unknownLines = (versions?.unknown ?? []).map((u) => unknownLine(u.reason, checkedAgo)).filter(Boolean)
 
   // Кнопка в строке новости -- по компоненту. Сырые строки новостей
