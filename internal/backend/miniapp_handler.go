@@ -492,43 +492,9 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
 			return
 		}
-		// Every agent report carries agent_heartbeat, and all checks of one
-		// report share one timestamp. A resolver_guard row strictly older
-		// than the heartbeat row is not from the latest report — the check
-		// stopped coming (watchdog switched off, or its incident closed as
-		// watchdog_off) and its last row would otherwise sit here answering
-		// "на запасных"/"работает" for up to 30 days after it stopped being
-		// true.
-		//
-		// Tunnels are not judged by the heartbeat: when awg-manager does not
-		// answer, the agent sends tunnels=fail and no tunnel rows at all, and
-		// the last known tunnels must stay on screen. They are judged by the
-		// inventory instead -- an OK "tunnels" row lists what is on the router
-		// in that report, so a tunnel_* row strictly older than it did not come
-		// with it: the tunnel is gone (deleted, or replaced by the config
-		// wizard). Before this, deleted tunnels stayed for 30 days and the
-		// screen named a removed tunnel as the egress (vvarg, 15.09.2026).
-		var heartbeatTS, inventoryTS time.Time
-		haveHeartbeat, haveInventory := false, false
-		for _, row := range rows {
-			switch row.CheckName {
-			case "agent_heartbeat":
-				heartbeatTS, haveHeartbeat = row.TS, true
-			case miniappTunnelsInventoryCheck:
-				if row.Status == "ok" {
-					inventoryTS, haveInventory = row.TS, true
-				}
-			}
-		}
 		resp := miniappRouterEventsResp{Tunnels: []miniappTunnel{}}
 		byCheck := make(map[string]db.EventRow, len(rows))
-		for _, row := range rows {
-			if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
-				continue
-			}
-			if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
-				continue
-			}
+		for _, row := range miniappCurrentRows(d, routerID, rows) {
 			byCheck[row.CheckName] = row
 			resp.Checks = append(resp.Checks, miniappCheckStatus{
 				CheckName: row.CheckName,
@@ -546,6 +512,53 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// miniappCurrentRows отбрасывает из «последних строк каждой проверки» те,
+// что уже не про текущий роутер. Одна функция на экран роутера и на список
+// роутеров (LIST-01): иначе список и экран расходятся.
+//
+// Every agent report carries agent_heartbeat, and all checks of one report
+// share one timestamp. A resolver_guard row strictly older than the heartbeat
+// row is not from the latest report -- the check stopped coming (watchdog
+// switched off, or its incident closed as watchdog_off) and its last row would
+// otherwise sit here answering "на запасных"/"работает" for up to 30 days.
+//
+// Tunnels are not judged by the heartbeat: when awg-manager does not answer,
+// the agent sends tunnels=fail and no tunnel rows at all, and the last known
+// tunnels must stay on screen. They are judged by the inventory instead -- an
+// OK "tunnels" row lists what is on the router in that report, so a tunnel_*
+// row strictly older than it did not come with it: the tunnel is gone. The
+// inventory is the latest OK "tunnels" row, looked up separately (GHOST-01):
+// the latest row of any status is "fail" exactly when awg-manager is down, and
+// judging by it switched the filter off and brought deleted tunnels back
+// (vvarg, 15.09.2026). Lookup error -- no filter, as before.
+func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRow {
+	var heartbeatTS, inventoryTS time.Time
+	haveHeartbeat, haveInventory := false, false
+	for _, row := range rows {
+		switch row.CheckName {
+		case "agent_heartbeat":
+			heartbeatTS, haveHeartbeat = row.TS, true
+		case miniappTunnelsInventoryCheck:
+			if row.Status == "ok" {
+				inventoryTS, haveInventory = row.TS, true
+			} else if ts, ok, err := d.DB.Events().LatestEventTSWithStatus(routerID, miniappTunnelsInventoryCheck, "ok", time.Now().UTC().Add(-miniappEventsWindow)); err == nil && ok {
+				inventoryTS, haveInventory = ts, true
+			}
+		}
+	}
+	out := make([]db.EventRow, 0, len(rows))
+	for _, row := range rows {
+		if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
+			continue
+		}
+		if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // miniappTimelineEvent is one row of the router's timeline: what changed and

@@ -93,6 +93,31 @@ func (e *EventsRepo) LatestEvent(userID int64, checkName string) (EventRow, bool
 	return r, true, nil
 }
 
+// LatestEventTSWithStatus -- время самой свежей строки (userID, checkName)
+// с заданным статусом не раньше since. Точечная выборка по уникальному
+// индексу (user_id, check_name, ts) в обратном порядке: обычно первая же
+// строка подходит. ok=false -- такой строки в окне нет.
+func (e *EventsRepo) LatestEventTSWithStatus(userID int64, checkName, status string, since time.Time) (time.Time, bool, error) {
+	var tsStr string
+	err := e.d.db.QueryRow(
+		`SELECT ts FROM events
+		  WHERE user_id = ? AND check_name = ? AND ts >= ? AND status = ?
+		  ORDER BY ts DESC LIMIT 1`,
+		userID, checkName, since.UTC(), status,
+	).Scan(&tsStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	t, err := parseEventTS(tsStr)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
 // LatestEventsByPrefix returns the most recent event for each distinct
 // check_name starting with `prefix`, for a single user. Used by the
 // alerts formatter to render "neighbouring tunnels" context next to a
