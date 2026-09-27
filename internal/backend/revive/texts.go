@@ -46,32 +46,52 @@ const (
 
 const noticeAgainHint = "поставить заново можно в приложении, экран «Парк»"
 
-func noticeRevived(nick, version string) string {
+// passwordNote -- что с паролем root на сервере после закрытия намерения
+// (REV-01). Секрет намерения стирается всегда, но с v0.45 пароль может
+// храниться в router_credentials для авто-оживления -- тогда «стёрт» было бы
+// ложью.
+func passwordNote(stored bool) string {
+	if stored {
+		return "Пароль хранится на сервере зашифрованным — для следующего оживления."
+	}
+	return "Пароль стёрт с сервера."
+}
+
+func noticeRevived(nick, version string, stored bool) string {
 	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
 	if v == "" {
-		return fmt.Sprintf("✅ Роутер «%s»: агент ожил. Пароль стёрт с сервера.", nick)
+		return fmt.Sprintf("✅ Роутер «%s»: агент ожил. %s", nick, passwordNote(stored))
 	}
-	return fmt.Sprintf("✅ Роутер «%s»: агент ожил, версия «%s». Пароль стёрт с сервера.", nick, v)
+	return fmt.Sprintf("✅ Роутер «%s»: агент ожил, версия «%s». %s", nick, v, passwordNote(stored))
 }
 
-func noticeAliveItself(nick string) string {
-	return fmt.Sprintf("✅ Роутер «%s»: агент снова на связи сам, переустанавливать не пришлось. Оживление снято, пароль стёрт с сервера.", nick)
+func noticeAliveItself(nick string, stored bool) string {
+	return fmt.Sprintf("✅ Роутер «%s»: агент снова на связи сам, переустанавливать не пришлось. Оживление снято. %s", nick, passwordNote(stored))
 }
 
+// noticeAuthFailed -- введённый пароль не подошёл: секрет намерения стёрт, а
+// сохранённый пароль, если он тот же, стёрт forgetRejectedCredentials.
 func noticeAuthFailed(nick string) string {
 	return fmt.Sprintf("⚠️ Роутер «%s»: пароль не подошёл — поставьте оживление заново в приложении, экран «Парк». Введённый пароль стёрт с сервера.", nick)
 }
 
-func noticeFailed(nick, reason string) string {
-	return fmt.Sprintf("⚠️ Роутер «%s»: оживить агент не вышло — %s. Пароль стёрт с сервера; %s.", nick, reason, noticeAgainHint)
+func noticeFailed(nick, reason string, stored bool) string {
+	return fmt.Sprintf("⚠️ Роутер «%s»: оживить агент не вышло — %s. %s %s.", nick, reason, passwordNote(stored), capitalize(noticeAgainHint))
 }
 
-func noticeGaveUp(nick string, attempts int, reason string) string {
-	return fmt.Sprintf("⚠️ Роутер «%s»: оживить агент не вышло (попыток: %d) — %s. Пароль стёрт с сервера; %s.",
-		nick, attempts, reason, noticeAgainHint)
+func noticeGaveUp(nick string, attempts int, reason string, stored bool) string {
+	return fmt.Sprintf("⚠️ Роутер «%s»: оживить агент не вышло (попыток: %d) — %s. %s %s.",
+		nick, attempts, reason, passwordNote(stored), capitalize(noticeAgainHint))
 }
 
-func noticeExpired(nick string, expiresAt time.Time) string {
-	return fmt.Sprintf("⌛ Роутер «%s» так и не появился до %s — оживление снято, пароль стёрт с сервера.",
-		nick, expiresAt.UTC().Format("02.01.2006"))
+func noticeExpired(nick string, expiresAt time.Time, stored bool) string {
+	return fmt.Sprintf("⌛ Роутер «%s» так и не появился до %s — оживление снято. %s",
+		nick, expiresAt.UTC().Format("02.01.2006"), passwordNote(stored))
+}
+
+func capitalize(s string) string {
+	for i, r := range s {
+		return strings.ToUpper(string(r)) + s[i+len(string(r)):]
+	}
+	return s
 }
