@@ -3,7 +3,7 @@ import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
-import { humanAge } from '../labels.js'
+import { humanAge, workingTunnelCount, workingTunnelNote } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
@@ -37,6 +37,7 @@ export function DiagTab({ routerID, asleep }) {
           router: r.router,
           checks: c.checks ?? [],
           tunnels: c.tunnels ?? [],
+          incidents: r.incidents ?? [],
         })
         setError(null)
       })
@@ -55,7 +56,8 @@ export function DiagTab({ routerID, asleep }) {
   const rows = checkRows(data)
   const age = data.router?.last_seen_age_sec
   const silent = isStale(data.router)
-  const tunnelsAlive = data.tunnels.filter((t) => t.status === 'ok').length
+  // То же правило, что на «Сейчас» (MINI-07).
+  const tunnelsAlive = workingTunnelCount(data.tunnels, data.incidents)
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
   const exits = exitCompare(
     direct.result?.status === 'ok' ? direct.result.output : null,
@@ -80,9 +82,15 @@ export function DiagTab({ routerID, asleep }) {
       <div class="stat-grid">
         <Stat
           label="VPN-туннели"
-          value={data.tunnels.length ? `${tunnelsAlive} из ${data.tunnels.length}` : null}
-          note={data.tunnels.length ? 'на связи' : 'роутер не сообщил ни одного'}
-          tone={data.tunnels.length && tunnelsAlive === 0 ? 'danger' : undefined}
+          value={silent || !data.tunnels.length ? null : tunnelsAlive}
+          note={
+            silent
+              ? 'данные устарели'
+              : data.tunnels.length
+                ? workingTunnelNote(tunnelsAlive, data.tunnels.length)
+                : 'роутер не сообщил ни одного'
+          }
+          tone={!silent && data.tunnels.length && tunnelsAlive === 0 ? 'danger' : undefined}
         />
         <Stat
           label="отчёт о себе"

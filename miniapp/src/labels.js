@@ -223,6 +223,25 @@ export function tunnelStateLabel(t) {
   return 'работает'
 }
 
+// Сколько VPN-туннелей работает -- ОДНО правило для «Сейчас» и «Проверок»
+// (MINI-07; было «3 из 3 на связи» против «1 работает из 3»). Работающий --
+// поднятый интерфейс, чья проверка не провалена и по кому нет тревоги.
+// Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял running с
+// мёртвой удалённой стороной, а одного «проверка ok» мало тем более --
+// она не знает, что роутер туннель остановил.
+export function workingTunnelCount(tunnels = [], incidents = []) {
+  return (tunnels ?? []).filter(
+    (t) =>
+      tunnelStateLabel(t) === 'работает' &&
+      t.status !== 'fail' &&
+      !(incidents ?? []).some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
+  ).length
+}
+
+export function workingTunnelNote(live, total) {
+  return `${live === 1 ? 'работает' : 'работают'} из ${total} настроенных`
+}
+
 // Not sourced from a single bot function: alerts/format.go:1178 (humanAgeSec)
 // and tg/tunnels_panel.go:92 (humanAgeShort) already disagree with each other
 // (no day bucket in either, different remainder handling), and neither is one

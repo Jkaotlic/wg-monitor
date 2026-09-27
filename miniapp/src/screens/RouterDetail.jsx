@@ -24,6 +24,8 @@ import {
   ACTION_LABELS,
   checkLabel,
   checkState as checkStateOf,
+  workingTunnelCount,
+  workingTunnelNote,
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
@@ -31,7 +33,6 @@ import {
   pingLabel,
   statusLabel,
   trafficLabel,
-  tunnelStateLabel,
 } from '../labels.js'
 
 // TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
@@ -687,12 +688,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
-  const liveCount = tunnels.filter(
-    (t) =>
-      tunnelStateLabel(t) === 'работает' &&
-      t.status !== 'fail' &&
-      !incidents.some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
-  ).length
+  const liveCount = workingTunnelCount(tunnels, incidents)
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -761,7 +757,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? `${liveCount === 1 ? 'работает' : 'работают'} из ${tunnels.length} настроенных`
+              ? workingTunnelNote(liveCount, tunnels.length)
               : 'роутер не сообщил ни одного'
         }
         tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
