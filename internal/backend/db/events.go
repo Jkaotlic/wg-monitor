@@ -40,8 +40,16 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 // LatestPerUserAll returns one (user_id → MAX(ts)) entry per user that has at
 // least one event. Used by the heartbeat watcher to replace its N+1 loop
 // (PERF-03/DB-09). Users with no events at all are absent from the map.
+//
+// PERF-01: зовётся каждые 30 с. Прежний GROUP BY по events проходил индекс
+// целиком (2 млн строк: 1,19 с на живой базе при пуле в одно соединение, и всё
+// это время база занята). Коррелированный подзапрос по users -- один поиск
+// MAX(ts) по индексу (user_id, ts) на роутер: 0,0 с. События роутера, которого
+// уже нет в users, сюда больше не попадают -- их никто и не спрашивал.
+const latestPerUserAllQuery = `SELECT u.id, (SELECT MAX(e.ts) FROM events e WHERE e.user_id = u.id) FROM users u`
+
 func (e *EventsRepo) LatestPerUserAll() (map[int64]time.Time, error) {
-	rows, err := e.d.db.Query(`SELECT user_id, MAX(ts) FROM events GROUP BY user_id`)
+	rows, err := e.d.db.Query(latestPerUserAllQuery)
 	if err != nil {
 		return nil, err
 	}
