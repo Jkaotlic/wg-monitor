@@ -99,3 +99,31 @@ describe('MINI-01: строка «Парка» у молчащей тревог�
     expect(rows[0].sub).toMatch(/^не на связи/)
   })
 })
+
+// review v0.46, п. 4: сервер отдаёт reach ("online"|"sleeping"|"offline"),
+// посчитанный без учёта тревог. Когда он есть -- он единственный источник.
+describe('reach от сервера -- один источник для подписи и фильтра', () => {
+  const MOBILE_SLEEPING_ALERT = {
+    id: 11, nickname: 'vymysel-car', kind: 'mobile', status: 'alert', stale: true, reach: 'sleeping',
+    last_seen_age_sec: 3 * 3600, active_incidents: [{ check_name: 'dns' }],
+  }
+  it('reach важнее догадки по kind', () => {
+    expect(reachStatus({ ...MOBILE_SLEEPING_ALERT, kind: 'static' })).toBe('sleeping')
+    expect(reachStatus({ ...SILENT_ALERT, kind: 'mobile', reach: 'offline' })).toBe('offline')
+    expect(isStale({ status: 'alert', reach: 'offline' })).toBe(true)
+    expect(isStale({ status: 'alert', reach: 'online', stale: true })).toBe(false)
+  })
+  it('фильтр кладёт роутер туда же, куда его подписывает пилюля', () => {
+    const pill = fleetRow(MOBILE_SLEEPING_ALERT).pill.text
+    expect(pill).toMatch(/^спит/)
+    expect(filterBucket(MOBILE_SLEEPING_ALERT)).toBe('sleeping')
+    const off = { ...SILENT_ALERT, reach: 'offline' }
+    expect(fleetRow(off).pill.text).toMatch(/^нет ответа/)
+    expect(filterBucket(off)).toBe('silent')
+  })
+  it('без reach: мобильная молчащая тревога -- «спит» и в фильтре «спят»', () => {
+    const m = { ...SILENT_ALERT, kind: 'mobile' }
+    expect(fleetRow(m).pill.text).toMatch(/^спит/)
+    expect(filterBucket(m)).toBe('sleeping')
+  })
+})
