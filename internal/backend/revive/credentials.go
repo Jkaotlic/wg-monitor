@@ -21,7 +21,7 @@ import (
 
 // RequestedBySystem -- requested_by намерения, поставленного авто-проходом, а
 // не админом. Telegram-номера положительны, поэтому -1 ни с кем не совпадёт.
-const RequestedBySystem int64 = -1
+const RequestedBySystem = db.ReviveRequestedBySystem
 
 // AutoRetryAfter -- не чаще раза в сутки после того, как авто-оживление
 // закончилось (не вышло, срок истёк, ожил). Иначе проход раз в полчаса

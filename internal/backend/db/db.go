@@ -97,6 +97,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate revive_intents.generation: %w", err)
 	}
+	if err := migrateReviveNotifiedAutoError(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate revive_intents.notified_auto_error: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -252,6 +256,13 @@ func migratePendingAttempts(d *sql.DB) error {
 func migrateReviveGeneration(d *sql.DB) error {
 	return addColumnIfMissing(d, "revive_intents", "generation",
 		`ALTER TABLE revive_intents ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`)
+}
+
+// migrateReviveNotifiedAutoError -- причина последнего отказа авто-оживления,
+// о котором уже сказали админу (REV-02: одна весть на серию одинаковых).
+func migrateReviveNotifiedAutoError(d *sql.DB) error {
+	return addColumnIfMissing(d, "revive_intents", "notified_auto_error",
+		`ALTER TABLE revive_intents ADD COLUMN notified_auto_error TEXT NOT NULL DEFAULT ''`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

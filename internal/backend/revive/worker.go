@@ -418,6 +418,12 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 			return
 		}
 	}
+	// Кто ставил -- читаем до закрытия: вести авто-оживления идут иначе
+	// (REV-02). Ошибка чтения -- как ручное: прежний путь.
+	auto := false
+	if cur, err := s.cfg.DB.Revive().Get(routerID); err == nil && cur != nil && cur.Generation == generation {
+		auto = cur.RequestedBy == RequestedBySystem
+	}
 	ok, err := s.cfg.DB.Revive().Finish(routerID, from, to, reason, s.now(), generation)
 	if err != nil {
 		s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
@@ -428,7 +434,7 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 		return
 	}
 	s.logger.Info("оживление агента закрыто, секрет стёрт", "router_id", routerID, "status", to)
-	if s.cfg.Notifier == nil || notice == nil {
+	if notice == nil {
 		return
 	}
 	text := notice(s.credentialsStored(routerID))
@@ -441,8 +447,49 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 	// не даст повторить уведомление никогда, оно было бы потеряно навсегда.
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifySendTimeout)
 	defer cancel()
+	if auto {
+		s.notifyAuto(sendCtx, routerID, to, reason, text)
+		return
+	}
+	if s.cfg.Notifier == nil {
+		return
+	}
 	if _, err := s.cfg.Notifier.Send(sendCtx, routerID, text, ""); err != nil {
 		s.logger.Warn("оживление: уведомление не доставлено", "router_id", routerID, "err", err)
+	}
+}
+
+// notifyAuto -- итог авто-оживления (REV-02). Ожил -- всем получателям, как
+// обычно, и серия отказов начинается заново. Всё остальное -- только админу
+// (владелец оживления не ставил, экран «Парк» видит только админ) и одной
+// вестью на серию одинаковых причин: авто-проход повторяет раз в сутки, и
+// одно и то же каждый день -- шум.
+func (s *Service) notifyAuto(ctx context.Context, routerID int64, to, reason, text string) {
+	if to == StatusDone && reason == reasonRevived {
+		if err := s.cfg.DB.Revive().SetNotifiedAutoError(routerID, ""); err != nil {
+			s.logger.Warn("авто-оживление: серия отказов не сброшена", "router_id", routerID, "err", err)
+		}
+		if s.cfg.Notifier != nil {
+			if _, err := s.cfg.Notifier.Send(ctx, routerID, text, ""); err != nil {
+				s.logger.Warn("оживление: уведомление не доставлено", "router_id", routerID, "err", err)
+			}
+		}
+		return
+	}
+	prev, err := s.cfg.DB.Revive().NotifiedAutoError(routerID)
+	if err != nil {
+		s.logger.Warn("авто-оживление: прошлая весть не прочитана", "router_id", routerID, "err", err)
+		return
+	}
+	if prev == reason || s.cfg.AdminNotifier == nil {
+		return
+	}
+	if err := s.cfg.AdminNotifier.SendAdmin(ctx, text); err != nil {
+		s.logger.Warn("авто-оживление: весть админу не доставлена", "router_id", routerID, "err", err)
+		return
+	}
+	if err := s.cfg.DB.Revive().SetNotifiedAutoError(routerID, reason); err != nil {
+		s.logger.Warn("авто-оживление: отметка вести не записана", "router_id", routerID, "err", err)
 	}
 }
 
