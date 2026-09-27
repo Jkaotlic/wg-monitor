@@ -328,9 +328,19 @@ export function sendCommand(routerID, action, args = {}, confirm = '') {
 // Resolves to null when the agent hasn't answered yet: the backend returns 404
 // result_not_ready by design (miniappCommandResultHandler, miniapp_commands.go),
 // which is a "poll again", not a failure. Any other error still throws.
+//
+// Любой другой 404 (SEC-02, бэкенд v0.46: чужая или неизвестная команда --
+// сразу not_found) -- конец опроса: ждать там нечего. Ошибка несёт фразу для
+// человека вместо технического «… failed: 404».
+export const COMMAND_GONE_TEXT = 'Итог этой команды недоступен: сервер её не знает или она вам не принадлежит. Ждать нечего — запустите заново, если нужно.'
+
 export function fetchCommandResult(routerID, cmdID, waitSec = 10) {
   return request(`/routers/${routerID}/commands/${encodeURIComponent(cmdID)}?wait_sec=${waitSec}`).catch((err) => {
-    if (err instanceof ApiError && err.status === 404 && err.code === 'result_not_ready') return null
+    if (err instanceof ApiError && err.status === 404) {
+      const code = err.code !== 'unknown' ? err.code : err.data?.error
+      if (code === 'result_not_ready') return null
+      throw new ApiError(404, code || 'not_found', COMMAND_GONE_TEXT, err.serverMessage, err.field, err.data)
+    }
     throw err
   })
 }
