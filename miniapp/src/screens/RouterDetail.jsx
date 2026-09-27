@@ -25,6 +25,7 @@ import {
   checkState as checkStateOf,
   workingTunnelCount,
   workingTunnelNote,
+  uncheckedTunnelCount,
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
@@ -686,6 +687,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
   const liveCount = workingTunnelCount(tunnels, incidents)
+  // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
+  const uncheckedCount = uncheckedTunnelCount(tunnels)
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -754,10 +757,10 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? workingTunnelNote(liveCount, tunnels.length)
+              ? workingTunnelNote(liveCount, tunnels.length, uncheckedCount)
               : 'роутер не сообщил ни одного'
         }
-        tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
+        tone={!headline.stale && tunnels.length && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}
       />
     </div>
   )

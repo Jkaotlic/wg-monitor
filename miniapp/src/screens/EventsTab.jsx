@@ -140,7 +140,7 @@ function RawFeed({ data }) {
                   {e.check_name}
                   <u class="ev-code">{e.status}</u>
                 </span>
-                <span class={`ev-dot ev-dot-${e.status === 'ok' ? 'sig' : 'bad'}`} />
+                <span class={`ev-dot ev-dot-${e.status === 'ok' ? 'sig' : e.status === 'unknown' ? 'muted' : 'bad'}`} />
               </li>
             ))}
           </ul>

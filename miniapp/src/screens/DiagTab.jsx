@@ -3,7 +3,7 @@ import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
-import { humanAge, workingTunnelCount, workingTunnelNote } from '../labels.js'
+import { humanAge, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
 import { Section } from '../ui/Section.jsx'
@@ -61,6 +61,7 @@ export function DiagTab({ routerID, asleep }) {
   const silent = isStale(data.router)
   // То же правило, что на «Сейчас» (MINI-07).
   const tunnelsAlive = workingTunnelCount(data.tunnels, data.incidents)
+  const tunnelsUnchecked = uncheckedTunnelCount(data.tunnels)
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
   const exits = exitCompare(
     direct.result?.status === 'ok' ? direct.result.output : null,
@@ -90,10 +91,10 @@ export function DiagTab({ routerID, asleep }) {
             silent
               ? 'данные устарели'
               : data.tunnels.length
-                ? workingTunnelNote(tunnelsAlive, data.tunnels.length)
+                ? workingTunnelNote(tunnelsAlive, data.tunnels.length, tunnelsUnchecked)
                 : 'роутер не сообщил ни одного'
           }
-          tone={!silent && data.tunnels.length && tunnelsAlive === 0 ? 'danger' : undefined}
+          tone={!silent && data.tunnels.length && tunnelsAlive === 0 && tunnelsUnchecked === 0 ? 'danger' : undefined}
         />
         <Stat
           label="отчёт о себе"

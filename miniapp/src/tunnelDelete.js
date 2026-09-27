@@ -50,6 +50,8 @@ function stateLabel(live, t) {
   // Проверки не загрузились (withCheckVerdict): роутер сказал «поднят»,
   // неизвестна проверка (review v0.46, п. 5).
   if (t?.verdict_unknown) return 'поднят, проверка не пришла: сервер не ответил'
+  // Проверка пришла, но ничего не проверила (unknown, v0.46).
+  if (t?.check_unverified && live === 'up') return 'поднят, не проверено'
   return tunnelLiveLabel(live)
 }
 

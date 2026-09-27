@@ -94,6 +94,8 @@ export function tunnelsView(snapshot) {
     iface: activeTunnel.iface ?? '',
     live: tunnelLive(activeTunnel),
     checkUnknown: Boolean(activeTunnel.verdict_unknown),
+    // Проверка пришла, но ничего не проверила (unknown, v0.46).
+    unverified: Boolean(activeTunnel.check_unverified),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
     // Правила политики + свои DNS и статические маршруты туннеля (counts):
     // у политики поля static нет (wire.RoutePolicySummary), статические

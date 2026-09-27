@@ -181,7 +181,7 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount } from './labels.js'
+import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount } from './labels.js'
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 
@@ -190,7 +190,8 @@ import { ageByServerClock, clockTime } from './serverClock.js'
 // роутер, отчитывающийся о себе.
 const ROW_ORDER = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels', 'agent_heartbeat']
 
-const ANSWER_TONE = { да: 'ok', нет: 'danger', 'не знаем': 'muted' }
+const ANSWER_TONE = { да: 'ok', нет: 'danger', 'не знаем': 'muted', 'не проверено': 'muted' }
+const UNCHECKED = 'не проверено'
 
 // Возраст -- по часам сервера (serverClock.js, MINI-10); без сдвига -- время
 // словами, а не возраст по часам телефона.
@@ -268,9 +269,13 @@ function tunnelsRow(check, tunnels, clock, incidents) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
   const alive = workingTunnelCount(list, incidents)
+  // «Не проверено» -- ни работающий, ни упавший (статус unknown, v0.46).
+  const unchecked = uncheckedTunnelCount(list)
+  const broken = list.length - alive - unchecked
+  const value = `${alive} из ${list.length} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
   return {
-    answer: alive === list.length ? 'да' : 'нет',
-    value: `${alive} из ${list.length} ${alive === 1 ? 'работает' : 'работают'}`,
+    answer: broken > 0 ? 'нет' : unchecked > 0 ? UNCHECKED : 'да',
+    value,
   }
 }
 
@@ -309,7 +314,9 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     // проверке: роутер, не приславший её, всё равно прислал сами туннели.
     if (!check && !(key === 'tunnels' && tunnels?.length)) continue
     let body
-    if (key === 'dns') body = dnsRow(check, clock)
+    // Проверка ничего не проверила (unknown, v0.46): «не проверено», серым.
+    if (check?.status === 'unknown' && key !== 'tunnels') body = { answer: UNCHECKED, tone: 'muted', value: measuredAt(check.ts, clock) }
+    else if (key === 'dns') body = dnsRow(check, clock)
     else if (key === 'external_reach') body = reachRow(check, clock)
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
@@ -337,6 +344,17 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     // dns_split всегда ok, в списке она читалась бы вечным «да»: у неё свой
     // раздел на экране (dnsSplit.js).
     if (c.check_name === 'dns_split') continue
+    if (c.status === 'unknown') {
+      rows.push({
+        key: c.check_name,
+        title: checkLabel(c.check_name),
+        code: c.check_name,
+        answer: UNCHECKED,
+        tone: 'muted',
+        value: measuredAt(c.ts, clock),
+      })
+      continue
+    }
     if (c.check_name === 'resolver_guard') {
       const g = guardRow(c)
       rows.push({

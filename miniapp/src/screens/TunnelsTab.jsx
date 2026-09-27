@@ -232,6 +232,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
             ) : view.active.checkUnknown ? (
               <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
+            ) : view.active.unverified ? (
+              <StateTag tone="warn">поднят, не проверено</StateTag>
             ) : (
               <StateTag>VPN-туннель поднят</StateTag>
             )}

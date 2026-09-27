@@ -2084,6 +2084,7 @@ body {
 .ev-dot-sig { background: var(--sig); }
 .ev-dot-warn { background: var(--warn); }
 .ev-dot-bad { background: var(--bad); }
+.ev-dot-muted { background: var(--muted); }
 
 /* Последствие провалившейся проверки: висит под своей строкой, красным
    текстом без карточки -- это пояснение к строке, а не новая строка. */

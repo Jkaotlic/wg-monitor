@@ -58,12 +58,18 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
     }
   }
   const failing = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
-  if (!snapshot || failing.size === 0 || !Array.isArray(snapshot.tunnels)) return snapshot
+  // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
+  // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
+  const unchecked = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
+  if (!snapshot || (failing.size === 0 && unchecked.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
-    tunnels: snapshot.tunnels.map((t) =>
-      failing.has(t.id) && tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, status: 'dead' } : t,
-    ),
+    tunnels: snapshot.tunnels.map((t) => {
+      if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
+      if (failing.has(t.id)) return { ...t, status: 'dead' }
+      if (unchecked.has(t.id)) return { ...t, check_unverified: true }
+      return t
+    }),
   }
 }
 

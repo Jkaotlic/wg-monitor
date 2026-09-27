@@ -133,6 +133,9 @@ export function guardVerdict(check) {
   return 'unknown'
 }
 
+export const NOT_CHECKED_LABEL = 'не проверено'
+const NOT_CHECKED = { label: NOT_CHECKED_LABEL, tone: 'muted' }
+
 const GUARD_STATE = {
   ok: { label: 'работает', tone: 'ok' },
   fallback: { label: 'на запасных', tone: 'warn' },
@@ -156,6 +159,10 @@ const GUARD_STATE = {
 // того, как он замолчал. «Работает» в настоящем времени тогда -- ложь, а
 // строка «Отчёты от роутера» -- прямо неправда: отчёты-то и не приходят.
 export function checkState(check, { stale = false } = {}) {
+  // «unknown» (бэкенд v0.46): агент не смог ничего проверить. Не «работает»
+  // и не «не работает» -- серое «не проверено», и в счёт исправных или
+  // сломанных не идёт. Давность этого не меняет: не проверено -- и тогда.
+  if (check.status === 'unknown' && check.check_name !== 'agent_heartbeat') return { ...NOT_CHECKED }
   if (stale) {
     if (check.check_name === 'agent_heartbeat') return { label: 'не приходят', tone: 'danger' }
     if (check.status === 'fail') return { label: 'не работало на момент отчёта', tone: 'danger' }
@@ -229,17 +236,26 @@ export function tunnelStateLabel(t) {
 // Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял running с
 // мёртвой удалённой стороной, а одного «проверка ok» мало тем более --
 // она не знает, что роутер туннель остановил.
+//
+// Статус «unknown» (проверка ничего не проверила) -- ни работающий, ни
+// упавший: он считается отдельно (uncheckedTunnelCount).
 export function workingTunnelCount(tunnels = [], incidents = []) {
   return (tunnels ?? []).filter(
     (t) =>
       tunnelStateLabel(t) === 'работает' &&
       t.status !== 'fail' &&
+      t.status !== 'unknown' &&
       !(incidents ?? []).some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
   ).length
 }
 
-export function workingTunnelNote(live, total) {
-  return `${live === 1 ? 'работает' : 'работают'} из ${total} настроенных`
+export function uncheckedTunnelCount(tunnels = []) {
+  return (tunnels ?? []).filter((t) => t.status === 'unknown').length
+}
+
+export function workingTunnelNote(live, total, unchecked = 0) {
+  const base = `${live === 1 ? 'работает' : 'работают'} из ${total} настроенных`
+  return unchecked > 0 ? `${base} · ${unchecked} ${NOT_CHECKED_LABEL}` : base
 }
 
 // Not sourced from a single bot function: alerts/format.go:1178 (humanAgeSec)
