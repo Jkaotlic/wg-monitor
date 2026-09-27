@@ -228,3 +228,48 @@ func TestDiagFresh_RelogsInWhenSessionExpires(t *testing.T) {
 		t.Fatalf("stream hits: got %d want 2", streamHits)
 	}
 }
+
+// CHK-06: после обрыва потока любой статус, кроме "running", считался
+// успехом свежего прогона -- и "error", и пустой, и "idle" (прогон мог не
+// начаться вовсе). Тогда diag_now отдавал старый отчёт как свежий. Успех --
+// только явное завершение.
+func TestDiagFresh_CutStreamOnlyDoneIsSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		ok     bool
+	}{
+		{"done", true},
+		{"completed", true},
+		{"error", false},
+		{"failed", false},
+		{"", false},
+		{"idle", false},
+	} {
+		t.Run("status="+tc.status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/diagnostics/stream":
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.WriteHeader(200)
+					fmt.Fprint(w, "event: phase\ndata: {}\n\n")
+					w.(http.Flusher).Flush()
+				case "/api/diagnostics/status":
+					_, _ = w.Write([]byte(`{"success":true,"data":{"status":"` + tc.status + `"}}`))
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer srv.Close()
+			c := New(srv.URL)
+			diagStatusPollInterval = time.Millisecond
+			t.Cleanup(func() { diagStatusPollInterval = defaultDiagStatusPollInterval })
+			err := c.DiagFresh(context.Background())
+			if tc.ok && err != nil {
+				t.Fatalf("DiagFresh: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("status %q after a cut stream must not count as a fresh completed run", tc.status)
+			}
+		})
+	}
+}

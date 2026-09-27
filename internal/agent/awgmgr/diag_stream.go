@@ -154,8 +154,17 @@ func (c *Client) waitForDiagIdle(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if status != "running" {
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "running":
+			continue
+		case "done", "completed", "complete", "finished", "success":
 			return nil
+		case "error", "failed", "fail":
+			return fmt.Errorf("DIAG_STREAM_ERROR: diagnostic run ended with status %q", status)
+		default:
+			// CHK-06: "idle", пустой или незнакомый статус не доказывает, что
+			// свежий прогон состоялся -- отчёт мог остаться прежним.
+			return fmt.Errorf("DIAG_UNCONFIRMED: diagnostic run completion not confirmed (status %q) — the last report may be stale", status)
 		}
 	}
 }
