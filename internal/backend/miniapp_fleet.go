@@ -288,7 +288,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				AgentVersion:   a.AgentVersion,
 				PendingVersion: a.PendingVersion,
 				NotifyMuted:    mutedByAdmin[a.ID],
-				Away:           a.Status == "sleeping" || a.Status == "offline",
+				Away:           fleetAwayFromSummary(a),
 				Stale:          a.Stale,
 				Reach:          a.Reach,
 			}
@@ -416,6 +416,12 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// fleetAwayFromSummary -- «не на связи» по reach (связь без учёта тревог):
+// status "alert" у молчащего роутера не значит, что до него дойдёт команда.
+func fleetAwayFromSummary(a dashboardSummaryAgent) bool {
+	return a.Reach == "sleeping" || a.Reach == "offline"
 }
 
 func miniappFleetReviveFrom(v *revive.IntentView) *miniappFleetRevive {

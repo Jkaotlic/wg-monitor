@@ -84,3 +84,17 @@ func TestReachFieldOnAllEndpoints(t *testing.T) {
 		t.Errorf("экран роутера: reach=%v status=%v", router["reach"], router["status"])
 	}
 }
+
+// «Не на связи» в строке «Парка», когда строки роутера нет (сбой чтения
+// users), -- по reach, а не по status: тревога не делает роутер доступным.
+func TestFleetAwayFromReach(t *testing.T) {
+	if !fleetAwayFromSummary(dashboardSummaryAgent{Status: "alert", Reach: "offline"}) {
+		t.Fatal("молчащий роутер с тревогой -- не на связи")
+	}
+	if fleetAwayFromSummary(dashboardSummaryAgent{Status: "alert", Reach: "online"}) {
+		t.Fatal("живой роутер с тревогой -- на связи")
+	}
+	if !fleetAwayFromSummary(dashboardSummaryAgent{Status: "sleeping", Reach: "sleeping"}) {
+		t.Fatal("спящий -- не на связи")
+	}
+}
