@@ -2,10 +2,15 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +36,7 @@ const maxConcurrentReleaseProxy = 2
 
 var releaseProxySlots = make(chan struct{}, maxConcurrentReleaseProxy)
 
-func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
+func releaseAssetProxyHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
@@ -47,6 +52,10 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 		u := strings.TrimRight(releaseDownloadBase, "/") + "/" + url.PathEscape(version) + "/" + url.PathEscape(asset)
 		if limit, small := releaseSmallAssetLimit(asset); small {
 			serveReleaseSmallAsset(w, r, u, limit)
+			return
+		}
+		if d.ReleaseCacheDir != "" {
+			serveReleaseBinaryCached(w, r, d.ReleaseCacheDir, version, asset, u)
 			return
 		}
 		select {
@@ -76,6 +85,131 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 		}
 		writeReleaseAsset(w, got)
 	}
+}
+
+// serveReleaseBinaryCached -- бинарь выпуска через дисковый кэш (SEC-01).
+//
+// Раздача без авторизации, и медленный клиент держал слот до 90 с: два таких
+// стопорили раскатку всего парка. Теперь слот держит только поход на GitHub
+// (с таймаутом, не зависящим от клиента), а клиенту файл отдаётся с диска,
+// уже без слота и без копии в памяти. В кэш попадает только бинарь, чья
+// sha256 совпала с подписанным checksums.txt выпуска: выпуск неизменен, и
+// проверенный файл годится всем следующим.
+func serveReleaseBinaryCached(w http.ResponseWriter, r *http.Request, cacheDir, version, asset, u string) {
+	path := filepath.Join(cacheDir, version, asset)
+	if serveReleaseCacheFile(w, r, path) {
+		return
+	}
+	select {
+	case releaseProxySlots <- struct{}{}:
+	default:
+		w.Header().Set("Retry-After", releaseProxyRetryAfter())
+		writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "release proxy busy; retry shortly")
+		return
+	}
+	status, msg := fillReleaseCache(r.Context(), path, version, asset, u)
+	<-releaseProxySlots
+	if status != http.StatusOK {
+		writeJSONError(w, status, errCodeInternal, msg)
+		return
+	}
+	if !serveReleaseCacheFile(w, r, path) {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "release cache read failed")
+	}
+}
+
+// fillReleaseCache забирает бинарь, сверяет с подписанными суммами и
+// атомарно кладёт в кэш. Поход на GitHub не привязан к соединению клиента:
+// отвалившийся клиент не должен выбрасывать уже почти скачанный файл.
+func fillReleaseCache(ctx context.Context, path, version, asset, u string) (int, string) {
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+	defer cancel()
+	sums, err := verifiedChecksumsFetcher(fetchCtx, releaseDownloadBase, version)
+	if err != nil {
+		return http.StatusBadGateway, "release checksums: " + err.Error()
+	}
+	want := strings.ToLower(strings.TrimSpace(sums[asset]))
+	if want == "" {
+		return http.StatusBadGateway, "release checksums: no entry for " + asset
+	}
+	got, status, msg := fetchReleaseProxyAsset(fetchCtx, u, maxSelfUpdateProxyBytes, 90*time.Second)
+	if status != http.StatusOK {
+		return status, msg
+	}
+	sum := sha256.Sum256(got.body)
+	if hex.EncodeToString(sum[:]) != want {
+		return http.StatusBadGateway, "release fetch: sha256 mismatch for " + asset
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return http.StatusInternalServerError, "release cache: " + err.Error()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+asset+".tmp-*")
+	if err != nil {
+		return http.StatusInternalServerError, "release cache: " + err.Error()
+	}
+	_, werr := tmp.Write(got.body)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmp.Name())
+		return http.StatusInternalServerError, "release cache write failed"
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return http.StatusInternalServerError, "release cache: " + err.Error()
+	}
+	pruneReleaseCache(filepath.Dir(filepath.Dir(path)), releaseCacheKeepVersions)
+	return http.StatusOK, ""
+}
+
+// releaseCacheKeepVersions -- сколько выпусков держать в кэше: бэкенд живёт
+// на Raspberry Pi, и копить все бинари всех версий незачем.
+const releaseCacheKeepVersions = 3
+
+// pruneReleaseCache оставляет keep самых свежих (по времени изменения)
+// каталогов версий. Ошибки не мешают раздаче: кэш -- удобство.
+func pruneReleaseCache(root string, keep int) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	type dirAt struct {
+		name string
+		at   time.Time
+	}
+	var dirs []dirAt
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		dirs = append(dirs, dirAt{e.Name(), info.ModTime()})
+	}
+	if len(dirs) <= keep {
+		return
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].at.After(dirs[j].at) })
+	for _, d := range dirs[keep:] {
+		_ = os.RemoveAll(filepath.Join(root, d.name))
+	}
+}
+
+// serveReleaseCacheFile отдаёт файл кэша; false -- файла нет.
+func serveReleaseCacheFile(w http.ResponseWriter, r *http.Request, path string) bool {
+	f, err := os.Open(path) // #nosec G304 -- путь из проверенных тега и имени файла
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeContent(w, r, "", st.ModTime(), f)
+	return true
 }
 
 // releaseProxyRetryAfter -- сколько секунд просить подождать при отказе

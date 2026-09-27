@@ -297,6 +297,7 @@ func main() {
 		MiniappDocs:       tgClient,
 		MuteCutoffHour:    muteCutoffHour,
 		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
+		ReleaseCacheDir:   backend.DefaultReleaseCacheDir(cfg),
 		PublicBaseURL:     cfg.PublicBaseURL,
 		PublicIP:          cfg.PublicIP,
 		Provision:         provisionDeps,

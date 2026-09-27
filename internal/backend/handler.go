@@ -360,7 +360,11 @@ type Deps struct {
 	// the same cfg.State.MuteCutoffHour the bot uses.
 	MuteCutoffHour    int
 	BackendUpdatePath string
-	PublicBaseURL     string
+	// ReleaseCacheDir -- каталог дискового кэша бинарей выпуска (SEC-01):
+	// проверенный по подписанным суммам бинарь отдаётся отсюда без слота
+	// раздачи. Пусто -- без кэша, как раньше (через память и слот).
+	ReleaseCacheDir string
+	PublicBaseURL   string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the
