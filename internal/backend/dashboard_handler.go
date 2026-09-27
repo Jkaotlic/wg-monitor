@@ -355,10 +355,14 @@ type dashboardSummaryTotals struct {
 }
 
 type dashboardSummaryAgent struct {
-	ID               int64               `json:"id"`
-	Nickname         string              `json:"nickname"`
-	Kind             string              `json:"kind"`
-	Status           string              `json:"status"`
+	ID       int64  `json:"id"`
+	Nickname string `json:"nickname"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status"`
+	// Stale -- отчёт устарел по тем же порогам, что offline/sleeping, и
+	// независимо от тревог: status "alert" у молчащего роутера не значит, что
+	// он на связи (MINI-01). Без omitempty: false тоже ответ.
+	Stale            bool                `json:"stale"`
 	ExpectedExitIP   string              `json:"expected_exit_ip"`
 	AWGIface         string              `json:"awg_iface"`
 	LastSeenAt       *time.Time          `json:"last_seen_at,omitempty"`
@@ -793,11 +797,11 @@ func parseDashboardReleaseRankNumber(s string) (int, bool) {
 }
 
 func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time, policy dashboardStatusPolicy) dashboardSummaryAgent {
-	status := "online"
 	age := dashboardLastSeenAge(user, now)
-	if len(incidents) > 0 {
-		status = "alert"
-	} else if age == nil {
+	// Сначала -- что говорит возраст отчёта; тревога перекрывает status, но
+	// не stale.
+	status := "online"
+	if age == nil {
 		status = "offline"
 	} else if user.IsMobile() {
 		gap := time.Duration(*age) * time.Second
@@ -808,6 +812,10 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		}
 	} else if time.Duration(*age)*time.Second >= policy.StaticStaleAfter {
 		status = "offline"
+	}
+	stale := status != "online"
+	if len(incidents) > 0 {
+		status = "alert"
 	}
 
 	var lastSeenAge *int64
@@ -821,6 +829,7 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		Nickname:        user.Nickname,
 		Kind:            user.Kind,
 		Status:          status,
+		Stale:           stale,
 		ExpectedExitIP:  user.ExpectedExitIP,
 		AWGIface:        user.AWGIface,
 		LastSeenAt:      utcTimePtr(user.LastSeenAt),

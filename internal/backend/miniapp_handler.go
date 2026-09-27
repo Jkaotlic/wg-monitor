@@ -189,9 +189,12 @@ func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
 }
 
 type miniappRouterSummary struct {
-	ID             int64      `json:"id"`
-	Nickname       string     `json:"nickname"`
-	Status         string     `json:"status"`
+	ID       int64  `json:"id"`
+	Nickname string `json:"nickname"`
+	Status   string `json:"status"`
+	// Stale -- см. dashboardSummaryAgent.Stale: отчёт устарел, даже если
+	// status "alert". Экран считает устаревшим stale || offline || sleeping.
+	Stale          bool       `json:"stale"`
 	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
 	LastSeenAgeSec *int64     `json:"last_seen_age_sec,omitempty"`
 	// AgentVersion и Kind -- для поиска и фильтров списка (спека цикла 2,
@@ -334,6 +337,7 @@ func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary
 		ID:              a.ID,
 		Nickname:        a.Nickname,
 		Status:          a.Status,
+		Stale:           a.Stale,
 		LastSeenAt:      a.LastSeenAt,
 		LastSeenAgeSec:  a.LastSeenAgeSec,
 		AgentVersion:    a.AgentVersion,
