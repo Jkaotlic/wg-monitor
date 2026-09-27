@@ -252,9 +252,9 @@ func TestHydraRouteCheckNoPoliciesNoField(t *testing.T) {
 }
 
 // CHK-07: HydraRoute не установлен, а правила не прочитались -- нужен ли он,
-// неизвестно. Прежде это было «ok» с mechanism_probe_error. Теперь unknown:
-// ни тревоги по незнанию, ни ложного «всё хорошо».
-func TestHydraRouteCheckNotInstalledWithUnreadableRulesIsUnknown(t *testing.T) {
+// неизвестно. Прежде это было простое «ok». Теперь ok + unverified: ни
+// тревоги по незнанию, ни неотмеченного «всё хорошо».
+func TestHydraRouteCheckNotInstalledWithUnreadableRulesIsUnverified(t *testing.T) {
 	srv := newHydraRouteCheckServer(t, hydraRouteFixtures{
 		statusJSON: `{"success":true,"data":{"installed":false,"running":false}}`,
 		dnsJSON:    `not json`,
@@ -263,8 +263,8 @@ func TestHydraRouteCheckNotInstalledWithUnreadableRulesIsUnknown(t *testing.T) {
 	})
 	defer srv.Close()
 	got := (HydraRouteCheck{Client: awgmgr.New(srv.URL)}).Run(context.Background(), Deps{})
-	if got.Status != StatusUnknown {
-		t.Fatalf("status=%q, want unknown when rules are unreadable: %+v", got.Status, got)
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("want ok+unverified when rules are unreadable: %+v", got)
 	}
 	if got.Details["mechanism_probe_error"] == nil {
 		t.Fatalf("probe error lost: %+v", got.Details)

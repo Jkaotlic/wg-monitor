@@ -53,7 +53,7 @@ func (h HydraRouteCheck) Run(ctx context.Context, _ Deps) wire.Check {
 		if mechErr != nil {
 			// CHK-07: правила не прочитались -- нужен ли HydraRoute,
 			// неизвестно; «ok» было бы неправдой, тревога -- догадкой.
-			return Unknown("hydraroute", start, "routing rules unreadable: cannot tell whether HydraRoute is needed", details)
+			return Unverified("hydraroute", start, "routing rules unreadable: cannot tell whether HydraRoute is needed", details)
 		}
 		return OK("hydraroute", start, details)
 	}

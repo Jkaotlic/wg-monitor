@@ -542,8 +542,8 @@ func TestDNS_CanceledProbe_YieldsInconclusiveNotFailure(t *testing.T) {
 
 	got := chk.Run(ctx, Deps{})
 	// CHK-02: единственный адрес не опрошен -- «не проверено», не «ok».
-	if got.Status != StatusUnknown {
-		t.Fatalf("a canceled/timed-out probe must be inconclusive (unknown), not a check failure or ok; got %+v", got)
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("a canceled/timed-out probe must be inconclusive (ok+unverified), not a check failure; got %+v", got)
 	}
 	if got.Details["failed_count"] != 0 {
 		t.Fatalf("canceled probe must not increment failed_count, got details=%+v", got.Details)
@@ -675,9 +675,9 @@ func TestProbeInconclusive_BeforeDeadlineStillCounts(t *testing.T) {
 
 // CHK-02: проверка, которая ничего не проверила, не говорит «ok». Живой
 // роутер 27.09 слал dns=ok с {"discovery_error":"ndmc show running-config:
-// exit status 1","endpoints":0}. Статус "unknown": бэкенд (state.Apply)
-// такой статус не двигает ни к тревоге, ни к «починилось».
-func TestDNS_DiscoveryErrorWithNothingToProbeIsUnknown(t *testing.T) {
+// exit status 1","endpoints":0}. Уходит ok + details.unverified: бэкенд
+// принимает только ok|fail, а новый пропускает такое мимо FSM («не проверено»).
+func TestDNS_DiscoveryErrorWithNothingToProbeIsUnverified(t *testing.T) {
 	chk := DNS{
 		TestDomain: "example.com",
 		EndpointProvider: func(context.Context) ([]keenetic.DNSEndpoint, error) {
@@ -685,8 +685,8 @@ func TestDNS_DiscoveryErrorWithNothingToProbeIsUnknown(t *testing.T) {
 		},
 	}
 	got := chk.Run(context.Background(), Deps{})
-	if got.Status != "unknown" {
-		t.Fatalf("status=%q, want unknown when discovery failed and nothing was probed: %+v", got.Status, got)
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("want ok+unverified when discovery failed and nothing was probed: %+v", got)
 	}
 	if got.Details["discovery_error"] == nil {
 		t.Fatalf("discovery_error lost: %+v", got.Details)
@@ -719,7 +719,7 @@ func TestDNS_ThresholdCountsOnlyProbedEndpoints(t *testing.T) {
 	}
 }
 
-func TestDNS_AllEndpointsSkippedIsUnknown(t *testing.T) {
+func TestDNS_AllEndpointsSkippedIsUnverified(t *testing.T) {
 	chk := DNS{
 		Endpoints: []keenetic.DNSEndpoint{
 			{Type: "plain", Host: "198.51.100.11", Port: 53, NDMSName: "Wireguard1"},
@@ -730,7 +730,7 @@ func TestDNS_AllEndpointsSkippedIsUnknown(t *testing.T) {
 		},
 	}
 	got := chk.Run(context.Background(), Deps{})
-	if got.Status != "unknown" {
-		t.Fatalf("status=%q, want unknown when every endpoint was skipped: %+v", got.Status, got)
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("want ok+unverified when every endpoint was skipped: %+v", got)
 	}
 }

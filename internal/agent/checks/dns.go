@@ -113,7 +113,7 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			// CHK-02: настройки не прочитались -- проверять было нечего, и
 			// «ok» тут было бы неправдой.
 			details["discovery_error"] = endpointProviderErr.Error()
-			return Unknown(c.Name(), start, "dns endpoints could not be read", details)
+			return Unverified(c.Name(), start, "dns endpoints could not be read", details)
 		}
 		return OK(c.Name(), start, details)
 	}
@@ -249,7 +249,7 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	if probed == 0 {
 		// Все адреса пропущены (нет интерфейса, проверка не успела) --
 		// ни один резолвер не опрошен, «ok» было бы неправдой (CHK-02).
-		return Unknown(c.Name(), start, "no DNS endpoint was actually probed", details)
+		return Unverified(c.Name(), start, "no DNS endpoint was actually probed", details)
 	}
 	if failedCount >= threshold {
 		return Fail(c.Name(), start,
