@@ -362,7 +362,10 @@ type dashboardSummaryAgent struct {
 	// Stale -- отчёт устарел по тем же порогам, что offline/sleeping, и
 	// независимо от тревог: status "alert" у молчащего роутера не значит, что
 	// он на связи (MINI-01). Без omitempty: false тоже ответ.
-	Stale            bool                `json:"stale"`
+	Stale bool `json:"stale"`
+	// Reach -- каким был бы status без тревог: online | sleeping | offline
+	// по возрасту отчёта и порогам static/mobile. Фронт берёт его, если есть.
+	Reach            string              `json:"reach"`
 	ExpectedExitIP   string              `json:"expected_exit_ip"`
 	AWGIface         string              `json:"awg_iface"`
 	LastSeenAt       *time.Time          `json:"last_seen_at,omitempty"`
@@ -813,6 +816,7 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 	} else if time.Duration(*age)*time.Second >= policy.StaticStaleAfter {
 		status = "offline"
 	}
+	reach := status
 	stale := status != "online"
 	if len(incidents) > 0 {
 		status = "alert"
@@ -830,6 +834,7 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		Kind:            user.Kind,
 		Status:          status,
 		Stale:           stale,
+		Reach:           reach,
 		ExpectedExitIP:  user.ExpectedExitIP,
 		AWGIface:        user.AWGIface,
 		LastSeenAt:      utcTimePtr(user.LastSeenAt),

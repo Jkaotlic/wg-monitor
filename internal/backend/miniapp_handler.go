@@ -194,7 +194,9 @@ type miniappRouterSummary struct {
 	Status   string `json:"status"`
 	// Stale -- см. dashboardSummaryAgent.Stale: отчёт устарел, даже если
 	// status "alert". Экран считает устаревшим stale || offline || sleeping.
-	Stale          bool       `json:"stale"`
+	Stale bool `json:"stale"`
+	// Reach -- см. dashboardSummaryAgent.Reach.
+	Reach          string     `json:"reach"`
 	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
 	LastSeenAgeSec *int64     `json:"last_seen_age_sec,omitempty"`
 	// AgentVersion и Kind -- для поиска и фильтров списка (спека цикла 2,
@@ -341,6 +343,7 @@ func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary
 		Nickname:        a.Nickname,
 		Status:          a.Status,
 		Stale:           a.Stale,
+		Reach:           a.Reach,
 		LastSeenAt:      a.LastSeenAt,
 		LastSeenAgeSec:  a.LastSeenAgeSec,
 		AgentVersion:    a.AgentVersion,

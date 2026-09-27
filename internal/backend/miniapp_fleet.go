@@ -118,6 +118,8 @@ type miniappFleetRouter struct {
 	// Stale -- то же, что в сводке (dashboardSummaryAgent.Stale): отчёт
 	// устарел по порогам offline/sleeping, независимо от тревог. Без omitempty.
 	Stale bool `json:"stale"`
+	// Reach -- см. dashboardSummaryAgent.Reach.
+	Reach string `json:"reach"`
 	// PanelAddressKnown -- у роутера записан годный адрес панели (тот же
 	// panelAddress, что у ссылки panel_url). Сводке парка самого адреса не
 	// нужно (TestMiniappFleetNeverLeaksRouterSecrets): листу оживления надо
@@ -288,6 +290,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				NotifyMuted:    mutedByAdmin[a.ID],
 				Away:           a.Status == "sleeping" || a.Status == "offline",
 				Stale:          a.Stale,
+				Reach:          a.Reach,
 			}
 			_, row.RootPasswordSaved = savedCreds[a.ID]
 			if i, ok := usersByID[a.ID]; ok {
