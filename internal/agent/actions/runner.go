@@ -52,6 +52,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -767,6 +768,17 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "exec not configured", payload
 		}
 		dryRun, _ := cmd.Args["dry_run"].(bool)
+		if !dryRun {
+			// AGENT-04: сторож DNS держит роутер (запасные серверы, переход
+			// или уборка) -- его строки живут только в текущем конфиге.
+			// Сброс снёс бы их и сохранил конфиг, а сторож потом убирал бы
+			// уже эталонные строки. Отказ до любых команд.
+			if hold, err := dnswatchcfg.Hold(r.DNSWatchdogStatePath); err != nil {
+				return "err", fmt.Sprintf("dns_reset: не удалось прочитать состояние сторожа DNS, сбрасывать DNS небезопасно: %v", err), payload
+			} else if hold != "" {
+				return "err", "dns_reset: сторож DNS сейчас держит роутер на запасных DNS-серверах или не закончил уборку после них. Сбросить DNS можно, когда он вернётся на свой сервер, или после перезагрузки роутера", payload
+			}
+		}
 		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{
 			DryRun: dryRun,
 			// Свой резолвер оператора сбросом не сносим: иначе «починить DNS»
