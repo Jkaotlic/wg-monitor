@@ -250,6 +250,9 @@ func miniappServiceDots(d Deps, routerID int64, incidents []dashboardIncident) (
 	if err != nil {
 		return nil, false
 	}
+	// Те же строки, что видит экран роутера (LIST-01): без призраков
+	// удалённых туннелей и устаревшего resolver_guard.
+	rows = miniappCurrentRows(d, routerID, rows)
 	out := make([]miniappCheckDot, 0, len(miniappLampChecks))
 	for _, row := range rows {
 		if !miniappLampChecks[row.CheckName] {

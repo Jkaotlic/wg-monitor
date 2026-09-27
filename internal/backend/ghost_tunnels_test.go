@@ -58,3 +58,29 @@ func TestMiniappEventsGhostTunnelStaysHiddenWhenAwgmFails(t *testing.T) {
 		t.Fatalf("удалённый туннель назван выходом: %+v", resp.Traffic)
 	}
 }
+
+// LIST-01: список роутеров фильтрует строки так же, как экран роутера.
+// Несущий awg14 удалён (нет в последнем инвентаре), его старая строка «ok»
+// -- призрак; живого несущего нет, и плашка «резерв не работает» была бы
+// ложью: список обязан сказать «тревога», как и экран.
+func TestMiniappRoutersIgnoreGhostCarrier(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	seedWorkrouterEvents(t, d, ownedID, "awg14", "awg10")
+	newer := time.Now().UTC().Add(-30 * time.Second)
+	for _, r := range []struct{ check, status, details string }{
+		{"agent_heartbeat", "ok", ""},
+		{"tunnels", "ok", `{"tunnel_count":1}`},
+		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"nl2","status":"running","enabled":true,"handshake_age_sec":1440,"active_default_known":true}`},
+	} {
+		if err := d.Events().Insert(ownedID, r.check, r.status, r.details, newer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedHardIncident(t, d, ownedID, "tunnel_awg10")
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	body, rows := miniappRoutersRows(t, h, ownerTG)
+	if _, ok := rows["router-owned"]["reserve_only_alert"]; ok {
+		t.Fatalf("несущий-призрак засчитан живым: %s", body)
+	}
+}
