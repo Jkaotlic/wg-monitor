@@ -65,6 +65,9 @@ type Reporter struct {
 
 	reportOKPath    string // AGENT-11: метка «новый бинарь отчитался» для скрипта замены
 	reportOKWritten bool
+	// reportRejectedPath -- метка «бэкенд явно отверг отчёт» (4xx).
+	reportRejectedPath    string
+	reportRejectedWritten bool
 
 	lastPersistAt time.Time // AGENT-10: когда файл состояния писался последний раз
 	stateWrites   int       // сколько раз писался (для тестов)
@@ -84,6 +87,10 @@ type ReporterConfig struct {
 	// ReportOKPath -- куда положить метку после первого успешного отчёта
 	// процесса (actions.SelfUpdateReportOKPath). Пусто -- не писать.
 	ReportOKPath string
+	// ReportRejectedPath -- куда положить метку, когда бэкенд явно отверг
+	// отчёт (ErrUnauthorized, ErrReportRejected). Сеть и 5xx её не ставят:
+	// авария бэкенда -- не повод откатывать обновление. Пусто -- не писать.
+	ReportRejectedPath string
 }
 
 func NewReporter(cfg ReporterConfig) *Reporter {
@@ -102,7 +109,8 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		configPath:  cfg.ConfigPath,
 		backendURL:  cfg.BackendURL,
 
-		reportOKPath: cfg.ReportOKPath,
+		reportOKPath:       cfg.ReportOKPath,
+		reportRejectedPath: cfg.ReportRejectedPath,
 	}
 	r.loadState()
 	return r
@@ -185,6 +193,9 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	canonicalURL, err := r.sender.SendReport(ctx, report)
 	if err != nil {
 		slog.Warn("send report failed", "err", err)
+		if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrReportRejected) {
+			r.markReportRejected()
+		}
 		if errors.Is(err, ErrUnauthorized) {
 			now := time.Now()
 			r.mu.Lock()
@@ -220,6 +231,22 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	r.mu.Unlock()
 	r.persistStateThrottled(snap, recovered)
 	r.markReportOK()
+}
+
+// markReportRejected -- AGENT-11: бэкенд явно отверг отчёт. Скрипт замены
+// откатывает бинарь, если за 5 минут так и не было успешного отчёта.
+func (r *Reporter) markReportRejected() {
+	if r.reportRejectedPath == "" || r.reportRejectedWritten {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(r.reportRejectedPath), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(r.reportRejectedPath, []byte(r.version+"\n"), 0o644); err != nil {
+		slog.Debug("report-rejected marker write", "err", err)
+		return
+	}
+	r.reportRejectedWritten = true
 }
 
 // markReportOK -- AGENT-11: после первого успешного отчёта процесса кладёт

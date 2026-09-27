@@ -333,7 +333,7 @@ func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
 }
 
 func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", true)
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", "/opt/var/wg-monitor/report-rejected", true)
 
 	required := []string{
 		"/opt/etc/init.d/S99wg-monitor start",
@@ -341,7 +341,7 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 		"pidof wg-monitor >/dev/null 2>&1",
 		"pgrep -x wg-monitor >/dev/null 2>&1",
 		"ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1",
-		"if ! is_running; then",
+		"! is_running; then",
 		"mv /opt/bin/wg-monitor.bak /opt/bin/wg-monitor",
 		"/opt/etc/init.d/S99wg-monitor start",
 	}
@@ -360,7 +360,7 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 // after 2 s. A crash-after-start (e.g. config parse error) would pass a
 // single 2 s check but fail within the 60 s polling window.
 func TestSelfUpdateSwapScriptPollsForHealthAfterStart(t *testing.T) {
-	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", true)
+	script := selfUpdateSwapScript("/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok", "/opt/var/wg-monitor/report-rejected", true)
 
 	// Must contain a loop that polls for process health after start.
 	if !strings.Contains(script, "while ") && !strings.Contains(script, "for ") {
@@ -934,7 +934,7 @@ func TestSelfUpdate_RequiresVersionBindingForNewTags(t *testing.T) {
 // ставится, иначе откат вернул бы бинарь с позапрошлого обновления.
 func TestSelfUpdateSwapScriptRequiresReportMarkerAndFreshBackup(t *testing.T) {
 	const bin, marker = "/opt/bin/wg-monitor", "/opt/var/wg-monitor/report-ok"
-	script := selfUpdateSwapScript(bin, marker, true)
+	script := selfUpdateSwapScript(bin, marker, "/opt/var/wg-monitor/report-rejected", true)
 	ordered := []string{
 		"rm -f " + bin + ".bak",
 		"if ! cp -p " + bin + " " + bin + ".bak; then",
@@ -958,7 +958,7 @@ func TestSelfUpdateSwapScriptRequiresReportMarkerAndFreshBackup(t *testing.T) {
 		t.Fatalf("backup failure must not be ignored:\n%s", script)
 	}
 
-	legacy := selfUpdateSwapScript(bin, marker, false)
+	legacy := selfUpdateSwapScript(bin, marker, "/opt/var/wg-monitor/report-rejected", false)
 	if strings.Contains(legacy, "[ -f "+marker+" ]") {
 		t.Fatalf("a target without the marker (downgrade below v0.46) must not wait for it:\n%s", legacy)
 	}

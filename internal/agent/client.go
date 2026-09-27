@@ -22,6 +22,12 @@ import (
 // a distinctive log line lets the operator spot a rotated token in journald.
 var ErrUnauthorized = errors.New("backend rejected token (401/403)")
 
+// ErrReportRejected -- бэкенд явно отверг отчёт (4xx, кроме 401/403 --
+// это ErrUnauthorized -- и временных 408/429): форма или содержимое ему не
+// подходят. Сеть и 5xx сюда не попадают. По этой ошибке репортёр кладёт
+// метку report-rejected для скрипта замены бинаря (AGENT-11).
+var ErrReportRejected = errors.New("backend rejected the report (4xx)")
+
 const (
 	maxReportResponseBytes  = 4 << 10
 	maxCommandResponseBytes = 64 << 10
@@ -98,6 +104,9 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, er
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
 			return "", e
+		}
+		if resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
+			return "", fmt.Errorf("%w: backend returned %d: %s", ErrReportRejected, resp.StatusCode, string(preview))
 		}
 		return "", fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}

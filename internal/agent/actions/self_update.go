@@ -211,7 +211,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 	binPath := selfUpdateBinPath
 	tmpPath := binPath + ".new"
 	scriptPath := selfUpdateSwapScriptPath()
-	script := selfUpdateSwapScript(binPath, SelfUpdateReportOKPath(), selfUpdateTargetWritesReportMarker(version))
+	script := selfUpdateSwapScript(binPath, SelfUpdateReportOKPath(), SelfUpdateReportRejectedPath(), selfUpdateTargetWritesReportMarker(version))
 	if err := writeSelfUpdateSwapScript(scriptPath, script); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("write %s: %w", scriptPath, err)
@@ -873,6 +873,12 @@ func SelfUpdateReportOKPath() string {
 	return selfUpdateStateDir + "/report-ok"
 }
 
+// SelfUpdateReportRejectedPath -- метка «бэкенд явно отверг отчёт» (4xx:
+// авторизация, проверка формы). Сеть и 5xx её не ставят.
+func SelfUpdateReportRejectedPath() string {
+	return selfUpdateStateDir + "/report-rejected"
+}
+
 func selfUpdateTargetWritesReportMarker(version string) bool {
 	cmp, ok := releasesig.CompareReleaseTags(version, selfUpdateReportMarkerFromVersion)
 	return ok && cmp >= 0
@@ -881,12 +887,23 @@ func selfUpdateTargetWritesReportMarker(version string) bool {
 // selfUpdateSwapScript -- замена бинаря и откат (AGENT-11):
 //   - .bak делается заново; не вышло -- новый бинарь не ставится (устаревший
 //     .bak откатил бы на позапрошлую версию);
-//   - здоровье = процесс жив 60 с И (для целей с меткой) новый бинарь
-//     успешно отчитался в течение 5 минут; иначе -- откат на .bak.
-func selfUpdateSwapScript(binPath, reportMarker string, requireReport bool) string {
-	healthy := `[ $_i -ge 12 ]`
+//   - откат, если новый процесс упал в первые 60 с;
+//   - для целей с метками (>= v0.46) ещё откат, если бэкенд ЯВНО отверг
+//     отчёты нового бинаря (метка report-rejected: 4xx) и успешного отчёта
+//     (report-ok) так и не было за 5 минут. Нет меток -- бэкенд или сеть
+//     недоступны, это не вина бинаря: он остаётся (иначе авария бэкенда
+//     откатывала бы весь парк).
+func selfUpdateSwapScript(binPath, reportMarker, rejectedMarker string, requireReport bool) string {
+	markers := ""
+	settled := `[ $_i -ge 12 ]`
+	verdict := ""
 	if requireReport {
-		healthy = `[ $_i -ge 12 ] && [ -f ` + reportMarker + ` ]`
+		markers = "rm -f " + reportMarker + " " + rejectedMarker + "\n"
+		settled = `[ $_i -ge 12 ] && [ -f ` + reportMarker + ` ]`
+		verdict = `if [ $_rollback -eq 0 ] && [ ! -f ` + reportMarker + ` ] && [ -f ` + rejectedMarker + ` ]; then
+	_rollback=1
+fi
+`
 	}
 	return `#!/bin/sh
 sleep 3
@@ -899,8 +916,7 @@ if ! cp -p ` + binPath + ` ` + binPath + `.bak; then
 	/opt/etc/init.d/S99wg-monitor start
 	exit 1
 fi
-rm -f ` + reportMarker + `
-mv ` + binPath + `.new ` + binPath + `
+` + markers + `mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
 is_running() {
@@ -912,23 +928,22 @@ is_running() {
 	fi
 	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
 }
-# Poll every 5 s for up to 300 s: the process must stay up for 60 s (crash
-# after start) and, when required, the new binary must report successfully.
-_ok=0
+# Poll every 5 s: crash within the first 60 s (12 ticks) rolls back; with
+# report markers keep watching up to 300 s for report-ok / report-rejected.
+_rollback=0
 _i=0
 while [ $_i -lt 60 ]; do
 	sleep 5
-	if ! is_running; then
-		_ok=0
+	_i=$((_i + 1))
+	if [ $_i -le 12 ] && ! is_running; then
+		_rollback=1
 		break
 	fi
-	_i=$((_i + 1))
-	if ` + healthy + `; then
-		_ok=1
+	if ` + settled + `; then
 		break
 	fi
 done
-if [ $_ok -eq 0 ]; then
+` + verdict + `if [ $_rollback -eq 1 ]; then
 	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
 	killall -9 wg-monitor 2>/dev/null
 	mv ` + binPath + `.bak ` + binPath + `

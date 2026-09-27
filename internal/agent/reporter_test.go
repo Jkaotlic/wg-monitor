@@ -430,3 +430,34 @@ func TestReporterThrottlesStateWritesButKeepsResumedAccuracy(t *testing.T) {
 		t.Fatalf("state on exit = %v, want the exact last report %v", st.LastReportAt, want)
 	}
 }
+
+// AGENT-11 (ревью): явный отказ бэкенда (4xx: токен, форма отчёта) кладёт
+// метку report-rejected -- по ней скрипт замены откатывает бинарь, который
+// бэкенд не принимает. Сеть и 5xx метку не ставят: авария бэкенда -- не
+// повод откатывать.
+func TestReporterWritesRejectedMarkerOnlyOnExplicit4xx(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401", fmt.Errorf("%w: status=401", ErrUnauthorized), true},
+		{"422", fmt.Errorf("%w: status=422", ErrReportRejected), true},
+		{"5xx", errors.New("backend returned 503: busy"), false},
+		{"network", errors.New("dial tcp 203.0.113.9:443: connect: connection refused"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ok, rej := filepath.Join(dir, "report-ok"), filepath.Join(dir, "report-rejected")
+			r := NewReporter(ReporterConfig{Sender: &stubSender{err: tc.err}, Version: "v0.46.0", Interval: time.Hour, ReportOKPath: ok, ReportRejectedPath: rej})
+			r.sendOnce(context.Background())
+			_, err := os.Stat(rej)
+			if got := err == nil; got != tc.want {
+				t.Fatalf("report-rejected present = %v, want %v", got, tc.want)
+			}
+			if _, err := os.Stat(ok); err == nil {
+				t.Fatal("report-ok must not appear on a failed report")
+			}
+		})
+	}
+}
