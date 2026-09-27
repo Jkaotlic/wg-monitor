@@ -31,17 +31,22 @@ function foldState(steps, names, jobDone) {
 // починку РОУТЕРА, без имени туннеля (MINI-05): чужое задание может быть
 // починкой другого туннеля, и выдавать его ход за ход этого -- ложь. Такое
 // задание названо починкой роутера (scope 'router'), своё -- 'this'.
-export function repairView(job, { ownJobID = '' } = {}) {
+// pollFailed -- опрос хода не удался. Пока ответа нет вовсе, «узнаю…» с
+// вечно спрятанной кнопкой запирало бы человека (review v0.46, п. 2): тогда
+// честно говорим, что не узнали, и кнопку показываем.
+export function repairView(job, { ownJobID = '', pollFailed = false } = {}) {
   const steps = job?.steps ?? []
-  const loading = job == null
+  const unknown = job == null && pollFailed
+  const loading = job == null && !pollFailed
   // Пустой ответ -- починки не было; раньше экран писал над ним «Чиню».
-  const idle = !loading && !job.job_id && !job.state
+  const idle = job != null && !job.job_id && !job.state
   const done = job?.state === 'success' || job?.state === 'failed'
   const running = Boolean(job?.running)
   const failed = steps.find((s) => s.status === 'failed')
-  const scope = !loading && !idle && ownJobID && job.job_id === ownJobID ? 'this' : 'router'
+  const scope = job != null && !idle && ownJobID && job.job_id === ownJobID ? 'this' : 'router'
   let title
   if (loading) title = 'Узнаю, идёт ли починка…'
+  else if (unknown) title = 'Не удалось узнать, идёт ли починка'
   else if (idle) title = 'Починки ещё не было'
   else if (scope === 'router') {
     if (running) title = 'На роутере идёт починка'

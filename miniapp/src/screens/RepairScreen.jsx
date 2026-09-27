@@ -67,7 +67,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
     }
   }, [routerID])
 
-  const view = repairView(job, { ownJobID })
+  const view = repairView(job, { ownJobID, pollFailed: Boolean(pollError) })
   const running = Boolean(job?.running)
 
   function start() {

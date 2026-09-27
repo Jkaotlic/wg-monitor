@@ -49,3 +49,15 @@ describe('MINI-05: экран починки', () => {
     root.remove()
   })
 })
+
+describe('review п.2: первый опрос /repair не удался', () => {
+  it('кнопка «Починить» есть, ошибка названа', async () => {
+    mocks.status = () => Promise.reject(new Error('сервер не ответил'))
+    const root = await mount()
+    expect(root.querySelector('.repair-start')?.textContent).toContain('Починить «vymysel-nl»')
+    expect(root.textContent).toContain('Не удалось узнать ход починки')
+    expect(root.querySelector('.repair-title').textContent).not.toBe('Узнаю, идёт ли починка…')
+    render(null, root)
+    root.remove()
+  })
+})
