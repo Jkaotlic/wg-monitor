@@ -5,7 +5,7 @@
 // сначала "работает ли сейчас", потом "что будет, если ляжет", и только
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
-import { tunnelLive, tunnelSwitchedOff } from './routes.js'
+import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -76,7 +76,11 @@ export function tunnelsView(snapshot) {
     iface: activeTunnel.iface ?? '',
     live: tunnelLive(activeTunnel),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
-    rules: (policy.dns ?? 0) + (policy.static ?? 0),
+    // Правила политики + свои DNS и статические маршруты туннеля (counts):
+    // у политики поля static нет (wire.RoutePolicySummary), статические
+    // маршруты агент считает на туннель (MINI-09). Число -- то же, что в
+    // строке туннеля раскладки (tunnelRows).
+    rules: tunnelRows(snapshot).find((r) => r.id === activeTunnel.id)?.total ?? (policy.dns ?? 0),
   }
 
   const chain = (policy.interfaces ?? []).map((link) => {

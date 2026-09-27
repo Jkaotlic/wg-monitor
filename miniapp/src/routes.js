@@ -335,7 +335,9 @@ export function policyRows(snapshot) {
     return {
       name: p.name,
       chain,
-      rules: (p.dns ?? 0) + (p.static ?? 0),
+      // Статических маршрутов у политики нет (wire.RoutePolicySummary): они
+      // привязаны к туннелю и живут в counts (MINI-09).
+      rules: p.dns ?? 0,
       hrNeo: p.hr_neo ?? 0,
       viaVPN: Boolean(p.via_vpn),
       egress,
