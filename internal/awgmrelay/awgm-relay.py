@@ -240,15 +240,18 @@ def send_input(sock, text):
 def send_resize(sock, cols=120, rows=40):
     ws_send(sock, 0x2, b"1" + json.dumps({"columns": cols, "rows": rows}, separators=(",", ":")).encode("ascii"))
 
+def shell_prompt(text):
+    if re.search(r"(^|\n)[^ \n\r]+@[^\n\r]+:[^\n\r]*[#$] ?", text):
+        return True
+    return re.search(r"(^|\n)[#$] ?", text) is not None
+
 def prompt_action(text):
     lower = text.lower()
     if "password:" in lower:
         return "password"
     if "login:" in lower:
         return "login"
-    if re.search(r"(^|\n)[^ \n\r]+@[^\n\r]+:[^\n\r]*[#$] ?", text):
-        return "shell"
-    if re.search(r"(^|\n)[#$] ?", text):
+    if shell_prompt(text):
         return "shell"
     return ""
 
@@ -731,8 +734,24 @@ def run_install_bootstrap(cfg):
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
     print("install bootstrap complete for %s at %s (%s)" % (nick, cfg.get("target_version") or "", arch))
 
+# ROOT_LOGIN_REFUSED -- отказ входа root в терминал (AGENT-07). "auth_failed"
+# в тексте -- метка, по которой бэкенд (terminalConnectHint) узнаёт отказ
+# авторизации; "root_login_refused" отличает его от 401 панели awg-manager.
+ROOT_LOGIN_REFUSED = "auth_failed: root_login_refused: router terminal refused the root login (wrong root password?)"
+# Приглашение входа в конце вывода; строку «Last login: ...» не путать.
+LOGIN_PROMPT_AT_END = re.compile(r"(?:^|\n)(?![Ll]ast )[^\n]*login: ?$", re.I)
+SHELL_PROBE_OUTPUT = "__WG_SHELL_OK__"
+# Команда печатает маркер, но сама маркером не является: эхо набора не
+# засчитается за ответ оболочки.
+SHELL_PROBE_COMMAND = "echo __WG_SHELL_\"\"OK__\n"
+
+def login_refused(recent):
+    low = recent.lower()
+    return "incorrect" in low or LOGIN_PROMPT_AT_END.search(recent.rstrip(" ")) is not None
+
 def login_terminal(sock, cfg):
     out = ""
+    mark = 0  # вывод до последнего нашего ввода уже разобран
     sent_user = False
     sent_password = False
     deadline = time.time() + 8
@@ -745,23 +764,56 @@ def login_terminal(sock, cfg):
                 return out
             continue
         out += text
-        action = prompt_action(out)
+        recent = out[mark:]
+        if sent_password and login_refused(recent):
+            # AGENT-07: неверный пароль -- обрываемся сразу. Иначе скрипт с
+            # токеном набрался бы в приглашение login: (оно пишется в syslog),
+            # а маркер ждали бы 15 минут.
+            raise RelayError(ROOT_LOGIN_REFUSED)
+        action = prompt_action(recent)
+        if sent_password and shell_prompt(recent):
+            # После пароля «Last login: ...» не приглашение входа.
+            action = "shell"
         if action == "login" and not sent_user:
             user = (cfg.get("terminal_user") or "").strip()
             if not user:
                 raise RelayError("awgm terminal asks for login but terminal user is empty")
             send_input(sock, user + "\n")
             sent_user = True
+            mark = len(out)
         elif action == "password" and not sent_password:
             password = cfg.get("terminal_password") or ""
             if not password:
                 raise RelayError("awgm terminal asks for password but router root password is empty")
             send_input(sock, password + "\n")
             sent_password = True
+            mark = len(out)
         elif action == "shell":
             print("__WG_STEP__ terminal_connected")
             return out
+    if sent_user or sent_password:
+        # Вход начат, но приглашение оболочки не опознано. Прежде тут молча
+        # возвращались и слали скрипт вслепую; теперь спрашиваем оболочку
+        # безобидной командой и шлём скрипт, только если она ответила.
+        out += confirm_shell(sock)
+        print("__WG_STEP__ terminal_connected")
     return out
+
+def confirm_shell(sock):
+    send_input(sock, SHELL_PROBE_COMMAND)
+    out = ""
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        try:
+            text = ws_recv(sock)
+        except socket.timeout:
+            continue
+        out += text
+        if SHELL_PROBE_OUTPUT in out:
+            return out
+        if login_refused(out):
+            raise RelayError(ROOT_LOGIN_REFUSED)
+    raise RelayError(ROOT_LOGIN_REFUSED)
 
 def run_bootstrap(sock, cfg):
     script = cfg.get("bootstrap_script") or ""
