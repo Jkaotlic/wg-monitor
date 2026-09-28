@@ -285,3 +285,33 @@ CREATE TABLE IF NOT EXISTS router_credentials (
     ciphertext BLOB      NOT NULL,
     saved_at   TIMESTAMP NOT NULL
 );
+
+-- v0.47: факты роутера (адрес выхода, линии, хуки, списки прошивки, журнал
+-- пингчека). Одна строка на роутер и вид; блок заменяется целиком --
+-- удалённый VPN-туннель уходит сам. Время -- текст фиксированной ширины
+-- (db.FactTSLayout), чтобы сравнение строк было сравнением времени.
+CREATE TABLE IF NOT EXISTS router_facts (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL,
+    body        TEXT    NOT NULL,
+    at          TEXT    NOT NULL,
+    received_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, kind)
+);
+
+-- v0.47: серии неудач пингчека awg-manager. Строка на серию, не на пробу:
+-- проб ~1900 в сутки на VPN-туннель, серий -- единицы.
+CREATE TABLE IF NOT EXISTS awgm_ping_runs (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tunnel_id   TEXT    NOT NULL,
+    tunnel_name TEXT    NOT NULL DEFAULT '',
+    from_ts     TEXT    NOT NULL,
+    to_ts       TEXT    NOT NULL,
+    fails       INTEGER NOT NULL,
+    went_down   INTEGER NOT NULL DEFAULT 0,
+    recovered   INTEGER NOT NULL DEFAULT 0,
+    error       TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, tunnel_id, from_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_awgm_ping_runs_user_to ON awgm_ping_runs(user_id, to_ts);
+CREATE INDEX IF NOT EXISTS idx_awgm_ping_runs_to ON awgm_ping_runs(to_ts);
