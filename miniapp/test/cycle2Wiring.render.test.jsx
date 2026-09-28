@@ -46,7 +46,12 @@ vi.mock('../src/screens/ParkSection.jsx', () => ({
   },
 }))
 vi.mock('../src/screens/AccessSection.jsx', () => ({ AccessSection: () => <div class="stub stub-access">доступ</div> }))
-vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => <div class="stub stub-settings">настройки</div> }))
+// С v0.47 админские куски -- слоты SettingsSections: заглушка их рисует.
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({
+  SettingsSections: ({ repairSlot, settingsSlot, dangerSlot }) => (
+    <div class="stub stub-settings">настройки{repairSlot}{settingsSlot}{dangerSlot}</div>
+  ),
+}))
 vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <div class="stub stub-router">Сейчас {id}</div> }))
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: () => <div class="stub">туннели</div> }))
 vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">проверки</div> }))

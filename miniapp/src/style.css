@@ -124,6 +124,34 @@
   color: var(--muted);
 }
 
+/* Группа вкладки «Управление» (v0.47) -- уровень над разделом: крупнее и
+   ярче маленьких заглавных .section-title, с чертой сверху, чтобы граница
+   «Проверить → Починить» читалась при пролистывании. Первый раздел группы
+   встаёт вплотную к её заголовку. */
+.manage-group {
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.manage-group:first-of-type {
+  margin-top: var(--sp-4);
+  padding-top: 0;
+  border-top: 0;
+}
+
+.manage-group-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  color: var(--text);
+}
+
+.manage-group > .section:first-of-type {
+  margin-top: var(--sp-3);
+}
+
 /* ============================================================
    Card / row
    ============================================================ */

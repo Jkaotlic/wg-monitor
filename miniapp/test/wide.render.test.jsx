@@ -17,8 +17,17 @@ vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <d
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: () => <div class="stub">туннели</div> }))
 vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">проверки</div> }))
 vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: () => <div class="stub">события</div> }))
-vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => <div class="stub stub-settings">настройки</div> }))
-vi.mock('../src/screens/RouterAdminSections.jsx', () => ({ RouterAdminSections: () => <div class="stub stub-admin">обслуживание</div> }))
+// С v0.47 админские куски -- слоты SettingsSections: заглушка их рисует.
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({
+  SettingsSections: ({ repairSlot, settingsSlot, dangerSlot }) => (
+    <div class="stub stub-settings">настройки{repairSlot}{settingsSlot}{dangerSlot}</div>
+  ),
+}))
+vi.mock('../src/screens/RouterAdminSections.jsx', () => ({
+  AdminRepairSections: () => <div class="stub stub-admin">обслуживание</div>,
+  AdminSettingsSections: () => null,
+  AdminDangerZone: () => null,
+}))
 vi.mock('../src/screens/AgentConfigScreen.jsx', () => ({ AgentConfigScreen: () => <div class="stub stub-agentcfg">настройки агента</div> }))
 vi.mock('../src/screens/ParkSection.jsx', () => ({ ParkSection: ({ currentID }) => <div class="stub stub-park">парк {String(currentID)}</div> }))
 
