@@ -87,9 +87,16 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 	if !ok {
 		return 0, fmt.Errorf("access policies do not offer interface %q (the router lists %d policy interfaces)", iface, len(polIfaces))
 	}
+	// Только политики HydraRoute Neo (жалоба оператора 28.09.2026: выпуск
+	// конфига дописывал туннель и в «RU» -- политику «российское напрямую»).
+	// До этого цикл брал ЛЮБУЮ политику с непустой цепочкой, и имя функции
+	// обещало больше, чем она соблюдала: ограничение «только HydraRoute»
+	// жило лишь в старой ветке по правилам и потерялось при переходе на
+	// модель политик.
+	targets := hydraRoutePolicyTargets(ctx, c, policies)
 	changed := 0
 	for _, p := range policies {
-		if len(p.Interfaces) == 0 || policyChainHasInterface(p, permitName) {
+		if !targets[strings.ToLower(strings.TrimSpace(p.Name))] || policyChainHasInterface(p, permitName) {
 			continue
 		}
 		if err := c.PermitPolicyInterface(ctx, p.Name, permitName, len(p.Interfaces)); err != nil {
@@ -125,7 +132,7 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 		return changed, fmt.Errorf("verify access policies after permit: %w", err)
 	}
 	for _, p := range after {
-		if len(p.Interfaces) == 0 {
+		if len(p.Interfaces) == 0 || !targets[strings.ToLower(strings.TrimSpace(p.Name))] {
 			continue
 		}
 		if !policyChainHasInterface(p, permitName) {
@@ -133,6 +140,67 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 		}
 	}
 	return changed, nil
+}
+
+// hydraRoutePolicyTargets -- политики, в которые свежий туннель встаёт
+// резервом: ключ -- имя политики в нижнем регистре. Политика берётся, только
+// если выполнены оба условия:
+//
+//   - её называет правило HydraRoute Neo, привязанное к политике (пустое
+//     hrPolicyName -- политика по умолчанию «HydraRoute», как в route_status);
+//   - в её цепочке уже стоит VPN-туннель awg-manager. Цепочка из одного
+//     провайдера -- это обход наоборот («российское напрямую»), даже если
+//     правило вроде geoip:ru ведёт именно в неё.
+//
+// Пустая цепочка по-прежнему не трогается (см. addTunnelToHydraRoutePolicies).
+// Не прочитались правила -- берётся одна политика по умолчанию; не
+// прочитались туннели -- второе условие не проверяется. Оба отката сужают
+// выбор или оставляют его прежним по имени, но никогда не расширяют его на
+// чужие политики.
+func hydraRoutePolicyTargets(ctx context.Context, c *awgmgr.Client, policies []awgmgr.AccessPolicy) map[string]bool {
+	names := map[string]bool{strings.ToLower(defaultHydraRoutePolicyName): true}
+	if rules, err := c.ListDNSRoutes(ctx); err == nil {
+		for _, r := range rules {
+			if !isHydraRouteBackend(r) || len(r.Routes) > 0 || isDirectProviderHRNeoPolicy(r) {
+				continue
+			}
+			names[strings.ToLower(strings.TrimSpace(nonEmptyString(r.HRPolicyName, defaultHydraRoutePolicyName)))] = true
+		}
+	}
+	var tunnelIfaces map[string]bool
+	if all, err := c.TunnelsAll(ctx); err == nil && all != nil {
+		tunnelIfaces = map[string]bool{}
+		for _, list := range [][]awgmgr.Tunnel{all.Tunnels, all.System, all.External} {
+			for _, t := range list {
+				for _, alias := range []string{t.InterfaceName, t.NDMSName} {
+					if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
+						tunnelIfaces[alias] = true
+					}
+				}
+			}
+		}
+	}
+	targets := map[string]bool{}
+	for _, p := range policies {
+		key := strings.ToLower(strings.TrimSpace(p.Name))
+		if len(p.Interfaces) == 0 || !names[key] {
+			continue
+		}
+		if tunnelIfaces != nil && !policyChainHasTunnel(p, tunnelIfaces) {
+			continue
+		}
+		targets[key] = true
+	}
+	return targets
+}
+
+func policyChainHasTunnel(p awgmgr.AccessPolicy, tunnelIfaces map[string]bool) bool {
+	for _, link := range p.Interfaces {
+		if tunnelIfaces[strings.ToLower(strings.TrimSpace(link.Name))] {
+			return true
+		}
+	}
+	return false
 }
 
 func policyChainHasInterface(p awgmgr.AccessPolicy, iface string) bool {
