@@ -202,6 +202,10 @@ type BackendConfig struct {
 type AgentConfig struct {
 	Nickname    string `yaml:"nickname"`
 	IntervalSec int    `yaml:"interval_sec"`
+	// WakeHooksOff выключает ndm-хук мгновенной реакции (v0.47). По
+	// умолчанию хук включён (решение оператора 28.09); выключатель -- в
+	// настройках агента для админа.
+	WakeHooksOff bool `yaml:"wake_hooks_off,omitempty"`
 }
 
 func (a AgentConfig) Interval() time.Duration {

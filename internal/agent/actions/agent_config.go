@@ -32,6 +32,7 @@ type agentConfigField struct {
 
 var agentConfigWhitelist = []agentConfigField{
 	{"interval_sec", "agent", "interval_sec", "int"},
+	{"wake_hooks_off", "agent", "wake_hooks_off", "bool"},
 	{"awgm_base_url", "awg_manager", "base_url", "string"},
 	{"awgm_login", "awg_manager", "login", "string"},
 	{"external_reach_enabled", "external_reach", "enabled", "bool"},
@@ -54,7 +55,8 @@ const dnsWatchdogMaskedPath = "/***"
 // silently ignores the keys we don't list, so this parses any real config.
 type agentConfigFile struct {
 	Agent struct {
-		IntervalSec int `yaml:"interval_sec"`
+		IntervalSec  int  `yaml:"interval_sec"`
+		WakeHooksOff bool `yaml:"wake_hooks_off"`
 	} `yaml:"agent"`
 	AwgManager struct {
 		BaseURL  string `yaml:"base_url"`
@@ -82,6 +84,7 @@ type agentConfigFile struct {
 type AgentConfigView struct {
 	ConfigKind                 string `json:"config_kind"`
 	IntervalSec                int    `json:"interval_sec"`
+	WakeHooksOff               bool   `json:"wake_hooks_off"`
 	AWGMBaseURL                string `json:"awgm_base_url"`
 	AWGMLogin                  string `json:"awgm_login"`
 	ExternalReachEnabled       bool   `json:"external_reach_enabled"`
@@ -112,6 +115,7 @@ func GetAgentConfig(configPath string) (string, error) {
 	view := AgentConfigView{
 		ConfigKind:                 "agent",
 		IntervalSec:                f.Agent.IntervalSec,
+		WakeHooksOff:               f.Agent.WakeHooksOff,
 		AWGMBaseURL:                f.AwgManager.BaseURL,
 		AWGMLogin:                  f.AwgManager.Login,
 		ExternalReachEnabled:       f.ExternalReach.Enabled,
