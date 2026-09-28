@@ -920,6 +920,8 @@ func TestCleanupAgentPaths_AllArtifacts(t *testing.T) {
 		"/opt/etc/init.d/S99wg-monitor",
 		"/opt/var/wg-monitor",
 		"/opt/etc/ndm/ifstatechanged.d/90-wg-monitor.sh",
+		"/opt/etc/ndm/ifstatechanged.d/.90-wg-monitor.sh.tmp",
+		"/opt/etc/ndm/ifstatechanged.d/90-wg-monitor.sh.tmp",
 	}
 	joined := strings.Join(cmds, "\n")
 	for _, w := range wantFragments {

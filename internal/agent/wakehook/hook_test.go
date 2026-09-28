@@ -83,3 +83,48 @@ func TestEnsureDisabledRemovesOwnFileOnly(t *testing.T) {
 		t.Fatalf("повторное выключение: %q", st)
 	}
 }
+
+// Временный файл лежит в каталоге, который ndm исполняет целиком: при ошибке
+// он не должен оставаться (тем более исполняемым).
+func TestEnsureRemovesTempOnError(t *testing.T) {
+	dir := t.TempDir()
+	wake := filepath.Join(t.TempDir(), "w")
+	// Место хука занято непустым каталогом -- rename обязан упасть.
+	if err := os.MkdirAll(filepath.Join(dir, ScriptName, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := Ensure(dir, wake, true); st != StateError {
+		t.Fatalf("state=%q, ждали error", st)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != ScriptName {
+			t.Fatalf("после ошибки в каталоге хуков остался %q", e.Name())
+		}
+	}
+}
+
+func TestEnsureTempNameIsHidden(t *testing.T) {
+	if !strings.HasPrefix(filepath.Base(tempPath(t.TempDir())), ".") {
+		t.Fatal("временный файл хука без точки в начале имени: ndm может его исполнить")
+	}
+}
+
+// Выключение снимает и хук, и забытый временный файл (текущий и старый v0.47-rc).
+func TestEnsureDisabledRemovesTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	wake := filepath.Join(t.TempDir(), "w")
+	Ensure(dir, wake, true)
+	for _, p := range []string{tempPath(dir), filepath.Join(dir, ScriptName+".tmp")} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, e := Ensure(dir, wake, false); st != StateDisabled {
+		t.Fatalf("state=%q err=%q", st, e)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("после выключения остались: %v", entries)
+	}
+}

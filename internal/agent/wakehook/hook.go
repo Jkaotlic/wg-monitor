@@ -45,8 +45,10 @@ func Script(wakeFile string) string {
 func Ensure(dir, wakeFile string, enabled bool) (string, string) {
 	path := filepath.Join(dir, ScriptName)
 	if !enabled {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return StateError, err.Error()
+		for _, p := range []string{path, tempPath(dir), legacyTempPath(dir)} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return StateError, err.Error()
+			}
 		}
 		return StateDisabled, ""
 	}
@@ -60,8 +62,12 @@ func Ensure(dir, wakeFile string, enabled bool) (string, string) {
 	if cur, err := os.ReadFile(path); err == nil && string(cur) == want {
 		return StateInstalled, ""
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(want), 0o755); err != nil {
+	tmp := tempPath(dir)
+	// Остаток прошлой попытки сохранил бы свои права при WriteFile.
+	_ = os.Remove(tmp)
+	_ = os.Remove(legacyTempPath(dir))
+	if err := os.WriteFile(tmp, []byte(want), 0o600); err != nil {
+		_ = os.Remove(tmp)
 		return StateError, err.Error()
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
@@ -74,3 +80,12 @@ func Ensure(dir, wakeFile string, enabled bool) (string, string) {
 	}
 	return StateInstalled, ""
 }
+
+// tempPath -- временный файл установки. Точка в начале и права 0600 до самого
+// rename: ndm исполняет каталог хуков целиком, и недописанный скрипт не
+// должен туда попасть исполняемым.
+func tempPath(dir string) string { return filepath.Join(dir, "."+ScriptName+".tmp") }
+
+// legacyTempPath -- имя временного файла в ранних сборках v0.47 (без точки,
+// 0755). Снимается при выключении и деинсталляции.
+func legacyTempPath(dir string) string { return filepath.Join(dir, ScriptName+".tmp") }

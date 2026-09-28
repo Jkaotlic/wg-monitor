@@ -2741,7 +2741,8 @@ func cleanupAgentPaths() []string {
 		"rm -f /opt/etc/init.d/S99wg-monitor",
 		"rm -rf /opt/var/wg-monitor",
 		// v0.47: свой ndm-хук и файл пробуждения. Чужие хуки (awg-manager) не трогаем.
-		"rm -f /opt/etc/ndm/ifstatechanged.d/90-wg-monitor.sh /opt/var/run/wg-monitor.wake",
+		// Временные файлы установки хука -- тоже (ndm исполняет каталог целиком).
+		"rm -f /opt/etc/ndm/ifstatechanged.d/90-wg-monitor.sh /opt/etc/ndm/ifstatechanged.d/.90-wg-monitor.sh.tmp /opt/etc/ndm/ifstatechanged.d/90-wg-monitor.sh.tmp /opt/var/run/wg-monitor.wake",
 	}
 }
 
