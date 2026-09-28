@@ -25,8 +25,10 @@ var (
 	// нужно смотреть по обе стороны совпадения одновременно.
 	reIPv4Digits = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`)
 	// IPv6: либо четыре и больше групп подряд, либо сжатая форма с «::».
-	// Время «15:04:05» (три группы, без «::») сюда не попадает.
-	reIPv6 = regexp.MustCompile(`(?i:\b(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}\b|\b(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*))`)
+	// Время «15:04:05» (три группы, без «::») сюда не попадает. Без \b (как
+	// и у IPv4): «_» для \b -- часть слова, и в «peer_2001:db8::1» первая
+	// группа уходила открытой. Левая граница проверяется в maskIPv6.
+	reIPv6 = regexp.MustCompile(`(?i:(?:[0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*))`)
 	// reHostCandidate находит «слово.слово(.TLD)», Unicode-aware (\p{L}), с
 	// той же ручной проверкой границ, что у IPv4 -- «сайт.рф» обязан
 	// маскироваться наравне с «vpn.example.com».
@@ -37,7 +39,7 @@ var (
 // vpn.example.com -> v***.com, сайт.рф -> с***.рф.
 func Text(s string) string {
 	s = maskIPv4(s)
-	s = reIPv6.ReplaceAllString(s, "<IPv6>")
+	s = maskIPv6(s)
 	s = maskHost(s)
 	return s
 }
@@ -82,6 +84,39 @@ func maskIPv4(s string) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// maskIPv6 заменяет адрес на <IPv6>. Кандидат пропускается, только если
+// перед ним цифра (любая, unicode.IsDigit) или шестнадцатеричная буква: тогда
+// это хвост более длинной hex-строки, а не отдельный адрес. Буквы вне
+// a-f, «_», кириллица и знаки препинания границей служат -- как у IPv4, адрес
+// вплотную к префиксу маскируется. Справа не проверяется: регулярка жадная, и
+// отказ по правому соседу только выпустил бы адрес наружу целиком.
+func maskIPv6(s string) string {
+	idxs := reIPv6.FindAllStringIndex(s, -1)
+	if idxs == nil {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range idxs {
+		start, end := m[0], m[1]
+		if start > 0 {
+			pr, _ := utf8.DecodeLastRuneInString(s[:start])
+			if unicode.IsDigit(pr) || isHexLetter(pr) {
+				continue
+			}
+		}
+		b.WriteString(s[last:start])
+		b.WriteString("<IPv6>")
+		last = end
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func isHexLetter(r rune) bool {
+	return (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 // maskHost маскирует хосты вида «имя.домен» первой буквой и TLD:
