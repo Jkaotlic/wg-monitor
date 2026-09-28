@@ -45,6 +45,10 @@ type FactsProvider interface {
 	Committed(sent *wire.ReportFacts)
 }
 
+// maxReportBytes -- потолок отчёта с фактами. Больше -- факты выбрасываются:
+// 413 от бэкенда = ErrReportRejected, а после self_update это откат бинаря.
+const maxReportBytes = 60 << 10
+
 // factsCollectTimeout -- факты читают awg-manager (журнал пингчека, WAN);
 // зависший ответ не должен держать отчёт.
 const factsCollectTimeout = 8 * time.Second
@@ -71,9 +75,11 @@ type Reporter struct {
 	lastReportAt time.Time
 	forceResumed bool // set by ForceResumed; consumed by next sendOnce
 
-	trigger string        // wire.TriggerHook для внеочередного отчёта; съедается sendOnce
-	facts   FactsProvider // nil -- отчёт без фактов
-	wake    chan struct{}
+	facts FactsProvider // nil -- отчёт без фактов
+	wake  chan struct{}
+	// lastRegularAt -- когда начат последний плановый (не хук) отчёт. Хук-
+	// отчёты его не двигают: плановый ритм держит автомат тревог.
+	lastRegularAt time.Time
 
 	lastAuthErrorAt        time.Time
 	consecutiveAuthRejects int
@@ -136,6 +142,9 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 
 func (r *Reporter) Run(ctx context.Context) {
 	r.sendOnce(ctx)
+	// Тикер не сбрасывается хук-отчётами: флапающий интерфейс (хук раз в
+	// 30-60 с) иначе откладывал бы плановые отчёты без конца, а тревоги и
+	// выздоровления держатся только на них.
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	for {
@@ -146,11 +155,19 @@ func (r *Reporter) Run(ctx context.Context) {
 		case <-t.C:
 			r.sendOnce(ctx)
 		case <-r.wake:
-			if r.wakeReport(ctx) {
-				t.Reset(r.interval)
+			r.wakeReport(ctx)
+			if r.regularOverdue() {
+				r.sendOnce(ctx)
 			}
 		}
 	}
+}
+
+// regularOverdue -- с начала последнего планового отчёта прошёл интервал.
+func (r *Reporter) regularOverdue() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.lastRegularAt.IsZero() && time.Since(r.lastRegularAt) >= r.interval
 }
 
 // ForceResumed triggers an immediate report cycle with Resumed=true regardless
@@ -179,10 +196,9 @@ func (r *Reporter) wakeReport(ctx context.Context) bool {
 	if !ok || !hs.HookReportsAllowed() {
 		return false
 	}
-	r.mu.Lock()
-	r.trigger = wire.TriggerHook
-	r.mu.Unlock()
-	r.sendOnce(ctx)
+	r.sendOnceMu.Lock()
+	defer r.sendOnceMu.Unlock()
+	r.sendOnceLocked(ctx, wire.TriggerHook)
 	return true
 }
 
@@ -192,20 +208,27 @@ func (r *Reporter) wakeReport(ctx context.Context) bool {
 func (r *Reporter) sendOnce(ctx context.Context) {
 	r.sendOnceMu.Lock()
 	defer r.sendOnceMu.Unlock()
-	r.sendOnceLocked(ctx)
+	r.sendOnceLocked(ctx, "")
 }
 
-func (r *Reporter) sendOnceLocked(ctx context.Context) {
+// sendOnceLocked шлёт один отчёт; trigger решается вызывающим под
+// sendOnceMu (общего поля нет -- метка не перетечёт на чужой отчёт).
+// Хук-отчёт не трогает состояние «вернулся после отвала»: forceResumed и
+// lastReportAt остаются первому плановому, который и несёт Resumed=true.
+func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
 	start := time.Now()
+	hook := trigger == wire.TriggerHook
 
 	r.mu.Lock()
 	prev := r.lastReportAt
-	forced := r.forceResumed
-	r.forceResumed = false
-	trigger := r.trigger
-	r.trigger = ""
+	forced := false
+	if !hook {
+		forced = r.forceResumed
+		r.forceResumed = false
+		r.lastRegularAt = start
+	}
 	r.mu.Unlock()
-	resumed := forced || (!prev.IsZero() && time.Since(prev) > ResumedThreshold)
+	resumed := !hook && (forced || (!prev.IsZero() && time.Since(prev) > ResumedThreshold))
 
 	if resumed && r.awgClient != nil {
 		// Kick awg-manager into a fresh ping cycle so our /pingcheck/status
@@ -246,6 +269,13 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 		Facts:        facts,
 		Trigger:      trigger,
 	}
+	if facts != nil {
+		if body, merr := json.Marshal(report); merr == nil && len(body) > maxReportBytes {
+			slog.Warn("report too large; sending without facts", "bytes", len(body), "limit", maxReportBytes)
+			report.Facts = nil
+			facts = nil
+		}
+	}
 	canonicalURL, err := r.sender.SendReport(ctx, report)
 	if err != nil {
 		slog.Warn("send report failed", "err", err)
@@ -280,10 +310,14 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	now := time.Now()
 	r.mu.Lock()
 	recovered := r.consecutiveAuthRejects > 0 || !r.lastAuthErrorAt.IsZero()
-	r.lastReportAt = now
+	if !hook {
+		// Хук-отчёт не сдвигает отсчёт отвала: иначе первый плановый после
+		// сна потерял бы Resumed=true.
+		r.lastReportAt = now
+	}
 	r.consecutiveAuthRejects = 0
 	r.lastAuthErrorAt = time.Time{}
-	snap := reporterState{LastReportAt: now}
+	snap := reporterState{LastReportAt: r.lastReportAt}
 	r.mu.Unlock()
 	r.persistStateThrottled(snap, recovered)
 	r.markReportOK()

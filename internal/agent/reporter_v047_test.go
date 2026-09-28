@@ -124,3 +124,174 @@ func TestReporterDoesNotCommitFactsOnFailure(t *testing.T) {
 		t.Fatal("неотправленные факты помечены отправленными: серии пингчека потеряются")
 	}
 }
+
+// recSender запоминает каждый отчёт (с меткой хука и Resumed).
+type recSender struct {
+	mu      sync.Mutex
+	reports []wire.Report
+	block   chan struct{} // не nil -- первая отправка ждёт, пока его не закроют
+	blocked bool
+}
+
+func (s *recSender) HookReportsAllowed() bool { return true }
+
+func (s *recSender) SendReport(_ context.Context, r wire.Report) (string, error) {
+	s.mu.Lock()
+	wait := s.block != nil && !s.blocked
+	if wait {
+		s.blocked = true
+	}
+	ch := s.block
+	s.mu.Unlock()
+	if wait {
+		<-ch
+	}
+	s.mu.Lock()
+	s.reports = append(s.reports, r)
+	s.mu.Unlock()
+	return "", nil
+}
+
+func (s *recSender) snapshot() []wire.Report {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]wire.Report(nil), s.reports...)
+}
+
+// I1: интерфейс флапает -- хук каждые 40 с при интервале 60 с. Внеочередные
+// отчёты не двигают автомат тревог, поэтому не смеют откладывать плановые:
+// за 5 минут плановых должно быть не меньше 4 (масштаб 1 с = 1 мс).
+func TestReporterHookReportsDoNotPostponeRegularCadence(t *testing.T) {
+	s := &recSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: 60 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	stop := time.After(300 * time.Millisecond)
+	tk := time.NewTicker(40 * time.Millisecond)
+loop:
+	for {
+		select {
+		case <-tk.C:
+			r.RequestWake()
+		case <-stop:
+			break loop
+		}
+	}
+	tk.Stop()
+	cancel()
+	<-done
+	regular, hook := 0, 0
+	for _, rep := range s.snapshot() {
+		if rep.Trigger == wire.TriggerHook {
+			hook++
+		} else {
+			regular++
+		}
+	}
+	if hook == 0 {
+		t.Fatal("хук-отчётов нет: тест ничего не проверяет")
+	}
+	if regular < 4 {
+		t.Fatalf("плановых отчётов %d (хук-отчётов %d): флап интерфейса заморозил автомат тревог", regular, hook)
+	}
+}
+
+// Метка хука выбирается под замком отправки: принудительный отчёт, ждущий
+// очереди рядом с хук-отчётом, не может уйти помеченным hook (мимо автомата).
+func TestReporterForceReportNeverLabelledHookUnderConcurrency(t *testing.T) {
+	s := &recSender{block: make(chan struct{})}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); r.sendOnce(ctx) }() // держит замок отправки
+	time.Sleep(30 * time.Millisecond)
+	go func() { defer wg.Done(); r.wakeReport(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	go func() { defer wg.Done(); r.ForceResumed(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	close(s.block)
+	wg.Wait()
+	reps := s.snapshot()
+	if len(reps) != 3 {
+		t.Fatalf("отчётов %d, хотим 3", len(reps))
+	}
+	sawForced, sawHook := false, false
+	for _, rep := range reps[1:] {
+		if rep.Resumed {
+			sawForced = true
+			if rep.Trigger == wire.TriggerHook {
+				t.Fatalf("принудительный отчёт ушёл с trigger=hook: %+v", rep)
+			}
+		}
+		if rep.Trigger == wire.TriggerHook {
+			sawHook = true
+		}
+	}
+	if !sawForced || !sawHook {
+		t.Fatalf("ждали принудительный и хук-отчёт: forced=%v hook=%v", sawForced, sawHook)
+	}
+}
+
+// M5: после отвала >30 мин хук-отчёт не съедает метку Resumed -- её несёт
+// первый ПЛАНОВЫЙ отчёт (на нём держится подавление стартовых провалов мобильных).
+func TestReporterHookReportDoesNotConsumeResumed(t *testing.T) {
+	s := &recSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
+	r.lastReportAt = time.Now().Add(-2 * ResumedThreshold)
+	ctx := context.Background()
+	if !r.wakeReport(ctx) {
+		t.Fatal("хук-отчёт не ушёл")
+	}
+	r.sendOnce(ctx)
+	reps := s.snapshot()
+	if len(reps) != 2 {
+		t.Fatalf("отчётов %d", len(reps))
+	}
+	if reps[0].Trigger != wire.TriggerHook {
+		t.Fatalf("первый не хук: %+v", reps[0])
+	}
+	if !reps[1].Resumed || reps[1].Trigger != "" {
+		t.Fatalf("первый плановый после отвала без Resumed: %+v", reps[1])
+	}
+}
+
+// M5: принудительный Resumed (force_recheck) тоже не съедается хук-отчётом.
+func TestReporterHookReportKeepsForceResumed(t *testing.T) {
+	s := &recSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
+	r.lastReportAt = time.Now()
+	r.mu.Lock()
+	r.forceResumed = true
+	r.mu.Unlock()
+	ctx := context.Background()
+	r.wakeReport(ctx)
+	r.sendOnce(ctx)
+	reps := s.snapshot()
+	if len(reps) != 2 || !reps[1].Resumed {
+		t.Fatalf("метку force съел хук-отчёт: %+v", reps)
+	}
+}
+
+// M3: отчёт больше 60 КиБ уходит без фактов (413 = ErrReportRejected = откат
+// обновления), а неотправленные факты не помечаются отправленными.
+func TestReporterDropsOversizedFacts(t *testing.T) {
+	huge := make(map[string]wire.ExitProbe)
+	for i := 0; i < 2000; i++ {
+		huge[string(rune('a'+i%26))+time.Duration(i).String()] = wire.ExitProbe{Source: "example.com", Err: "timeout talking to 203.0.113.10"}
+	}
+	facts := &fakeFacts{give: &wire.ReportFacts{Exit: &wire.ExitFacts{Tunnels: huge}}}
+	s := &fakeSender{}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour, Facts: facts})
+	r.sendOnce(context.Background())
+	if s.n != 1 {
+		t.Fatalf("отчёт не ушёл: n=%d", s.n)
+	}
+	if s.last.Facts != nil {
+		t.Fatal("раздутые факты ушли в отчёте: бэкенд ответит 413")
+	}
+	if len(facts.committed) != 0 {
+		t.Fatal("выброшенные факты помечены отправленными: серии пингчека потеряются")
+	}
+}
