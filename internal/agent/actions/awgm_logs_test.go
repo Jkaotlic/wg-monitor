@@ -69,6 +69,33 @@ func TestAwgmLogsMasksUnsanitizedEntries(t *testing.T) {
 	}
 }
 
+// Fix round 1 (P5): по-записный sanitized перекрывает флаг страницы в обе
+// стороны -- запись sanitized:false обязана маскироваться, даже если
+// страница в целом sanitized:true.
+func TestAwgmLogsPerEntrySanitizedFalseOverridesPageTrue(t *testing.T) {
+	cli := logsFake(t, `{"success":true,"data":{"enabled":true,"sanitized":true,"total":1,"logs":[
+		{"timestamp":"2026-09-28T07:00:00Z","level":"warn","target":"198.51.100.7","message":"peer 198.51.100.7 down","sanitized":false}]}}`, 200, nil)
+	_, out := runLogs(t, cli, nil)
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "198.51.100.7") {
+		t.Fatalf("запись sanitized:false при странице sanitized:true не замаскирована: %s", b)
+	}
+	if !strings.Contains(out.Entries[0].Message, "198.*.*.7") {
+		t.Fatalf("message = %q", out.Entries[0].Message)
+	}
+}
+
+// Зеркальный случай P5: флага sanitized у страницы нет вовсе (по умолчанию
+// значит false), но у самой записи sanitized:true -- текст не трогаем.
+func TestAwgmLogsPerEntrySanitizedTrueWithoutPageFlag(t *testing.T) {
+	cli := logsFake(t, `{"success":true,"data":{"enabled":true,"total":1,"logs":[
+		{"timestamp":"2026-09-28T07:00:00Z","level":"warn","message":"peer 198.51.100.7 up","sanitized":true}]}}`, 200, nil)
+	_, out := runLogs(t, cli, nil)
+	if out.Entries[0].Message != "peer 198.51.100.7 up" {
+		t.Fatalf("запись sanitized:true без флага страницы испорчена: %q", out.Entries[0].Message)
+	}
+}
+
 func TestAwgmLogsKeepsSanitizedText(t *testing.T) {
 	cli := logsFake(t, `{"success":true,"data":{"enabled":true,"sanitized":true,"total":1,"logs":[
 		{"timestamp":"2026-09-28T07:00:00Z","level":"warn","message":"listen-порт переехал: 12*****.1:9000","sanitized":true}]}}`, 200, nil)
