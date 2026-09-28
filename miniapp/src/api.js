@@ -226,6 +226,13 @@ export function fetchTimeline(routerID, days = 7, { raw = false } = {}) {
   return request(`/routers/${routerID}/timeline?days=${days}${suffix}`)
 }
 
+// Факты роутера v0.47 (miniapp_facts.go): адрес выхода по VPN-туннелям,
+// линии провайдера, хук, списки сайтов прошивки. Белый список сервера --
+// топология только админу.
+export function fetchRouterFacts(id) {
+  return request(`/routers/${id}/facts`)
+}
+
 export function fetchAccess(routerID) {
   return request(`/routers/${routerID}/access`)
 }

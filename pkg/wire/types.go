@@ -16,6 +16,11 @@ type Report struct {
 	// suppress false ROUTER_OFFLINE alerts and grant a grace window for the
 	// freshly-collected check results to populate the FSM.
 	Resumed bool `json:"resumed,omitempty"`
+	// Facts -- знание о роутере сверх проверок (v0.47, pkg/wire/facts.go).
+	// Старый бэкенд ключ не знает и молча пропускает.
+	Facts *ReportFacts `json:"facts,omitempty"`
+	// Trigger -- чем разбужен отчёт: пусто -- тикер, TriggerHook -- хук KeenOS.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 type Check struct {
@@ -48,6 +53,9 @@ type Command struct {
 // heartbeat window, backend returns the new domain, agents self-migrate.
 type ReportResponse struct {
 	CanonicalURL string `json:"canonical_url,omitempty"`
+	// HookReports -- бэкенд умеет принимать отчёты от хука мимо автомата
+	// тревог (v0.47). Без него агент внеочередных отчётов не шлёт.
+	HookReports bool `json:"hook_reports,omitempty"`
 }
 
 var validCommandActions = map[string]bool{
@@ -107,6 +115,10 @@ var validCommandActions = map[string]bool{
 	"update_backend_url":  true,
 	"agent_config_get":    true,
 	"update_agent_config": true,
+	// v0.47: адрес выхода одного VPN-туннеля по кнопке и журнал awg-manager.
+	// Оба только читают роутер.
+	"exit_ip_probe": true,
+	"awgm_logs":     true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

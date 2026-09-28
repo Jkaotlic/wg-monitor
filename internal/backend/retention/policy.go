@@ -115,6 +115,12 @@ func (p *Policy) prune(ctx context.Context) error {
 	} else {
 		flapsDeleted, _ = res.RowsAffected()
 	}
+	// v0.47: серии пингчека awg-manager живут столько же, сколько события.
+	if n, err := p.DB.PingRuns().PruneBefore(cutoff); err != nil {
+		p.Logger.Warn("retention: awgm_ping_runs prune failed", "err", err)
+	} else if n > 0 {
+		p.Logger.Info("retention: awgm_ping_runs pruned", "deleted", n)
+	}
 	orphanCutoff := p.now().Add(-7 * 24 * time.Hour).UTC()
 	orphanDeleted := int64(0)
 	// BUG-02: сирота -- состояние удалённого роутера или проверки, которую

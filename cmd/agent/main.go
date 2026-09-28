@@ -22,6 +22,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/wakehook"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -84,6 +85,10 @@ func main() {
 		awgClient.SetCredentials(cfg.AwgManager.Login, awgPassword)
 	}
 
+	// v0.47: сигналы awg-manager и KeenOS (адрес выхода, пингчек, линии, хук).
+	signals := buildSignals(cfg, awgClient, wakehook.DefaultDir, wakehook.DefaultWakeFile)
+	logger.Info("wake hook", "state", signals.hookState)
+
 	// Single-Check probes
 	singleChecks := buildSingleChecks(cfg, awgClient, logger)
 	// DNS watchdog (opt-in per router): the loop runs in its own goroutine
@@ -97,6 +102,7 @@ func main() {
 		checks.TunnelsCheck{
 			Client:          awgClient,
 			HandshakeMaxAge: cfg.Checks.AWG.HandshakeMaxAge(),
+			AwgmDownSince:   signals.tracker.DownSince,
 		},
 	}
 
@@ -116,6 +122,7 @@ func main() {
 		ReportRejectedPath: actions.SelfUpdateReportRejectedPath(),
 		ConfigPath:         *configPath,
 		BackendURL:         cfg.Backend.URL,
+		Facts:              signals.hub,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -135,9 +142,11 @@ func main() {
 		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks)
+	runner.ExitProbeNow = signals.prober.ProbeNow
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
+	signals.start(ctx, rep.RequestWake)
 
 	// The watchdog's own probe, candidate probes and ndmc calls don't fit the
 	// reporter's 10 s per-check budget, so it is a loop of its own. On

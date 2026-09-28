@@ -88,6 +88,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// число строк журнала 1..300).
 		"opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove",
 		"entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove",
+		// v0.47: адрес выхода одного VPN-туннеля (читающее, все роли, резолвер
+		// tunnel_id) и журнал awg-manager (читающее, владелец и админ).
+		"exit_ip_probe", "awgm_logs",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {

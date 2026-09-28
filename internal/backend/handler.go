@@ -857,6 +857,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 		}
 		insertStmt.Close()
+		// v0.47: серии пингчека awg-manager -- в той же транзакции, что события.
+		if _, err := upsertReportPingRuns(r.Context(), tx, uid, rep.Facts); err != nil {
+			tx.Rollback()
+			d.Logger.Warn("ping runs upsert (tx rollback)", "nickname", nick, "err", err)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "ping runs")
+			return
+		}
 		if dupes > 0 {
 			addReportDup(dupes)
 			d.Logger.Info("report idempotent retry",
@@ -895,6 +902,20 @@ func reportHandler(d Deps) http.HandlerFunc {
 					d.Logger.Warn("router versions upsert", "nickname", nick, "err", err)
 				}
 			}
+		}
+
+		// v0.47: факты роутера. Стаявший отчёт рассказывает про прошлое -- его
+		// факты не перекрывают свежие.
+		if reportIsFresh && rep.Facts != nil {
+			saveReportFacts(d, uid, nick, rep.Facts, time.Now().UTC())
+		}
+		// v0.47: отчёт от хука KeenOS обновляет экран, но автомат тревог не
+		// двигает -- FSM твердеет по счёту отчётов (state.Thresholds.Fail), и
+		// внеочередные отчёты при флаппинге ускорили бы тревогу.
+		if rep.Trigger == wire.TriggerHook {
+			d.Logger.Info("hook report: fsm skipped", "nickname", nick,
+				"check_count", len(dispatchChecks), "req_id", RequestIDFromContext(r.Context()))
+			dispatchChecks = nil
 		}
 
 		// Post-commit: FSM dispatch. Каждая итерация — отдельный State.Save
@@ -1030,8 +1051,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
-		clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
+		// v0.47: хук-отчёт не двигает автомат тревог -- то же правило, что и
+		// dispatchChecks=nil выше. closeHardAsRecovery шлёт state.Recovery в
+		// FSM и настоящее уведомление о «починилось» через d.Dispatcher.Handle;
+		// пропустить его так же обязательно, как и обычный dispatch.
+		if rep.Trigger != wire.TriggerHook {
+			clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
+			clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
+		}
 		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
 		// resumed marker. Per-check status changes already emit dedicated
 		// FSM-transition logs (OBS-09); spamming Info every 60s for every
@@ -1086,15 +1113,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
+		resp := wire.ReportResponse{HookReports: true}
 		if d.PublicBaseURL != "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(wire.ReportResponse{
-				CanonicalURL: strings.TrimRight(d.PublicBaseURL, "/"),
-			})
-		} else {
-			w.WriteHeader(http.StatusOK)
+			resp.CanonicalURL = strings.TrimRight(d.PublicBaseURL, "/")
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 

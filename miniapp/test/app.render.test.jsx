@@ -41,8 +41,17 @@ vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <d
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: () => <div class="stub">VPN-туннели</div> }))
 vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">Проверки</div> }))
 vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: () => <div class="stub">Что было</div> }))
-vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => <div class="stub stub-settings">Настройки роутера</div> }))
-vi.mock('../src/screens/RouterAdminSections.jsx', () => ({ RouterAdminSections: () => <div class="stub stub-admin">Обслуживание</div> }))
+// С v0.47 админские куски -- слоты SettingsSections: заглушка их рисует.
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({
+  SettingsSections: ({ repairSlot, settingsSlot, dangerSlot }) => (
+    <div class="stub stub-settings">Настройки роутера{repairSlot}{settingsSlot}{dangerSlot}</div>
+  ),
+}))
+vi.mock('../src/screens/RouterAdminSections.jsx', () => ({
+  AdminRepairSections: () => <div class="stub stub-admin">Обслуживание</div>,
+  AdminSettingsSections: () => null,
+  AdminDangerZone: () => null,
+}))
 vi.mock('../src/screens/AgentConfigScreen.jsx', () => ({ AgentConfigScreen: () => <div class="stub stub-agentcfg">Настройки агента</div> }))
 
 const { ApiError } = await import('../src/api.js')
@@ -277,7 +286,10 @@ describe('оболочка: Telegram', () => {
   it('старая ссылка open=settings открывает вкладку «Управление»', async () => {
     const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
     expect(root.querySelector('.app-body .stub-settings')).toBeTruthy()
-    expect(root.querySelector('.app-body .stub-admin')).toBeTruthy()
+    // В Telegram сессия не админская (tgSession.is_admin=false): с v0.47
+    // вкладка не передаёт админские слоты вовсе. Прежняя заглушка
+    // RouterAdminSections рисовалась без учёта роли и утверждала обратное.
+    expect(root.querySelector('.app-body .stub-admin')).toBe(null)
     expect(root.querySelector('.tabbar-item-active').textContent).toBe('Управление')
     expect(root.querySelector('.app-header-gear')).toBe(null)
     cleanup(root)

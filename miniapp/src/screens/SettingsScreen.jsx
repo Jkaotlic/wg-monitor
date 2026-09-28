@@ -23,7 +23,10 @@ import {
   rebootBannerVisible,
 } from '../maintenance.js'
 import { Section } from '../ui/Section.jsx'
+import { ManageGroup } from '../ui/ManageGroup.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
+import { HooksRow, AwgmLogsSection } from './SignalSections.jsx'
+import { agentAtLeast } from '../agentConfig.js'
 
 // Настройки роутера и обслуживание -- то, за чем оператор раньше шёл в бота.
 //
@@ -34,7 +37,12 @@ import { DataRow } from '../ui/DataRow.jsx'
 //
 // С v0.41 это не слой за шестерёнкой, а содержимое вкладки «Управление»
 // (ManageTab): разделы без своей крышки, первым -- адрес панели.
-export function SettingsSections({ routerID, routerName, asleep, openSheet }) {
+//
+// С v0.47 разделы сведены в группы по тому, зачем пришли: Роутер · Версии ·
+// Проверить · Починить · Настройки и доступ. Админские разделы вкладка
+// вставляет слотами (repairSlot, settingsSlot, dangerSlot) -- так они стоят
+// рядом с родственными, а не отдельным хвостом после справки.
+export function SettingsSections({ routerID, routerName, asleep, openSheet, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
   const [tunnels, setTunnels] = useState([])
@@ -202,299 +210,324 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet }) {
     <>
       {error && <p class="state state-error">{error}</p>}
 
-      {/* Панель роутера -- первой: за ней чаще всего и приходят. Владельцу
-          и админу; оператору роутера сервер адреса не отдаёт, и секции нет
-          вовсе. Адрес открывается напрямую во внешнем браузере. */}
-      {settings && (settings.role === 'owner' || settings.role === 'admin') && (() => {
-        const panel = panelRow(settings)
-        return (
-          <Section title="Панель роутера">
-            <div class="card settings-card">
+      <ManageGroup title="Роутер">
+        {/* Панель роутера -- первой: за ней чаще всего и приходят. Владельцу
+            и админу; оператору роутера сервер адреса не отдаёт, и секции нет
+            вовсе. Адрес открывается напрямую во внешнем браузере. */}
+        {settings && (settings.role === 'owner' || settings.role === 'admin') && (() => {
+          const panel = panelRow(settings)
+          return (
+            <Section title="Панель роутера">
+              <div class="card settings-card">
+                {panel.known ? (
+                  <button type="button" class="panel-open" onClick={() => openExternal(panel.url)}>
+                    <span class="panel-open-host">{panel.host}</span>
+                    <span class="panel-open-go">открыть ↗</span>
+                  </button>
+                ) : (
+                  <DataRow title="Панель роутера" value="адрес не сохранён" valueTone="muted" />
+                )}
+              </div>
               {panel.known ? (
-                <button type="button" class="panel-open" onClick={() => openExternal(panel.url)}>
-                  <span class="panel-open-host">{panel.host}</span>
-                  <span class="panel-open-go">открыть ↗</span>
-                </button>
+                <p class="hint">
+                  {panel.hint ? `Адрес частный: ${panel.hint}. ` : ''}Панель спросит свой логин и пароль — мы их не знаем и не храним.
+                </p>
               ) : (
-                <DataRow title="Панель роутера" value="адрес не сохранён" valueTone="muted" />
+                <p class="hint">{panel.hint}</p>
               )}
-            </div>
-            {panel.known ? (
-              <p class="hint">
-                {panel.hint ? `Адрес частный: ${panel.hint}. ` : ''}Панель спросит свой логин и пароль — мы их не знаем и не храним.
-              </p>
-            ) : (
-              <p class="hint">{panel.hint}</p>
-            )}
-          </Section>
-        )
-      })()}
+            </Section>
+          )
+        })()}
 
-      {settings && (
-        <Section title="Опрос и тревоги">
-          <div class="card">
-            {thresholdRows(settings).map((r) => (
-              <DataRow key={r.key} title={r.title} code={r.code} value={r.value} />
-            ))}
+        <Section title="Уведомления">
+          <div class="card settings-card">
+            <DataRow
+              title="Писать мне об этом роутере"
+              value={settings?.notify_muted ? 'выключено' : 'включено'}
+              valueTone={settings?.notify_muted ? 'warn' : 'ok'}
+            />
             <p class="card-foot">
-              Эти числа живут в настройках бота, а не роутера: поменять их можно там, где он
-              запущен. Здесь они показаны, чтобы было видно, через сколько придёт тревога.
+              {settings?.notify_muted
+                ? 'Бот молчит об этом роутере. О поломке вы узнаете, только сами открыв приложение.'
+                : 'Бот напишет вам в личку, когда с роутером что-то случится.'}
             </p>
           </div>
+          <button
+            type="button"
+            class={settings?.notify_muted ? 'btn btn-ghost btn-wide' : 'btn btn-danger btn-wide'}
+            disabled={notifyBusy}
+            onClick={toggleNotify}
+          >
+            {notifyBusy ? 'Сохраняем…' : settings?.notify_muted ? 'Снова уведомлять' : 'Выключить уведомления'}
+          </button>
+          {notifyError && <p class="state state-error">{notifyError}</p>}
         </Section>
-      )}
+      </ManageGroup>
 
-      <Section title="Уведомления">
-        <div class="card settings-card">
-          <DataRow
-            title="Писать мне об этом роутере"
-            value={settings?.notify_muted ? 'выключено' : 'включено'}
-            valueTone={settings?.notify_muted ? 'warn' : 'ok'}
-          />
-          <p class="card-foot">
-            {settings?.notify_muted
-              ? 'Бот молчит об этом роутере. О поломке вы узнаете, только сами открыв приложение.'
-              : 'Бот напишет вам в личку, когда с роутером что-то случится.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          class={settings?.notify_muted ? 'btn btn-ghost btn-wide' : 'btn btn-danger btn-wide'}
-          disabled={notifyBusy}
-          onClick={toggleNotify}
-        >
-          {notifyBusy ? 'Сохраняем…' : settings?.notify_muted ? 'Снова уведомлять' : 'Выключить уведомления'}
-        </button>
-        {notifyError && <p class="state state-error">{notifyError}</p>}
-      </Section>
-
-      <Section title="Обновления">
-        {newsRows.length > 0 && (
-          <div class="card settings-card">
-            {newsRows.map((r) => {
-              const act = newsAction(r.component)
-              return (
-                <div key={r.key} class="settings-row">
-                  <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
-                  <p class="card-foot">{r.text}</p>
-                  {act && (
-                    <button type="button" class={r.component === 'firmware' ? 'btn btn-danger btn-row' : 'btn btn-primary btn-row'} onClick={act.open}>
-                      {act.label}
-                    </button>
-                  )}
-                  {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
-                  {mayHideNews && (
-                    <div class="settings-actions">
-                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
-                        Отложить на неделю
-                      </button>
-                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
-                        Скрыть эту новость
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-        {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
-            и «обновлений нет» обязаны звучать по-разному: раньше и то, и
-            другое выглядело как отсутствие блока. */}
-        {unknownLines.length > 0 && (
-          <div class="card">
-            {unknownLines.map((line) => (
-              <p key={line} class="card-foot">{line}</p>
-            ))}
-          </div>
-        )}
-        {versions && newsRows.length === 0 && unknownLines.length === 0 && (
-          <div class="card">
-            <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
-          </div>
-        )}
-        {installedRows(versions).length > 0 && (
-          <div class="card settings-card">
-            {installedRows(versions).map((r) => (
-              <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
-            ))}
-            {versions?.checked_at && <p class="card-foot">Роутер рассказал про версии {checkedAgo}.</p>}
-          </div>
-        )}
-        {versionsError && <p class="state state-error">{versionsError}</p>}
-      </Section>
-
-      {maintain && openSheet && (
-        <Section title="Обслуживание">
-          {showReboot && (
+      <ManageGroup title="Версии">
+        <Section title="Обновления">
+          {newsRows.length > 0 && (
             <div class="card settings-card">
-              <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>
-              {refusals.reboot ? (
-                <p class="hint">{refusals.reboot}</p>
-              ) : routerName ? (
-                <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
-                  Перезагрузить роутер
-                </button>
-              ) : null}
+              {newsRows.map((r) => {
+                const act = newsAction(r.component)
+                return (
+                  <div key={r.key} class="settings-row">
+                    <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+                    <p class="card-foot">{r.text}</p>
+                    {act && (
+                      <button type="button" class={r.component === 'firmware' ? 'btn btn-danger btn-row' : 'btn btn-primary btn-row'} onClick={act.open}>
+                        {act.label}
+                      </button>
+                    )}
+                    {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
+                    {mayHideNews && (
+                      <div class="settings-actions">
+                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
+                          Отложить на неделю
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
+                          Скрыть эту новость
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
-          {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
-          {agentReady && hrneoButtonVisible(versions) && (
-            <button
-              type="button"
-              class="btn btn-ghost btn-wide"
-              onClick={() => openSheet(hrneoUpdateSheet({ routerID, installed: versions?.installed?.hrneo ?? '', asleep }))}
-            >
-              Проверить и обновить HydraRoute Neo
-            </button>
+          {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
+              и «обновлений нет» обязаны звучать по-разному: раньше и то, и
+              другое выглядело как отсутствие блока. */}
+          {unknownLines.length > 0 && (
+            <div class="card">
+              {unknownLines.map((line) => (
+                <p key={line} class="card-foot">{line}</p>
+              ))}
+            </div>
           )}
-          {!hrneoButtonVisible(versions) && <p class="hint">{MAINT_TEXTS.hrneoMissing}</p>}
-          <div class="settings-actions">
-            <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'hrneo', asleep }))}>
-              Перезапустить HydraRoute
-            </button>
-            <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
-              Перезапустить awg-manager
-            </button>
-          </div>
-          <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>
-            Обновить пакеты Entware
-          </button>
-          {opkgOut && (
+          {versions && newsRows.length === 0 && unknownLines.length === 0 && (
+            <div class="card">
+              <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
+            </div>
+          )}
+          {installedRows(versions).length > 0 && (
             <div class="card settings-card">
-              <p class={opkgOut.tone === 'error' ? 'state state-error' : opkgOut.tone === 'warn' ? 'state state-warn' : 'state'}>{opkgOut.text}</p>
-              {opkgOut.failedFeeds.map((feed) => (
-                <div key={feed.url} class="settings-row">
-                  <DataRow title="Источник пакетов не отвечает" value={feed.host} valueTone="warn" />
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-row settings-row-btn"
-                    onClick={() => openSheet(feedDisableSheet({ routerID, feed, asleep, onResult: setOpkgResult }))}
-                  >
-                    Отключить фид
-                  </button>
-                </div>
+              {installedRows(versions).map((r) => (
+                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
+              ))}
+              {versions?.checked_at && <p class="card-foot">Роутер рассказал про версии {checkedAgo}.</p>}
+            </div>
+          )}
+          {versionsError && <p class="state state-error">{versionsError}</p>}
+        </Section>
+
+        <Section title="Что стоит на роутере">
+          {agentRow(settings) && (
+            <div class="card settings-card">
+              <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
+            </div>
+          )}
+          <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
+            {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
+          </button>
+          {audit.error && <p class="state state-error">{audit.error}</p>}
+          {audit.result && audit.result.status !== 'ok' && (
+            <p class="state state-error">Роутер не ответил: {audit.result.output || audit.result.status}</p>
+          )}
+          {auditOut.length > 0 && (
+            <div class="card settings-card">
+              {auditOut.map((r) => (
+                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.sub} valueTone={r.tone} />
               ))}
             </div>
           )}
         </Section>
-      )}
 
-      <Section title="Что стоит на роутере">
-        {agentRow(settings) && (
-          <div class="card settings-card">
-            <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
-          </div>
-        )}
-        <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
-          {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
-        </button>
-        {audit.error && <p class="state state-error">{audit.error}</p>}
-        {audit.result && audit.result.status !== 'ok' && (
-          <p class="state state-error">Роутер не ответил: {audit.result.output || audit.result.status}</p>
-        )}
-        {auditOut.length > 0 && (
-          <div class="card settings-card">
-            {auditOut.map((r) => (
-              <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.sub} valueTone={r.tone} />
-            ))}
-          </div>
-        )}
-      </Section>
-
-      <Section title="Прошивка роутера">
-        <button type="button" class="btn btn-ghost btn-wide" disabled={firmware.busy} onClick={() => firmware.run('firmware_status', {}, deadline)}>
-          {firmware.busy ? 'Спрашиваем роутер…' : 'Проверить прошивку'}
-        </button>
-        {firmware.error && <p class="state state-error">{firmware.error}</p>}
-        {firmware.result && firmware.result.status !== 'ok' && (
-          <p class="state state-error">Роутер не ответил: {firmware.result.output || firmware.result.status}</p>
-        )}
-        {fw?.known && (
-          <div class="card settings-card">
-            {fw.rows.map((r) => (
-              <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
-            ))}
-            {fw.hint && <p class="card-foot">Роутер говорит: {fw.hint}</p>}
-            <p class="card-foot">
-              Установка необратима: роутер скачает прошивку и перезагрузится. VPN-туннели упадут на
-              несколько минут, и вернуть прежнюю версию из приложения нельзя.
-            </p>
-          </div>
-        )}
-        {fw?.known && fw.updateAvailable && maintain && openSheet && !refusals.firmware && routerName && (
-          <button
-            type="button"
-            class="btn btn-danger btn-wide"
-            onClick={() =>
-              openSheet(firmwareSheet({ routerID, routerName, current: fw.current, available: fw.available, asleep, onResult: noteRefusal, onDone: load }))
-            }
-          >
-            Установить прошивку
+        <Section title="Прошивка роутера">
+          <button type="button" class="btn btn-ghost btn-wide" disabled={firmware.busy} onClick={() => firmware.run('firmware_status', {}, deadline)}>
+            {firmware.busy ? 'Спрашиваем роутер…' : 'Проверить прошивку'}
           </button>
-        )}
-        {fw?.known && fw.updateAvailable && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
-      </Section>
-
-      <Section title="Проверка связи">
-        {pings.length === 0 ? (
-          <div class="card">
-            <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
-          </div>
-        ) : (
-          <div class="card">
-            {pings.map((r) => (
-              <div key={r.key} class="settings-row">
-                <DataRow dot={r.tone === 'muted' ? undefined : r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone === 'muted' ? undefined : r.tone} />
-                {r.enabled != null && openSheet && (
-                  <button type="button" class="btn btn-ghost btn-row settings-row-btn" onClick={() => askPingToggle(r)}>
-                    {r.enabled ? 'Выключить' : 'Включить'}
-                  </button>
-                )}
-              </div>
-            ))}
-            <p class="card-foot">
-              Роутер сам проверяет VPN-туннель и поднимает его, если ответа нет. Задержка — это
-              то, что он намерил последним замером.
-            </p>
-          </div>
-        )}
-        <button type="button" class="btn btn-ghost btn-wide" disabled={pingNow.busy} onClick={() => pingNow.run('pingcheck_now', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}>
-          {pingNow.busy ? 'Проверяем…' : 'Проверить связь сейчас'}
-        </button>
-        {pingNow.error && <p class="state state-error">{pingNow.error}</p>}
-      </Section>
-
-      <Section title="Проверить роутер изнутри">
-        <div class="settings-actions">
-          <button type="button" class="btn btn-ghost" disabled={doctor.busy} onClick={() => doctor.run('router_doctor', {}, deadline)}>
-            {doctor.busy ? 'Смотрим…' : 'Осмотр роутера'}
-          </button>
-          <button type="button" class="btn btn-ghost" disabled={hrneo.busy} onClick={() => hrneo.run('hrneo_doctor', {}, deadline)}>
-            {hrneo.busy ? 'Смотрим…' : 'Осмотр HydraRoute Neo'}
-          </button>
-        </div>
-        {(doctor.error || hrneo.error) && <p class="state state-error">{doctor.error || hrneo.error}</p>}
-        {[...doctorOut, ...hrneoOut].length > 0 && (
-          <div class="card settings-card">
-            {[...doctorOut, ...hrneoOut].map((r, i) => (
-              <DataRow key={`${r.key}-${i}`} dot={r.tone} title={r.title} value={r.value} valueTone={r.tone} />
-            ))}
-          </div>
-        )}
-        {/* Доктор отвечает текстом; разобранные строки -- это его пересказ,
-            и сам ответ обязан остаться доступным целиком. */}
-        {(doctor.result?.status === 'ok' || hrneo.result?.status === 'ok') && (
-          <>
-            <button type="button" class="btn btn-ghost raw-toggle" onClick={() => setShowHelp((v) => !v)}>
-              {showHelp ? 'Скрыть ответ целиком' : 'Ответ роутера целиком'}
+          {firmware.error && <p class="state state-error">{firmware.error}</p>}
+          {firmware.result && firmware.result.status !== 'ok' && (
+            <p class="state state-error">Роутер не ответил: {firmware.result.output || firmware.result.status}</p>
+          )}
+          {fw?.known && (
+            <div class="card settings-card">
+              {fw.rows.map((r) => (
+                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+              ))}
+              {fw.hint && <p class="card-foot">Роутер говорит: {fw.hint}</p>}
+              <p class="card-foot">
+                Установка необратима: роутер скачает прошивку и перезагрузится. VPN-туннели упадут на
+                несколько минут, и вернуть прежнюю версию из приложения нельзя.
+              </p>
+            </div>
+          )}
+          {fw?.known && fw.updateAvailable && maintain && openSheet && !refusals.firmware && routerName && (
+            <button
+              type="button"
+              class="btn btn-danger btn-wide"
+              onClick={() =>
+                openSheet(firmwareSheet({ routerID, routerName, current: fw.current, available: fw.available, asleep, onResult: noteRefusal, onDone: load }))
+              }
+            >
+              Установить прошивку
             </button>
-            {showHelp && (
-              <pre class="raw-dump">{[doctor.result?.output, hrneo.result?.output].filter(Boolean).join('\n\n')}</pre>
-            )}
-          </>
+          )}
+          {fw?.known && fw.updateAvailable && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
+        </Section>
+      </ManageGroup>
+
+      <ManageGroup title="Проверить">
+        <Section title="Проверка связи">
+          {pings.length === 0 ? (
+            <div class="card">
+              <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
+            </div>
+          ) : (
+            <div class="card">
+              {pings.map((r) => (
+                <div key={r.key} class="settings-row">
+                  <DataRow dot={r.tone === 'muted' ? undefined : r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone === 'muted' ? undefined : r.tone} />
+                  {r.enabled != null && openSheet && (
+                    <button type="button" class="btn btn-ghost btn-row settings-row-btn" onClick={() => askPingToggle(r)}>
+                      {r.enabled ? 'Выключить' : 'Включить'}
+                    </button>
+                  )}
+                </div>
+              ))}
+              <p class="card-foot">
+                Роутер сам проверяет VPN-туннель и поднимает его, если ответа нет. Задержка — это
+                то, что он намерил последним замером.
+              </p>
+            </div>
+          )}
+          <button type="button" class="btn btn-ghost btn-wide" disabled={pingNow.busy} onClick={() => pingNow.run('pingcheck_now', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}>
+            {pingNow.busy ? 'Проверяем…' : 'Проверить связь сейчас'}
+          </button>
+          {pingNow.error && <p class="state state-error">{pingNow.error}</p>}
+        </Section>
+
+        <Section title="Проверить роутер изнутри">
+          <div class="settings-actions">
+            <button type="button" class="btn btn-ghost" disabled={doctor.busy} onClick={() => doctor.run('router_doctor', {}, deadline)}>
+              {doctor.busy ? 'Смотрим…' : 'Осмотр роутера'}
+            </button>
+            <button type="button" class="btn btn-ghost" disabled={hrneo.busy} onClick={() => hrneo.run('hrneo_doctor', {}, deadline)}>
+              {hrneo.busy ? 'Смотрим…' : 'Осмотр HydraRoute Neo'}
+            </button>
+          </div>
+          {(doctor.error || hrneo.error) && <p class="state state-error">{doctor.error || hrneo.error}</p>}
+          {[...doctorOut, ...hrneoOut].length > 0 && (
+            <div class="card settings-card">
+              {[...doctorOut, ...hrneoOut].map((r, i) => (
+                <DataRow key={`${r.key}-${i}`} dot={r.tone} title={r.title} value={r.value} valueTone={r.tone} />
+              ))}
+            </div>
+          )}
+          {/* Доктор отвечает текстом; разобранные строки -- это его пересказ,
+              и сам ответ обязан остаться доступным целиком. */}
+          {(doctor.result?.status === 'ok' || hrneo.result?.status === 'ok') && (
+            <>
+              <button type="button" class="btn btn-ghost raw-toggle" onClick={() => setShowHelp((v) => !v)}>
+                {showHelp ? 'Скрыть ответ целиком' : 'Ответ роутера целиком'}
+              </button>
+              {showHelp && (
+                <pre class="raw-dump">{[doctor.result?.output, hrneo.result?.output].filter(Boolean).join('\n\n')}</pre>
+              )}
+            </>
+          )}
+        </Section>
+
+        {/* Круг -- владелец и админ (P3): оператору сервер отказывает сам
+            (owner_only), а старый агент (< v0.47) журнал не отдаёт вовсе --
+            вторая, независимая от сервера преграда, как и у остальных
+            v0.47-секций. */}
+        {settings && settings.role !== 'operator' && agentAtLeast(settings.agent_version, 'v0.47.0') && (
+          <AwgmLogsSection routerID={routerID} deadline={deadline} />
         )}
-      </Section>
+      </ManageGroup>
+
+      <ManageGroup title="Починить">
+        {maintain && openSheet && (
+          <Section title="Обслуживание">
+            {showReboot && (
+              <div class="card settings-card">
+                <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>
+                {refusals.reboot ? (
+                  <p class="hint">{refusals.reboot}</p>
+                ) : routerName ? (
+                  <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
+                    Перезагрузить роутер
+                  </button>
+                ) : null}
+              </div>
+            )}
+            {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
+            {agentReady && hrneoButtonVisible(versions) && (
+              <button
+                type="button"
+                class="btn btn-ghost btn-wide"
+                onClick={() => openSheet(hrneoUpdateSheet({ routerID, installed: versions?.installed?.hrneo ?? '', asleep }))}
+              >
+                Проверить и обновить HydraRoute Neo
+              </button>
+            )}
+            {!hrneoButtonVisible(versions) && <p class="hint">{MAINT_TEXTS.hrneoMissing}</p>}
+            <div class="settings-actions">
+              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'hrneo', asleep }))}>
+                Перезапустить HydraRoute
+              </button>
+              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
+                Перезапустить awg-manager
+              </button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>
+              Обновить пакеты Entware
+            </button>
+            {opkgOut && (
+              <div class="card settings-card">
+                <p class={opkgOut.tone === 'error' ? 'state state-error' : opkgOut.tone === 'warn' ? 'state state-warn' : 'state'}>{opkgOut.text}</p>
+                {opkgOut.failedFeeds.map((feed) => (
+                  <div key={feed.url} class="settings-row">
+                    <DataRow title="Источник пакетов не отвечает" value={feed.host} valueTone="warn" />
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-row settings-row-btn"
+                      onClick={() => openSheet(feedDisableSheet({ routerID, feed, asleep, onResult: setOpkgResult }))}
+                    >
+                      Отключить фид
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        )}
+
+        {repairSlot}
+      </ManageGroup>
+
+      <ManageGroup title="Настройки и доступ">
+        {settings && (
+          <Section title="Опрос и тревоги">
+            <div class="card">
+              {thresholdRows(settings).map((r) => (
+                <DataRow key={r.key} title={r.title} code={r.code} value={r.value} />
+              ))}
+              <HooksRow routerID={routerID} />
+              <p class="card-foot">
+                Эти числа живут в настройках бота, а не роутера: поменять их можно там, где он
+                запущен. Здесь они показаны, чтобы было видно, через сколько придёт тревога.
+              </p>
+            </div>
+          </Section>
+        )}
+
+        {settingsSlot}
+      </ManageGroup>
+
+      {dangerSlot}
 
       <Section title="Что умеет приложение">
         <div class="card">

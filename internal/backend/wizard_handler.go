@@ -1142,6 +1142,41 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		}
 		on, _ := args["on"].(bool)
 		return map[string]any{"tunnel_id": tunnelID, "on": on}, true
+	case "exit_ip_probe":
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe tunnel id")
+			return nil, false
+		}
+		return map[string]any{"tunnel_id": tunnelID}, true
+	case "awgm_logs":
+		// Собираем заново: sanitize, bucket и всё прочее клиентское не доезжает.
+		out := map[string]any{}
+		switch level := strings.TrimSpace(argString(args, "level")); level {
+		case "":
+		case "error", "warn", "info":
+			out["level"] = level
+		default:
+			writeJSONError(w, http.StatusBadRequest, "invalid_level", "level must be error|warn|info")
+			return nil, false
+		}
+		switch group := strings.TrimSpace(argString(args, "group")); group {
+		case "":
+		case "tunnel", "routing", "system", "server":
+			out["group"] = group
+		default:
+			writeJSONError(w, http.StatusBadRequest, "invalid_group", "group must be tunnel|routing|system|server")
+			return nil, false
+		}
+		if v, ok := args["limit"]; ok {
+			n, ok := agentConfigArgInt(v)
+			if !ok || n < 1 || n > 200 {
+				writeJSONError(w, http.StatusBadRequest, "invalid_limit", "limit must be 1..200")
+				return nil, false
+			}
+			out["limit"] = n
+		}
+		return out, true
 	case "tunnel_traffic":
 		// Период уезжает в query-строку awg-manager'а. Словарь периодов
 		// принадлежит роутеру, и своей копии здесь нет -- есть запрет на то,
@@ -1259,6 +1294,8 @@ var agentConfigBoolArgs = map[string]bool{
 	"allow_router_reboot":    true,
 	"allow_firmware_install": true,
 	"dns_watchdog_enabled":   true,
+	// v0.47: выключатель ndm-хука.
+	"wake_hooks_off": true,
 }
 
 // agentConfigWatchdogEndpointOK: the agent's own rule (dnswatchcfg), not a copy.

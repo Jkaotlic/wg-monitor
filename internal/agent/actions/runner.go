@@ -76,6 +76,9 @@ type Runner struct {
 	Sleep                func(ctx context.Context, d time.Duration) error
 	AllowRouterReboot    bool // gates `service_restart router`
 	AllowFirmwareInstall bool // gates `firmware_install`
+	// ExitProbeNow -- замер адреса выхода одного VPN-туннеля (v0.47,
+	// exitprobe.Prober.ProbeNow). nil -- команда отвечает «не умеет».
+	ExitProbeNow func(ctx context.Context, tunnelID string) (wire.ExitProbe, error)
 	// ConfigPath is the path to the agent's config.yaml. Required for
 	// update_backend_url to rewrite the URL in-place.
 	ConfigPath string
@@ -1020,6 +1023,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		repoResolveIP, _ := cmd.Args["repo_resolve_ip"].(string)
 		allowDowngrade, _ := cmd.Args["allow_downgrade"].(bool)
 		out, err := SelfUpdate(ctx, version, r.Version, allowDowngrade, repoBase, repoResolveIP, r.BackendURL)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "exit_ip_probe":
+		status, out := r.runExitIPProbe(ctx, cmd.Args)
+		return status, out, payload
+	case "awgm_logs":
+		out, err := AwgmLogsJSON(ctx, r.AwgClient, cmd.Args)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

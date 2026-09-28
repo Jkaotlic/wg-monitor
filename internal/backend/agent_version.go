@@ -73,6 +73,9 @@ var miniappActionMinAgentVersion = map[string]string{
 	// обещал бы обновление, которого не будет.
 	"awgm_update":  "v0.32.0",
 	"hrneo_update": "v0.32.0",
+	// v0.47: старый агент ответил бы «unknown action».
+	"exit_ip_probe": "v0.47.0",
+	"awgm_logs":     "v0.47.0",
 }
 
 // miniappAdminOnlyActions -- действия, чей радиус router-global: их видит и

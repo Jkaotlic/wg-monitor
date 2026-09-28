@@ -19,6 +19,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
+import { ExitRow } from './SignalSections.jsx'
 
 // Экран одного VPN-туннеля: что это, сколько через него идёт и можно ли его
 // удалить. Локальный слой вкладки (как мастер замены): в адрес не пишется.
@@ -133,6 +134,9 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
     </button>
   ) : null
 
+  const meta = (snapshot?.tunnels ?? []).find((x) => x.id === card?.id)
+  const tunnelRunning = meta ? Boolean(meta.enabled) && (!meta.status || meta.status === 'running') : true
+
   return (
     <Overlay title="VPN-туннель" backLabel="VPN-туннели" onBack={onClose}>
       <div class="screen tunnel-screen">
@@ -145,6 +149,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
               были бы вчерашней картиной. */}
           {fresh && <DataRow title="Интерфейс" value={card.iface || 'роутер не сообщил'} />}
           {fresh && <DataRow title="Правила" value={tunnelRuleSummary(card)} />}
+          {fresh && <ExitRow routerID={routerID} tunnelID={card.id} running={tunnelRunning} />}
           {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
 

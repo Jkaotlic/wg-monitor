@@ -296,13 +296,13 @@ describe('Парк: переустановить агент сейчас', () =>
 })
 
 async function mountAdmin(openLayer, onOpenAgentConnection) {
-  const { RouterAdminSections } = await import('../src/screens/RouterAdminSections.jsx')
+  const { AdminDangerZone } = await import('../src/screens/RouterAdminSections.jsx')
   const sheets = []
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
     render(
-      <RouterAdminSections routerID={22} routerName="home" isAdmin openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />,
+      <AdminDangerZone routerID={22} routerName="home" isAdmin openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />,
       root,
     )
   })
@@ -341,10 +341,10 @@ describe('Управление: перенаправить агента', () => 
   })
 
   it('не админу «Опасного» нет', async () => {
-    const { RouterAdminSections } = await import('../src/screens/RouterAdminSections.jsx')
+    const { AdminDangerZone } = await import('../src/screens/RouterAdminSections.jsx')
     const root = document.createElement('div')
     document.body.appendChild(root)
-    await act(async () => render(<RouterAdminSections routerID={22} routerName="home" isAdmin={false} openSheet={() => {}} />, root))
+    await act(async () => render(<AdminDangerZone routerID={22} routerName="home" isAdmin={false} openSheet={() => {}} />, root))
     await flush()
     expect(root.querySelector('details.danger-zone')).toBe(null)
     cleanup(root)

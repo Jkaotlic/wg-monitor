@@ -69,6 +69,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/timeline", reqID(auth(miniappRouterTimelineHandler(d))))
+	// Факты роутера (v0.47): адрес выхода, WAN, DNS прошивки, хук -- белым
+	// списком, топология только админу. Видят все с доступом к роутеру.
+	mux.Handle("GET /v1/miniapp/routers/{id}/facts", reqID(auth(miniappRouterFactsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/settings", reqID(auth(miniappRouterSettingsHandler(d))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/notify", reqID(auth(miniappNotifyHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/vpn", reqID(auth(miniappVPNAccountsHandler(d))))
@@ -630,6 +633,12 @@ type miniappTimelineIncident struct {
 	DownSec   int    `json:"down_sec"`
 	Flaps     int    `json:"flaps"`
 	Ongoing   bool   `json:"ongoing"`
+
+	AwgmFirstFail string `json:"awgm_first_fail,omitempty"`
+	AwgmFails     int    `json:"awgm_fails,omitempty"`
+	AwgmWentDown  bool   `json:"awgm_went_down,omitempty"`
+	AwgmOnly      bool   `json:"awgm_only,omitempty"`
+	AwgmClean     bool   `json:"awgm_clean,omitempty"`
 }
 
 type miniappTimelineResp struct {
@@ -716,7 +725,11 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 				})
 			}
 		} else {
-			for _, inc := range timeline.Fold(rows, time.Now().UTC()) {
+			// v0.47: серии пингчека -- точечной выборкой по индексу, events не
+			// трогаем. Ошибка чтения -- лента без подписей, а не без ленты.
+			runs, _ := d.DB.PingRuns().Since(routerID, since)
+			cov := miniappAwgmCoverage(d, routerID)
+			for _, inc := range timeline.FoldWithAwgm(rows, runs, cov, time.Now().UTC()) {
 				out := miniappTimelineIncident{
 					CheckName: inc.CheckName,
 					From:      inc.From.UTC().Format(time.RFC3339),
@@ -728,6 +741,11 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 				if !inc.To.IsZero() {
 					out.To = inc.To.UTC().Format(time.RFC3339)
 				}
+				if !inc.AwgmFirstFail.IsZero() {
+					out.AwgmFirstFail = inc.AwgmFirstFail.UTC().Format(time.RFC3339)
+				}
+				out.AwgmFails, out.AwgmWentDown = inc.AwgmFails, inc.AwgmWentDown
+				out.AwgmOnly, out.AwgmClean = inc.AwgmOnly, inc.AwgmClean
 				resp.Incidents = append(resp.Incidents, out)
 			}
 		}

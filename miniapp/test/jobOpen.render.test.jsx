@@ -9,13 +9,15 @@ import { act } from 'preact/test-utils'
 const JOB = { jobId: 'job-9', title: 'Переустановка агента на «home»' }
 
 vi.mock('../src/screens/RouterAdminSections.jsx', () => ({
-  RouterAdminSections: ({ openLayer, routerName }) => (
+  AdminRepairSections: () => null,
+  AdminSettingsSections: () => null,
+  AdminDangerZone: ({ openLayer, routerName }) => (
     <button type="button" class="stub-admin" data-name={routerName} onClick={() => openLayer('job', JOB)}>
       открыть
     </button>
   ),
 }))
-vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: () => null }))
+vi.mock('../src/screens/SettingsScreen.jsx', () => ({ SettingsSections: ({ dangerSlot }) => dangerSlot }))
 vi.mock('../src/screens/ParkSection.jsx', () => ({
   ParkSection: ({ openLayer }) => (
     <button type="button" class="stub-park" onClick={() => openLayer('job', JOB)}>
