@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -59,6 +60,9 @@ type Client struct {
 	version  string
 	http     *http.Client
 	longPoll *http.Client
+
+	// hookReports -- последний ответ /v1/report объявил hook_reports (v0.47).
+	hookReports atomic.Bool
 }
 
 // NewClient: timeout — для коротких report/result. long-poll-клиент
@@ -128,8 +132,13 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, er
 			return "", fmt.Errorf("decode report response: %w", err)
 		}
 	}
+	c.hookReports.Store(rr.HookReports)
 	return rr.CanonicalURL, nil
 }
+
+// HookReportsAllowed -- бэкенд умеет принимать отчёты от хука мимо автомата
+// тревог. Бэкенд v0.46 поля не шлёт, и внеочередных отчётов агент не делает.
+func (c *Client) HookReportsAllowed() bool { return c.hookReports.Load() }
 
 // PollCommand long-polls /v1/cmd?wait=N. Returns (nil, nil) on 204 (no command
 // before the hold expired) — that's the normal idle path; the cmdloop simply
