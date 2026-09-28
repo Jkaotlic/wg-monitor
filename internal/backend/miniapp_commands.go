@@ -470,13 +470,14 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 				return
 			}
 			// Второй гейт (miniappOwnerOnlyActions) проверяется тоже, а не
-			// только admin-only -- хотя сегодня карта пуста: обслуживание,
-			// включая firmware_install, открыто админу, владельцу и
-			// оператору (решение оператора 14.09), а необратимость держит
-			// набор имени роутера, а не роль. Код остаётся написанным на
-			// будущее: owner-only действие с чувствительным выводом заведётся
-			// в эту карту, а не отдельной веткой, и гейт прикроет его сразу и
-			// на постановке, и здесь, на опросе.
+			// только admin-only: с v0.47 в карте awgm_logs -- журнал
+			// awg-manager, хроника сети владельца; его вывод читает только
+			// владелец, и гейт держит это и на постановке, и здесь, на
+			// опросе результата. Обслуживание (включая firmware_install)
+			// по-прежнему открыто админу, владельцу и оператору (решение
+			// оператора 14.09): необратимость держит набор имени роутера, а не
+			// роль. Новое owner-only действие с чувствительным выводом
+			// заводится в эту же карту, а не отдельной веткой.
 			if (miniappOwnerOnlyActions[cmd.Action] || miniappOwnerOnlyCommand(cmd.Action, cmd.Args)) && !miniappIsOwner(d, telegramUserID, routerID) {
 				writeJSONError(w, http.StatusForbidden, "owner_only",
 					"this action changes the device itself and is available to the router's owner only")
