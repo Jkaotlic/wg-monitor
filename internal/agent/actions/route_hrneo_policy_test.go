@@ -265,8 +265,12 @@ func TestAddTunnelToHydraRoutePolicies_OrderPerPolicyDoesNotLeak(t *testing.T) {
 			{Name: "Wireguard0", Up: false},
 		},
 		// С 28.09.2026 туннель встаёт только в политики HydraRoute Neo: обе
-		// должны быть названы правилами, иначе запись в две политики -- то,
-		// ради чего тест и написан, -- не случится вовсе.
+		// должны быть названы правилами и держать VPN-туннель в цепочке,
+		// иначе запись в две политики -- то, ради чего тест и написан, -- не
+		// случится вовсе.
+		tunnels: &awgmgr.TunnelsAll{Tunnels: []awgmgr.Tunnel{
+			{ID: "awg9", InterfaceName: "opkgtun9"}, {ID: "awg10", InterfaceName: "opkgtun10"}, {ID: "awg11", InterfaceName: "opkgtun11"},
+		}},
 		dnsRoutes: []awgmgr.DNSRoute{
 			{ID: "hr:A", Backend: "hydraroute", Enabled: true, HRRouteMode: "policy", HRPolicyName: "Short"},
 			{ID: "hr:B", Backend: "hydraroute", Enabled: true, HRRouteMode: "policy", HRPolicyName: "Long"},
@@ -578,6 +582,67 @@ func TestAddTunnelToHydraRoutePolicies_SkipsForeignVPNPolicy(t *testing.T) {
 			{ID: "awg10", InterfaceName: "opkgtun10"}, {ID: "awg11", InterfaceName: "opkgtun11"},
 		}},
 		dnsRoutes: []awgmgr.DNSRoute{{ID: "hr:AI", Backend: "hydraroute", Enabled: true}},
+	}
+	srv := s.server(t)
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	if _, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel); err != nil {
+		t.Fatalf("addTunnelToHydraRoutePolicies: %v", err)
+	}
+	if want := []string{"HydraRoute/Wireguard0@1"}; !reflect.DeepEqual(s.permits, want) {
+		t.Fatalf("permits = %v, want %v", s.permits, want)
+	}
+}
+
+// Туннели awg-manager не прочитались -- отличить цепочку-провайдера от
+// VPN-цепочки нечем. Тогда туннель встаёт только в политику по умолчанию, а
+// политики, названные одними правилами (здесь «RU» через geoip:ru), не
+// берутся: откат обязан сужать выбор, а не возвращать исходную жалобу.
+// Выключенное правило политику не называет.
+func TestAddTunnelToHydraRoutePolicies_TunnelsUnreadableKeepsDefaultOnly(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+			"RU":         {{Name: "GigabitEthernet1", Order: 0}},
+			"Old":        {{Name: "OpkgTun10", Order: 0}},
+		},
+		ifaces: []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "OpkgTun10", Up: true},
+			{Name: "GigabitEthernet1", Up: true}, {Name: "Wireguard0", Up: false},
+		},
+		tunnels: nil, // /api/tunnels/all отвечает 404
+		dnsRoutes: []awgmgr.DNSRoute{
+			{ID: "hr:geoip:ru", Backend: "hydraroute", Enabled: true, HRRouteMode: "policy", HRPolicyName: "RU"},
+			{ID: "hr:old", Backend: "hydraroute", Enabled: false, HRRouteMode: "policy", HRPolicyName: "Old"},
+		},
+	}
+	srv := s.server(t)
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	if _, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel); err != nil {
+		t.Fatalf("addTunnelToHydraRoutePolicies: %v", err)
+	}
+	if want := []string{"HydraRoute/Wireguard0@1"}; !reflect.DeepEqual(s.permits, want) {
+		t.Fatalf("permits = %v, want %v", s.permits, want)
+	}
+}
+
+// Выключенное правило не делает политику целью и на штатном пути.
+func TestAddTunnelToHydraRoutePolicies_DisabledRuleDoesNotNamePolicy(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+			"Old":        {{Name: "OpkgTun10", Order: 0}},
+		},
+		ifaces: []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "OpkgTun10", Up: true}, {Name: "Wireguard0", Up: false},
+		},
+		tunnels: &awgmgr.TunnelsAll{Tunnels: []awgmgr.Tunnel{
+			{ID: "awg10", InterfaceName: "opkgtun10"}, {ID: "awg11", InterfaceName: "opkgtun11"},
+		}},
+		dnsRoutes: []awgmgr.DNSRoute{
+			{ID: "hr:old", Backend: "hydraroute", Enabled: false, HRRouteMode: "policy", HRPolicyName: "Old"},
+		},
 	}
 	srv := s.server(t)
 

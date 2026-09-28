@@ -152,16 +152,22 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 //     провайдера -- это обход наоборот («российское напрямую»), даже если
 //     правило вроде geoip:ru ведёт именно в неё.
 //
-// Пустая цепочка по-прежнему не трогается (см. addTunnelToHydraRoutePolicies).
-// Не прочитались правила -- берётся одна политика по умолчанию; не
-// прочитались туннели -- второе условие не проверяется. Оба отката сужают
-// выбор или оставляют его прежним по имени, но никогда не расширяют его на
-// чужие политики.
+// Политика по умолчанию «HydraRoute» -- кандидат всегда, даже если её не
+// называет ни одно правило: так вела себя и старая ветка по правилам
+// (isHydraRoutePolicyRule), а цепочку-провайдера отсекает второе условие.
+// Выключенное правило политику не называет. Пустая цепочка по-прежнему не
+// трогается (см. addTunnelToHydraRoutePolicies).
+//
+// Откаты только сужают выбор: не прочитались правила -- кандидат одна
+// политика по умолчанию; не прочитались туннели -- отличить провайдера от
+// VPN нечем, и кандидатом тоже остаётся одна политика по умолчанию (иначе
+// «RU», названная правилом geoip:ru, снова получила бы туннель -- ровно
+// исходная жалоба).
 func hydraRoutePolicyTargets(ctx context.Context, c *awgmgr.Client, policies []awgmgr.AccessPolicy) map[string]bool {
 	names := map[string]bool{strings.ToLower(defaultHydraRoutePolicyName): true}
 	if rules, err := c.ListDNSRoutes(ctx); err == nil {
 		for _, r := range rules {
-			if !isHydraRouteBackend(r) || len(r.Routes) > 0 || isDirectProviderHRNeoPolicy(r) {
+			if !r.Enabled || !isHydraRouteBackend(r) || len(r.Routes) > 0 || isDirectProviderHRNeoPolicy(r) {
 				continue
 			}
 			names[strings.ToLower(strings.TrimSpace(nonEmptyString(r.HRPolicyName, defaultHydraRoutePolicyName)))] = true
@@ -179,6 +185,9 @@ func hydraRoutePolicyTargets(ctx context.Context, c *awgmgr.Client, policies []a
 				}
 			}
 		}
+	}
+	if tunnelIfaces == nil {
+		names = map[string]bool{strings.ToLower(defaultHydraRoutePolicyName): true}
 	}
 	targets := map[string]bool{}
 	for _, p := range policies {
