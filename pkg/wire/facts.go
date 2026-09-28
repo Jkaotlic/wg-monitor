@@ -183,15 +183,23 @@ func (f *ReportFacts) Clamp() {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		for i, id := range ids {
-			if i >= MaxExitTunnels {
-				delete(f.Exit.Tunnels, id)
-				continue
-			}
+		// Карта -- ссылочный тип: agent (Task 2) может держать ту же карту как
+		// свой «последний инвентарь» и передать её сюда напрямую. delete()/запись
+		// по ключу мутировали бы чужие данные в обход правила «Clamp работает над
+		// значением f, а не над состоянием вызывающего» (P1). Строим новую карту
+		// только из удержанных id и кладём в неё копии ExitProbe с обрезанным
+		// текстом -- исходная карта вызывающего никакими операциями не трогается.
+		n := len(ids)
+		if n > MaxExitTunnels {
+			n = MaxExitTunnels
+		}
+		clamped := make(map[string]ExitProbe, n)
+		for _, id := range ids[:n] {
 			p := f.Exit.Tunnels[id]
 			p.Err = ClipText(p.Err)
-			f.Exit.Tunnels[id] = p
+			clamped[id] = p
 		}
+		f.Exit.Tunnels = clamped
 	}
 	if len(f.PingRuns) > MaxPingRuns {
 		f.PingRuns = f.PingRuns[:MaxPingRuns]

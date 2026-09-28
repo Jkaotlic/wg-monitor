@@ -129,3 +129,43 @@ func TestNewActionsAreValid(t *testing.T) {
 		}
 	}
 }
+
+// Clamp обязан не трогать карту вызывающего: агент (Task 2) может держать тот
+// же map[string]ExitProbe как свой «последний инвентарь» и передать его прямо
+// в Report.Facts.Exit.Tunnels. Ни delete(), ни запись по ключу в исходную
+// карту не допускаются (постановление P1) -- Clamp обязан построить новую
+// карту для отправляемого блока.
+func TestClampExitTunnelsDoesNotMutateCallerMap(t *testing.T) {
+	now := time.Date(2026, 9, 28, 7, 0, 0, 0, time.UTC)
+	original := make(map[string]ExitProbe, MaxExitTunnels+5)
+	for i := 0; i < MaxExitTunnels+5; i++ {
+		id := "awg" + string(rune('a'+i))
+		original[id] = ExitProbe{VPNIP: "203.0.113.1", Source: ExitSourceAwgm, At: now}
+	}
+	// Снимок значений исходной карты до Clamp -- сравниваем с ним после.
+	wantLen := len(original)
+	wantCopy := make(map[string]ExitProbe, len(original))
+	for id, p := range original {
+		wantCopy[id] = p
+	}
+
+	f := &ReportFacts{Exit: &ExitFacts{At: now, Tunnels: original}}
+	f.Clamp()
+
+	if len(original) != wantLen {
+		t.Fatalf("исходная карта изменила длину: было %d, стало %d", wantLen, len(original))
+	}
+	for id, want := range wantCopy {
+		got, ok := original[id]
+		if !ok {
+			t.Fatalf("исходная карта потеряла ключ %q", id)
+		}
+		if got != want {
+			t.Fatalf("исходная карта изменила значение %q: было %+v, стало %+v", id, want, got)
+		}
+	}
+
+	if len(f.Exit.Tunnels) != MaxExitTunnels {
+		t.Fatalf("результат Clamp не обрезан: %d туннелей, хотим %d", len(f.Exit.Tunnels), MaxExitTunnels)
+	}
+}
