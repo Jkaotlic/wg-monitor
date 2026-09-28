@@ -194,13 +194,25 @@ var miniappCommandAllowlist = map[string]bool{
 	"entware_clean_run":     true,
 	"entware_clean_logs":    true,
 	"entware_clean_remove":  true,
+
+	// v0.47. Адрес выхода одного VPN-туннеля по кнопке: только чтение, круг --
+	// все с доступом к роутеру (как check_via_tunnel). Туннель адресуется
+	// tunnel_id через тот же резолвер, что tunnel_restart.
+	"exit_ip_probe": true,
+	// Журнал awg-manager: только чтение, но даже маскированный он показывает
+	// имена VPN-туннелей и хронику сети владельца -- круг владелец и админ
+	// (miniappOwnerOnlyActions). Аргументы собирает заново явная ветка
+	// санитайзера: sanitize и bucket до агента не доезжают никогда.
+	"awgm_logs": true,
 }
 
-// miniappOwnerOnlyActions -- действия, которых оператору не положено. С цикла 1
-// список пуст: прошивку ставят и операторы (решение оператора 14.09). Карта и
-// её гейты на постановке и опросе остаются -- новое такое действие заводится
-// сюда, а не отдельной веткой.
-var miniappOwnerOnlyActions = map[string]bool{}
+// miniappOwnerOnlyActions -- действия, которых оператору не положено.
+// С v0.47 здесь журнал awg-manager. Карта и её гейты на постановке и опросе
+// остаются -- новое такое действие заводится сюда, а не отдельной веткой.
+var miniappOwnerOnlyActions = map[string]bool{
+	// v0.47: журнал awg-manager -- хроника сети владельца.
+	"awgm_logs": true,
+}
 
 // miniappTunnelArgActions -- действия, чей туннель адресуется идентификатором,
 // а имя NDMS-интерфейса подставляет сервер. Список общий, чтобы новое такое
@@ -213,6 +225,7 @@ var miniappTunnelArgActions = map[string]bool{
 	"pingcheck_toggle": true,
 	"tunnel_traffic":   true,
 	"tunnel_power":     true,
+	"exit_ip_probe":    true,
 }
 
 // miniappNDMSRequiredActions -- те из них, которые без имени NDMS-интерфейса
@@ -313,6 +326,10 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 				on, _ := req.Args["on"].(bool)
 				delete(resolved, "ndms_name")
 				resolved["on"] = on
+			}
+			// Замеру адреса имя NDMS-интерфейса не нужно: awg-manager мерит по id.
+			if req.Action == "exit_ip_probe" {
+				delete(resolved, "ndms_name")
 			}
 			commandArgs = resolved
 		}

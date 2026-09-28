@@ -69,6 +69,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/timeline", reqID(auth(miniappRouterTimelineHandler(d))))
+	// Факты роутера (v0.47): адрес выхода, WAN, DNS прошивки, хук -- белым
+	// списком, топология только админу. Видят все с доступом к роутеру.
+	mux.Handle("GET /v1/miniapp/routers/{id}/facts", reqID(auth(miniappRouterFactsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/settings", reqID(auth(miniappRouterSettingsHandler(d))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/notify", reqID(auth(miniappNotifyHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/vpn", reqID(auth(miniappVPNAccountsHandler(d))))
