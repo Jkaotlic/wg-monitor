@@ -6,8 +6,10 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/exitprobe"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/facts"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/pingruns"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/wakehook"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/wanfacts"
@@ -30,6 +32,28 @@ func buildSignals(cfg *agent.Config, awgClient *awgmgr.Client, hookDir, wakeFile
 		prober:  &exitprobe.Prober{Client: awgClient},
 		tracker: &pingruns.Tracker{Src: awgClient},
 		wan:     &wanfacts.Collector{Client: awgClient},
+	}
+	// Ping-Check профиль на линии провайдера (Task 15a, сверка С3): running-
+	// config несёт профиль привязанным к приоритету линии (`ip global N`
+	// внутри `interface <NDMS-имя>`), а /api/wan/status -- тот же приоритет
+	// под kernel-именем интерфейса (eth3, cdc_br0...). Тот же доступ к ndmc,
+	// что и у readDNSEndpoints (cmd/agent/main.go) -- второй путь к прошивке
+	// не заводим.
+	ndmc := keenetic.NDMC{Runner: checks.OSExec{}}
+	s.wan.PingCheck = func(ctx context.Context) (map[string]string, error) {
+		rc, err := ndmc.Show(ctx, "running-config")
+		if err != nil {
+			return nil, err
+		}
+		st, err := awgClient.WANStatus(ctx)
+		if err != nil {
+			return nil, err
+		}
+		priorities := make(map[string]int, len(st.Interfaces))
+		for name, it := range st.Interfaces {
+			priorities[name] = it.Priority
+		}
+		return keenetic.WANPingCheckByPriority(rc, priorities), nil
 	}
 	state, errText := wakehook.Ensure(hookDir, wakeFile, !cfg.Agent.WakeHooksOff)
 	s.hookState = state

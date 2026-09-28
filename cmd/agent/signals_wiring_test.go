@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,25 @@ func TestBuildSignalsInstallsHookAndWiresHub(t *testing.T) {
 	}
 	if s.hub.Exit == nil || s.hub.Ping == nil || s.hub.WAN == nil {
 		t.Fatal("сборщик фактов не подключён")
+	}
+	if s.wan.PingCheck == nil {
+		t.Fatal("хук Ping-Check (Task 15a) не подключён к wanfacts.Collector")
+	}
+}
+
+// На машине без /bin/ndmc (любой не-KeeneticOS хост, включая CI и этот Mac)
+// хук обязан вернуться с ошибкой, а не паникой -- то же вырождение, что и
+// при нечитаемом running-config на самом роутере.
+func TestBuildSignalsPingCheckHookDegradesWithoutNDMC(t *testing.T) {
+	dir := t.TempDir()
+	wake := filepath.Join(t.TempDir(), "run", "wg-monitor.wake")
+	s := buildSignals(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), dir, wake)
+	profiles, err := s.wan.PingCheck(context.Background())
+	if err == nil {
+		t.Fatal("ожидали ошибку -- ndmc недоступен на этой машине")
+	}
+	if profiles != nil {
+		t.Fatalf("profiles = %+v, want nil при ошибке", profiles)
 	}
 }
 
