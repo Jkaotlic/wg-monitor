@@ -633,6 +633,12 @@ type miniappTimelineIncident struct {
 	DownSec   int    `json:"down_sec"`
 	Flaps     int    `json:"flaps"`
 	Ongoing   bool   `json:"ongoing"`
+
+	AwgmFirstFail string `json:"awgm_first_fail,omitempty"`
+	AwgmFails     int    `json:"awgm_fails,omitempty"`
+	AwgmWentDown  bool   `json:"awgm_went_down,omitempty"`
+	AwgmOnly      bool   `json:"awgm_only,omitempty"`
+	AwgmClean     bool   `json:"awgm_clean,omitempty"`
 }
 
 type miniappTimelineResp struct {
@@ -719,7 +725,11 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 				})
 			}
 		} else {
-			for _, inc := range timeline.Fold(rows, time.Now().UTC()) {
+			// v0.47: серии пингчека -- точечной выборкой по индексу, events не
+			// трогаем. Ошибка чтения -- лента без подписей, а не без ленты.
+			runs, _ := d.DB.PingRuns().Since(routerID, since)
+			cov := miniappAwgmCoverage(d, routerID)
+			for _, inc := range timeline.FoldWithAwgm(rows, runs, cov, time.Now().UTC()) {
 				out := miniappTimelineIncident{
 					CheckName: inc.CheckName,
 					From:      inc.From.UTC().Format(time.RFC3339),
@@ -731,6 +741,11 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 				if !inc.To.IsZero() {
 					out.To = inc.To.UTC().Format(time.RFC3339)
 				}
+				if !inc.AwgmFirstFail.IsZero() {
+					out.AwgmFirstFail = inc.AwgmFirstFail.UTC().Format(time.RFC3339)
+				}
+				out.AwgmFails, out.AwgmWentDown = inc.AwgmFails, inc.AwgmWentDown
+				out.AwgmOnly, out.AwgmClean = inc.AwgmOnly, inc.AwgmClean
 				resp.Incidents = append(resp.Incidents, out)
 			}
 		}

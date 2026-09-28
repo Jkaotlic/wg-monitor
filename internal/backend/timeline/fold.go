@@ -45,6 +45,14 @@ type Incident struct {
 	DownSec   int
 	Flaps     int
 	Ongoing   bool
+
+	// v0.47: серии пингчека awg-manager (timeline.FoldWithAwgm). Нули --
+	// серий нет или агент старый.
+	AwgmFirstFail time.Time // первая неудача awg-manager внутри происшествия
+	AwgmFails     int       // сколько проб awg-manager провалил за происшествие
+	AwgmWentDown  bool      // awg-manager признал VPN-туннель упавшим
+	AwgmOnly      bool      // видел только awg-manager: моргнул между отчётами
+	AwgmClean     bool      // журнал читался, а awg-manager связь не терял
 }
 
 // Fold сворачивает строки событий в происшествия. Вход принимается в любом

@@ -513,6 +513,13 @@ func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 		}
 		b.WriteString("\n")
 	}
+	// v0.47: агент пометил, с какой пробы awg-manager считает VPN-туннель
+	// упавшим. Источник назван, чтобы владелец не путал с нашим замером.
+	if since := strOrEmpty(d, "awgm_down_since"); since != "" {
+		if t, err := time.Parse(time.RFC3339, since); err == nil {
+			fmt.Fprintf(b, "  По awg-manager связь пропадает с %s\n", t.In(mscLoc()).Format("02.01 15:04 МСК"))
+		}
+	}
 	if conflict, ok := boolOrFalse(d, "address_conflict"); ok && conflict {
 		b.WriteString("  ⚠ конфликт адресов на интерфейсе\n")
 	}
