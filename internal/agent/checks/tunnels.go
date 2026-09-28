@@ -25,6 +25,9 @@ const (
 type TunnelsCheck struct {
 	Client          *awgmgr.Client
 	HandshakeMaxAge time.Duration
+	// AwgmDownSince -- открытая серия неудач пингчека awg-manager
+	// (pingruns.Tracker.DownSince, v0.47). nil -- без пометки.
+	AwgmDownSince func(tunnelID string) (time.Time, bool)
 }
 
 func (t TunnelsCheck) Group() string { return "tunnels" }
@@ -105,6 +108,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		rc.Unknown = routeCounts == nil
 		out = append(out, evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier))
 	}
+	annotateAwgmDown(out, t.AwgmDownSince)
 	return out
 }
 
@@ -551,5 +555,28 @@ func isPingCheckFailureStatus(status string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// annotateAwgmDown -- v0.47: у VPN-туннеля, который awg-manager уже признал
+// упавшим, details несут время первой неудачи; тревога назовёт его «по
+// awg-manager». Статус проверки это не меняет ни в какую сторону.
+func annotateAwgmDown(out []wire.Check, since func(string) (time.Time, bool)) {
+	if since == nil {
+		return
+	}
+	for i := range out {
+		id, ok := strings.CutPrefix(out[i].Name, tunnelCheckPrefix)
+		if !ok || id == "" {
+			continue
+		}
+		at, ok := since(id)
+		if !ok {
+			continue
+		}
+		if out[i].Details == nil {
+			out[i].Details = map[string]any{}
+		}
+		out[i].Details["awgm_down_since"] = at.UTC().Format(time.RFC3339)
 	}
 }
