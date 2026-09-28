@@ -1030,6 +1030,12 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	case "exit_ip_probe":
 		status, out := r.runExitIPProbe(ctx, cmd.Args)
 		return status, out, payload
+	case "awgm_logs":
+		out, err := AwgmLogsJSON(ctx, r.AwgClient, cmd.Args)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}
