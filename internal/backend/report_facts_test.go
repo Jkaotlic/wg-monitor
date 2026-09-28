@@ -139,3 +139,123 @@ func TestReportResponseAdvertisesHookReports(t *testing.T) {
 		t.Fatalf("бэкенд v0.47 обязан объявить hook_reports: %q", body)
 	}
 }
+
+// Fix round 1 (Critical): clearMissingResolverGuardHard/clearMissingTunnelHards
+// call closeHardAsRecovery -> state.Recovery + d.Dispatcher.Handle, a real
+// "recovered" notification -- FSM movement just like the ordinary dispatch
+// loop. Хук-отчёт не должен снимать открытый hard тем же путём, каким не
+// должен его открывать: гейт по rep.Trigger обязан стоять и здесь.
+
+// Хук-отчёт без resolver_guard в списке проверок НЕ снимает открытый hard;
+// тот же по форме отчёт без Trigger -- снимает (доказывает, что гейт
+// настоящий, а не сломанная заготовка).
+func TestHookReportDoesNotClearResolverGuardHard(t *testing.T) {
+	d, uid, tok, disp, srv := factsTestServer(t)
+	if err := d.State().Save(uid, resolverGuardCheck, db.IncidentState{
+		CurrentStatus: "hard", ConsecutiveFails: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Truncate(time.Second)
+	// Полный отчёт (есть agent_heartbeat), resolver_guard среди проверок нет --
+	// обычным путём это сняло бы hard. Отправлен как хук-отчёт: не должен.
+	postFactsReport(t, srv, tok, wire.Report{
+		Timestamp: base, AgentVersion: "v0.47.0", Trigger: wire.TriggerHook,
+		Checks: []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+	})
+	disp.mu.Lock()
+	hookCalls := len(disp.calls)
+	disp.mu.Unlock()
+	if hookCalls != 0 {
+		t.Fatalf("хук-отчёт вызвал диспетчер: %d вызовов, хотим 0", hookCalls)
+	}
+	got, err := d.State().Get(uid, resolverGuardCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "hard" {
+		t.Fatalf("хук-отчёт снял resolver_guard hard: status=%s, хотим hard", got.CurrentStatus)
+	}
+
+	// Тот же отчёт по форме, но без Trigger -- обязан снять hard обычным путём.
+	postFactsReport(t, srv, tok, wire.Report{
+		Timestamp: base.Add(time.Minute), AgentVersion: "v0.47.0",
+		Checks: []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+	})
+	disp.mu.Lock()
+	calls := len(disp.calls)
+	disp.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("обычный отчёт обязан снять resolver_guard hard: %d вызовов диспетчера, хотим 1", calls)
+	}
+	got, err = d.State().Get(uid, resolverGuardCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "ok" {
+		t.Fatalf("resolver_guard hard не снят обычным отчётом: status=%s, хотим ok", got.CurrentStatus)
+	}
+}
+
+// То же для tunnel_* hard: хук-отчёт со свежим «tunnels: ok» инвентарём, но
+// без конкретного tunnel_* среди проверок, не снимает его hard; тот же
+// отчёт без Trigger -- снимает.
+func TestHookReportDoesNotClearTunnelHard(t *testing.T) {
+	d, uid, tok, disp, srv := factsTestServer(t)
+	const tunnelCheck = "tunnel_awg11"
+	if err := d.State().Save(uid, tunnelCheck, db.IncidentState{
+		CurrentStatus: "hard", ConsecutiveFails: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Truncate(time.Second)
+	postFactsReport(t, srv, tok, wire.Report{
+		Timestamp: base, AgentVersion: "v0.47.0", Trigger: wire.TriggerHook,
+		Checks: []wire.Check{
+			{Name: "agent_heartbeat", Status: "ok"},
+			{Name: "tunnels", Status: "ok"},
+		},
+	})
+	disp.mu.Lock()
+	hookCalls := len(disp.calls)
+	disp.mu.Unlock()
+	if hookCalls != 0 {
+		t.Fatalf("хук-отчёт вызвал диспетчер: %d вызовов, хотим 0", hookCalls)
+	}
+	got, err := d.State().Get(uid, tunnelCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "hard" {
+		t.Fatalf("хук-отчёт снял %s hard: status=%s, хотим hard", tunnelCheck, got.CurrentStatus)
+	}
+
+	postFactsReport(t, srv, tok, wire.Report{
+		Timestamp: base.Add(time.Minute), AgentVersion: "v0.47.0",
+		Checks: []wire.Check{
+			{Name: "agent_heartbeat", Status: "ok"},
+			{Name: "tunnels", Status: "ok"},
+		},
+	})
+	// «tunnels» -- обычная проверка инвентаря, тоже идёт через FSM-диспатч
+	// (NoOp) наравне с closeHardAsRecovery для tunnel_awg11: считаем вызовы
+	// диспетчера именно по имени снимаемой проверки, а не общий счётчик.
+	disp.mu.Lock()
+	calls := 0
+	for _, c := range disp.checks {
+		if c.Name == tunnelCheck {
+			calls++
+		}
+	}
+	disp.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("обычный отчёт обязан снять %s hard: %d вызовов диспетчера по этой проверке, хотим 1", tunnelCheck, calls)
+	}
+	got, err = d.State().Get(uid, tunnelCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "ok" {
+		t.Fatalf("%s hard не снят обычным отчётом: status=%s, хотим ok", tunnelCheck, got.CurrentStatus)
+	}
+}

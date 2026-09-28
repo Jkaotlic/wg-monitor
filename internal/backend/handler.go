@@ -1051,8 +1051,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
-		clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
+		// v0.47: хук-отчёт не двигает автомат тревог -- то же правило, что и
+		// dispatchChecks=nil выше. closeHardAsRecovery шлёт state.Recovery в
+		// FSM и настоящее уведомление о «починилось» через d.Dispatcher.Handle;
+		// пропустить его так же обязательно, как и обычный dispatch.
+		if rep.Trigger != wire.TriggerHook {
+			clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
+			clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
+		}
 		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
 		// resumed marker. Per-check status changes already emit dedicated
 		// FSM-transition logs (OBS-09); spamming Info every 60s for every
