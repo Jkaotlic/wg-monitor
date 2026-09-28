@@ -67,7 +67,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
 
   function askSave() {
     const edited = {}
-    for (const f of agentConfigFields()) {
+    for (const f of agentConfigFields(view)) {
       if (f.key in values) edited[f.key] = f.kind === 'bool' ? Boolean(values[f.key]) : values[f.key]
     }
     const { error } = validateAgentConfig(edited)
@@ -144,7 +144,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
             {view && (
               <Section title="Что меняем">
                 <div class="card settings-card">
-                  {agentConfigFields().map((f) => (
+                  {agentConfigFields(view).map((f) => (
                     <div key={f.key} class="field">
                       <label for={`agent-cfg-${f.key}`}>
                         {f.title}

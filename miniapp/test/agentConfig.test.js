@@ -161,9 +161,9 @@ vi.mock('../src/useCommand.js', () => ({
 
 const { AgentConfigScreen } = await import('../src/screens/AgentConfigScreen.jsx')
 
-async function mount(settings) {
+async function mount(settings, view = VIEW) {
   mocks.settings = settings
-  mocks.command = { status: 'ok', output: JSON.stringify(VIEW) }
+  mocks.command = { status: 'ok', output: JSON.stringify(view) }
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
@@ -207,6 +207,29 @@ describe('экран правки конфига агента', () => {
     expect(root.textContent).toContain(AGENT_CONFIG_TEXTS.panelPassword)
     // Путь своего DNS-сервера не появляется на экране ни в каком виде.
     expect(root.textContent).not.toContain('dns.example.com')
+    render(null, root)
+  })
+})
+
+// M2 (финальное ревью v0.47): выключатель хука -- только агенту, который
+// прислал это поле. Агент старее v0.47 хука не умеет, и переключатель на его
+// форме -- обещание, которое роутер не выполнит.
+describe('выключатель хука в форме', () => {
+  it('агент без поля wake_hooks_off -- в полях формы его нет', () => {
+    expect(agentConfigFields(VIEW).map((f) => f.key)).not.toContain('wake_hooks_off')
+    expect(agentConfigFields({ ...VIEW, wake_hooks_off: false }).map((f) => f.key)).toContain('wake_hooks_off')
+  })
+
+  it('старый агент: переключателя на экране нет', async () => {
+    const root = await mount({ role: 'admin', agent_version: 'v0.46.0' })
+    expect(root.querySelectorAll('input').length).toBeGreaterThan(0)
+    expect(root.querySelector('#agent-cfg-wake_hooks_off')).toBeNull()
+    render(null, root)
+  })
+
+  it('агент v0.47: переключатель есть', async () => {
+    const root = await mount({ role: 'admin', agent_version: 'v0.47.0' }, { ...VIEW, wake_hooks_off: false })
+    expect(root.querySelector('#agent-cfg-wake_hooks_off')).not.toBeNull()
     render(null, root)
   })
 })

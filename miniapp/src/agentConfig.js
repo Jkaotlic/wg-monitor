@@ -57,8 +57,15 @@ const FIELDS = [
   { key: 'allow_firmware_install', title: 'Разрешить установку прошивки', kind: 'bool' },
 ]
 
-export function agentConfigFields() {
-  return FIELDS.map((f) => ({ ...f }))
+// Поля формы. С видом роутера (view) -- только то, что агент умеет:
+// выключатель хука появился в v0.47, и агент старее это поле не присылает.
+// Без вида -- полный список (белый список ключей, проверки).
+export function agentConfigFields(view) {
+  const fields = FIELDS.map((f) => ({ ...f }))
+  if (view && typeof view === 'object' && !('wake_hooks_off' in view)) {
+    return fields.filter((f) => f.key !== 'wake_hooks_off')
+  }
+  return fields
 }
 
 export function editableAgentConfigKeys() {
