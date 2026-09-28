@@ -71,9 +71,9 @@ describe('что мини-апп правит', () => {
   // Четыре ключа сторожа в v0.31 из мини-аппа не правятся: среди них
   // dns_watchdog_enabled -- выключатель сторожа, а ворота нулевого пункта
   // этот цикл не делает.
-  it('мини-апп правит семь ключей из одиннадцати', () => {
+  it('мини-апп правит восемь ключей из двенадцати', () => {
     const editable = editableAgentConfigKeys()
-    expect(editable).toHaveLength(7)
+    expect(editable).toHaveLength(8)
     for (const k of [
       'dns_watchdog_enabled',
       'dns_watchdog_endpoint',

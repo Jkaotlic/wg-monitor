@@ -44,6 +44,16 @@ export function incidentLine(incident) {
   const from = hhmm(incident.from)
   const down = humanAge(incident.down_sec ?? 0)
 
+  // v0.47: моргание, которое видел только awg-manager (между нашими отчётами).
+  // Жёлтое и прошедшее: связь уже вернулась к моменту следующего отчёта.
+  if (incident.awgm_only) {
+    const detail =
+      (incident.flaps ?? 1) > 1
+        ? `моргал ${incident.flaps} раз с ${from} до ${hhmm(incident.to)} — по журналу awg-manager`
+        : `моргнул в ${from}, через ${down} восстановился — по журналу awg-manager`
+    return { title: what, detail, tone: 'warn', ongoing: false }
+  }
+
   let detail
   if (incident.ongoing) {
     detail = `с ${from}, идёт уже ${down}`
@@ -51,6 +61,11 @@ export function incidentLine(incident) {
     detail = `моргал ${incident.flaps} раз, с ${from} до ${hhmm(incident.to)} · всего не работал ${down}`
   } else {
     detail = `в ${from}, ${down}`
+  }
+  if (incident.awgm_first_fail) {
+    detail += ` · awg-manager: первая неудача в ${hhmm(incident.awgm_first_fail)}, провалов ${incident.awgm_fails ?? 0}`
+  } else if (incident.awgm_clean) {
+    detail += ' · awg-manager связь не терял'
   }
 
   return {
