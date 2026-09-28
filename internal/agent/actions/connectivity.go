@@ -3,8 +3,6 @@ package actions
 import (
 	"context"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -15,7 +13,7 @@ import (
 	"unicode"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
-	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/exitprobe"
 )
 
 // connectivityTarget — one HTTP probe target with a friendly Name.
@@ -55,7 +53,7 @@ func CheckViaTunnel(ctx context.Context, c *awgmgr.Client) (status, output strin
 	}
 	httpc := ifaceBoundClient(iface, 6*time.Second)
 
-	exitIP, traceErr := fetchExitIP(ctx, httpc, 5*time.Second)
+	exitIP, traceErr := exitprobe.FetchExitIP(ctx, httpc, 5*time.Second)
 	results := probeAll(ctx, httpc, targetsViaTunnel, 5*time.Second)
 
 	var b strings.Builder
@@ -83,7 +81,7 @@ func CheckViaTunnel(ctx context.Context, c *awgmgr.Client) (status, output strin
 func CheckDirect(ctx context.Context) (status, output string) {
 	httpc := &http.Client{Timeout: 6 * time.Second}
 
-	exitIP, traceErr := fetchExitIP(ctx, httpc, 5*time.Second)
+	exitIP, traceErr := exitprobe.FetchExitIP(ctx, httpc, 5*time.Second)
 	results := probeAll(ctx, httpc, targetsDirect, 5*time.Second)
 
 	var b strings.Builder
@@ -141,31 +139,6 @@ func probeAll(ctx context.Context, httpc *http.Client, targets []connectivityTar
 	}
 	wg.Wait()
 	return out
-}
-
-// fetchExitIP queries Cloudflare's cdn-cgi/trace to discover what egress
-// IP the connection appears as. Works via any HTTP client (iface-bound or
-// not) — that's exactly the contract: ask through this client, see what
-// IP the world sees us as.
-func fetchExitIP(ctx context.Context, httpc *http.Client, timeout time.Duration) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, "https://1.1.1.1/cdn-cgi/trace", nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := httpc.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	for _, line := range strings.Split(string(body), "\n") {
-		if v, ok := strings.CutPrefix(line, "ip="); ok {
-			return strings.TrimSpace(v), nil
-		}
-	}
-	return "", fmt.Errorf("no ip= line in trace response")
 }
 
 // pickConnectivityTunnelIface returns (linuxIface, prettyLabel) for the
@@ -508,19 +481,11 @@ func nonEmptyString(v, fallback string) string {
 }
 
 // ifaceBoundClient builds an HTTP client whose dialer pins traffic to the
-// given linux iface (e.g. "nwg1"). Reuses the existing checks.IfaceDialer
-// so the binding logic is exactly the same as the periodic external_reach
-// check.
+// given linux iface (e.g. "nwg1"). Delegates to exitprobe.IfaceClient so the
+// binding logic is exactly the same as the periodic external_reach check and
+// the exit-address prober (v0.47).
 func ifaceBoundClient(iface string, timeout time.Duration) *http.Client {
-	d := checks.IfaceDialer(iface)
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return d.DialContext(ctx, network, addr)
-			},
-		},
-	}
+	return exitprobe.IfaceClient(iface, timeout)
 }
 
 // classifyConnectivityStatus picks the wire-protocol status code:
