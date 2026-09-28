@@ -10,6 +10,7 @@ import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
+import { ExitIPSection, WANSection } from './SignalSections.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
 // моргнула»: пять строк данных, у каждой -- ответ и измерение. Числа берутся
@@ -210,6 +211,9 @@ export function DiagTab({ routerID, asleep }) {
           <p class="state state-error">{direct.error || viaTunnel.error}</p>
         )}
       </Section>
+
+      <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
+      <WANSection routerID={routerID} />
 
       <Section title="Отчёт роутера о себе">
         <button

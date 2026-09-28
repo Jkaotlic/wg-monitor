@@ -33,6 +33,7 @@ import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, openAns
 import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 import { HrneoBlock } from './HrneoBlock.jsx'
+import { NativeDNSSection } from './SignalSections.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -551,6 +552,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
           ))}
         </Section>
       )}
+
+      <NativeDNSSection routerID={routerID} tunnels={snapshot?.tunnels ?? []} />
 
       {snapshot && !canMutate && openSheet && (
         <p class="admin-note">

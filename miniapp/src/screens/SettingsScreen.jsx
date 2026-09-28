@@ -25,6 +25,8 @@ import {
 import { Section } from '../ui/Section.jsx'
 import { ManageGroup } from '../ui/ManageGroup.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
+import { HooksRow, AwgmLogsSection } from './SignalSections.jsx'
+import { agentAtLeast } from '../agentConfig.js'
 
 // Настройки роутера и обслуживание -- то, за чем оператор раньше шёл в бота.
 //
@@ -436,6 +438,14 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
             </>
           )}
         </Section>
+
+        {/* Круг -- владелец и админ (P3): оператору сервер отказывает сам
+            (owner_only), а старый агент (< v0.47) журнал не отдаёт вовсе --
+            вторая, независимая от сервера преграда, как и у остальных
+            v0.47-секций. */}
+        {settings && settings.role !== 'operator' && agentAtLeast(settings.agent_version, 'v0.47.0') && (
+          <AwgmLogsSection routerID={routerID} deadline={deadline} />
+        )}
       </ManageGroup>
 
       <ManageGroup title="Починить">
@@ -505,6 +515,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
               {thresholdRows(settings).map((r) => (
                 <DataRow key={r.key} title={r.title} code={r.code} value={r.value} />
               ))}
+              <HooksRow routerID={routerID} />
               <p class="card-foot">
                 Эти числа живут в настройках бота, а не роутера: поменять их можно там, где он
                 запущен. Здесь они показаны, чтобы было видно, через сколько придёт тревога.
