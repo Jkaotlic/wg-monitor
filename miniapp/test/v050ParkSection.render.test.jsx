@@ -118,7 +118,7 @@ describe('Парк как пульт (спека пакет 2)', () => {
   it('массовые -- сеткой, «Обновить всех отставших» -- единственный лайм', async () => {
     const root = await mountPark()
     const grid = root.querySelector('.park-batch')
-    expect(grid.className).toContain('action-row')
+    expect(grid.className).toContain('action-row-pair')
     expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)', 'Опросить все', 'Проверить все', 'Аудит всех'])
     expect([...root.querySelectorAll('.btn-primary')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)'])
     cleanup(root)

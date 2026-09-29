@@ -537,7 +537,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
 
           {/* Массовые действия -- сеткой 2×2 одной высоты (спека п. 2.5). */}
           <Section title="Все роутеры сразу">
-            <div class="action-row park-batch">
+            <div class="action-row action-row-pair park-batch">
               {behind > 0 && (
                 <button type="button" class="btn btn-primary" onClick={askUpdateAll}>
                   Обновить всех отставших ({behind})

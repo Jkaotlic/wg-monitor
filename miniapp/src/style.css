@@ -2756,6 +2756,13 @@ body {
   padding-right: 0;
 }
 
+/* Пилюля состояния -- по своему содержимому («резерв не работает»), не в 45%
+   колонки значения: имя роутера переносится, пилюля не вылезает за карточку. */
+.park-row .data-row-value {
+  flex: none;
+  max-width: none;
+}
+
 /* Карточка бэкенда: сторож и кнопка раскатки -- уже с полями строки, снизу
    нужен только воздух. */
 .park-backend {
@@ -2844,6 +2851,7 @@ body {
 
 .park-batch {
   margin-top: var(--sp-3);
+  grid-auto-rows: 1fr;
 }
 
 /* Под строкой роутера: «уведомлять меня» и переход на его экран. */
@@ -4794,8 +4802,21 @@ body {
 
 /* Лист выбора: поиск над вариантами, вариант -- имя слева, пилюля справа. */
 .sheet-search {
+  box-sizing: border-box;
   width: 100%;
   min-height: 44px;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.sheet-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sheet-choice {
@@ -4852,11 +4873,14 @@ body {
   color: var(--dim);
 }
 
-/* Заголовок слоя -- один (v0.50, общие правила): когда в теле есть H1,
-   полоса сверху несёт только «‹ назад». Слои без своего H1 («Починка»,
+/* Заголовок слоя -- один (v0.50, общие правила): на телефоне, когда в теле
+   есть H1, полоса сверху несёт только «‹ назад» (на широком экране H1 прячет
+   правило широкой раскладки выше, там остаётся заголовок полосы). Слои без своего H1 («Починка»,
    кабинет, мастер сайта) оставляют заголовок в полосе. */
-.overlay:has(.overlay-back):has(.overlay-body .screen-title) .overlay-title {
-  display: none;
+@media (max-width: 1023.98px) {
+  .overlay:has(.overlay-back):has(.overlay-body .screen-title) .overlay-title {
+    display: none;
+  }
 }
 
 /* Парк (v0.50): входы наверх, карточки роутеров -- отдельными карточками. */
