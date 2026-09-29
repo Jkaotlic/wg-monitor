@@ -491,3 +491,90 @@ func TestMiniappAwg3ConfFilename(t *testing.T) {
 		}
 	}
 }
+
+func TestMiniappVPNIssueAwg3(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.awg3.routerConf = awg3panel.RouterConfig{Conf: []byte("[Interface]\nPrivateKey = ROUTER-CONF-MUST-NOT-LEAK\n"), PeerID: "p1", Reused: true}
+	const path = "/v1/miniapp/routers/{id}/vpn/issue"
+	for _, who := range []int64{cabOperator, cabOwner} {
+		rec := env.do(t, who, http.MethodPost, path, `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`)
+		if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+			t.Fatalf("от %d: %d %s", who, rec.Code, rec.Body.String())
+		}
+	}
+	if len(env.awg3.routerCalls) != 0 {
+		t.Fatal("не-админ дошёл до панели")
+	}
+	rec := env.do(t, cabAdmin, http.MethodPost, path, `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"tunnel_name":"main_awg1"`) || strings.Contains(rec.Body.String(), "ROUTER-CONF") {
+		t.Fatalf("админ: %d %s", rec.Code, rec.Body.String())
+	}
+	if env.awg3.routerCalls[0] != "main|awg1|router-owned" {
+		t.Fatalf("в сервис: %v", env.awg3.routerCalls)
+	}
+	cmd := env.sink.enqueued[0]
+	if cmd.Action != "tunnel_import" || cmd.Args["name"] != "main_awg1" || cmd.Args["replace"] != true || cmd.Args["backend"] != "nativewg" {
+		t.Fatalf("команда: %+v", cmd)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(cmd.Args["conf"].(string))
+	if !strings.Contains(string(raw), "ROUTER-CONF") {
+		t.Fatal("конфиг не дошёл до агента")
+	}
+	if strings.Contains(env.logs.String(), "ROUTER-CONF") {
+		t.Fatal("конфиг в журнале")
+	}
+	origins, err := env.d.TunnelOrigins().List(env.ownedID)
+	if err != nil || len(origins) != 0 {
+		t.Fatalf("выпуск с панели записал происхождение: %+v %v", origins, err)
+	}
+}
+
+func TestMiniappVPNIssueAwg3Refusals(t *testing.T) {
+	cases := []struct {
+		name, body string
+		err        error
+		status     int
+		code       string
+	}{
+		{"нет панели", `{"provider":"awg3panel","iface":"awg1"}`, nil, http.StatusBadRequest, "missing_instance"},
+		{"нет интерфейса", `{"provider":"awg3panel","instance_id":"main"}`, nil, http.StatusBadRequest, "missing_iface"},
+		{"readonly", `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`, &awg3panel.Error{Kind: awg3panel.KindReadonly}, http.StatusConflict, "awg3_readonly"},
+		{"пауза", `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`, &awg3panel.Error{Kind: awg3panel.KindBanned, Until: time.Now().Add(time.Minute)}, http.StatusConflict, "awg3_paused"},
+		{"ник не годится", `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`, &awg3panel.FieldError{Field: "router", Reason: "Имя роутера не годится для пира панели: до 34 знаков, без «[», «]»"}, http.StatusBadRequest, "invalid_field"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newCabinetEnv(t)
+			env.awg3.routerErr = tc.err
+			rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", tc.body)
+			if code, _, _ := cabinetErrorBody(t, rec); rec.Code != tc.status || code != tc.code {
+				t.Fatalf("%d %s", rec.Code, rec.Body.String())
+			}
+			if len(env.sink.enqueued) != 0 {
+				t.Fatal("отказ, а команда агенту ушла")
+			}
+		})
+	}
+	off := newCabinetEnv(t, func(d *Deps) { d.Awg3Panels = nil })
+	rec := off.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusServiceUnavailable || code != "awg3_not_configured" {
+		t.Fatalf("не настроено: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAwg3IsNotAReplaceOrRepairProvider(t *testing.T) {
+	for _, p := range miniappVPNProviders {
+		if p == "awg3panel" {
+			t.Fatal("awg3panel в miniappVPNProviders -- мастер замены начнёт его перевыпускать")
+		}
+	}
+	deps, ownedID, tgUser := replaceDeps(t)
+	rec := postReplace(t, NewMux(deps), ownedID, tgUser, `{"provider":"awg3panel","option_id":"main","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusBadRequest || body.Code != "unknown_provider" {
+		t.Fatalf("мастер замены принял awg3panel: %d %s", rec.Code, rec.Body.String())
+	}
+}
