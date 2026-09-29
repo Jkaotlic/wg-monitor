@@ -86,14 +86,35 @@ describe('ошибки словами (спека п. 1.4)', () => {
     const files = readdirSync(dir, { recursive: true }).filter((f) => /\.(jsx?|mjs)$/.test(f))
     const hits = []
     for (const f of files) {
-      const text = readFileSync(dir + f, 'utf8')
-      // errorText.js сверяет message с COMMAND_GONE_TEXT -- это не вывод;
-      // в signals.js `e` -- строка журнала awg-manager (e.message -- её текст),
-      // не ошибка запроса.
-      if (f.endsWith('errorText.js') || f.endsWith('signals.js')) continue
-      for (const m of text.matchAll(/\b(err|e|error|again)\??\.message\b/g)) hits.push(`${f}: ${m[0]}`)
+      // errorText.js сверяет message с COMMAND_GONE_TEXT -- это не вывод.
+      if (f.endsWith('errorText.js')) continue
+      const lines = readFileSync(dir + f, 'utf8').split('\n')
+      lines.forEach((line, i) => {
+        // signals.js: `e` -- строка журнала awg-manager, e.message -- её текст,
+        // а не ошибка запроса; исключена ровно эта строка, не файл.
+        if (f.endsWith('signals.js') && /`\$\{e\.message\} ×\$\{e\.repeats\}`|: e\.message,?$/.test(line.trim())) return
+        // 1) любое имя перехваченной ошибки, что бы ни стояло в catch;
+        // 2) `.catch((x) => …)` -- то же для промисов.
+        const names = new Set()
+        for (const m of line.matchAll(/catch\s*\(\s*(\w+)\s*\)/g)) names.add(m[1])
+        for (const m of line.matchAll(/\(\s*(\w+)\s*\)\s*=>/g)) if (/\.catch\(/.test(line)) names.add(m[1])
+        for (const n of names) if (new RegExp(`\\b${n}\\??\\.message\\b`).test(line)) hits.push(`${f}:${i + 1}: ${n}.message`)
+      })
+      // Тело catch-блока: имя из `catch (x) {` до закрывающей скобки блока.
+      const text = lines.join('\n')
+      for (const m of text.matchAll(/catch\s*\(\s*(\w+)\s*\)\s*\{/g)) {
+        const body = text.slice(m.index, m.index + 600)
+        const end = (() => { let d = 0; for (let k = body.indexOf('{'); k < body.length; k++) { if (body[k] === '{') d++; if (body[k] === '}' && --d === 0) return k } return body.length })()
+        if (new RegExp(`\\b${m[1]}\\??\\.message\\b`).test(body.slice(0, end))) hits.push(`${f}: ${m[1]}.message в catch`)
+      }
+      // Любое `x.message` в строке, что рисует JSX (poll.message -- слово сервера
+      // из jobPoll, не err.message; item.message -- поле ответа разбора .conf).
+      lines.forEach((line, i) => {
+        if (f.endsWith('signals.js') && /e\.message/.test(line)) return
+        if (/<\w[^>]*>|\{[^}]*\}/.test(line) && /\b\w+\??\.message\b/.test(line) && f.endsWith('.jsx') && !/item\.message|m\.message|poll\.message/.test(line)) hits.push(`${f}:${i + 1}: jsx .message`)
+      })
     }
-    expect(hits).toEqual([])
+    expect([...new Set(hits)]).toEqual([])
   })
 })
 

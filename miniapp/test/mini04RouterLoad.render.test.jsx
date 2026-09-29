@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
+import { OFFLINE_ERROR_TEXT } from '../src/errorText.js'
 
 const mocks = vi.hoisted(() => ({ routerImpl: null }))
 
@@ -51,7 +52,7 @@ describe('MINI-04', () => {
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
     await flush()
     expect(root.querySelector('.hero h1')?.textContent).toBe('lesnaya')
-    expect(root.textContent).not.toContain('сервер не ответил')
+    expect(root.textContent).not.toContain(OFFLINE_ERROR_TEXT)
     render(null, root)
     root.remove()
   })

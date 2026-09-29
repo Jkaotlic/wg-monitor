@@ -3,7 +3,7 @@ import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, 
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine, backupCopy, deadReserveLine } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
@@ -700,7 +700,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // Запасной есть, но упал -- это не «запасного нет» (v0.50, спека п. 1.3).
   // Когда шапка уже говорит о тревоге по VPN-туннелю, плитка молчит.
   const deadReserve = backupLine ? null : deadReserveLine({ traffic, tunnels, incidents, via: path.via })
-  const heroCovers = Boolean(headline.check?.startsWith('tunnel_'))
+  const heroCovers = heroCoversReserve(deadReserve, headline.check)
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { checkLabel, incidentCopy, tunnelOf } from '../src/labels.js'
-import { backupCopy, deadReserveLine, reserveLine } from '../src/trafficPath.js'
+import { backupCopy, deadReserveLine, heroCoversReserve, reserveLine } from '../src/trafficPath.js'
+import { routerHeadline } from '../src/routerHeadline.js'
 
 const TUNNELS = [
   { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'fail' },
@@ -64,5 +65,49 @@ describe('«запасного нет» против «запасной упал
   it('запасного правда нет -- прежняя плитка', () => {
     expect(backupCopy({ backupLine: undefined }).title).toBe('Запасного VPN-туннеля нет')
     expect(backupCopy({ backupLine: undefined, deadReserve: null, heroCovers: true }).title).toBe('Запасного VPN-туннеля нет')
+  })
+})
+
+describe('шапка закрывает плитку резерва только про тот же туннель (ревью, п. 1)', () => {
+  const carrierDown = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
+  // Несущий упал (тревога по нему), запасной «поплыл» без своей тревоги.
+  const tunnels = [
+    { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'fail' },
+    { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'fail' },
+  ]
+  const incidents = [{ check_name: 'tunnel_awg14' }]
+
+  it('шапка про несущего -- плитка про запасной остаётся и говорит, что он упал', () => {
+    const dead = deadReserveLine({ traffic: carrierDown, tunnels, incidents, via: 'vpn-hip' })
+    expect(dead?.tunnel_id).toBe('awg10')
+    expect(heroCoversReserve(dead, 'tunnel_awg14')).toBe(false)
+    const c = backupCopy({ backupLine: undefined, deadReserve: dead, heroCovers: heroCoversReserve(dead, 'tunnel_awg14') })
+    expect(c.title).toBe('Запасной «vpn-nl» не отвечает')
+  })
+
+  it('шапка про сам запасной -- плитки нет; шапка не про туннель -- плитка есть', () => {
+    const dead = tunnels[1]
+    expect(heroCoversReserve(dead, 'tunnel_awg10')).toBe(true)
+    expect(heroCoversReserve(dead, 'dns')).toBe(false)
+    expect(heroCoversReserve(null, 'tunnel_awg10')).toBe(false)
+  })
+})
+
+describe('тег шапки: запасной упал против «резерва нет» (ревью, п. 3)', () => {
+  const ONLINE = { status: 'alert', last_seen_age_sec: 10 }
+  const traffic = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', reserve_tunnel_ids: [] }
+  const carrier = { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'ok' }
+
+  it('запасной настроен, но не отвечает -- «запасной упал»', () => {
+    const tunnels = [carrier, { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'fail' }]
+    const h = routerHeadline({ router: ONLINE, traffic, incidents: [{ check_name: 'tunnel_awg10' }], tunnels, reserveOnlyAlert: true })
+    expect(h.tag).toBe('всё работает, запасной упал')
+    expect(h.tag).not.toMatch(/резерва нет/)
+    expect(h.verdict).toContain('Запасной «vpn-nl» не отвечает')
+  })
+
+  it('тревога по туннелю, которого в списке нет -- «резерва нет»', () => {
+    const h = routerHeadline({ router: ONLINE, traffic, incidents: [{ check_name: 'tunnel_awg99' }], tunnels: [carrier], reserveOnlyAlert: true })
+    expect(h.tag).toBe('всё работает, резерва нет')
   })
 })
