@@ -143,7 +143,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
         <h1 class="screen-title">
           <Quoted text={`«${card.name}»`} />
         </h1>
-        <div class="card">
+        <div class="card card-rows">
           <DataRow title="Состояние" code={card.id} value={fresh ? card.stateLabel : outcome?.done ? 'удалён с роутера' : 'нет в снимке роутера'} />
           {/* Пропавший из снимка VPN-туннель: прежние интерфейс и правила
               были бы вчерашней картиной. */}

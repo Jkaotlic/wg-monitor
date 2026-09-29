@@ -43,7 +43,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         />
       )
     case 'diag':
-      return <DiagTab key={key} routerID={nav.routerID} asleep={asleep} />
+      return <DiagTab key={key} routerID={nav.routerID} asleep={asleep} isAdmin={isAdmin} />
     // Экраны глубже «Управления» (настройки и подключение агента, сброс DNS,
     // пакеты) -- слои с адресом; закрываются обратно во вкладку. «Ход
     // работы» перенаправления возвращает сюда же (returnTo 'manage').

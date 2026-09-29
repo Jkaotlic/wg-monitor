@@ -279,7 +279,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
 
         {view && phase !== 'done' && (
           <Section title="Что в конфиге">
-            <div class="card">
+            <div class="card card-rows">
               <DataRow title="Сервер" value={view.endpoint} />
               <DataRow title="Адреса" value={view.addresses} />
               <DataRow title="DNS" value={view.dns} />
@@ -311,7 +311,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
 
         {view && phase !== 'done' && (
           <Section title="Что произойдёт">
-            <div class="card">
+            <div class="card card-rows">
               <DataRow title="Новый VPN-туннель" value={`«${preview.name}»`} />
               <p class="card-foot">
                 <Quoted text={IMPORT_TEXTS.replaceHint} />

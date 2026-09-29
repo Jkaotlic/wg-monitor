@@ -50,7 +50,7 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
         )}
 
         {rows.length > 0 ? (
-          <div class="card">
+          <div class="card card-rows">
             {rows.map((r) => (
               <button
                 key={r.id}

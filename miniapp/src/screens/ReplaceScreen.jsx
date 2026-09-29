@@ -96,7 +96,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
 
         {!view.idle && (
           <Section title={view.running ? 'Идёт замена' : 'Чем кончилось'}>
-            <div class="card">
+            <div class="card card-rows">
               {view.steps.map((s) => (
                 <DataRow
                   key={s.name}
@@ -144,7 +144,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
 
         {showForm && pick && (
           <Section title="Что произойдёт">
-            <div class="card">
+            <div class="card card-rows">
               <DataRow title="Заменяем" code={tunnel.id} value={tunnel.name} />
               <DataRow title="Новый конфиг" code={pick.provider} value={pick.option.label} />
               {/* В code стоит то, что оператор может сверить с роутером:

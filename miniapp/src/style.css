@@ -442,19 +442,19 @@ body {
   gap: var(--sp-3);
 }
 
+/* Заголовок тревоги -- целиком, дата -- под ним. Дата справа отнимала у
+   заголовка полстроки, и на 360 px «VPN-туннель awg10 не …» обрывался. */
 .incident-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-3);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   margin-bottom: var(--sp-2);
 }
 
 .incident-since {
-  flex: none;
   font-size: var(--fs-xs);
   color: var(--muted);
-  white-space: nowrap;
 }
 
 /* incidentCopy's "why" line -- same answer-then-detail voice as
@@ -508,12 +508,10 @@ body {
 }
 
 /* «Починить» и «Перезапустить VPN-туннель» -- пара одного размера (v0.41).
-   Обёртка перезапуска растворяется в сетке (display: contents): кнопка
-   встаёт второй ячейкой, а строки хода команды -- на всю ширину под парой. */
+   Обёртка перезапуска растворяется в ряду (display: contents): кнопка
+   встаёт второй, а строки хода команды -- на всю ширину под парой. Сам ряд
+   -- общее правило пар, у .settings-actions. */
 .incident-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-2);
   margin: var(--sp-3) 0;
 }
 
@@ -522,14 +520,12 @@ body {
 }
 
 .incident-pair .btn {
-  width: 100%;
   min-width: 0;
   margin: 0;
-  white-space: normal;
 }
 
 .incident-pair .state {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
   margin: 0;
 }
 
@@ -1764,9 +1760,13 @@ body {
 .data-row-dot-warn { background: var(--warn); }
 .data-row-dot-danger { background: var(--bad); }
 
+/* Подпись -- главное в строке: она растёт, а значение не шире 45% и
+   переносится в своей колонке. Раньше значение было nowrap без предела,
+   и подпись сжималась до слова в строку («Сайты / открываются / по имени»). */
 .data-row-main {
-  flex: 1;
+  flex: 1 1 55%;
   min-width: 0;
+  overflow-wrap: break-word;
   font-size: var(--fs-md);
   font-weight: 500;
   line-height: var(--lh-tight);
@@ -1781,14 +1781,22 @@ body {
   letter-spacing: 0.05em;
   color: var(--dim);
   margin-top: 3px;
+  /* Код -- одно слово: «vpn-nl» не рвётся по дефису на «vpn-» и «nl»; не
+     влез -- многоточие. Подчёркивание обещало ссылку, которой нет. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
 }
 
 .data-row-value {
+  flex: 0 1 auto;
+  max-width: 45%;
   font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--ink);
-  white-space: nowrap;
   text-align: right;
+  overflow-wrap: break-word;
 }
 
 .data-row-value-sub {
@@ -1816,6 +1824,7 @@ body {
 
 .chain-link {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-2) 14px;
@@ -1831,6 +1840,10 @@ body {
   width: 1px;
   background: var(--line);
 }
+
+/* Действие звена («Перезапустить») держится правого края -- и когда
+   ушло на свою строку, не наезжает на линию цепочки слева. */
+.chain-link > .btn { margin-left: auto; }
 
 .chain-link:first-child::before { top: 50%; }
 .chain-link:last-child::before { bottom: 50%; }
@@ -1851,8 +1864,11 @@ body {
 .chain-dot-active { background: var(--sig); box-shadow: 0 0 10px rgba(200, 242, 74, 0.7); }
 .chain-dot-ready { background: var(--ok); }
 
+/* Звено держит под подпись не меньше 8rem: кнопка «Перезапустить» справа
+   сжимала её до слова в строку, а код «vpn-nl» -- до «vpn-» / «nl». Не
+   влезают рядом -- кнопка уходит на свою строку. */
 .chain-main {
-  flex: 1;
+  flex: 1 1 8rem;
   min-width: 0;
   font-size: var(--fs-md);
   font-weight: 500;
@@ -1891,6 +1907,39 @@ body {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: rgba(200, 242, 74, 0.7);
+}
+
+/* Карточка из строк (.data-row, .settings-row, .fleet-row, сноска): у строк
+   свои поля по 14px, и поля карточки поверх них давали рамку в рамке --
+   строки с отступом внутри, сноска отдельной плашкой. Одна рамка -- у
+   карточки полей нет, сноска ложится в край. */
+.card-rows {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Строка и её пояснение («Не определяются адреса сайтов») -- одно целое:
+   черта идёт под парой, а не между строкой и её ошибкой. */
+.data-row-group {
+  border-bottom: 1px solid var(--line);
+}
+
+.data-row-group:last-child { border-bottom: none; }
+.data-row-group > .data-row { border-bottom: none; }
+
+/* Строки без точки в карточке, где точки есть, держат её отступ: иначе
+   «Обход блокировок работает» без точки съезжал левее соседей. */
+.card-rows:has(.data-row-dot) .data-row:not(:has(> .data-row-dot)) {
+  padding-left: calc(14px + 7px + var(--sp-3));
+}
+
+/* Черта над сноской уже есть -- черта строки над ней дала бы двойную. */
+.card-rows > :has(+ .card-foot) { border-bottom-color: transparent; }
+
+/* Несколько сносок подряд -- одна сноска из абзацев, а не стопка плашек. */
+.card-foot + .card-foot {
+  border-top: none;
+  padding-top: 0;
 }
 
 /* Сноска под карточкой: объясняет показание, а не повторяет его. */
@@ -2118,9 +2167,15 @@ body {
    текстом без карточки -- это пояснение к строке, а не новая строка. */
 .diag-consequence {
   margin: -4px 0 0;
-  padding: 0 14px 10px 30px;
+  padding: 0 14px 10px;
   font-size: var(--fs-sm);
   color: var(--bad);
+}
+
+/* Пояснение встаёт под подписью строки, ровно по её левому краю: в карточке
+   с точками это отступ точки. */
+.card-rows:has(.data-row-dot) .diag-consequence {
+  padding-left: calc(14px + 7px + var(--sp-3));
 }
 
 /* ============================================================
@@ -2283,14 +2338,26 @@ body {
   margin-top: var(--sp-3);
 }
 
-.settings-actions {
+/* Пара кнопок в строку («Осмотр роутера» / «Осмотр HydraRoute Neo»,
+   «Перезапустить HydraRoute» / «… awg-manager», «Починить» / «Перезапустить
+   VPN-туннель»). Кнопки одной высоты, а когда подписи в половине строки
+   тесно -- каждая встаёт на свою строку целиком: на 360 px подпись в две
+   строки делала пару разновысокой. Порог -- основа flex: две кнопки по
+   13,5rem встают рядом только там, где подпись помещается в одну строку. */
+.settings-actions,
+.incident-pair {
   display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
   gap: var(--sp-2);
 }
 
-.settings-actions .btn {
-  flex: 1;
+.settings-actions .btn,
+.incident-pair .btn {
+  flex: 1 1 13.5rem;
   min-height: 44px;
+  white-space: normal;
+  line-height: var(--lh-tight);
 }
 
 /* ============================================================
