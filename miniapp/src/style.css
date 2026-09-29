@@ -3733,11 +3733,24 @@ body {
   color: var(--warn);
 }
 
+/* Правка 6 (ревью раунд 1): родная подпись «Choose File / No file chosen»
+   по-английски и не красится -- вход спрятан визуально (доступен для
+   клавиатуры и скринридера через свою кнопку .awg3-file-btn), а видимую
+   часть рисует кнопка plus certHint из awg3Panel.js. */
 .awg3-file input {
-  width: 100%;
-  font: inherit;
-  font-size: var(--fs-sm);
-  color: var(--text);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.awg3-file-btn {
+  margin-top: var(--sp-2);
 }
 
 .awg3-check {
@@ -3757,12 +3770,18 @@ body {
   background: var(--muted);
 }
 
-.awg3-peer + .awg3-peer {
-  border-top: 1px solid var(--line2);
+/* Правка 1 (ревью раунд 1): пир -- один .data-row (правило v0.48 «строка
+   данных»), без обёртки .awg3-peer и без отдельной черты-разделителя --
+   черту уже рисует .data-row сама на себе. Ярлык (роутер или «выключен»)
+   живёт внутри той же строки, под именем. */
+.awg3-peer-tag {
+  margin: 2px 0 0;
 }
 
-.awg3-peer-router {
-  margin: 0 0 var(--sp-2);
+/* Единица трафика не должна остаться одна на своей строке: «↑ 200,3» /
+   «МБ» на переносе читается хуже прочерка. */
+.awg3-peers .data-row-value-sub {
+  white-space: nowrap;
 }
 
 /* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,

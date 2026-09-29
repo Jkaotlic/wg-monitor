@@ -22,6 +22,7 @@ export const AWG3_TEXTS = {
   saveHint: 'Проверка — один запрос к панели. Пароль не подбирается: после отказа бот к панели не обращается, пока вы не пересохраните учётные данные.',
   certSection: 'Клиентский сертификат',
   p12Label: 'Файл .p12',
+  p12Pick: 'Выбрать файл .p12',
   p12Password: 'Пароль от .p12',
   p12PasswordHint: 'Нужен, только чтобы достать сертификат. Сам файл и этот пароль не хранятся.',
   p12ReadError: 'Файл не прочитался — выберите его ещё раз.',
@@ -29,6 +30,7 @@ export const AWG3_TEXTS = {
   settings: 'Настройки панели',
   readonly: 'Панель только для просмотра: выпускать с неё нельзя.',
   peersLoading: 'Спрашиваем панель…',
+  peersHint: 'Время — с последнего обмена ключами; ниже — трафик за интерфейс.',
   noPeers: 'На этом интерфейсе пиров нет.',
   noIfaces: 'Панель не назвала ни одного интерфейса.',
   retry: 'Повторить',
@@ -213,11 +215,13 @@ function agoText(sec) {
 
 // handshake_age_sec -1 -- ни одного handshake: «не подключался», а не
 // «55 лет назад».
-export function handshakeText(state, ageSec) {
-  const never = typeof ageSec !== 'number' || ageSec < 0
-  if (state === 'off') return never ? 'выключен' : `выключен · handshake ${agoText(ageSec)}`
-  if (never || state === 'never') return 'не подключался'
-  return `handshake ${agoText(ageSec)}`
+// Правка 1-2 (ревью раунд 1): колонка времени -- ТОЛЬКО короткая форма, без
+// англицизма «handshake» и без «выключен» (тот текст переехал в ярлык под
+// именем пира, peerRows ниже). Состояние пира сюда больше не приходит --
+// «никогда» уже целиком читается по возрасту (-1 или не число).
+export function handshakeText(ageSec) {
+  if (typeof ageSec !== 'number' || ageSec < 0) return 'не подключался'
+  return agoText(ageSec)
 }
 
 // ↓ -- принято сервером, ↑ -- отдано, как в консоли панели.
@@ -226,18 +230,27 @@ export function trafficText(rx, tx) {
   return `↓ ${formatBytes(rx ?? 0)} · ↑ ${formatBytes(tx ?? 0)}`
 }
 
-export const PEER_DOT = { online: 'ok', idle: 'warn', never: 'muted' }
+export const PEER_DOT = { online: 'ok', idle: 'warn', never: 'muted', off: 'muted' }
 
+// Правка 1 (ревью раунд 1): один .data-row на пира (без обёртки
+// .awg3-peer). router -- ярлык «роутер «nick»» под именем; off -- пир
+// выключен и без ярлыка роутера, тогда под именем -- «выключен». Оба ярлыка
+// взаимоисключающие: выключенный пир с уже известным роутером всё равно
+// подписан роутером -- это важнее, чем факт паузы.
 export function peerRows(peers) {
-  return (Array.isArray(peers) ? peers : []).map((p) => ({
-    id: String(p.id),
-    title: p.name || String(p.id),
-    state: p.state,
-    dot: PEER_DOT[p.state],
-    value: handshakeText(p.state, p.handshake_age_sec),
-    valueSub: trafficText(p.rx_bytes, p.tx_bytes),
-    router: p.router && p.router.nickname ? { id: p.router.id, nickname: String(p.router.nickname) } : null,
-  }))
+  return (Array.isArray(peers) ? peers : []).map((p) => {
+    const router = p.router && p.router.nickname ? { id: p.router.id, nickname: String(p.router.nickname) } : null
+    return {
+      id: String(p.id),
+      title: p.name || String(p.id),
+      state: p.state,
+      dot: PEER_DOT[p.state],
+      value: handshakeText(p.handshake_age_sec),
+      valueSub: trafficText(p.rx_bytes, p.tx_bytes),
+      router,
+      off: !router && p.state === 'off',
+    }
+  })
 }
 
 export function summaryText(summary) {
@@ -281,6 +294,16 @@ const DM_TEXTS = {
 
 export function dmText(dm) {
   return DM_TEXTS[dm] ?? DM_TEXTS.failed
+}
+
+// Правка 5 (ревью раунд 1): потолок на стороне браузера -- сертификат в
+// .p12 не бывает больше сотни килобайт, и незачем читать в память и слать
+// на сервер явно не то (а заодно прячем нечитаемо длинные ошибки сервера
+// за понятным словом до отправки).
+const P12_MAX_BYTES = 100 * 1024
+
+export function p12SizeProblem(size) {
+  return typeof size === 'number' && size > P12_MAX_BYTES ? 'Файл .p12 больше 100 КБ — это не похоже на сертификат.' : ''
 }
 
 export function bytesToBase64(bytes) {

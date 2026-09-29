@@ -194,20 +194,31 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
               <p class="state">{AWG3_TEXTS.noIfaces}</p>
             ) : (
               <Section title={`Пиры · ${summaryText(page.summary)}`}>
+                {/* Правка 2 (ревью раунд 1): что значит время -- сказано ОДИН
+                    раз здесь, а не словом «handshake» на каждой строке. */}
+                {rows.length > 0 && <p class="hint">{AWG3_TEXTS.peersHint}</p>}
                 {loading && <p class="state">{AWG3_TEXTS.peersLoading}</p>}
                 {rows.length === 0 ? (
                   <p class="state">{AWG3_TEXTS.noPeers}</p>
                 ) : (
                   <div class="card card-rows awg3-peers">
                     {rows.map((r) => (
-                      <div class="awg3-peer" key={r.id}>
-                        <DataRow dot={r.dot} title={r.title} value={r.value} valueSub={r.valueSub} />
-                        {r.router && (
-                          <p class="awg3-peer-router">
-                            <Pill tone="sig">{`роутер «${r.router.nickname}»`}</Pill>
-                          </p>
-                        )}
-                      </div>
+                      <DataRow
+                        key={r.id}
+                        dot={r.dot}
+                        title={r.title}
+                        titleExtra={
+                          r.router ? (
+                            <p class="awg3-peer-tag">
+                              <Pill tone="sig">{`роутер «${r.router.nickname}»`}</Pill>
+                            </p>
+                          ) : r.off ? (
+                            <p class="awg3-peer-tag hint">выключен</p>
+                          ) : null
+                        }
+                        value={r.value}
+                        valueSub={r.valueSub}
+                      />
                     ))}
                   </div>
                 )}

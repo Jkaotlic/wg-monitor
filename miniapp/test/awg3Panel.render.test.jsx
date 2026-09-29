@@ -93,9 +93,10 @@ async function fill(root, id, value) {
   })
 }
 
-async function pickFile(root, name = 'anex.p12') {
+async function pickFile(root, name = 'anex.p12', sizeBytes = 3) {
   const input = root.querySelector('#a3-p12')
-  Object.defineProperty(input, 'files', { value: [new File(['P12'], name)], configurable: true })
+  const bytes = sizeBytes === 3 ? ['P12'] : [new Uint8Array(sizeBytes)]
+  Object.defineProperty(input, 'files', { value: [new File(bytes, name)], configurable: true })
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
   await flush()
 }
@@ -218,6 +219,61 @@ describe('форма панели', () => {
     expect(field.textContent).toContain('Пароль от файла .p12 не подошёл')
   })
 
+  // Правка 3 (ревью раунд 1): нативный input не шлёт change на тот же файл
+  // повторно -- сбрасываем его .value после чтения и после отправки, чтобы
+  // повторный выбор того же файла снова сработал.
+  it('после выбора и после отправки нативный input сброшен -- тот же файл выбирается снова', async () => {
+    mocks.saveReply = new ApiError(400, 'invalid_field', 'x', 'Пароль от файла .p12 не подошёл', 'p12_password')
+    const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
+    await pickFile(root)
+    expect(root.querySelector('#a3-p12').value).toBe('')
+    await fill(root, 'a3-id', 'main')
+    await fill(root, 'a3-base_url', 'https://panel.example.com')
+    await fill(root, 'a3-user', 'admin')
+    await fill(root, 'a3-password', 'pw')
+    await click(button(root, 'Сохранить и проверить'))
+    expect(root.querySelector('#a3-p12').value).toBe('')
+    mocks.saveReply = null
+    // Пароль стирается из состояния сразу после любой попытки отправки
+    // (решение задачи 9) -- перед повтором его нужно ввести заново, как и в
+    // жизни; проверяем именно повторный выбор ТОГО ЖЕ файла .p12.
+    await fill(root, 'a3-password', 'pw')
+    // Тот же файл ещё раз (в браузере это второй change только благодаря сбросу выше).
+    await pickFile(root)
+    await click(button(root, 'Сохранить и проверить'))
+    expect(calls('create').length).toBe(2)
+    expect(calls('create')[1][1].p12_base64).toBe('UDEyLUZJTEU=')
+  })
+
+  // Правка 4 (ревью раунд 1): пароли панели никогда не подсказываются
+  // браузером как «уже вводили».
+  it('пароль панели и пароль .p12 -- autocomplete=new-password', async () => {
+    const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
+    expect(root.querySelector('#a3-password').getAttribute('autocomplete')).toBe('new-password')
+    expect(root.querySelector('#a3-p12_password').getAttribute('autocomplete')).toBe('new-password')
+  })
+
+  // Правка 5 (ревью раунд 1): файл больше 100 КБ отклоняется в браузере, не
+  // читается и не уходит проверять readFileBase64.
+  it('.p12 больше 100 КБ -- отказ словами, файл не читается', async () => {
+    const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
+    await pickFile(root, 'big.p12', 100 * 1024 + 1)
+    const field = root.querySelector('#a3-p12').closest('.field')
+    expect(field.textContent).toContain('Файл .p12 больше 100 КБ — это не похоже на сертификат.')
+    expect(field.textContent).not.toContain('Выбран файл')
+  })
+
+  // Правка 6 (ревью раунд 1): русская кнопка вместо «Choose File / No file
+  // chosen», имя выбранного файла -- из состояния формы, а не из нативного
+  // контрола.
+  it('кнопка «Выбрать файл .p12» вместо нативной подписи браузера', async () => {
+    const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
+    expect(button(root, 'Выбрать файл .p12')).toBeTruthy()
+    expect(root.textContent).not.toContain('No file chosen')
+    await pickFile(root, 'anex.p12')
+    expect(root.textContent).toContain('Выбран файл «anex.p12»')
+  })
+
   it('проверка не прошла -- панель сохранена, слова про пароль', async () => {
     mocks.saveReply = { panel: { ...MAIN, state: 'bad_password' }, check: { ran: true, ok: false, code: 'awg3_bad_password', message: 'x' } }
     const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
@@ -255,13 +311,18 @@ describe('форма панели', () => {
 })
 
 describe('экран панели', () => {
-  it('интерфейсы вкладками, сводка, пиры с точками, handshake, трафик и ярлык роутера', async () => {
+  it('интерфейсы вкладками, сводка, пиры ОДНОЙ строкой (без «handshake»), трафик и ярлык роутера', async () => {
     const { root } = await mountPanel()
     expect(root.textContent).toContain('онлайн 1 из 3')
+    // Правка 2 (ревью раунд 1): раз, а не на каждой строке -- что значит время.
+    expect(root.textContent).toContain('обмена ключами')
+    expect(root.textContent).not.toContain('handshake')
     expect(root.querySelectorAll('.segment-tab').length).toBe(2)
-    const peers = [...root.querySelectorAll('.awg3-peer')]
+    // Правка 1: пир -- ОДИН .data-row, без обёртки .awg3-peer.
+    const peers = [...root.querySelectorAll('.awg3-peers > .data-row')]
     expect(peers.length).toBe(3)
-    expect(peers[0].textContent).toContain('handshake 2 мин назад')
+    expect(peers[0].textContent).toContain('2 мин назад')
+    expect(peers[0].textContent).not.toContain('handshake')
     expect(peers[0].textContent).toContain('↓ 1,5 КБ · ↑ 2,0 МБ')
     expect(peers[0].textContent).toContain('роутер «home»')
     expect(peers[1].textContent).toContain('не подключался')
@@ -270,6 +331,16 @@ describe('экран панели', () => {
     expect(peers[2].querySelector('.data-row-dot-warn')).toBeTruthy()
     await click(button(root, 'reserve'))
     expect(calls('peers').map((c) => c[2])).toEqual(['', 'awg2'])
+  })
+
+  it('пир выключен без роутера -- «выключен» под именем, своя точка', async () => {
+    mocks.page.peers = [{ id: 'p9', name: 'old-ipad', state: 'off', handshake_age_sec: 259200, rx_bytes: 0, tx_bytes: 0, router: null }]
+    const { root } = await mountPanel()
+    const rows = [...root.querySelectorAll('.awg3-peers > .data-row')]
+    expect(rows.length).toBe(1)
+    expect(rows[0].textContent).toContain('выключен')
+    expect(rows[0].textContent).not.toContain('роутер')
+    expect(rows[0].querySelector('.data-row-dot-muted')).toBeTruthy()
   })
 
   it('состояния спеки: пароль, пауза ЧЧ:ММ, сертификат, недоступна с повтором', async () => {

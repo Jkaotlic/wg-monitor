@@ -20,6 +20,7 @@ import {
   bytesToBase64,
   certHint,
   deletePanelSheetText,
+  p12SizeProblem,
 } from '../src/awg3Panel.js'
 
 const at = (h, m) => new Date(2026, 8, 29, h, m).toISOString()
@@ -121,25 +122,28 @@ describe('список и состояния', () => {
 })
 
 describe('пиры', () => {
-  it('handshake словами: никогда, только что, минуты, часы, дни, выключен', () => {
-    expect(handshakeText('never', -1)).toBe('не подключался')
-    expect(handshakeText('online', 0)).toBe('handshake только что')
-    expect(handshakeText('online', 125)).toBe('handshake 2 мин назад')
-    expect(handshakeText('idle', 3 * 3600 + 5)).toBe('handshake 3 ч назад')
-    expect(handshakeText('idle', 50 * 3600)).toBe('handshake 2 дн назад')
-    expect(handshakeText('off', -1)).toBe('выключен')
-    expect(handshakeText('off', 90)).toBe('выключен · handshake 1 мин назад')
+  // Правка 1 (ревью раунд 1): value-колонка -- только короткое время, без
+  // слова «handshake» (англицизм) и без «выключен» (тот текст переехал в
+  // ярлык под именем пира, отдельно от времени).
+  it('обмен ключами коротко: никогда, только что, минуты, часы, дни', () => {
+    expect(handshakeText(-1)).toBe('не подключался')
+    expect(handshakeText(0)).toBe('только что')
+    expect(handshakeText(125)).toBe('2 мин назад')
+    expect(handshakeText(3 * 3600 + 5)).toBe('3 ч назад')
+    expect(handshakeText(50 * 3600)).toBe('2 дн назад')
   })
 
-  it('строки: точка, трафик ↓/↑, ярлык роутера', () => {
+  it('строки: точка, трафик ↓/↑, ярлык роутера или «выключен»', () => {
     const rows = peerRows([
       { id: 'p1', name: 'wgmon-home', state: 'online', handshake_age_sec: 30, rx_bytes: 1536, tx_bytes: 2 * 1024 * 1024, router: { id: 7, nickname: 'home' } },
       { id: 'p2', name: 'laptop', state: 'never', handshake_age_sec: -1, rx_bytes: 0, tx_bytes: 0, router: null },
       { id: 'p3', name: 'tablet', state: 'off', handshake_age_sec: -1 },
     ])
-    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'handshake только что', valueSub: '↓ 1,5 КБ · ↑ 2,0 МБ', router: { id: 7, nickname: 'home' } })
-    expect(rows[1]).toMatchObject({ dot: 'muted', value: 'не подключался', valueSub: '', router: null })
-    expect(rows[2].dot).toBe(undefined)
+    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'только что', valueSub: '↓ 1,5 КБ · ↑ 2,0 МБ', router: { id: 7, nickname: 'home' }, off: false })
+    expect(rows[1]).toMatchObject({ dot: 'muted', value: 'не подключался', valueSub: '', router: null, off: false })
+    // off -- своя точка (muted, как у never) и свой ярлык под именем, а не
+    // текст в колонке времени.
+    expect(rows[2]).toMatchObject({ dot: 'muted', value: 'не подключался', router: null, off: true })
     expect(trafficText(0, 0)).toBe('')
     expect(summaryText({ peers_total: 6, peers_online: 4 })).toBe('онлайн 4 из 6')
     expect(summaryText({ peers_total: 0 })).toBe('пиров нет')
@@ -178,5 +182,13 @@ describe('файл .p12', () => {
     expect(bytesToBase64(new Uint8Array([0x50, 0x31, 0x32]))).toBe('UDEy')
     const big = new Uint8Array(70_000).map((_, i) => i % 256)
     expect(atob(bytesToBase64(big)).length).toBe(70_000)
+  })
+
+  // Правка 5 (ревью раунд 1): клиентский потолок 100 КБ -- сертификат в
+  // .p12 не бывает таким большим, а лишнее не грузим в браузер зря.
+  it('p12SizeProblem -- потолок 100 КБ словами', () => {
+    expect(p12SizeProblem(1024)).toBe('')
+    expect(p12SizeProblem(100 * 1024)).toBe('')
+    expect(p12SizeProblem(100 * 1024 + 1)).toBe('Файл .p12 больше 100 КБ — это не похоже на сертификат.')
   })
 })

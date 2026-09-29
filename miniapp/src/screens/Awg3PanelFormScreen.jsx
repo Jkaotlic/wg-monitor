@@ -14,6 +14,7 @@ import {
   passwordHint,
   deletePanelSheetText,
   readFileBase64,
+  p12SizeProblem,
 } from '../awg3Panel.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -40,6 +41,10 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
   const alive = useRef(true)
   const valuesRef = useRef(values)
   valuesRef.current = values
+  // Правка 3 (ревью раунд 1): нативный input type=file не шлёт change на тот
+  // же файл повторно, пока его .value не сброшен -- ref нужен, чтобы сбросить
+  // его и после чтения, и после отправки (save её обнуляет отдельно).
+  const fileInputRef = useRef(null)
   useEffect(
     () => () => {
       alive.current = false
@@ -79,8 +84,17 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
   }
 
   async function pickFile(e) {
-    const file = e.currentTarget.files?.[0]
+    const input = e.currentTarget
+    const file = input.files?.[0]
     if (!file) return
+    // Правка 5: потолок 100 КБ -- до чтения, файл явно не сертификат.
+    const big = p12SizeProblem(file.size)
+    if (big) {
+      setFieldError({ key: 'p12', text: big })
+      setError('')
+      input.value = ''
+      return
+    }
     try {
       const b64 = await readFileBase64(file)
       if (!alive.current) return
@@ -89,6 +103,9 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
       setError('')
     } catch {
       if (alive.current) setFieldError({ key: 'p12', text: AWG3_TEXTS.p12ReadError })
+    } finally {
+      // Сброс .value -- иначе повторный выбор ТОГО ЖЕ файла не пришлёт change.
+      input.value = ''
     }
   }
 
@@ -122,6 +139,9 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
     Object.assign(values, { password: '', p12_password: '', p12_base64: '' })
     valuesRef.current = cleared
     setValues(cleared)
+    // Тот же сброс, что в pickFile: иначе повторный выбор одного и того же
+    // файла после отказа сервера не пришлёт change.
+    if (fileInputRef.current) fileInputRef.current.value = ''
     setError('')
     setFieldError(null)
     setCheck(null)
@@ -199,7 +219,13 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
               <div class="card form-group">
                 <div class={fe('p12') ? 'field field-error awg3-file' : 'field awg3-file'}>
                   <label for="a3-p12">{AWG3_TEXTS.p12Label}</label>
-                  <input id="a3-p12" type="file" accept=".p12,.pfx,application/x-pkcs12" onChange={pickFile} />
+                  {/* Правка 6: родная подпись «Choose File / No file chosen» --
+                      по-английски и её не перекрасить; вход спрятан, кнопка --
+                      своя, имя файла показывает certHint из состояния формы. */}
+                  <input ref={fileInputRef} id="a3-p12" type="file" accept=".p12,.pfx,application/x-pkcs12" onChange={pickFile} />
+                  <button type="button" class="btn btn-ghost btn-wide awg3-file-btn" onClick={() => fileInputRef.current?.click()}>
+                    {AWG3_TEXTS.p12Pick}
+                  </button>
                   {fe('p12') ? (
                     <p class="field-error-text" role="alert">
                       {fe('p12')}
