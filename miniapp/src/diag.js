@@ -206,6 +206,10 @@ function dnsRow(check, clock) {
   const f = check.facts
   if (!f || f.resolvers == null) return { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
   const total = f.resolvers
+  // Ни одного опрошенного резолвера -- вопроса не задавали, и «да» при
+  // «0 из 0» было бы неправдой. Агент v0.46+ сам шлёт unknown (CHK-02),
+  // агенты постарше -- ok с нулём: экран не верит им так же.
+  if (total === 0) return { answer: UNCHECKED, value: 'ни один резолвер не опрошен' }
   const alive = total - (f.resolvers_failed ?? 0)
   // Подмена ответов важнее счётчика живых резолверов: резолвер отвечает, но
   // отвечает не то, и «2 из 2» тут читалось бы как «всё хорошо».

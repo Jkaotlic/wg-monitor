@@ -221,6 +221,22 @@ describe('checkRows', () => {
     expect(dns.value).toContain('подмен')
   })
 
+  // «0 из 0 резолверов» под зелёным «да»: роутер не опросил ни одного
+  // резолвера, и ответа на вопрос нет. Агент v0.46+ шлёт тут unknown
+  // (CHK-02), но агенты постарше -- ok с нулём, и экран обязан сам не верить.
+  it('ноль опрошенных резолверов -- «не проверено», а не «да»', () => {
+    const rows = checkRows({
+      checks: [{ check_name: 'dns', status: 'ok', ts: '2026-08-20T09:00:00Z', facts: { resolvers: 0, resolvers_failed: 0 } }],
+      tunnels: [],
+      router: ROUTER,
+    })
+    const dns = rowsByKey(rows).dns
+    expect(dns.answer).toBe('не проверено')
+    expect(dns.tone).toBe('muted')
+    expect(dns.value).not.toContain('0 из 0')
+    expect(dns.consequence).toBe('')
+  })
+
   // На запасных сайты открываются -- это жёлтое, как 🟡 в боте, а не красное.
   // «Не следит» и «ещё не прочитал» -- не «да»: об исправности сторож молчит.
   it('строка сторожа говорит по details, а не по одному статусу', () => {
