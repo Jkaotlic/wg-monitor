@@ -3796,10 +3796,11 @@ body {
   white-space: nowrap;
 }
 
-/* Единица трафика не должна остаться одна на своей строке: «↑ 200,3» /
-   «МБ» на переносе читается хуже прочерка. */
+/* Единица трафика не должна остаться одна на своей строке: внутри половин
+   «↓ 1,2 ГБ» и «↑ 200,3 МБ» -- неразрывные пробелы (trafficText), между ними
+   строка может перенестись, а не вылезти за карточку. */
 .awg3-peers .data-row-value-sub {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,
@@ -4876,9 +4877,11 @@ body {
 /* Заголовок слоя -- один (v0.50, общие правила): на телефоне, когда в теле
    есть H1, полоса сверху несёт только «‹ назад» (на широком экране H1 прячет
    правило широкой раскладки выше, там остаётся заголовок полосы). Слои без своего H1 («Починка»,
-   кабинет, мастер сайта) оставляют заголовок в полосе. */
+   кабинет, мастер сайта) оставляют заголовок в полосе. Селекторы -- через
+   дочерние комбинаторы: вложенный слой («Добавить сайт» внутри «Маршрутов»)
+   свой заголовок сохраняет. */
 @media (max-width: 1023.98px) {
-  .overlay:has(.overlay-back):has(.overlay-body .screen-title) .overlay-title {
+  .overlay:has(> .overlay-head > .overlay-back):has(> .overlay-body > .screen > .screen-title, > .overlay-body > .screen > .router-header > .screen-title) > .overlay-head > .overlay-title {
     display: none;
   }
 }
@@ -4911,6 +4914,11 @@ body {
   color: var(--dim);
   overflow-wrap: anywhere;
 }
+
+.park-card-line.park-update-warn { color: var(--warn); }
+.park-card-line.park-update-danger { color: var(--danger); }
+.park-card-line.park-update-ok { color: var(--ok); }
+.park-card-line.park-update-sig { color: var(--sig); }
 
 .park-more-body {
   margin-top: var(--sp-2);

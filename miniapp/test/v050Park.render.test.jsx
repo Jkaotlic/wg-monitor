@@ -105,6 +105,7 @@ describe('шапка: переключатель роутера (спека п. 
     const root = await mountAt('/miniapp/?router=2&tab=diag')
     const sw = root.querySelector('.router-switch')
     expect(sw.textContent.trim()).toBe('Дача')
+    expect(sw.getAttribute('aria-label')).toBe('Сменить роутер: Дача')
     expect(root.querySelector('.app-header-fleet').textContent.trim()).toBe('Все роутеры')
     await act(async () => sw.click())
     await flush()

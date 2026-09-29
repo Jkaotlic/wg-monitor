@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { fleetRow, fleetSummary, fleetSummaryLine, stateCountLabel, routerSwitchChoices } from '../src/fleet.js'
-import { parkRank, fleetRouterRows, parkCardLine, warningFoldTitle } from '../src/fleetAdmin.js'
+import { parkRank, fleetRouterRows, parkCardLine, parkCardTone, warningFoldTitle } from '../src/fleetAdmin.js'
 import { navReducer } from '../src/nav.js'
 
 const r = (over) => ({ id: 1, nickname: 'x', status: 'online', last_seen_age_sec: 30, ...over })
@@ -64,6 +64,16 @@ describe('Парк: порядок карточек (спека п. 2.4)', () =>
     expect(parkCardLine({ sub: 'не на связи 4 дн', update: { text: 'ждёт включения: v0.49.0 поставится, когда роутер выйдет на связь' }, router: { agent_version: 'v0.30.0' } })).toBe(
       'не на связи 4 дн · ждёт включения: v0.49.0 поставится, когда роутер выйдет на связь',
     )
+  })
+
+  it('оживление в пути выигрывает у версии в той же строке; тон сохраняется', () => {
+    const row = { sub: 'не на связи 4 дн', update: { text: '', tone: 'ok' }, router: { agent_version: 'v0.30.0' } }
+    expect(parkCardLine(row, { text: 'ждём выхода на связь', tone: 'sig' })).toBe('не на связи 4 дн · оживление: ждём выхода на связь')
+    expect(parkCardTone(row, { text: 'ждём выхода на связь', tone: 'sig' })).toBe('sig')
+    expect(parkCardTone({ ...row, update: { text: 'не ставится v0.49.0: x', tone: 'danger' } }, { text: '' })).toBe('danger')
+    expect(parkCardTone({ ...row, update: { text: 'агент отстаёт от бэкенда', tone: 'warn' } })).toBe('warn')
+    expect(parkCardTone(row)).toBe('')
+    expect(parkCardTone({ ...row, update: { text: 'ставится v0.49.0', tone: 'muted' } })).toBe('')
   })
 
   it('оговорки одной свёрнутой строкой', () => {

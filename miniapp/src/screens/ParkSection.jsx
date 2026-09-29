@@ -30,6 +30,7 @@ import {
   cardWarning,
   EMPTY_PARK,
   parkCardLine,
+  parkCardTone,
   warningFoldTitle,
   fleetWarningNotes,
   fleetRouterRows,
@@ -623,8 +624,8 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                     <div class="card park-row" key={row.id}>
                       {/* Имя и та же пилюля, что в «Мои роутеры» (спека п. 2.4). */}
                       <DataRow title={row.name} value={<Chip tone={row.pill.tone}>{row.pill.text}</Chip>} />
-                      <p class="park-card-line">
-                        <Quoted text={parkCardLine(row)} />
+                      <p class={`park-card-line${parkCardTone(row, rv) ? ` park-update-${parkCardTone(row, rv)}` : ''}`}>
+                        <Quoted text={parkCardLine(row, rv)} />
                       </p>
                       <div class="action-row action-row-pair park-card-actions">
                         {canOpen && (

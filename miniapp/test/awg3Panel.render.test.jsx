@@ -345,7 +345,7 @@ describe('экран панели', () => {
     expect(peers.length).toBe(3)
     expect(peers[0].textContent).toContain('2 мин назад')
     expect(peers[0].textContent).not.toContain('handshake')
-    expect(peers[0].textContent).toContain('↓ 1,5 КБ · ↑ 2,0 МБ')
+    expect(peers[0].textContent).toContain('↓\u00a01,5\u00a0КБ · ↑\u00a02,0\u00a0МБ')
     // Ревью раунд 3 (finding 2): в тексте пилюли только ник, полная фраза --
     // в title (проверяется отдельным тестом ниже), иначе фраза «роутер
     // «nick»» вылезает за колонку на узком экране.
@@ -501,6 +501,34 @@ describe('экран панели', () => {
     await click(button(root, 'Открыть VPN-туннели «work»'))
     expect(opened).toEqual([9])
     render(null, host)
+  })
+
+  async function issueToWork(root, seen) {
+    await click(button(root, 'Выпустить на роутер'))
+    const { host } = await openSheetOf(seen)
+    await act(async () => {
+      const select = host.querySelector('#sheet-field-router')
+      select.value = '9'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await click(button(host, 'Выпустить'))
+    await flush()
+    await flush()
+    render(null, host)
+  }
+
+  it('«Открыть VPN-туннели» только после успеха; новый лист снимает прошлый итог', async () => {
+    mocks.waitReply = { status: 'error', output: 'boom' }
+    const { root, seen } = await mountPanel({ onOpenRouterTunnels: () => {} })
+    await issueToWork(root, seen)
+    expect(root.querySelector('.awg3-outcome-error')).toBeTruthy()
+    expect(button(root, 'Открыть VPN-туннели «work»')).toBeFalsy()
+    mocks.waitReply = { status: 'ok' }
+    await issueToWork(root, seen)
+    expect(button(root, 'Открыть VPN-туннели «work»')).toBeTruthy()
+    await click(button(root, 'Конфиг на устройство'))
+    expect(root.querySelector('.awg3-outcome')).toBe(null)
+    expect(button(root, 'Открыть VPN-туннели «work»')).toBeFalsy()
   })
 
   it('QR не переживает уход с экрана', async () => {

@@ -8,7 +8,7 @@ export function Header({ fleetVisible, onFleet, onLogout, router = null, onSwitc
   return (
     <div class="app-header">
       {router && onSwitch ? (
-        <button type="button" class="router-switch" aria-haspopup="dialog" title={router.nickname} onClick={onSwitch}>
+        <button type="button" class="router-switch" aria-haspopup="dialog" aria-label={`Сменить роутер: ${router.nickname}`} title={router.nickname} onClick={onSwitch}>
           <span class="router-switch-name">{router.nickname}</span>
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 6l4 4 4-4" />

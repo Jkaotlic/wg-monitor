@@ -23,10 +23,12 @@ describe('v0.50 Парк и шапка: CSS', () => {
   })
 
   it('оверлей: заголовок полосы прячется, когда в теле есть H1 и в полосе есть «назад» (корневой слой без «назад» остаётся с заголовком)', () => {
-    expect(body('.overlay:has(.overlay-back):has(.overlay-body .screen-title) .overlay-title')).toMatch(/display:\s*none/)
+    expect(css).toMatch(/\.overlay:has\(> \.overlay-head > \.overlay-back\):has\(> \.overlay-body > \.screen > \.screen-title, > \.overlay-body > \.screen > \.router-header > \.screen-title\) > \.overlay-head > \.overlay-title\s*\{\s*display:\s*none/)
+    // Вложенный слой не должен терять заголовок из-за H1 внешнего: никаких потомковых `.overlay-body .screen-title`.
+    expect(css).not.toMatch(/\.overlay:has\(\.overlay-back\)/)
     expect(body('.overlay:has(.overlay-body .screen-title) .overlay-title')).toBe('')
     // На широком экране H1 прячет своё правило .wide-shell -- здесь только телефон.
-    expect(css).toMatch(/@media \(max-width: 1023\.98px\)\s*\{\s*\.overlay:has\(\.overlay-back\):has\(\.overlay-body \.screen-title\) \.overlay-title/)
+    expect(css).toMatch(/@media \(max-width: 1023\.98px\)\s*\{\s*\.overlay:has\(> \.overlay-head/)
   })
 
   it('карточки Парка -- две колонки от 1100 px', () => {
@@ -36,6 +38,15 @@ describe('v0.50 Парк и шапка: CSS', () => {
   it('поле поиска в листе -- в теме приложения, а не белое системное', () => {
     expect(body('.sheet-search')).toMatch(/background:\s*var\(--page\)/)
     expect(body('.sheet-search')).toMatch(/min-height:\s*44px/)
+  })
+
+  it('тон строки карточки Парка не гаснет под .park-card-line', () => {
+    expect(body('.park-card-line.park-update-warn')).toMatch(/var\(--warn\)/)
+    expect(body('.park-card-line.park-update-danger')).toMatch(/var\(--danger\)/)
+  })
+
+  it('строка трафика пира может перенестись между половинами (не nowrap)', () => {
+    expect(body('.awg3-peers .data-row-value-sub')).not.toMatch(/nowrap/)
   })
 
   it('заголовок QR -- не капслоком', () => {

@@ -139,7 +139,7 @@ describe('пиры', () => {
       { id: 'p2', name: 'laptop', state: 'never', handshake_age_sec: -1, rx_bytes: 0, tx_bytes: 0, router: null },
       { id: 'p3', name: 'tablet', state: 'off', handshake_age_sec: -1 },
     ])
-    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'только что', valueSub: '↓ 1,5 КБ · ↑ 2,0 МБ', router: { id: 7, nickname: 'home' }, off: false })
+    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'только что', valueSub: '↓\u00a01,5\u00a0КБ · ↑\u00a02,0\u00a0МБ', router: { id: 7, nickname: 'home' }, off: false })
     expect(rows[1]).toMatchObject({ dot: 'muted', value: 'не подключался', valueSub: '', router: null, off: false })
     // off -- своя точка (muted, как у never) и свой ярлык под именем, а не
     // текст в колонке времени.

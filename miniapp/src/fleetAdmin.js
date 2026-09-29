@@ -60,9 +60,19 @@ export function fleetRouterRows(fleet, listRouters = []) {
 
 // Одна строка под именем: где роутер (или что с ним) и что с агентом --
 // обновление, если оно в пути, иначе версия.
-export function parkCardLine(row) {
+export function parkCardLine(row, rv) {
   const agent = row?.router?.agent_version ? `агент ${row.router.agent_version}` : ''
-  return [row?.sub, row?.update?.text || agent].filter(Boolean).join(' · ')
+  // Оживление в пути важнее версии: оно объясняет, почему роутер молчит.
+  const tail = rv?.text ? `оживление: ${rv.text}` : row?.update?.text || agent
+  return [row?.sub, tail].filter(Boolean).join(' · ')
+}
+
+// Тон строки карточки: оживление, иначе обновление агента. Красное и
+// жёлтое остаются красным и жёлтым, как на прежней карточке; приглушённое и
+// «всё хорошо» цвета не получают.
+export function parkCardTone(row, rv) {
+  const tone = rv?.text ? rv.tone : row?.update?.text ? row.update.tone : ''
+  return ['warn', 'danger', 'sig', 'ok'].includes(tone) ? tone : ''
 }
 
 export function warningFoldTitle(n) {

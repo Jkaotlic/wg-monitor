@@ -227,7 +227,10 @@ export function handshakeText(ageSec) {
 // ↓ -- принято сервером, ↑ -- отдано, как в консоли панели.
 export function trafficText(rx, tx) {
   if (!rx && !tx) return ''
-  return `↓ ${formatBytes(rx ?? 0)} · ↑ ${formatBytes(tx ?? 0)}`
+  // Неразрывные пробелы внутри каждой половины: строка может перенестись
+  // только на « · », а «↑ 200,3 МБ» не рвётся и не вылезает за карточку.
+  const nb = (t) => t.replace(/ /g, '\u00a0')
+  return `${nb(`↓ ${formatBytes(rx ?? 0)}`)} · ${nb(`↑ ${formatBytes(tx ?? 0)}`)}`
 }
 
 export const PEER_DOT = { online: 'ok', idle: 'warn', never: 'muted', off: 'muted' }

@@ -80,6 +80,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
   // сервера). Два нажатия в одном кадре -- один запрос: второй получает тот же
   // ответ.
   function askDevice() {
+    setRouterOutcome(null)
     let pending = null
     openSheet(
       localSheet({
@@ -122,6 +123,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
   // «Выпустить на роутер» -- листом с выбором роутера; после итога --
   // переход на его VPN-туннели.
   function askRouter() {
+    setRouterOutcome(null)
     const pick = routerPickRows(routers, page?.peers)
     let chosen = null
     openSheet(
@@ -167,15 +169,14 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
       res = null
     }
     if (!alive.current) return
-    setRouterOutcome({
-      ...commandOutcome(res, {
-        ok: `Конфиг встал на «${row.title}» VPN-туннелем «${resp.tunnel_name}».`,
-        fail: 'Роутер не принял конфиг',
-        pending: 'Конфиг выпущен, но роутер пока не подтвердил импорт. Загляните в его VPN-туннели позже.',
-      }),
-      routerID: row.id,
-      routerName: row.title,
+    const outcome = commandOutcome(res, {
+      ok: `Конфиг встал на «${row.title}» VPN-туннелем «${resp.tunnel_name}».`,
+      fail: 'Роутер не принял конфиг',
+      pending: 'Конфиг выпущен, но роутер пока не подтвердил импорт. Загляните в его VPN-туннели позже.',
     })
+    // «Открыть VPN-туннели» -- только после успеха: при отказе или ожидании
+    // открывать пока нечего.
+    setRouterOutcome(outcome.tone === 'ok' ? { ...outcome, routerID: row.id, routerName: row.title } : outcome)
     load(iface)
   }
 
