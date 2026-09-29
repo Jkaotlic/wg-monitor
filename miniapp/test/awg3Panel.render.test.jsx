@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   calls: [],
   saveReply: null,
   deleteReply: null,
+  page: null,
+  peersErr: null,
+  deviceReply: null,
+  routerReply: null,
+  waitReply: { status: 'ok' },
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -35,6 +40,18 @@ vi.mock('../src/api.js', async (importOriginal) => {
       log('delete', id, confirm)
       return reply(mocks.deleteReply, null)
     },
+    fetchAwg3Peers: (id, iface) => {
+      log('peers', id, iface)
+      return mocks.peersErr ? Promise.reject(mocks.peersErr) : Promise.resolve({ ...structuredClone(mocks.page), iface: iface || mocks.page.iface })
+    },
+    issueAwg3Device: (id, iface, name) => {
+      log('device', id, iface, name)
+      return reply(mocks.deviceReply, { name, address: '10.66.0.9/32', qr_png_base64: 'iVBORw0KGgo=', dm: 'sent' })
+    },
+    issueAwg3ToRouter: (routerID, id, iface) => {
+      log('router', routerID, id, iface)
+      return reply(mocks.routerReply, { cmd_id: 'c1', tunnel_name: `${id}_${iface}` })
+    },
   }
 })
 
@@ -43,8 +60,14 @@ vi.mock('../src/awg3Panel.js', async (importOriginal) => {
   return { ...real, readFileBase64: vi.fn(async () => 'UDEyLUZJTEU=') }
 })
 
+vi.mock('../src/commandWait.js', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, waitCommand: vi.fn(async () => mocks.waitReply) }
+})
+
 const { SelfhostedScreen } = await import('../src/screens/SelfhostedScreen.jsx')
 const { Awg3PanelFormScreen } = await import('../src/screens/Awg3PanelFormScreen.jsx')
+const { Awg3PanelScreen } = await import('../src/screens/Awg3PanelScreen.jsx')
 const { ApiError } = await import('../src/api.js')
 
 const MAIN = { id: 'main', label: 'Main', base_url: 'https://panel.example.com', user: 'admin', enabled: true, password_set: true, cert_set: true, cert_subject: 'anex', cert_not_after: '2028-11-26T00:00:00Z', state: 'ok', readonly: false }
@@ -82,6 +105,28 @@ async function click(el) {
   await flush()
 }
 
+const PAGE = {
+  panel: { ...MAIN },
+  ifaces: [{ id: 'awg1', title: 'main', interface: 'awg1' }, { id: 'awg2', title: 'reserve', interface: 'awg2' }],
+  iface: 'awg1',
+  summary: { peers_total: 3, peers_online: 1, peers_stale: 0, peers_never: 1, rx_bytes: 0, tx_bytes: 0 },
+  peers: [
+    { id: 'p1', name: 'wgmon-home', address: '10.66.0.2/32', enabled: true, state: 'online', handshake_age_sec: 125, rx_bytes: 1536, tx_bytes: 2097152, router: { id: 7, nickname: 'home' } },
+    { id: 'p2', name: 'laptop', address: '10.66.0.3/32', enabled: true, state: 'never', handshake_age_sec: -1, rx_bytes: 0, tx_bytes: 0, router: null },
+    { id: 'p3', name: 'tablet', address: '10.66.0.4/32', enabled: true, state: 'idle', handshake_age_sec: 7200, rx_bytes: 10, tx_bytes: 20, router: null },
+  ],
+  fetched_at: '2026-09-29T10:00:00Z',
+}
+const ROUTERS = [{ id: 9, nickname: 'work', status: 'online' }, { id: 7, nickname: 'home', status: 'online' }]
+
+async function mountPanel(over = {}) {
+  const seen = { sheets: [], edits: [] }
+  const root = await mountNode(
+    <Awg3PanelScreen panelId="main" routers={ROUTERS} onClose={() => {}} onEdit={(id) => seen.edits.push(id)} openSheet={(s) => seen.sheets.push(s)} {...over} />,
+  )
+  return { root, seen }
+}
+
 beforeEach(() => {
   mocks.panels = [structuredClone(MAIN), { id: 'nl2', label: 'nl2', base_url: 'https://203.0.113.5:8444', state: 'bad_password', password_set: true, cert_set: true }]
   mocks.panelsErr = null
@@ -89,6 +134,11 @@ beforeEach(() => {
   mocks.calls = []
   mocks.saveReply = null
   mocks.deleteReply = null
+  mocks.page = structuredClone(PAGE)
+  mocks.peersErr = null
+  mocks.deviceReply = null
+  mocks.routerReply = null
+  mocks.waitReply = { status: 'ok' }
 })
 
 describe('«Свои VPN-серверы»: группа «Панели awg3»', () => {
@@ -201,5 +251,130 @@ describe('форма панели', () => {
     sheets[0].onDone()
     expect(calls('delete')).toEqual([['delete', 'main', 'Main']])
     expect(deleted).toBe(1)
+  })
+})
+
+describe('экран панели', () => {
+  it('интерфейсы вкладками, сводка, пиры с точками, handshake, трафик и ярлык роутера', async () => {
+    const { root } = await mountPanel()
+    expect(root.textContent).toContain('онлайн 1 из 3')
+    expect(root.querySelectorAll('.segment-tab').length).toBe(2)
+    const peers = [...root.querySelectorAll('.awg3-peer')]
+    expect(peers.length).toBe(3)
+    expect(peers[0].textContent).toContain('handshake 2 мин назад')
+    expect(peers[0].textContent).toContain('↓ 1,5 КБ · ↑ 2,0 МБ')
+    expect(peers[0].textContent).toContain('роутер «home»')
+    expect(peers[1].textContent).toContain('не подключался')
+    expect(peers[0].querySelector('.data-row-dot-ok')).toBeTruthy()
+    expect(peers[1].querySelector('.data-row-dot-muted')).toBeTruthy()
+    expect(peers[2].querySelector('.data-row-dot-warn')).toBeTruthy()
+    await click(button(root, 'reserve'))
+    expect(calls('peers').map((c) => c[2])).toEqual(['', 'awg2'])
+  })
+
+  it('состояния спеки: пароль, пауза ЧЧ:ММ, сертификат, недоступна с повтором', async () => {
+    const retry = new Date(2026, 8, 29, 14, 5).toISOString()
+    const cases = [
+      [new ApiError(409, 'awg3_bad_password', 'x', ''), 'пересохраните'],
+      [new ApiError(409, 'awg3_paused', 'x', '', '', { retry_at: retry }), 'Панель ограничила вход, повтор после 14:05.'],
+      [new ApiError(409, 'awg3_cert_rejected', 'x', ''), 'Сертификат не принят'],
+      [new ApiError(502, 'awg3_unreachable', 'x', ''), 'Панель недоступна'],
+    ]
+    for (const [err, text] of cases) {
+      mocks.peersErr = err
+      mocks.calls = []
+      const { root, seen } = await mountPanel()
+      expect(root.querySelector('.awg3-banner').textContent).toContain(text)
+      expect(button(root, 'Конфиг на устройство')).toBeFalsy()
+      if (err.code === 'awg3_unreachable') {
+        mocks.peersErr = null
+        await click(button(root, 'Повторить'))
+        expect(calls('peers').length).toBe(2)
+        expect(root.textContent).toContain('онлайн 1 из 3')
+      }
+      await click(button(root, 'Настройки панели'))
+      expect(seen.edits).toEqual(['main'])
+      render(null, root)
+    }
+  })
+
+  it('readonly: кнопок выпуска нет, строка «только для просмотра»', async () => {
+    mocks.page.panel.readonly = true
+    const { root } = await mountPanel()
+    expect(button(root, 'Конфиг на устройство')).toBeFalsy()
+    expect(button(root, 'Выпустить на роутер')).toBeFalsy()
+    expect(root.textContent).toContain('только для просмотра')
+  })
+
+  it('конфиг на устройство: двойное нажатие -- один выпуск, QR на экране, личка словами', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const { root } = await mountPanel()
+    await click(button(root, 'Конфиг на устройство'))
+    await fill(root, 'a3-device-name', 'iphone-anex')
+    const submit = button(root, 'Выпустить')
+    await act(async () => {
+      submit.click()
+      submit.click()
+    })
+    await flush()
+    await flush()
+    expect(calls('device')).toEqual([['device', 'main', 'awg1', 'iphone-anex']])
+    expect(root.querySelector('img.awg3-qr').getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(root.textContent).toContain('Файл .conf и QR отправлены вам в личку.')
+    expect(calls('peers').length).toBe(2)
+    expect(setItem.mock.calls.some((c) => String(c[1]).includes('iVBOR'))).toBe(false)
+    setItem.mockRestore()
+  })
+
+  it('имя устройства проверяется до сервера; отказ сервера -- словами', async () => {
+    const { root } = await mountPanel()
+    await click(button(root, 'Конфиг на устройство'))
+    await fill(root, 'a3-device-name', 'wgmon-x')
+    await click(button(root, 'Выпустить'))
+    expect(calls('device').length).toBe(0)
+    expect(root.textContent).toContain('роутерам')
+    mocks.deviceReply = new ApiError(409, 'awg3_name_taken', 'x', 'Устройство с таким именем уже есть на этом интерфейсе — выберите другое имя')
+    await fill(root, 'a3-device-name', 'laptop')
+    await click(button(root, 'Выпустить'))
+    expect(root.textContent).toContain('Устройство с таким именем уже есть')
+    expect(root.querySelector('img.awg3-qr')).toBe(null)
+  })
+
+  it('первый отказ readonly прячет кнопки выпуска', async () => {
+    mocks.deviceReply = new ApiError(409, 'awg3_readonly', 'x', '')
+    const { root } = await mountPanel()
+    await click(button(root, 'Конфиг на устройство'))
+    await fill(root, 'a3-device-name', 'ipad')
+    await click(button(root, 'Выпустить'))
+    expect(button(root, 'Конфиг на устройство')).toBeFalsy()
+    expect(root.textContent).toContain('только для просмотра')
+  })
+
+  it('выпуск на роутер: выбор, лист, vpn/issue, ожидание итога', async () => {
+    const { root, seen } = await mountPanel()
+    await click(button(root, 'Выпустить на роутер'))
+    const rows = [...root.querySelectorAll('.awg3-routers .list-row-btn')]
+    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('уже есть'), expect.stringContaining('«wgmon-work»')])
+    await click(rows[1])
+    const sheet = seen.sheets[0]
+    expect(sheet.title).toBe('Выпустить на «work»?')
+    const resp = await sheet.perform()
+    expect(calls('router')).toEqual([['router', 9, 'main', 'awg1']])
+    await act(async () => {
+      await sheet.onDone(resp)
+    })
+    await flush()
+    expect(root.querySelector('.awg3-outcome-ok').textContent).toContain('Конфиг встал на «work» VPN-туннелем «main_awg1».')
+  })
+
+  it('QR не переживает уход с экрана', async () => {
+    let { root } = await mountPanel()
+    await click(button(root, 'Конфиг на устройство'))
+    await fill(root, 'a3-device-name', 'ipad')
+    await click(button(root, 'Выпустить'))
+    expect(root.querySelector('img.awg3-qr')).toBeTruthy()
+    render(null, root)
+    ;({ root } = await mountPanel())
+    expect(root.querySelector('img.awg3-qr')).toBe(null)
   })
 })

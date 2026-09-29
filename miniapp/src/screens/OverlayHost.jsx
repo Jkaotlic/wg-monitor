@@ -11,6 +11,7 @@ import { CabinetScreen } from './CabinetScreen.jsx'
 import { SelfhostedScreen } from './SelfhostedScreen.jsx'
 import { SelfhostedInstanceScreen } from './SelfhostedInstanceScreen.jsx'
 import { Awg3PanelFormScreen } from './Awg3PanelFormScreen.jsx'
+import { Awg3PanelScreen } from './Awg3PanelScreen.jsx'
 import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams } from '../nav.js'
@@ -127,7 +128,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
               dispatch({ type: 'overlay', overlay: 'selfhostedinst', params: { instanceId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
             }
             onOpenAwg3={(id) =>
-              dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
+              dispatch({ type: 'overlay', overlay: 'awg3panel', params: { panelId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
             }
             onAddAwg3={() =>
               dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: '', returnTo: 'selfhosted', returnParams: { returnTo } } })
@@ -142,6 +143,20 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             backLabel={returnLabel('selfhosted')}
             openSheet={openSheet}
             onClose={() => dispatch({ type: 'overlay', overlay: 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
+          />
+        )
+      // Экран awg3-панели: роутеры парка -- для «Выпустить на роутер»;
+      // «Настройки панели» открывают форму с возвратом сюда же.
+      case 'awg3panel':
+        return (
+          <Awg3PanelScreen
+            key={params.panelId ?? ''}
+            panelId={params.panelId ?? ''}
+            routers={routers}
+            backLabel={returnLabel(returnTo)}
+            openSheet={openSheet}
+            onClose={() => dispatch({ type: 'overlay', overlay: returnTo ?? 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
+            onEdit={(id) => dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: id, returnTo: 'awg3panel', returnParams: params } })}
           />
         )
       // Форма awg3-панели: пароль и .p12 -- только в её состоянии, в

@@ -3757,6 +3757,64 @@ body {
   background: var(--muted);
 }
 
+.awg3-peer + .awg3-peer {
+  border-top: 1px solid var(--line2);
+}
+
+.awg3-peer-router {
+  margin: 0 0 var(--sp-2);
+}
+
+/* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,
+   что у .settings-actions (v0.48): одна высота, перенос на свою строку, а не
+   всегда столбиком. */
+.awg3-actions {
+  margin: var(--sp-2) 0 0;
+}
+
+.awg3-device {
+  margin-top: var(--sp-3);
+}
+
+.awg3-qr-card {
+  text-align: center;
+}
+
+/* QR читается камерой только на светлом поле: белая рамка -- тихая зона. */
+.awg3-qr {
+  display: block;
+  width: min(240px, 100%);
+  height: auto;
+  margin: 0 auto var(--sp-3);
+  padding: var(--sp-2);
+  background: white;
+  border-radius: var(--radius-sm);
+  image-rendering: pixelated;
+}
+
+.awg3-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--warn);
+}
+
+.awg3-outcome-ok {
+  color: var(--ok);
+}
+
+.awg3-outcome-warn {
+  color: var(--warn);
+}
+
+.awg3-outcome-error {
+  color: var(--danger);
+}
+
+.awg3-settings {
+  margin-top: var(--sp-4);
+}
+
 .selfhosted-form .card + .field-hint {
   margin-top: var(--sp-2);
 }
