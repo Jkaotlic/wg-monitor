@@ -106,7 +106,8 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
   return (
     <Overlay title="Настройки агента" backLabel="Управление" onBack={onClose}>
       <div class="screen">
-        <h1 class="screen-title">{routerName || 'Роутер'}</h1>
+        <h1 class="screen-title">Настройки агента</h1>
+        {routerName && <p class="router-lastseen">{routerName}</p>}
 
         {loadError && <p class="state state-error">{loadError}</p>}
 

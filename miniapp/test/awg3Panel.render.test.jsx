@@ -69,6 +69,7 @@ const { SelfhostedScreen } = await import('../src/screens/SelfhostedScreen.jsx')
 const { Awg3PanelFormScreen } = await import('../src/screens/Awg3PanelFormScreen.jsx')
 const { Awg3PanelScreen } = await import('../src/screens/Awg3PanelScreen.jsx')
 const { ApiError } = await import('../src/api.js')
+const { Sheet } = await import('../src/ui/Sheet.jsx')
 
 const MAIN = { id: 'main', label: 'Main', base_url: 'https://panel.example.com', user: 'admin', enabled: true, password_set: true, cert_set: true, cert_subject: 'anex', cert_not_after: '2028-11-26T00:00:00Z', state: 'ok', readonly: false }
 
@@ -104,6 +105,15 @@ async function pickFile(root, name = 'anex.p12', sizeBytes = 3) {
 async function click(el) {
   await act(async () => el.click())
   await flush()
+}
+
+// Лист монтируется отдельно, как его показывает оболочка (SheetHost).
+async function openSheetOf(seen) {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let closed = 0
+  await act(async () => render(<Sheet sheet={seen.sheets.at(-1)} onClose={() => closed++} />, host))
+  return { host, closed: () => closed }
 }
 
 const PAGE = {
@@ -406,12 +416,25 @@ describe('экран панели', () => {
     expect(root.textContent).toContain('только для просмотра')
   })
 
+  it('кнопки выпуска контурные; форма -- листом, лайм только у «Выпустить» внутри', async () => {
+    const { root, seen } = await mountPanel()
+    expect(button(root, 'Конфиг на устройство').className).toContain('btn-ghost')
+    expect(button(root, 'Выпустить на роутер').className).toContain('btn-ghost')
+    expect(root.querySelectorAll('.btn-primary')).toHaveLength(0)
+    await click(button(root, 'Конфиг на устройство'))
+    expect(root.querySelector('#a3-device-name')).toBe(null)
+    const { host } = await openSheetOf(seen)
+    expect([...host.querySelectorAll('.btn-primary')].map((b) => b.textContent.trim())).toEqual(['Выпустить'])
+    render(null, host)
+  })
+
   it('конфиг на устройство: двойное нажатие -- один выпуск, QR на экране, личка словами', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
-    const { root } = await mountPanel()
+    const { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
-    await fill(root, 'a3-device-name', 'iphone-anex')
-    const submit = button(root, 'Выпустить')
+    const { host } = await openSheetOf(seen)
+    await fill(host, 'sheet-field-name', 'iphone-anex')
+    const submit = button(host, 'Выпустить')
     await act(async () => {
       submit.click()
       submit.click()
@@ -420,76 +443,90 @@ describe('экран панели', () => {
     await flush()
     expect(calls('device')).toEqual([['device', 'main', 'awg1', 'iphone-anex']])
     expect(root.querySelector('img.awg3-qr').getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
+    expect(root.querySelector('.awg3-qr-title').textContent).toBe('QR-код «iphone-anex»')
     expect(root.textContent).toContain('Файл .conf и QR отправлены вам в личку.')
-    expect(calls('peers').length).toBe(2)
     expect(setItem.mock.calls.some((c) => String(c[1]).includes('iVBOR'))).toBe(false)
     setItem.mockRestore()
+    render(null, host)
   })
 
-  it('имя устройства проверяется до сервера; отказ сервера -- словами', async () => {
-    const { root } = await mountPanel()
+  it('имя устройства проверяется до сервера; отказ сервера -- словами в листе', async () => {
+    const { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
-    await fill(root, 'a3-device-name', 'wgmon-x')
-    await click(button(root, 'Выпустить'))
-    expect(calls('device').length).toBe(0)
-    expect(root.textContent).toContain('роутерам')
+    const { host } = await openSheetOf(seen)
+    await fill(host, 'sheet-field-name', 'wgmon-x')
+    expect(button(host, 'Выпустить').disabled).toBe(true)
+    expect(host.textContent).toContain('роутерам')
     mocks.deviceReply = new ApiError(409, 'awg3_name_taken', 'x', 'Устройство с таким именем уже есть на этом интерфейсе — выберите другое имя')
-    await fill(root, 'a3-device-name', 'laptop')
-    await click(button(root, 'Выпустить'))
-    expect(root.textContent).toContain('Устройство с таким именем уже есть')
+    await fill(host, 'sheet-field-name', 'laptop')
+    await click(button(host, 'Выпустить'))
+    await flush()
+    expect(host.textContent).toContain('Устройство с таким именем уже есть')
+    expect(host.querySelector('#sheet-field-name').value).toBe('laptop')
     expect(root.querySelector('img.awg3-qr')).toBe(null)
+    render(null, host)
   })
 
   it('первый отказ readonly прячет кнопки выпуска', async () => {
     mocks.deviceReply = new ApiError(409, 'awg3_readonly', 'x', '')
-    const { root } = await mountPanel()
+    const { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
-    await fill(root, 'a3-device-name', 'ipad')
-    await click(button(root, 'Выпустить'))
+    const { host } = await openSheetOf(seen)
+    await fill(host, 'sheet-field-name', 'ipad')
+    await click(button(host, 'Выпустить'))
+    await flush()
     expect(button(root, 'Конфиг на устройство')).toBeFalsy()
     expect(root.textContent).toContain('только для просмотра')
+    render(null, host)
   })
 
-  it('выпуск на роутер: выбор, лист, vpn/issue, ожидание итога', async () => {
-    const { root, seen } = await mountPanel()
+  it('выпуск на роутер: выбор в листе, vpn/issue, итог и «Открыть VPN-туннели «ник»»', async () => {
+    const opened = []
+    const { root, seen } = await mountPanel({ onOpenRouterTunnels: (id) => opened.push(id) })
     await click(button(root, 'Выпустить на роутер'))
-    const rows = [...root.querySelectorAll('.awg3-routers .list-row-btn')]
-    expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('уже есть'), expect.stringContaining('«wgmon-work»')])
-    await click(rows[1])
-    const sheet = seen.sheets[0]
-    expect(sheet.title).toBe('Выпустить на «work»?')
-    const resp = await sheet.perform()
-    expect(calls('router')).toEqual([['router', 9, 'main', 'awg1']])
+    const { host } = await openSheetOf(seen)
+    const select = host.querySelector('#sheet-field-router')
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Выберите роутер', 'home', 'work'])
+    expect(button(host, 'Выпустить').disabled).toBe(true)
     await act(async () => {
-      await sheet.onDone(resp)
+      select.value = '9'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
     })
+    expect(host.textContent).toContain('«wgmon-work»')
+    await click(button(host, 'Выпустить'))
     await flush()
+    await flush()
+    expect(calls('router')).toEqual([['router', 9, 'main', 'awg1']])
     expect(root.querySelector('.awg3-outcome-ok').textContent).toContain('Конфиг встал на «work» VPN-туннелем «main_awg1».')
+    await click(button(root, 'Открыть VPN-туннели «work»'))
+    expect(opened).toEqual([9])
+    render(null, host)
   })
 
   it('QR не переживает уход с экрана', async () => {
-    let { root } = await mountPanel()
+    let { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
-    await fill(root, 'a3-device-name', 'ipad')
-    await click(button(root, 'Выпустить'))
+    const { host } = await openSheetOf(seen)
+    await fill(host, 'sheet-field-name', 'ipad')
+    await click(button(host, 'Выпустить'))
+    await flush()
     expect(root.querySelector('img.awg3-qr')).toBeTruthy()
+    render(null, host)
     render(null, root)
     ;({ root } = await mountPanel())
     expect(root.querySelector('img.awg3-qr')).toBe(null)
   })
 
-  // Ревью раунд 3 (финальный, finding 4): после успешного выпуска экран сам
-  // перечитывает страницу (load(iface)); если этот повтор упал, отказ
-  // раньше подменял ВСЮ страницу баннером, включая уже показанный QR --
-  // единственная копия секрета пропадала с экрана без вины админа. QR
-  // обязан пережить неудачный автоповтор.
   it('QR переживает неудачный автоповтор чтения страницы после выпуска', async () => {
-    const { root } = await mountPanel()
+    const { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
-    await fill(root, 'a3-device-name', 'ipad')
+    const { host } = await openSheetOf(seen)
+    await fill(host, 'sheet-field-name', 'ipad')
     mocks.peersErr = new ApiError(502, 'awg3_unreachable', 'x', '')
-    await click(button(root, 'Выпустить'))
+    await click(button(host, 'Выпустить'))
+    await flush()
     expect(root.querySelector('img.awg3-qr')).toBeTruthy()
     expect(root.querySelector('.awg3-banner')).toBeTruthy()
+    render(null, host)
   })
 })

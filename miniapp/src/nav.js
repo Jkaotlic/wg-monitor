@@ -180,9 +180,15 @@ export function navReducer(state, action) {
       if (action.closeOverlay) return { ...withoutParams(state), tab, overlay: null, sheet: null }
       return { ...state, tab }
     }
-    case 'router':
+    case 'router': {
       if (navPinned(state)) return state
-      return { ...withoutParams(state), routerID: action.id, tab: 'router', overlay: null, sheet: null }
+      // keepTab -- смена роутера из шапки (v0.50): вкладка роутера остаётся.
+      // tab -- переход сразу на вкладку («Открыть VPN-туннели «ник»»).
+      const wanted = action.tab ? normalizeTab(action.tab) : null
+      const kept = action.keepTab && TABS.includes(state.tab) ? state.tab : null
+      const tab = wanted && TABS.includes(wanted) ? wanted : kept ?? 'router'
+      return { ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null }
+    }
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
       const overlay = action.overlay ?? null

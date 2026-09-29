@@ -184,7 +184,6 @@ describe('«Парк»: обновление агента', () => {
     const row = rowOf(root, 'office')
     // v0.48: оговорка -- один раз над списком, на карточке -- метка.
     expect(root.querySelector('.park-notes').textContent).toContain('проверяет адрес загрузки')
-    expect(row.querySelector('.park-tag')).toBeTruthy()
     await act(async () => buttons(row, 'Обновить агент')[0].click())
     expect(sheets).toHaveLength(1)
     expect(sheets[0].confirmPhrase).toBe('office')
@@ -432,8 +431,7 @@ describe('«Парк»: оговорки обновления агента', () 
     expect(notes[0].textContent).not.toContain('gamma')
     // Сама фраза в тексте экрана -- ровно один раз.
     expect(root.textContent.split(SPACE)).toHaveLength(2)
-    expect(rowOf(root, 'alpha').querySelector('.park-tag')).toBeTruthy()
-    expect(rowOf(root, 'gamma').querySelector('.park-tag')).toBe(null)
+    expect(root.querySelector('details.park-warnings .fold-title')).toBeTruthy()
     // Список идёт после общей строки.
     const list = root.querySelector('.park-row')
     expect(notes[0].compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

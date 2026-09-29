@@ -60,6 +60,9 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
+  /* Высота телефонной шапки: под ней липнут чипы «Управления» (задача 3) */
+  --app-header-h: 64px;
+
   /* Radius: 20 герой -- 14 карточка и кнопка -- 999 пилюля */
   --radius-hero: 20px;
   --radius: 14px;
@@ -1010,7 +1013,9 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  box-sizing: border-box;
+  height: var(--app-header-h);
+  padding: 0 var(--sp-4);
   background: var(--page);
   border-bottom: 1px solid var(--border);
 }
@@ -1027,7 +1032,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  flex: none;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-2);
   border: none;
   background: transparent;
@@ -2737,24 +2743,17 @@ body {
 
 /* Строки парка разделены линией: под строкой данных живут версии, состояние
    обновления и кнопки, и без разделителя они прилипают к соседнему роутеру. */
-.park-row + .park-row {
-  border-top: 1px solid var(--border);
-}
-
 /* Карточка роутеров Парка -- одна рамка (.card-rows): строка данных несёт
    свои поля, всё под ней -- версии, кнопки, оговорки -- встаёт по её левому
    краю. Черты между именем роутера и его кнопками нет: это одна строка. */
 .park-row {
-  padding-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
 .park-row > .data-row {
   border-bottom: none;
-}
-
-.park-row > :not(.data-row) {
-  margin-left: 14px;
-  margin-right: 14px;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /* Карточка бэкенда: сторож и кнопка раскатки -- уже с полями строки, снизу
@@ -2831,41 +2830,12 @@ body {
    сеткой по две равной ширины и высоты; нечётная последняя -- во всю
    ширину. Раньше каждая была шириной своей подписи, и строка шла лесенкой. */
 .park-open {
-  display: flex;
-  /* Кнопка сама по ширине подписи и в блоке не растягивается: ширина --
-     строка за вычетом полей строки (.park-row > …, по 14px). */
-  width: calc(100% - 28px);
-  margin-top: var(--sp-2);
   min-height: 44px;
-}
-
-.park-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-2);
-  margin: var(--sp-2) 0 0;
-}
-
-.park-actions .btn {
-  min-width: 0;
-  min-height: 44px;
-  white-space: normal;
-  line-height: var(--lh-tight);
-}
-
-.park-actions > .btn:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
 }
 
 /* Общие оговорки обновления -- один раз над списком; на карточке -- метка. */
 .park-notes {
   margin-bottom: var(--sp-2);
-}
-
-.park-tag {
-  margin: var(--sp-1) 0 0;
-  font-size: var(--fs-xs);
-  color: var(--dim);
 }
 
 .park-result {
@@ -3468,6 +3438,8 @@ body {
   font-size: var(--fs-xs);
 }
 
+/* Классы .park-add и .park-selfhosted больше не на кнопках (v0.50: входы --
+   .park-entries); правило держим ради порядка стилей и тестов CSS. */
 .park-add {
   margin-top: var(--sp-3);
 }
@@ -4786,4 +4758,155 @@ body {
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--sig);
+}
+
+/* Переключатель роутера в шапке (v0.50): имя кнопкой «Дача ▾». Длинный ник
+   режется многоточием, а не раздвигает шапку за край 360 px. */
+.router-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--sp-2) 0 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.router-switch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.router-switch svg {
+  flex: none;
+  color: var(--dim);
+}
+
+/* Лист выбора: поиск над вариантами, вариант -- имя слева, пилюля справа. */
+.sheet-search {
+  width: 100%;
+  min-height: 44px;
+}
+
+.sheet-choice {
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: 0;
+  text-align: left;
+}
+
+.sheet-choice-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-choice-current {
+  border-color: var(--sig);
+}
+
+/* Свёртка (v0.50): заголовок и итог -- строкой-кнопкой, стрелка -- сама. */
+.fold > .fold-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  min-height: 44px;
+  padding: var(--sp-2) 0;
+  list-style: none;
+  cursor: pointer;
+}
+
+.fold > .fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > .fold-summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--dim);
+}
+
+.fold[open] > .fold-summary::after {
+  content: "▾";
+}
+
+.fold-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.fold-note {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+
+/* Заголовок слоя -- один (v0.50, общие правила): когда в теле есть H1,
+   полоса сверху несёт только «‹ назад». Слои без своего H1 («Починка»,
+   кабинет, мастер сайта) оставляют заголовок в полосе. */
+.overlay:has(.overlay-back):has(.overlay-body .screen-title) .overlay-title {
+  display: none;
+}
+
+/* Парк (v0.50): входы наверх, карточки роутеров -- отдельными карточками. */
+.park-entries {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.nav-card-quiet {
+  background: var(--surf);
+  border-color: var(--line);
+  color: var(--ink);
+  white-space: normal;
+  line-height: var(--lh-tight);
+}
+
+.park-cards {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.park-card-line {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.park-more-body {
+  margin-top: var(--sp-2);
+}
+
+.park-warnings {
+  margin-bottom: var(--sp-2);
+}
+
+@media (min-width: 1100px) {
+  .park-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Заголовок QR -- обычным регистром (спека п. 2.7). */
+.awg3-qr-title {
+  margin: var(--sp-5) 0 var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-transform: none;
+  color: var(--ink);
 }

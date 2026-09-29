@@ -110,7 +110,7 @@ describe('пятая вкладка', () => {
   it('шапка телефона без шестерёнки', async () => {
     const root = await mount(<Header fleetVisible onFleet={() => {}} />)
     expect(root.querySelector('.app-header-gear')).toBe(null)
-    expect(root.textContent).toContain('Мои роутеры')
+    expect(root.textContent).toContain('Все роутеры')
     cleanup(root)
   })
 })

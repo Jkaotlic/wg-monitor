@@ -2,6 +2,9 @@ import { useContext, useEffect, useRef, useState } from 'preact/hooks'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
+import { Fold } from '../ui/Fold.jsx'
+import { NavCard } from '../ui/NavCard.jsx'
+import { Chip } from '../ui/Chip.jsx'
 import {
   fetchFleet,
   createWebLink,
@@ -25,7 +28,9 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 import {
   backendRow,
   cardWarning,
-  fleetHeadline,
+  EMPTY_PARK,
+  parkCardLine,
+  warningFoldTitle,
   fleetWarningNotes,
   fleetRouterRows,
   notifyGapLines,
@@ -116,6 +121,15 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   // лист к этому моменту уже закрыт, а человек должен увидеть, чем кончилось.
   const [notice, setNotice] = useState('')
   const [fleetResult, setFleetResult] = useState(null)
+  // «Ещё ▸» на карточке -- по роутеру: раскрытие одной не трогает другие.
+  const [moreOpen, setMoreOpen] = useState(() => new Set())
+  const toggleMore = (id) =>
+    setMoreOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   // Массовая проверка -- одна на экран: две одновременно смешали бы счёт
   // ответивших, а роутеру пришли бы две команды подряд.
@@ -464,7 +478,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
     )
   }
 
-  const rows = fleet ? fleetRouterRows(fleet) : []
+  const rows = fleet ? fleetRouterRows(fleet, routers) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : null
   const backend = fleet ? backendRow(fleet) : null
@@ -486,14 +500,10 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
         <p class="state">Загрузка…</p>
       ) : (
         <>
-          <p class="router-lastseen">{fleetHeadline(fleet)}</p>
           {fleetError && <p class="state state-error">{fleetError}</p>}
 
           <div class="card card-rows park-backend">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
-            {/* Сторож -- рядом с бэкендом: это его процесс, и «молчат N»
-                читается как ответ на «кто сейчас не на связи», а не как
-                сноска под списком. */}
             {watchdog && (
               <div class={`park-watchdog park-watchdog-${watchdog.tone}`}>
                 <p class="park-watchdog-line">Сторож: {watchdog.text}</p>
@@ -508,7 +518,6 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 </button>
               </div>
             )}
-            {/* Только в браузере: в Telegram адреса /dashboard/ нет. */}
             {mode === 'web' && (
               <a class="park-rescue" href="/dashboard/rescue/">
                 Аварийная страница
@@ -516,27 +525,56 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
             )}
           </div>
 
-          {/* Действия над всем парком -- до списка: они про всех сразу. */}
+          {/* Входы наверх (v0.50, спека п. 2.1): свои серверы и новый роутер --
+              под сводкой, а не в хвосте экрана. Нейтральные плитки: лайм
+              остаётся у «Обновить всех отставших». */}
+          {openLayer && (
+            <div class="park-entries">
+              <NavCard quiet title="Свои VPN-серверы" onClick={() => openLayer('selfhosted')} />
+              <NavCard quiet title="Добавить роутер" onClick={() => openLayer('provision')} />
+            </div>
+          )}
+
+          {/* Массовые действия -- сеткой 2×2 одной высоты (спека п. 2.5). */}
           <Section title="Все роутеры сразу">
-            {/* Опрос всех -- самое безобидное из массовых: роутер переспросит
-                себя сам. У админа он живёт здесь; у владельца нескольких
-                роутеров остаётся под «Моими роутерами» (FleetOverlay). */}
-            {routers.length > 1 && (
-              <>
-                <button type="button" class="btn btn-ghost btn-wide" disabled={recheck.batch?.running} onClick={recheck.recheckAll}>
+            <div class="action-row park-batch">
+              {behind > 0 && (
+                <button type="button" class="btn btn-primary" onClick={askUpdateAll}>
+                  Обновить всех отставших ({behind})
+                </button>
+              )}
+              {routers.length > 1 && (
+                <button type="button" class="btn btn-ghost" disabled={recheck.batch?.running} onClick={recheck.recheckAll}>
                   {recheck.batch?.running ? 'Опрашиваем…' : 'Опросить все'}
                 </button>
-                <p class="hint">
-                  {batchProgress(recheck.batch) ||
-                    'Каждый роутер переспросит себя сам. Ничего не меняет; спящие ответят, когда проснутся.'}
-                </p>
-              </>
-            )}
-            {behind > 0 && (
-              <button type="button" class="btn btn-primary btn-wide" onClick={askUpdateAll}>
-                Обновить всех отставших ({behind})
-              </button>
-            )}
+              )}
+              {['doctor', 'audit'].map((kind) => (
+                <button key={kind} type="button" class="btn btn-ghost" disabled={Boolean(batch?.running)} onClick={() => runBatch(kind)}>
+                  {batch?.running && batch.kind === kind ? BATCH[kind].busy : BATCH[kind].idle}
+                </button>
+              ))}
+            </div>
+            <p class="hint">
+              {batchProgress(recheck.batch) ||
+                (batch?.running
+                  ? batchProgressLine(batch)
+                  : 'Опрос, осмотр и сверка версий ничего не меняют; выключенные и спящие пропускаются.')}
+            </p>
+            {batch && !batch.running && (() => {
+              const summary = batchSummary(batch)
+              return (
+                <div class="park-result">
+                  <p class="hint">
+                    <b>{summary.headline}</b>
+                  </p>
+                  {summary.lines.map((line) => (
+                    <p class="hint" key={line.id}>
+                      <Quoted text={line.text} />
+                    </p>
+                  ))}
+                </div>
+              )
+            })()}
             {fleetResult && (
               <div class="park-result">
                 <p class="hint">
@@ -554,170 +592,127 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 <Quoted text={notice} />
               </p>
             )}
-
-            <div class="action-row park-batch">
-              {['doctor', 'audit'].map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  class="btn btn-ghost"
-                  disabled={Boolean(batch?.running)}
-                  onClick={() => runBatch(kind)}
-                >
-                  {batch?.running && batch.kind === kind ? BATCH[kind].busy : BATCH[kind].idle}
-                </button>
-              ))}
-            </div>
-            {batch?.running ? (
-              <p class="hint">{batchProgressLine(batch)}</p>
-            ) : batch ? (
-              (() => {
-                const summary = batchSummary(batch)
-                return (
-                  <div class="park-result">
-                    <p class="hint">
-                      <b>{summary.headline}</b>
-                    </p>
-                    {summary.lines.map((line) => (
-                      <p class="hint" key={line.id}>
-                        <Quoted text={line.text} />
-                      </p>
-                    ))}
-                  </div>
-                )
-              })()
-            ) : (
-              <p class="hint">
-                Осмотр и сверка версий на каждом роутере на связи. Ничего не меняют; выключенные и
-                спящие пропускаются.
-              </p>
-            )}
-
           </Section>
 
           <Section title={`Роутеры · ${rows.length}`}>
             {reviveOff && <p class="hint">{reviveOff}</p>}
+            {/* Оговорки к обновлению -- одной свёрнутой строкой над списком
+                (спека п. 2.4); метки на карточках больше нет. */}
             {warningNotes.length > 0 && (
-              <div class="park-notes">
-                {warningNotes.map((n) => (
-                  <p class="hint" key={n.text}>
-                    Оговорка к обновлению: {n.text}. Касается: {n.names.join(', ')}.
-                  </p>
-                ))}
-              </div>
+              <Fold class="park-warnings" title={warningFoldTitle(warningNotes.length)}>
+                <div class="park-notes">
+                  {warningNotes.map((n) => (
+                    <p class="hint" key={n.text}>
+                      Оговорка к обновлению: {n.text}. Касается: {n.names.join(', ')}.
+                    </p>
+                  ))}
+                </div>
+              </Fold>
             )}
+            {rows.length === 0 && <p class="state">{EMPTY_PARK}</p>}
             {rows.length > 0 && (
-              <div class="card card-rows">
+              <div class="park-cards">
                 {rows.map((row) => {
                   const rv = revives.get(row.id)
                   const saved = savedPasswordLine(row.router)
                   const blocked = autoReviveBlockedLine(row.router)
                   const warn = cardWarning(row)
+                  const open = moreOpen.has(row.id)
+                  const canOpen = Boolean(onOpenRouter) && row.id !== currentID
                   return (
-                  <div class="park-row" key={row.id}>
-                    <DataRow title={row.name} value={row.state} valueSub={row.sub} />
-                    <div class="park-row-controls">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={row.notify.on ? 'true' : 'false'}
-                        class="park-switch"
-                        disabled={notifyBusy.has(row.id)}
-                        onClick={() => toggleNotify(row.router)}
-                      >
-                        <span class="park-switch-track" aria-hidden="true">
-                          <span class="park-switch-thumb" />
-                        </span>
-                        <span>уведомлять меня</span>
-                      </button>
-                    </div>
-                    {row.notify.note && <p class="hint">{row.notify.note}</p>}
-                    {notifyError.has(row.id) && <p class="state state-error">{notifyError.get(row.id)}</p>}
-                    {(row.versions || row.hint) && (
-                      <p class="hint">{[row.versions, row.hint].filter(Boolean).join(' · ')}</p>
-                    )}
-                    {row.update.text && (
-                      <p class={`park-update park-update-${row.update.tone}`}>
-                        <Quoted text={row.update.text} />
+                    <div class="card park-row" key={row.id}>
+                      {/* Имя и та же пилюля, что в «Мои роутеры» (спека п. 2.4). */}
+                      <DataRow title={row.name} value={<Chip tone={row.pill.tone}>{row.pill.text}</Chip>} />
+                      <p class="park-card-line">
+                        <Quoted text={parkCardLine(row)} />
                       </p>
-                    )}
-                    {/* Переустановка идёт через терминал панели: без её адреса
-                        сервер откажет, поэтому вместо кнопки -- где его задать. */}
-                    {reinstallNeedsPanel(row.router) && <p class="hint">{PANEL_ADDRESS_MISSING}</p>}
-                    {routerDelayLines(row.router).map((line) => (
-                      <p key={line.key} class={`park-update park-delay park-update-${line.tone}`}>
-                        {line.text}
-                      </p>
-                    ))}
-                    {/* Не только рядом с кнопкой «Обновить»: у слишком старого
-                        агента (B6) canUpdate=false -- self_update ему
-                        недоступен вовсе, но именно поэтому предупреждение
-                        обязано быть видно, а не пропадать вместе с кнопкой. */}
-                    {/* Общие оговорки сказаны один раз над списком (v0.48) --
-                        здесь метка; «слишком старый» остаётся строкой. */}
-                    {warn.text && <p class="hint">Оговорка: {warn.text}</p>}
-                    {warn.tagged && <p class="park-tag">есть оговорка к обновлению — над списком</p>}
-                    {/* «оживление:» -- рядом стоит строка обновления, и одинокое
-                        «ожил» или «срок истёк» читалось бы как про обновление. */}
-                    {rv.text && (
-                      <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
-                    )}
-                    {/* Авто-оживление давно не обновлявшихся (v0.45): чего ему
-                        не хватает -- говорит сервер; ручная кнопка ниже та же. */}
-                    {blocked && <p class="hint">{blocked}</p>}
-                    {saved && <p class="hint">{saved.text}</p>}
-                    {/* Переход на роутер -- главное действие строки, во всю
-                        ширину; остальные -- сеткой по две (.park-actions). */}
-                    {onOpenRouter && row.id !== currentID && (
-                      <button type="button" class="btn btn-ghost park-open" onClick={() => onOpenRouter(row.id)}>
-                        Открыть роутер
-                      </button>
-                    )}
-                    {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || saved?.canForget || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
-                      <div class="park-actions">
-                        {row.update.canUpdate && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
-                            Обновить агент
+                      <div class="action-row action-row-pair park-card-actions">
+                        {canOpen && (
+                          <button type="button" class="btn btn-ghost park-open" onClick={() => onOpenRouter(row.id)}>
+                            Открыть роутер
                           </button>
                         )}
-                        {canPickVersion(row.router) && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askOtherVersion(row.router)}>
-                            Другая версия…
+                        <button type="button" class="btn btn-ghost park-more" aria-expanded={open ? 'true' : 'false'} onClick={() => toggleMore(row.id)}>
+                          {open ? 'Скрыть ▾' : 'Ещё ▸'}
+                        </button>
+                      </div>
+                      {/* Всё остальное -- по «Ещё ▸». В DOM всегда (hidden), чтобы
+                          состояние листов и занятость переключателя не терялись. */}
+                      <div class="park-more-body" hidden={!open}>
+                        <div class="park-row-controls">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={row.notify.on ? 'true' : 'false'}
+                            class="park-switch"
+                            disabled={notifyBusy.has(row.id)}
+                            onClick={() => toggleNotify(row.router)}
+                          >
+                            <span class="park-switch-track" aria-hidden="true">
+                              <span class="park-switch-thumb" />
+                            </span>
+                            <span>уведомлять меня</span>
                           </button>
-                        )}
-                        {row.update.canCancel && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askCancel(row.router)}>
-                            Отменить обновление
-                          </button>
-                        )}
-                        {reinstallNeedsPanel(row.router) && onOpenConnection && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => onOpenConnection(row.id)}>
-                            Подключение агента
-                          </button>
-                        )}
-                        {reinstallAllowed(row.router) && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askReinstall(row.router)}>
-                            Переустановить агент
-                          </button>
-                        )}
-                        {rv.canRevive && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askRevive(row.router)}>
-                            Оживить агент
-                          </button>
-                        )}
-                        {rv.canCancel && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askReviveCancel(row.router)}>
-                            Отменить оживление
-                          </button>
-                        )}
-                        {saved?.canForget && (
-                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askForgetPassword(row.router)}>
-                            Забыть пароль
-                          </button>
+                        </div>
+                        {row.notify.note && <p class="hint">{row.notify.note}</p>}
+                        {notifyError.has(row.id) && <p class="state state-error">{notifyError.get(row.id)}</p>}
+                        {(row.versions || row.hint) && <p class="hint">{[row.versions, row.hint].filter(Boolean).join(' · ')}</p>}
+                        {reinstallNeedsPanel(row.router) && <p class="hint">{PANEL_ADDRESS_MISSING}</p>}
+                        {routerDelayLines(row.router).map((line) => (
+                          <p key={line.key} class={`park-update park-delay park-update-${line.tone}`}>
+                            {line.text}
+                          </p>
+                        ))}
+                        {warn.text && <p class="hint">Оговорка: {warn.text}</p>}
+                        {rv.text && <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>}
+                        {blocked && <p class="hint">{blocked}</p>}
+                        {saved && <p class="hint">{saved.text}</p>}
+                        {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || saved?.canForget || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
+                          <div class="action-row park-actions">
+                            {row.update.canUpdate && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askUpdate(row.router)}>
+                                Обновить агент
+                              </button>
+                            )}
+                            {canPickVersion(row.router) && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askOtherVersion(row.router)}>
+                                Другая версия…
+                              </button>
+                            )}
+                            {row.update.canCancel && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askCancel(row.router)}>
+                                Отменить обновление
+                              </button>
+                            )}
+                            {reinstallNeedsPanel(row.router) && onOpenConnection && (
+                              <button type="button" class="btn btn-ghost" onClick={() => onOpenConnection(row.id)}>
+                                Подключение агента
+                              </button>
+                            )}
+                            {reinstallAllowed(row.router) && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askReinstall(row.router)}>
+                                Переустановить агент
+                              </button>
+                            )}
+                            {rv.canRevive && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askRevive(row.router)}>
+                                Оживить агент
+                              </button>
+                            )}
+                            {rv.canCancel && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askReviveCancel(row.router)}>
+                                Отменить оживление
+                              </button>
+                            )}
+                            {saved?.canForget && (
+                              <button type="button" class="btn btn-ghost" onClick={() => askForgetPassword(row.router)}>
+                                Забыть пароль
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
-                    )}
-                  </div>
+                    </div>
                   )
                 })}
               </div>
@@ -733,43 +728,22 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 ))}
               </>
             )}
-
           </Section>
 
-          {/* Реже нужное -- в конце: новый роутер, свои серверы, вход из браузера. */}
-          <Section>
-            {/* Новый роутер: мастер -- слой парка, открывается с возвратом сюда. */}
-            {openLayer && (
-              <button type="button" class="btn btn-ghost btn-wide park-add" onClick={() => openLayer('provision')}>
-                Добавить роутер
+          {/* Вход из браузера -- реже нужное, в конце. В браузере он бессмыслен. */}
+          {mode !== 'web' && (
+            <Section>
+              <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
+                {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}
               </button>
-            )}
-
-            {/* Свои VPN-серверы -- общие для всего парка, поэтому живут здесь,
-                а не в кабинете роутера; оттуда с них только выпускают. */}
-            {openLayer && (
-              <button type="button" class="btn btn-ghost btn-wide park-selfhosted" onClick={() => openLayer('selfhosted')}>
-                Свои VPN-серверы
-              </button>
-            )}
-
-            {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
-                здесь. Классического веб-управления больше нет (цикл 3); запасной
-                вход -- аварийная страница из карточки бэкенда. */}
-            {mode !== 'web' && (
-              <>
-                <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
-                  {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}
-                </button>
-                {linkLines.map((line) => (
-                  <p class="hint" key={line}>
-                    {line}
-                  </p>
-                ))}
-                {linkError && <p class="state state-error">{linkError}</p>}
-              </>
-            )}
-          </Section>
+              {linkLines.map((line) => (
+                <p class="hint" key={line}>
+                  {line}
+                </p>
+              ))}
+              {linkError && <p class="state state-error">{linkError}</p>}
+            </Section>
+          )}
         </>
       )}
     </div>

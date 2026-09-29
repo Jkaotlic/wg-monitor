@@ -156,6 +156,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             backLabel={returnLabel(returnTo)}
             openSheet={openSheet}
             onClose={() => dispatch({ type: 'overlay', overlay: returnTo ?? 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
+            onOpenRouterTunnels={(id) => dispatch({ type: 'router', id, tab: 'tunnels' })}
             onEdit={(id) => dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: id, returnTo: 'awg3panel', returnParams: params } })}
           />
         )

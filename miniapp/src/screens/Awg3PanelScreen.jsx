@@ -17,29 +17,22 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { SegmentTabs } from '../ui/SegmentTabs.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
-import { ListRow } from '../ui/ListRow.jsx'
 import { Pill } from '../ui/Pill.jsx'
 import { Quoted } from '../ui/Q.jsx'
-import { TextField } from '../ui/FormField.jsx'
 
 // Экран awg3-панели: интерфейсы вкладками, сводка, пиры и два выпуска.
 // Панель спрашивается только здесь -- при открытии, переключении интерфейса,
 // «Повторить» и после выпуска; сервер склеивает запросы и держит ответ 30 с.
 // QR -- только в состоянии экрана (data:-адрес): не в навигации, не в
 // хранилище браузера, уходит вместе с экраном.
-export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои серверы', openSheet, onClose, onEdit }) {
+export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои серверы', openSheet, onClose, onEdit, onOpenRouterTunnels }) {
   const [page, setPage] = useState(null)
   const [banner, setBanner] = useState(null)
   const [loading, setLoading] = useState(true)
   const [readonly, setReadonly] = useState(false)
-  const [mode, setMode] = useState('')
-  const [deviceName, setDeviceName] = useState('')
-  const [deviceBusy, setDeviceBusy] = useState(false)
-  const [deviceError, setDeviceError] = useState('')
   const [qr, setQr] = useState(null)
   const [routerOutcome, setRouterOutcome] = useState(null)
   const alive = useRef(true)
-  const busy = useRef(false)
   const seq = useRef(0)
 
   useEffect(
@@ -77,56 +70,94 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
 
   function switchIface(id) {
     if (id === iface) return
-    setMode('')
     setQr(null)
     setRouterOutcome(null)
     load(id)
   }
 
-  function toggleMode(next) {
-    setMode((cur) => (cur === next ? '' : next))
-    setDeviceError('')
-    setRouterOutcome(null)
+  // «Конфиг на устройство» -- листом (v0.50, спека п. 2.7): лайм только у
+  // «Выпустить» внутри. Имя живёт в поле листа (keep -- переживает отказ
+  // сервера). Два нажатия в одном кадре -- один запрос: второй получает тот же
+  // ответ.
+  function askDevice() {
+    let pending = null
+    openSheet(
+      localSheet({
+        title: AWG3_TEXTS.device,
+        body: AWG3_TEXTS.deviceHint,
+        buttonLabel: AWG3_TEXTS.deviceIssue,
+        busyLabel: AWG3_TEXTS.deviceBusy,
+        fields: [
+          {
+            name: 'name',
+            label: AWG3_TEXTS.deviceName,
+            placeholder: AWG3_TEXTS.devicePlaceholder,
+            keep: true,
+            hint: (v) => (v.name ? deviceNameProblem(v.name) : ''),
+          },
+        ],
+        fieldsReady: (v) => !deviceNameProblem(v.name),
+        errorText: (err) => {
+          if (err?.code === 'awg3_readonly' && alive.current) setReadonly(true)
+          return awg3ErrorText(err)
+        },
+        perform: (_typed, values) => {
+          if (!pending) {
+            if (alive.current) setQr(null)
+            pending = issueAwg3Device(panelId, iface, String(values.name ?? '').trim()).finally(() => {
+              pending = null
+            })
+          }
+          return pending
+        },
+        onDone: (resp) => {
+          if (!alive.current || !resp) return
+          setQr({ src: `data:image/png;base64,${resp.qr_png_base64}`, name: resp.name, dm: dmText(resp.dm) })
+          load(iface)
+        },
+      }),
+    )
   }
 
-  function issueDevice(e) {
-    e?.preventDefault()
-    // Замок до перерисовки: второе нажатие в том же кадре не выпускает второго пира.
-    if (busy.current) return
-    const problem = deviceNameProblem(deviceName)
-    if (problem) {
-      setDeviceError(problem)
-      return
-    }
-    busy.current = true
-    setDeviceBusy(true)
-    setDeviceError('')
-    setQr(null)
-    issueAwg3Device(panelId, iface, deviceName.trim())
-      .then((resp) => {
-        if (!alive.current) return
-        setQr({ src: `data:image/png;base64,${resp.qr_png_base64}`, name: resp.name, dm: dmText(resp.dm) })
-        setDeviceName('')
-        setMode('')
-        load(iface)
-      })
-      .catch((err) => {
-        if (!alive.current) return
-        if (err?.code === 'awg3_readonly') {
-          setReadonly(true)
-          setMode('')
-        }
-        setDeviceError(awg3ErrorText(err))
-      })
-      .finally(() => {
-        busy.current = false
-        if (alive.current) setDeviceBusy(false)
-      })
+  // «Выпустить на роутер» -- листом с выбором роутера; после итога --
+  // переход на его VPN-туннели.
+  function askRouter() {
+    const pick = routerPickRows(routers, page?.peers)
+    let chosen = null
+    openSheet(
+      localSheet({
+        title: AWG3_TEXTS.router,
+        body: AWG3_TEXTS.routerHint,
+        buttonLabel: AWG3_TEXTS.deviceIssue,
+        busyLabel: AWG3_TEXTS.deviceBusy,
+        fields: [
+          {
+            name: 'router',
+            type: 'select',
+            label: AWG3_TEXTS.routerPick,
+            keep: true,
+            options: [{ value: '', label: 'Выберите роутер' }, ...pick.map((r) => ({ value: String(r.id), label: r.title }))],
+            hint: (v) => pick.find((r) => String(r.id) === v.router)?.sub ?? '',
+          },
+        ],
+        fieldsReady: (v) => Boolean(v.router),
+        errorText: (err) => {
+          if (err?.code === 'awg3_readonly' && alive.current) setReadonly(true)
+          return awg3ErrorText(err)
+        },
+        perform: (_typed, values) => {
+          chosen = pick.find((r) => String(r.id) === values.router) ?? null
+          return issueAwg3ToRouter(chosen.id, panelId, iface)
+        },
+        onDone: (resp) => {
+          if (chosen) followRouter(chosen, resp)
+        },
+      }),
+    )
   }
 
   async function followRouter(row, resp) {
     if (!alive.current || !resp?.cmd_id) return
-    setMode('')
     setRouterOutcome({ tone: 'warn', text: AWG3_TEXTS.routerWaiting })
     const router = routers.find((r) => r.id === row.id)
     let res = null
@@ -136,31 +167,16 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
       res = null
     }
     if (!alive.current) return
-    setRouterOutcome(
-      commandOutcome(res, {
+    setRouterOutcome({
+      ...commandOutcome(res, {
         ok: `Конфиг встал на «${row.title}» VPN-туннелем «${resp.tunnel_name}».`,
         fail: 'Роутер не принял конфиг',
         pending: 'Конфиг выпущен, но роутер пока не подтвердил импорт. Загляните в его VPN-туннели позже.',
       }),
-    )
+      routerID: row.id,
+      routerName: row.title,
+    })
     load(iface)
-  }
-
-  function pickRouter(row) {
-    openSheet(
-      localSheet({
-        title: `Выпустить на «${row.title}»?`,
-        body: AWG3_TEXTS.routerHint,
-        buttonLabel: 'Выпустить',
-        busyLabel: 'Выпускаем…',
-        errorText: (err) => {
-          if (err?.code === 'awg3_readonly' && alive.current) setReadonly(true)
-          return awg3ErrorText(err)
-        },
-        perform: () => issueAwg3ToRouter(row.id, panelId, iface),
-        onDone: (resp) => followRouter(row, resp),
-      }),
-    )
   }
 
   const title = page?.panel ? `Панель «${page.panel.label || page.panel.id}»` : 'Панель'
@@ -240,46 +256,14 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
               iface && (
                 <Section>
                   <div class="awg3-actions action-row">
-                    <button type="button" class={`btn ${mode === 'device' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => toggleMode('device')}>
+                    <button type="button" class="btn btn-ghost" onClick={askDevice}>
                       {AWG3_TEXTS.device}
                     </button>
-                    <button type="button" class={`btn ${mode === 'router' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => toggleMode('router')}>
+                    <button type="button" class="btn btn-ghost" disabled={pick.length === 0} onClick={askRouter}>
                       {AWG3_TEXTS.router}
                     </button>
                   </div>
-                  {mode === 'device' && (
-                    <form class="card form-group awg3-device" onSubmit={issueDevice} autocomplete="off" noValidate>
-                      <p class="field-hint">{AWG3_TEXTS.deviceHint}</p>
-                      <TextField
-                        id="a3-device-name"
-                        label={AWG3_TEXTS.deviceName}
-                        value={deviceName}
-                        placeholder={AWG3_TEXTS.devicePlaceholder}
-                        error={deviceError}
-                        onInput={(v) => {
-                          setDeviceName(v)
-                          setDeviceError('')
-                        }}
-                      />
-                      <button type="submit" class="btn btn-primary btn-wide" disabled={deviceBusy}>
-                        {deviceBusy ? AWG3_TEXTS.deviceBusy : AWG3_TEXTS.deviceIssue}
-                      </button>
-                    </form>
-                  )}
-                  {mode === 'router' && (
-                    <>
-                      <p class="field-hint">{AWG3_TEXTS.routerHint}</p>
-                      {pick.length === 0 ? (
-                        <p class="state">{AWG3_TEXTS.routerNone}</p>
-                      ) : (
-                        <ul class="card list-reset settings-card awg3-routers" aria-label={AWG3_TEXTS.routerPick}>
-                          {pick.map((r) => (
-                            <ListRow key={r.id} title={r.title} sub={r.sub} onClick={() => pickRouter(r)} />
-                          ))}
-                        </ul>
-                      )}
-                    </>
-                  )}
+                  {pick.length === 0 && <p class="hint">{AWG3_TEXTS.routerNone}</p>}
                 </Section>
               )
             )}
@@ -288,6 +272,11 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                 <Quoted text={routerOutcome.text} />
               </p>
             )}
+            {routerOutcome?.routerID != null && onOpenRouterTunnels && (
+              <button type="button" class="btn btn-ghost btn-wide awg3-open-tunnels" onClick={() => onOpenRouterTunnels(routerOutcome.routerID)}>
+                <Quoted text={`Открыть VPN-туннели «${routerOutcome.routerName}»`} />
+              </button>
+            )}
           </>
         )}
         {/* Ревью раунд 3 (finding 4): QR -- ВНЕ ветки banner/page. После
@@ -295,7 +284,10 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
             если этот автоповтор упадёт, банер раньше подменял всю ветку
             выше целиком, и единственная копия QR пропадала с экрана. */}
         {qr && (
-          <Section title={`QR «${qr.name}»`}>
+          <section class="section">
+            <h2 class="awg3-qr-title">
+              <Quoted text={`QR-код «${qr.name}»`} />
+            </h2>
             <div class="card awg3-qr-card">
               <img class="awg3-qr" src={qr.src} alt={AWG3_TEXTS.qrAlt} />
               <p class="field-hint">{AWG3_TEXTS.qrNote}</p>
@@ -303,7 +295,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                 {qr.dm}
               </p>
             </div>
-          </Section>
+          </section>
         )}
         {onEdit && (
           <button type="button" class={`btn ${banner?.fix ? 'btn-primary' : 'btn-ghost'} btn-wide awg3-settings`} onClick={() => onEdit(panelId)}>

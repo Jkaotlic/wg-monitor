@@ -58,7 +58,7 @@ describe('MINI-01: молчащий роутер с тревогой не выг
   })
   it('строка списка: пилюля про молчание, не «тревога»', () => {
     const row = fleetRow(SILENT_ALERT)
-    expect(row.pill.text).toContain('нет ответа')
+    expect(row.pill.text).toContain('молчит')
     expect(fleetRow(LIVE_ALERT).pill.text).toBe('тревога')
   })
   it('сводка широкого экрана считает его молчащим', () => {
@@ -118,7 +118,7 @@ describe('reach от сервера -- один источник для подп
     expect(pill).toMatch(/^спит/)
     expect(filterBucket(MOBILE_SLEEPING_ALERT)).toBe('sleeping')
     const off = { ...SILENT_ALERT, reach: 'offline' }
-    expect(fleetRow(off).pill.text).toMatch(/^нет ответа/)
+    expect(fleetRow(off).pill.text).toMatch(/^молчит/)
     expect(filterBucket(off)).toBe('silent')
   })
   it('без reach: мобильная молчащая тревога -- «спит» и в фильтре «спят»', () => {

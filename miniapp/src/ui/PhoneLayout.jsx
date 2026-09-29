@@ -1,4 +1,5 @@
-import { barTabs, fleetIsHome } from '../nav.js'
+import { barTabs, fleetIsHome, PARK_TAB } from '../nav.js'
+import { routerSwitchSheet } from '../fleet.js'
 import { Header } from './Header.jsx'
 import { TabBar } from './TabBar.jsx'
 import { SheetHost } from './Sheet.jsx'
@@ -22,9 +23,17 @@ export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout, refresh
   // Без роутера у админа активна та из двух, что на экране: список (крышка)
   // или Парк.
   const active = nav.routerID == null && isAdmin ? (home ? 'fleet' : nav.tab) : nav.tab
+  // Переключатель в шапке -- когда открыт роутер вкладки роутера и есть из
+  // кого выбирать (v0.50). На «Парке» роутер не показан -- и выбирать нечего.
+  const current = routers.find((r) => r.id === nav.routerID) ?? null
+  const canSwitch = Boolean(current) && routers.length > 1 && nav.tab !== PARK_TAB && !home
+  const openSwitch = () =>
+    dispatch({ type: 'sheet', sheet: routerSwitchSheet(routers, current.id, (id) => dispatch({ type: 'router', id, keepTab: true })) })
   return (
     <>
       <Header
+        router={canSwitch ? current : null}
+        onSwitch={openSwitch}
         fleetVisible={routers.length > 1 || Boolean(isAdmin)}
         onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })}
         onLogout={onLogout}

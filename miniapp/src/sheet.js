@@ -36,9 +36,11 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 // choices -- лист выбора вместо «точно?»: несколько кнопок-вариантов
 // столбиком ([{ value, label, danger }]), нажатие сразу выполняет perform с
 // выбранным value третьим аргументом. Так «Не беспокоить…» в карточке
-// тревоги прячет пять вариантов за одной кнопкой.
-export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', confirmStrict = false, errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '', choices = [] }) {
-  return { title, body, buttonLabel, danger, confirmPhrase, confirmStrict, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, choices, args: {} }
+// тревоги прячет пять вариантов за одной кнопкой. search -- поле поиска над
+// вариантами (выбор роутера из шапки при > 6 роутерах); вариант может нести
+// pill: { tone, text } и current: true.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', confirmStrict = false, errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '', choices = [], search = false }) {
+  return { title, body, buttonLabel, danger, confirmPhrase, confirmStrict, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, choices, search, args: {} }
 }
 
 export function initialFieldValues(fields) {

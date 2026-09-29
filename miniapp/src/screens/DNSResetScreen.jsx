@@ -108,7 +108,8 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   return (
     <Overlay title="Сброс DNS" backLabel="Управление" onBack={onClose}>
       <div class="screen">
-        <h1 class="screen-title">{routerName || 'Роутер'}</h1>
+        <h1 class="screen-title">Сброс DNS</h1>
+        {routerName && <p class="router-lastseen">{routerName}</p>}
         {loadError && <p class="state state-error">{loadError}</p>}
         {settings && settings.role !== 'admin' && <p class="hint">{T.adminOnly}</p>}
         {settings && settings.role === 'admin' && !available && (

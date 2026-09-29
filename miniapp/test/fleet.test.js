@@ -54,7 +54,7 @@ describe('fleetRow', () => {
 
   it('молчащий роутер называет, сколько молчит', () => {
     const row = fleetRow({ id: 1, nickname: 'Офис', status: 'offline', last_seen_age_sec: 7200 })
-    expect(row.pill).toEqual({ tone: 'danger', text: 'нет ответа 2 ч' })
+    expect(row.pill).toEqual({ tone: 'danger', text: 'молчит 2 ч' })
   })
 
   it('роутер, не отвечавший ни разу, не выдумывает возраст', () => {
