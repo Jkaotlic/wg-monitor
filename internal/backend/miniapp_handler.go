@@ -96,6 +96,13 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/toggle", reqID(auth(miniappSelfHostedToggleHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/selfhosted/{inst}", reqID(auth(miniappSelfHostedDeleteHandler(d))))
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/check", reqID(auth(miniappSelfHostedCheckHandler(d))))
+	// awg3-панели оператора (v0.49): только админ, гейт внутри обработчиков.
+	mux.Handle("GET /v1/miniapp/awg3panels", reqID(auth(miniappAwg3ListHandler(d))))
+	mux.Handle("POST /v1/miniapp/awg3panels", reqID(auth(miniappAwg3CreateHandler(d))))
+	mux.Handle("PUT /v1/miniapp/awg3panels/{panel}", reqID(auth(miniappAwg3UpdateHandler(d))))
+	mux.Handle("DELETE /v1/miniapp/awg3panels/{panel}", reqID(auth(miniappAwg3DeleteHandler(d))))
+	mux.Handle("GET /v1/miniapp/awg3panels/{panel}/peers", reqID(auth(miniappAwg3PeersHandler(d))))
+	mux.Handle("POST /v1/miniapp/awg3panels/{panel}/device", reqID(auth(miniappAwg3DeviceHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStartHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStatusHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStartHandler(d))))

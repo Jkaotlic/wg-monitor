@@ -255,6 +255,7 @@ type cabinetEnv struct {
 	logs    *bytes.Buffer
 	docs    *fakeDocSender
 	vps     *fakeSelfHosted
+	awg3    *fakeAwg3
 }
 
 func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
@@ -272,6 +273,7 @@ func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
 		logs:    &bytes.Buffer{},
 		docs:    &fakeDocSender{},
 		vps:     &fakeSelfHosted{},
+		awg3:    &fakeAwg3{},
 	}
 	deps := Deps{
 		DB:                  d,
@@ -282,6 +284,7 @@ func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
 		VPNCabinet:          env.cab,
 		VPNCabinetKeys:      env.keys,
 		SelfHosted:          env.vps,
+		Awg3Panels:          env.awg3,
 		MiniappDocs:         env.docs,
 	}
 	for _, m := range mods {

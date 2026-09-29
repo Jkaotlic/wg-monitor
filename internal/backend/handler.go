@@ -350,6 +350,9 @@ type Deps struct {
 	VPNCabinetKeys VPNCabinetKeys
 	// SelfHosted -- свои VPN-серверы (selfhostedamnezia.Service). nil -- 503.
 	SelfHosted SelfHostedVPS
+	// Awg3Panels -- awg3-панели оператора на его VPS (awg3panel.Service,
+	// цикл v0.49). nil -- маршруты /v1/miniapp/awg3panels отвечают 503.
+	Awg3Panels Awg3Panels
 	// MiniappDocs -- .conf документом в личку нажавшему (*tg.Client). nil -- 503.
 	MiniappDocs MiniappDocSender
 	// TelegramBotToken and TelegramAdminUserID enable /v1/miniapp/* endpoints
