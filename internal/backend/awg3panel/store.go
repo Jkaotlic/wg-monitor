@@ -26,6 +26,9 @@ const (
 	LockNone        Lock = ""
 	LockBadPassword Lock = "bad_password"
 	LockCert        Lock = "cert_rejected"
+	// LockServerCert -- наш клиент не смог проверить сертификат панели
+	// (отдельно от LockCert -- панель отвергла наш сертификат).
+	LockServerCert Lock = "server_cert_rejected"
 )
 
 // Instance -- одна панель. Password, CertPEM, KeyPEM -- секреты: из пакета
@@ -105,6 +108,13 @@ func SaveStore(path string, st Store) error {
 	if _, err := tmp.Write(append(body, '\n')); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("запись файла панелей: %w", err)
+	}
+	// Sync перед переименованием: без него при отвале питания после rename
+	// на диске может оказаться пустой или обрезанный файл (данные ещё в
+	// буфере ОС) -- секреты панелей теряются молча.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("синхронизация файла панелей: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("запись файла панелей: %w", err)

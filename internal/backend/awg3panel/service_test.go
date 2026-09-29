@@ -461,3 +461,172 @@ func TestTunnelName(t *testing.T) {
 		}
 	}
 }
+
+// TestIssueDeviceInvalidatesPageCache -- страница «Пиры» открыта, кэш тёплый,
+// админ выпускает устройство: следующее открытие ТОЙ ЖЕ страницы без сдвига
+// часов (кэш 30 с ещё не истёк) должно увидеть новый пир, а не отдать
+// протухшую копию из кэша.
+func TestIssueDeviceInvalidatesPageCache(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Peers: map[string][]awg3paneltest.Peer{"awg1": {{ID: "aaaaaaaaaaa1", Name: "iphone", Enabled: true}}}})
+	e.create(t, "main")
+	ctx := context.Background()
+	if page, err := e.s.Peers(ctx, "main", "awg1"); err != nil || len(page.Peers) != 1 {
+		t.Fatalf("прогрев кэша: %+v %v", page, err)
+	}
+	e.p.ResetHits()
+	if _, err := e.s.IssueDevice(ctx, "main", "awg1", "laptop"); err != nil {
+		t.Fatalf("выпуск устройства: %v", err)
+	}
+	page, err := e.s.Peers(ctx, "main", "awg1")
+	if err != nil {
+		t.Fatalf("после выпуска: %v", err)
+	}
+	if len(page.Peers) != 2 {
+		t.Fatalf("новый пир не виден без сброса кэша страницы: %d пиров", len(page.Peers))
+	}
+	// IssueDevice сам сходил за списком (проверка имени) -- один GET; если бы
+	// кэш страницы не сбросился, второго GET после выпуска не было бы.
+	if got := e.p.Hits("GET /api/ifaces/awg1/peers"); got != 2 {
+		t.Fatalf("страница не перечитана после выпуска устройства: %d GET .../peers, ждали 2", got)
+	}
+}
+
+// TestConfigForRouterInvalidatesPageCacheOnNewPeer -- то же самое для роутера,
+// когда пира «wgmon-…» ещё не было и панель выпустила новый.
+func TestConfigForRouterInvalidatesPageCacheOnNewPeer(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Peers: map[string][]awg3paneltest.Peer{"awg1": {{ID: "aaaaaaaaaaa1", Name: "iphone", Enabled: true}}}})
+	e.create(t, "main")
+	ctx := context.Background()
+	if page, err := e.s.Peers(ctx, "main", "awg1"); err != nil || len(page.Peers) != 1 {
+		t.Fatalf("прогрев кэша: %+v %v", page, err)
+	}
+	e.p.ResetHits()
+	rc, err := e.s.ConfigForRouter(ctx, "main", "awg1", "router-owned")
+	if err != nil || rc.Reused {
+		t.Fatalf("выпуск нового пира роутера: %+v %v", rc, err)
+	}
+	page, err := e.s.Peers(ctx, "main", "awg1")
+	if err != nil {
+		t.Fatalf("после выпуска: %v", err)
+	}
+	if len(page.Peers) != 2 {
+		t.Fatalf("новый пир роутера не виден без сброса кэша страницы: %d пиров", len(page.Peers))
+	}
+	if got := e.p.Hits("GET /api/ifaces/awg1/peers"); got != 2 {
+		t.Fatalf("страница не перечитана после выпуска пира роутера: %d GET .../peers, ждали 2", got)
+	}
+}
+
+// TestIssueDeviceSurvivesCallerCancelDuringPost -- ушедший вызывающий (закрытая
+// вкладка мини-аппа) не должен превращать успешный выпуск в ошибку: панель уже
+// начала создавать пира, когда родительский ctx отменяется.
+func TestIssueDeviceSurvivesCallerCancelDuringPost(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	e.p.SetOverride(func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return false
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		issued Issued
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		issued, err := e.s.IssueDevice(ctx, "main", "awg1", "iphone-anex")
+		done <- result{issued, err}
+	}()
+	<-started
+	cancel()
+	close(release)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("ушедший вызывающий не должен ронять выпуск: %v", res.err)
+	}
+	if res.issued.ID == "" || res.issued.QRPNGBase64 == "" {
+		t.Fatalf("нет выпущенного пира: %+v", res.issued)
+	}
+	if got := len(e.p.PeerList("awg1")); got != 1 {
+		t.Fatalf("пиров на панели: %d, ждали 1", got)
+	}
+}
+
+// TestConfigForRouterSurvivesCallerCancelDuringPost -- та же гарантия для
+// выпуска конфига роутера.
+func TestConfigForRouterSurvivesCallerCancelDuringPost(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	e.p.SetOverride(func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return false
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct {
+		rc  RouterConfig
+		err error
+	}, 1)
+	go func() {
+		rc, err := e.s.ConfigForRouter(ctx, "main", "awg1", "router-owned")
+		done <- struct {
+			rc  RouterConfig
+			err error
+		}{rc, err}
+	}()
+	<-started
+	cancel()
+	close(release)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("ушедший вызывающий не должен ронять выпуск: %v", res.err)
+	}
+	if res.rc.PeerID == "" || res.rc.Reused {
+		t.Fatalf("нет выпущенного пира роутера: %+v", res.rc)
+	}
+	if got := len(e.p.PeerList("awg1")); got != 1 {
+		t.Fatalf("пиров на панели: %d, ждали 1", got)
+	}
+}
+
+// TestServerCertUntrustedLocksWithDistinctMessage -- когда НАШ клиент не
+// доверяет сертификату ПАНЕЛИ (в отличие от TestCertRejectedLocks, где панель
+// отвергает наш клиентский сертификат), сообщение и класс должны это различать:
+// не «загрузите .p12 заново» (это не про наш сертификат), а «проверьте адрес и
+// сертификат на сервере».
+func TestServerCertUntrustedLocksWithDistinctMessage(t *testing.T) {
+	p := startPanel(t, awg3paneltest.Options{})
+	path := filepath.Join(t.TempDir(), DefaultStoreName)
+	// RootCAs не заданы -- системные корни, тестовый CA панели туда не входит.
+	s := NewService(path, Options{})
+	pfx, err := p.CA.P12("anex", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour), "p12-pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := Input{ID: "main", Label: "Main", BaseURL: p.URL, User: "admin", Password: testPanelPass, P12: pfx, P12Password: "p12-pw"}
+	_, res, err := s.Create(context.Background(), in)
+	if err != nil || res.Kind != KindServerCert {
+		t.Fatalf("проверка: %+v %v", res, err)
+	}
+	h := p.Handshakes()
+	if _, err := s.Peers(context.Background(), "main", ""); KindOf(err) != KindServerCert || !strings.Contains(err.Error(), "проверьте адрес") {
+		t.Fatalf("экран: %v", err)
+	}
+	if p.Handshakes() != h {
+		t.Fatal("после отказа сертификата панели бот снова стучится в панель")
+	}
+	if views, _ := s.List(); views[0].Lock != LockServerCert {
+		t.Fatalf("замок: %+v", views[0])
+	}
+}

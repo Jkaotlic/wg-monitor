@@ -1,9 +1,14 @@
 package awg3panel
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -159,13 +164,80 @@ func TestClientCertFromForeignCA(t *testing.T) {
 	}
 }
 
+// TestClientUntrustedServerCert -- НАШ клиент не может проверить сертификат
+// ПАНЕЛИ (чужой CA). Это KindServerCert, а не KindCert: дело не в нашем .p12,
+// а в адресе или сертификате сервера -- сообщение должно быть другим.
 func TestClientUntrustedServerCert(t *testing.T) {
 	p := startPanel(t, awg3paneltest.Options{})
 	certPEM, keyPEM, _ := p.CA.ClientPEM("anex")
 	// RootCAs nil -- системные корни, тестового CA среди них нет.
 	c, _ := NewClient(Credentials{BaseURL: p.URL, User: "admin", Password: testPanelPass, CertPEM: certPEM, KeyPEM: keyPEM}, ClientOptions{})
 	_, err := c.Ifaces(context.Background())
+	wantKind(t, err, KindServerCert)
+	if strings.Contains(err.Error(), ".p12") {
+		t.Fatalf("сообщение про сертификат панели не должно звать пересохранить .p12: %v", err)
+	}
+}
+
+// TestClientNoCertIsRejectedAsClientCert -- панель требует клиентский
+// сертификат (RequireAndVerifyClientCert); если мы его не предъявили,
+// панель шлёт TLS-алерт нам, а не наоборот -- это KindCert («загрузите .p12
+// заново»), а не KindServerCert.
+func TestClientNoCertIsRejectedAsClientCert(t *testing.T) {
+	p := startPanel(t, awg3paneltest.Options{})
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.CA.Pool},
+	}
+	c := &Client{base: p.URL, user: "admin", pass: testPanelPass, hc: &http.Client{Transport: tr, Timeout: 5 * time.Second}}
+	_, err := c.Ifaces(context.Background())
 	wantKind(t, err, KindCert)
+	if strings.Contains(err.Error(), "проверьте адрес") {
+		t.Fatalf("сообщение не должно звать проверить сертификат сервера: %v", err)
+	}
+}
+
+// TestClassifyTransportTLSKinds -- прямая таблица классов TLS-отказов:
+// панель отвергла наш сертификат (несколько форм алерта) -> KindCert; мы не
+// смогли проверить сертификат панели -> KindServerCert; временный сбой TLS
+// («internal error») -- НЕ класс сертификата вовсе, предохранитель не должен
+// взводиться -- KindUnreachable.
+func TestClassifyTransportTLSKinds(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		kind Kind
+	}{
+		{"панель: bad certificate", errors.New("remote error: tls: bad certificate"), KindCert},
+		{"панель: certificate required", errors.New("remote error: tls: certificate required"), KindCert},
+		{"панель: unknown certificate authority", errors.New("remote error: tls: unknown certificate authority"), KindCert},
+		{"панель: certificate expired", errors.New("remote error: tls: expired certificate"), KindCert},
+		{"временный: internal error", errors.New("remote error: tls: internal error"), KindUnreachable},
+		{"мы: неизвестный CA панели", x509.UnknownAuthorityError{}, KindServerCert},
+		{"мы: не то имя хоста", x509.HostnameError{Certificate: &x509.Certificate{}, Host: "x"}, KindServerCert},
+		{"мы: сертификат панели истёк", x509.CertificateInvalidError{Cert: &x509.Certificate{}, Reason: x509.Expired}, KindServerCert},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := classifyTransport(tc.err)
+			if KindOf(err) != tc.kind {
+				t.Fatalf("%v: класс = %q, ждали %q", err, KindOf(err), tc.kind)
+			}
+		})
+	}
+}
+
+// TestClientPrintsNothingSecret -- *Client хранит пароль в поле pass; без
+// String/GoString/LogValue печать структуры (в лог, в отладочный вывод)
+// выдаёт его через рефлексию, как и у Credentials.
+func TestClientPrintsNothingSecret(t *testing.T) {
+	p := startPanel(t, awg3paneltest.Options{})
+	c := clientFor(t, p, testPanelPass, 0)
+	var logs bytes.Buffer
+	slog.New(slog.NewTextHandler(&logs, nil)).Info("x", "client", c)
+	out := fmt.Sprintf("%v %+v %#v %s", c, c, c, logs.String())
+	if strings.Contains(out, testPanelPass) {
+		t.Fatalf("печать клиента выдала пароль: %s", out)
+	}
 }
 
 func TestClientHTMLFromProxy(t *testing.T) {

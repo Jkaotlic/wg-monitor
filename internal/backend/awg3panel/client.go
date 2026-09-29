@@ -51,6 +51,10 @@ type Client struct {
 	hc   *http.Client
 }
 
+func (*Client) String() string       { return hiddenValue }
+func (*Client) GoString() string     { return hiddenValue }
+func (*Client) LogValue() slog.Value { return slog.StringValue(hiddenValue) }
+
 func NewClient(c Credentials, o ClientOptions) (*Client, error) {
 	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(c.BaseURL), "/"))
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -180,8 +184,15 @@ func panelErrorText(body []byte, fallback string) string {
 }
 
 func classifyTransport(err error) error {
-	if isTLSError(err) {
-		return &Error{Kind: KindCert, Msg: "сертификат не принят", cause: err}
+	switch {
+	case isServerCertUntrusted(err):
+		// Наш клиент не смог проверить сертификат ПАНЕЛИ -- дело не в нашем
+		// .p12, а в адресе или сертификате сервера.
+		return &Error{Kind: KindServerCert, Msg: "сертификат панели не прошёл проверку — проверьте адрес и сертификат на сервере", cause: err}
+	case isClientCertRejected(err):
+		// Панель прислала нам TLS-алерт: она отвергла наш клиентский
+		// сертификат.
+		return &Error{Kind: KindCert, Msg: "сертификат не принят — загрузите .p12 заново", cause: err}
 	}
 	var ue *url.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ue) && ue.Timeout()) {
@@ -190,19 +201,37 @@ func classifyTransport(err error) error {
 	return &Error{Kind: KindUnreachable, Msg: "панель недоступна", cause: err}
 }
 
-// isTLSError -- отказ на TLS: сервер не принял наш сертификат (алерт
-// «remote error: tls: …» -- certificate required / bad certificate / unknown
-// authority, сверено на Go 1.27 29.09) или сертификат сервера не прошёл
-// проверку.
-func isTLSError(err error) bool {
+// isServerCertUntrusted -- НАШ клиент не смог проверить сертификат ПАНЕЛИ:
+// чужой CA, истёк, не то имя хоста. Это отказ на нашей стороне верификации,
+// до какого-либо TLS-алерта от сервера.
+func isServerCertUntrusted(err error) bool {
 	var cv *tls.CertificateVerificationError
 	var ua x509.UnknownAuthorityError
 	var he x509.HostnameError
 	var ci x509.CertificateInvalidError
-	if errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) {
-		return true
+	return errors.As(err, &cv) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci)
+}
+
+// isClientCertRejected -- ПАНЕЛЬ прислала нам TLS-алерт, отвергающий наш
+// клиентский сертификат (bad_certificate / certificate_required /
+// unknown_ca / истёк / не поддерживается, сверено на Go 1.27 29.09).
+// Алерт «internal error» -- временный сбой TLS на стороне панели, не про
+// сертификат вовсе: он НЕ входит сюда и уходит в KindUnreachable ниже --
+// предохранитель по нему взводиться не должен.
+func isClientCertRejected(err error) bool {
+	msg := err.Error()
+	if !strings.Contains(msg, "remote error: tls:") {
+		return false
 	}
-	return strings.Contains(err.Error(), "remote error: tls:")
+	for _, s := range []string{
+		"bad certificate", "certificate required", "unknown certificate authority",
+		"certificate unknown", "expired certificate", "unsupported certificate",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeJSON(r reply, dst any) error {

@@ -411,6 +411,8 @@ func (s *Service) ready(id string) (Instance, *Client, error) {
 		return Instance{}, nil, &Error{Kind: KindBadPassword, Msg: "панель не приняла логин или пароль — пересохраните учётные данные"}
 	case LockCert:
 		return Instance{}, nil, &Error{Kind: KindCert, Msg: "сертификат не принят — загрузите .p12 заново"}
+	case LockServerCert:
+		return Instance{}, nil, &Error{Kind: KindServerCert, Msg: "сертификат панели не прошёл проверку — проверьте адрес и сертификат на сервере"}
 	}
 	if s.opts.Now().Before(inst.PausedUntil) {
 		return Instance{}, nil, &Error{Kind: KindBanned, Until: inst.PausedUntil, Msg: "панель ограничила вход"}
@@ -449,6 +451,8 @@ func (s *Service) trip(id string, err error) error {
 		s.persist(id, func(i *Instance) { i.Lock = LockBadPassword })
 	case KindCert:
 		s.persist(id, func(i *Instance) { i.Lock = LockCert })
+	case KindServerCert:
+		s.persist(id, func(i *Instance) { i.Lock = LockServerCert })
 	case KindBanned:
 		until := s.opts.Now().Add(s.opts.Pause)
 		s.persist(id, func(i *Instance) { i.PausedUntil = until })
@@ -621,7 +625,10 @@ func (s *Service) IssueDevice(ctx context.Context, id, iface, name string) (Issu
 			return Issued{}, ErrNameTaken
 		}
 	}
-	issued, err := c.AddPeer(ctx, iface, name)
+	// WithoutCancel: ушедший вызывающий (закрытая вкладка) не должен превращать
+	// уже начатое создание пира на панели в ошибку -- получим и запомним
+	// результат, таймаут всё равно даёт клиент (10 с).
+	issued, err := c.AddPeer(context.WithoutCancel(ctx), iface, name)
 	if err != nil {
 		return Issued{}, notFoundAsIface(s.trip(id, err))
 	}
@@ -666,7 +673,9 @@ func (s *Service) ConfigForRouter(ctx context.Context, id, iface, nickname strin
 		}
 		// Пира удалили между списком и выдачей -- выпускаем новый.
 	}
-	issued, err := c.AddPeer(ctx, iface, name)
+	// WithoutCancel: см. IssueDevice -- ушедший вызывающий не должен ронять
+	// уже начатое создание пира.
+	issued, err := c.AddPeer(context.WithoutCancel(ctx), iface, name)
 	if err != nil {
 		return RouterConfig{}, notFoundAsIface(s.trip(id, err))
 	}

@@ -15,12 +15,17 @@ type Kind string
 const (
 	KindBadPassword Kind = "bad_password"  // 401: следующий запрос -- только после пересохранения
 	KindBanned      Kind = "paused"        // 429 или пауза предохранителя
-	KindCert        Kind = "cert_rejected" // TLS: сертификат не принят или сервер не прошёл проверку
-	KindUnreachable Kind = "unreachable"   // сеть, таймаут, 5xx
-	KindBadResponse Kind = "bad_response"  // не JSON, не та форма, редирект, 3xx/4xx прокси
-	KindReadonly    Kind = "readonly"      // сборка панели без мутаций
-	KindNotFound    Kind = "not_found"     // 404 JSON: интерфейс или пир
-	KindInvalid     Kind = "invalid"       // 400 JSON: панель отвергла ввод (имя)
+	KindCert        Kind = "cert_rejected" // TLS: панель отвергла НАШ клиентский сертификат
+	// KindServerCert -- НАШ клиент не смог проверить сертификат ПАНЕЛИ
+	// (чужой CA, истёк, не то имя хоста). Отдельно от KindCert: сообщение и
+	// действие админа разные -- дело не в .p12, а в адресе или сертификате
+	// сервера.
+	KindServerCert  Kind = "server_cert_rejected"
+	KindUnreachable Kind = "unreachable"  // сеть, таймаут, 5xx
+	KindBadResponse Kind = "bad_response" // не JSON, не та форма, редирект, 3xx/4xx прокси
+	KindReadonly    Kind = "readonly"     // сборка панели без мутаций
+	KindNotFound    Kind = "not_found"    // 404 JSON: интерфейс или пир
+	KindInvalid     Kind = "invalid"      // 400 JSON: панель отвергла ввод (имя)
 )
 
 // Error -- отказ панели словами. Msg не содержит ни пароля, ни тела ответа
