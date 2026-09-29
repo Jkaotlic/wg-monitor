@@ -4051,6 +4051,8 @@ body {
 @media (min-width: 1024px) {
   .wide-shell .manage-anchors {
     top: 0;
+    margin: 0 0 var(--sp-2);
+    padding: var(--sp-2) 0;
   }
 
   .wide-shell .manage-group,
