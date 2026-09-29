@@ -24,7 +24,9 @@ import { batchProgress } from '../fleet.js'
 import { useFleetRecheck } from '../useFleetRecheck.js'
 import {
   backendRow,
+  cardWarning,
   fleetHeadline,
+  fleetWarningNotes,
   fleetRouterRows,
   notifyGapLines,
   notifyMuteSheetText,
@@ -470,6 +472,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
   const revives = new Map(rows.map((row) => [row.id, reviveState(row.router, fleet)]))
   const reviveOff = fleet ? reviveNotConfiguredLine(fleet) : ''
+  const warningNotes = fleetWarningNotes(rows)
 
   return (
     <div class="park">
@@ -594,12 +597,22 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
 
           <Section title={`Роутеры · ${rows.length}`}>
             {reviveOff && <p class="hint">{reviveOff}</p>}
+            {warningNotes.length > 0 && (
+              <div class="park-notes">
+                {warningNotes.map((n) => (
+                  <p class="hint" key={n.text}>
+                    Оговорка к обновлению: {n.text}. Касается: {n.names.join(', ')}.
+                  </p>
+                ))}
+              </div>
+            )}
             {rows.length > 0 && (
               <div class="card card-rows">
                 {rows.map((row) => {
                   const rv = revives.get(row.id)
                   const saved = savedPasswordLine(row.router)
                   const blocked = autoReviveBlockedLine(row.router)
+                  const warn = cardWarning(row)
                   return (
                   <div class="park-row" key={row.id}>
                     <DataRow title={row.name} value={row.state} valueSub={row.sub} />
@@ -617,11 +630,6 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                         </span>
                         <span>уведомлять меня</span>
                       </button>
-                      {onOpenRouter && row.id !== currentID && (
-                        <button type="button" class="btn btn-ghost btn-row" onClick={() => onOpenRouter(row.id)}>
-                          Открыть роутер
-                        </button>
-                      )}
                     </div>
                     {row.notify.note && <p class="hint">{row.notify.note}</p>}
                     {notifyError.has(row.id) && <p class="state state-error">{notifyError.get(row.id)}</p>}
@@ -645,7 +653,10 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                         агента (B6) canUpdate=false -- self_update ему
                         недоступен вовсе, но именно поэтому предупреждение
                         обязано быть видно, а не пропадать вместе с кнопкой. */}
-                    {row.warning && <p class="hint">Оговорка: {row.warning}</p>}
+                    {/* Общие оговорки сказаны один раз над списком (v0.48) --
+                        здесь метка; «слишком старый» остаётся строкой. */}
+                    {warn.text && <p class="hint">Оговорка: {warn.text}</p>}
+                    {warn.tagged && <p class="park-tag">есть оговорка к обновлению — над списком</p>}
                     {/* «оживление:» -- рядом стоит строка обновления, и одинокое
                         «ожил» или «срок истёк» читалось бы как про обновление. */}
                     {rv.text && (
@@ -655,6 +666,13 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                         не хватает -- говорит сервер; ручная кнопка ниже та же. */}
                     {blocked && <p class="hint">{blocked}</p>}
                     {saved && <p class="hint">{saved.text}</p>}
+                    {/* Переход на роутер -- главное действие строки, во всю
+                        ширину; остальные -- сеткой по две (.park-actions). */}
+                    {onOpenRouter && row.id !== currentID && (
+                      <button type="button" class="btn btn-ghost park-open" onClick={() => onOpenRouter(row.id)}>
+                        Открыть роутер
+                      </button>
+                    )}
                     {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || saved?.canForget || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
                       <div class="park-actions">
                         {row.update.canUpdate && (

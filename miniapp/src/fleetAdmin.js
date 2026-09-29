@@ -164,3 +164,43 @@ export function withNotifyMuted(fleet, routerID, muted) {
     routers: (fleet.routers ?? []).map((r) => (r.id === routerID ? { ...r, notify_muted: muted } : r)),
   }
 }
+
+// --- Оговорки обновления агента (v0.48) --------------------------------------
+//
+// agent_update_warning -- фразы из короткого набора сервера
+// (agent_update_verdict.go), склеенные «; »: «старая проверка места…»,
+// «проверяет адрес загрузки…», «агент слишком старый…». Одна и та же фраза
+// под каждым из семи роутеров -- шум, поэтому Парк говорит её один раз над
+// списком и перечисляет, кого она касается; на карточке -- метка.
+//
+// «Агент слишком старый» -- не оговорка к обновлению, а причина, почему
+// кнопки «Обновить агент» у роутера нет вовсе (B6): она остаётся на его
+// карточке, иначе пропажа кнопки была бы необъяснима.
+const CARD_ONLY = 'агент слишком старый'
+
+function warningClauses(warning) {
+  return String(warning ?? '')
+    .split(';')
+    .map((part) => part.trim().replace(/[.\s]+$/, ''))
+    .filter(Boolean)
+}
+
+export function fleetWarningNotes(rows = []) {
+  const byText = new Map()
+  for (const row of rows) {
+    for (const text of warningClauses(row?.warning)) {
+      if (text.startsWith(CARD_ONLY)) continue
+      if (!byText.has(text)) byText.set(text, [])
+      byText.get(text).push(row.name)
+    }
+  }
+  return [...byText].map(([text, names]) => ({ text, names }))
+}
+
+export function cardWarning(row) {
+  const clauses = warningClauses(row?.warning)
+  return {
+    text: clauses.filter((t) => t.startsWith(CARD_ONLY)).join('; '),
+    tagged: clauses.some((t) => !t.startsWith(CARD_ONLY)),
+  }
+}

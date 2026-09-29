@@ -2780,11 +2780,45 @@ body {
   color: var(--sig);
 }
 
-.park-actions {
+/* Кнопки строки роутера: «Открыть роутер» -- во всю ширину, остальные --
+   сеткой по две равной ширины и высоты; нечётная последняя -- во всю
+   ширину. Раньше каждая была шириной своей подписи, и строка шла лесенкой. */
+.park-open {
   display: flex;
-  flex-wrap: wrap;
+  /* Кнопка сама по ширине подписи и в блоке не растягивается: ширина --
+     строка за вычетом полей строки (.park-row > …, по 14px). */
+  width: calc(100% - 28px);
+  margin-top: var(--sp-2);
+  min-height: 44px;
+}
+
+.park-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-2);
-  margin: var(--sp-2) 0;
+  margin: var(--sp-2) 0 0;
+}
+
+.park-actions .btn {
+  min-width: 0;
+  min-height: 44px;
+  white-space: normal;
+  line-height: var(--lh-tight);
+}
+
+.park-actions > .btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* Общие оговорки обновления -- один раз над списком; на карточке -- метка. */
+.park-notes {
+  margin-bottom: var(--sp-2);
+}
+
+.park-tag {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--dim);
 }
 
 .park-result {

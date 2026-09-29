@@ -182,7 +182,9 @@ describe('«Парк»: обновление агента', () => {
     mocks.updateReply = { queued: true, deferred: true, target_version: 'v0.33.0' }
     const { root, sheets } = await mountPark()
     const row = rowOf(root, 'office')
-    expect(row.textContent).toContain('Оговорка: проверяет адрес загрузки')
+    // v0.48: оговорка -- один раз над списком, на карточке -- метка.
+    expect(root.querySelector('.park-notes').textContent).toContain('проверяет адрес загрузки')
+    expect(row.querySelector('.park-tag')).toBeTruthy()
     await act(async () => buttons(row, 'Обновить агент')[0].click())
     expect(sheets).toHaveLength(1)
     expect(sheets[0].confirmPhrase).toBe('office')
@@ -404,6 +406,37 @@ describe('«Парк»: опросить все', () => {
     expect(poll).toBeGreaterThan(-1)
     expect(open).toBeGreaterThan(poll)
     expect(root.querySelectorAll('.fleet-count')).toHaveLength(3)
+    cleanup(root)
+  })
+})
+
+// v0.48: одна и та же оговорка под каждым роутером -- шум. Она говорится
+// один раз над списком с именами, на карточке -- короткая метка.
+describe('«Парк»: оговорки обновления агента', () => {
+  const SPACE = 'старая проверка места: нужно ≈10% раздела /opt свободно'
+  it('общая оговорка -- одна строка над списком со всеми именами, не под каждым', async () => {
+    reset()
+    mocks.fleet = {
+      ...FLEET,
+      routers: [
+        router({ id: 31, nickname: 'alpha', agent_version: 'v0.17.2', agent_behind: true, agent_update_warning: SPACE }),
+        router({ id: 32, nickname: 'beta', agent_version: 'v0.17.2', agent_behind: true, agent_update_warning: SPACE }),
+        router({ id: 33, nickname: 'gamma' }),
+      ],
+    }
+    const { root } = await mountPark()
+    const notes = root.querySelectorAll('.park-notes .hint')
+    expect(notes).toHaveLength(1)
+    expect(notes[0].textContent).toContain(SPACE)
+    expect(notes[0].textContent).toContain('alpha, beta')
+    expect(notes[0].textContent).not.toContain('gamma')
+    // Сама фраза в тексте экрана -- ровно один раз.
+    expect(root.textContent.split(SPACE)).toHaveLength(2)
+    expect(rowOf(root, 'alpha').querySelector('.park-tag')).toBeTruthy()
+    expect(rowOf(root, 'gamma').querySelector('.park-tag')).toBe(null)
+    // Список идёт после общей строки.
+    const list = root.querySelector('.park-row')
+    expect(notes[0].compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     cleanup(root)
   })
 })
