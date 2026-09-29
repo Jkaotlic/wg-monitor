@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { sendCommand, fetchCommandResult } from './api.js'
 import { asleepNote } from './maintenance.js'
+import { errorText } from './errorText.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -75,8 +76,9 @@ export function useCommand(routerID) {
       }
     } catch (err) {
       if (aliveRef.current) {
-        setError(err.message)
-        setErrorCode(err.code ?? null)
+        // Фраза для человека, а не «/routers/7/commands failed: 400» (v0.50).
+        setError(errorText(err))
+        setErrorCode(err?.code ?? null)
       }
     } finally {
       if (aliveRef.current) setBusy(false)

@@ -555,7 +555,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
               </p>
             )}
 
-            <div class="settings-actions park-batch">
+            <div class="action-row park-batch">
               {['doctor', 'audit'].map((kind) => (
                 <button
                   key={kind}

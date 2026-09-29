@@ -3,7 +3,9 @@ import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, 
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine, backupCopy } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy, deadReserveLine } from '../trafficPath.js'
+import { errorText } from '../errorText.js'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
 import { isStale } from '../staleness.js'
 import { Hero } from '../ui/Hero.jsx'
@@ -22,6 +24,7 @@ import { AppContext } from '../appContext.js'
 import {
   ACTION_LABELS,
   checkLabel,
+  tunnelOf,
   checkState as checkStateOf,
   workingTunnelCount,
   workingTunnelNote,
@@ -124,7 +127,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 
   return (
     <div class={wrapClass}>
-      <button class={btnClass} disabled={busy} onClick={handleClick}>
+      <button type="button" class={btnClass} disabled={busy} onClick={handleClick}>
         {busy ? (busyLabel ?? 'Выполняю…') : label}
       </button>
       {busy && <p class="state">Ждём ответа от роутера…</p>}
@@ -142,29 +145,32 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 // Повторять её объяснение слово в слово двумя блоками ниже -- это не
 // «подчеркнуть», а заставить прочитать одно и то же дважды и потерять время
 // в тот момент, когда его меньше всего.
-function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false }) {
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false, tunnels = [], primary = false }) {
   const [repairOpen, setRepairOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [history, setHistory] = useState(null)
   const [historyTruncated, setHistoryTruncated] = useState(false)
   const [historyError, setHistoryError] = useState(null)
 
+  function loadHistory() {
+    setHistoryError(null)
+    fetchIncidentHistory(routerID, incident.check_name)
+      .then((data) => {
+        setHistory(data.transitions ?? [])
+        setHistoryTruncated(!!data.truncated)
+      })
+      .catch((err) => setHistoryError(errorText(err)))
+  }
+
   function toggleHistory() {
     const next = !expanded
     setExpanded(next)
-    if (next && history == null) {
-      setHistoryError(null)
-      fetchIncidentHistory(routerID, incident.check_name)
-        .then((data) => {
-          setHistory(data.transitions ?? [])
-          setHistoryTruncated(!!data.truncated)
-        })
-        .catch((err) => setHistoryError(err.message))
-    }
+    if (next && history == null) loadHistory()
   }
 
   const suppressed = isSuppressed(incident)
-  const { what, why } = incidentCopy(incident.check_name)
+  const { what, why, code } = incidentCopy(incident.check_name, tunnels)
+  const lineName = tunnelOf(incident.check_name, tunnels)?.name || null
 
   // Лист «Не беспокоить»: выбор уходит на сервер, карточка обновляется его
   // ответом. Без листа (экран без оболочки) -- вариантов нет вовсе: пять
@@ -194,9 +200,12 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
   const tunnelID = incident.check_name.startsWith('tunnel_') ? incident.check_name.slice('tunnel_'.length) : null
 
   return (
-    <li class="card">
+    <li class="card incident-card">
       <div class="incident-head">
-        <span class="row-title">{what}</span>
+        <span class="row-title">
+          <Quoted text={what} />
+        </span>
+        {code && <u class="data-row-code">{code}</u>}
         {incident.hard_since && <span class="incident-since">с {formatDateTime(incident.hard_since)}</span>}
       </div>
 
@@ -206,37 +215,45 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           ack/mute only control whether this incident nags again, they never
           touch the router, so a muted tunnel incident must not lose the one
           button that can actually fix it. */}
-      {/* Починка и перезапуск -- пара одного размера (спека C2), акцент --
-          только у починки: она уводит трафик на резерв, перевыпускает конфиг и
-          возвращает VPN-туннель на место. Перезапуск -- ручной инструмент:
-          бесполезен, когда мертва удалённая сторона, полезен, когда подвис
-          сам туннель. */}
+      {/* Главная кнопка экрана -- «Починить» первой тревоги по VPN-туннелю:
+          лайм на всю ширину (v0.50, спека п. 1.2). У второй такой тревоги
+          она контурная -- лайм на экране один. Перезапуск и «Не
+          беспокоить…» -- пара ниже, одной высоты. */}
       {tunnelID && (
-        <div class="incident-pair">
-          <button class="btn btn-accent repair-open" onClick={() => setRepairOpen(true)}>
-            Починить
-          </button>
-          <CommandButton
-            routerID={routerID}
-            action="tunnel_restart"
-            args={{ tunnel_id: tunnelID }}
-            label={ACTION_LABELS.restartTunnel}
-            busyLabel="Перезапускаю…"
-            mutatingText={`Перезапустить ${checkLabel(incident.check_name)}? Связь через него на несколько секунд прервётся.`}
-            asleep={asleep}
-            wrapClass="restart-block"
-            btnClass="btn btn-ghost"
-            onDone={onDone}
-            openSheet={openSheet}
-            sheetTitle={ACTION_LABELS.restartTunnel}
-          />
+        <button type="button" class={`btn ${primary ? 'btn-primary' : 'btn-ghost'} btn-wide repair-open`} onClick={() => setRepairOpen(true)}>
+          Починить
+        </button>
+      )}
+      {(tunnelID || !suppressed) && (
+        <div class="action-row action-row-pair incident-actions-row">
+          {tunnelID && (
+            <CommandButton
+              routerID={routerID}
+              action="tunnel_restart"
+              args={{ tunnel_id: tunnelID }}
+              label={ACTION_LABELS.restartTunnel}
+              busyLabel="Перезапускаю…"
+              mutatingText={`Перезапустить ${checkLabel(incident.check_name, tunnels)}? Связь через него на несколько секунд прервётся.`}
+              asleep={asleep}
+              wrapClass="restart-block"
+              btnClass="btn btn-ghost"
+              onDone={onDone}
+              openSheet={openSheet}
+              sheetTitle={ACTION_LABELS.restartTunnel}
+            />
+          )}
+          {!suppressed && (
+            <button type="button" class="btn btn-ghost" onClick={askSilence}>
+              {ACTION_LABELS.silenceGroup}…
+            </button>
+          )}
         </div>
       )}
       {repairOpen && (
         <RepairScreen
           routerID={routerID}
           checkName={incident.check_name}
-          lineName={tunnelID}
+          lineName={lineName || tunnelID}
           onClose={() => {
             setRepairOpen(false)
             onDone?.()
@@ -244,26 +261,15 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
         />
       )}
 
-      {suppressed ? (
-        // Wording mirrors the backend's own confirmation lines for these two
-        // actions (alertaction.go's ApplyAck/ApplySilence/ApplyMute status
-        // strings, minus emoji and the admin/MSK footer this screen doesn't
-        // need) rather than the old bare "квитирован" -- acked and
-        // silenced/muted are indistinguishable here (both just set
-        // silenced_until; the incident carries no separate "was this a mute"
-        // flag), so the silenced branch uses ApplySilence's phrasing, which
-        // is honest for either origin.
-        <span class="badge badge-offline">
+      {/* Wording mirrors the backend's own confirmation lines (alertaction.go's
+          ApplyAck/ApplySilence): acked and silenced/muted are indistinguishable
+          here, so the silenced branch uses ApplySilence's phrasing. */}
+      {suppressed && (
+        <span class="badge badge-offline incident-quiet">
           {incident.acked
             ? 'Вижу проблему — напомним после восстановления'
             : `Уведомления скрыты до ${formatTime(incident.silenced_until)}`}
         </span>
-      ) : (
-        <div class="incident-actions">
-          <button class="btn btn-ghost" onClick={askSilence}>
-            {ACTION_LABELS.silenceGroup}…
-          </button>
-        </div>
       )}
 
       {/* История -- справка, а не действие: тихая ссылка, не кнопка. */}
@@ -273,7 +279,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
 
       {expanded && (
         <div class="incident-history">
-          {historyError && <p class="state state-error">{historyError}</p>}
+          <ErrorLine text={historyError} onRetry={loadHistory} />
           {historyError == null && history == null && <p class="state">Загрузка…</p>}
           {history != null && history.length === 0 && <p class="state">Нет событий за 24ч</p>}
           {history != null && history.length > 0 && (
@@ -500,7 +506,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
                   no mutation) -- this step only ever exists for the asleep gate, never
                   for a destructive confirm, so it stays primary rather than danger;
                   same reasoning as CommandButton's confirm button above. */}
-              <button class="btn btn-primary" onClick={dispatch}>
+              <button class="btn btn-ghost" onClick={dispatch}>
                 Да, выполнить
               </button>
               <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
@@ -509,7 +515,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
             </div>
           </div>
         ) : (
-          <button class="btn btn-primary compare-run" disabled={busy} onClick={handleClick}>
+          <button class="btn btn-ghost compare-run" disabled={busy} onClick={handleClick}>
             {/* Не "Повторить проверку": так называется опрос роутера в
                 быстрых действиях, а здесь запускаются два зонда наружу.
                 Одинаковые слова на кнопках, делающих разное, -- ловушка. */}
@@ -601,7 +607,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
       })
       .catch((err) => {
         if (my !== loadSeq.current) return
-        setError(err.message)
+        setError(errorText(err))
       })
   }
 
@@ -657,7 +663,15 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   const okCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
   const failingChecks = otherChecks.filter(isFailing)
 
-  if (router == null) return error ? <p class="state state-error">{error}</p> : <p class="state">Загрузка…</p>
+  if (router == null) {
+    return error ? (
+      <div class="screen">
+        <ErrorLine text={error} onRetry={loadData} />
+      </div>
+    ) : (
+      <p class="state">Загрузка…</p>
+    )
+  }
 
   // Say it before dispatching, not after a timeout: router.status already
   // distinguishes reachability from alerting (dashboard_handler.go:780-796),
@@ -683,6 +697,10 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
   // говорить про тот же несущий туннель, что и она.
   const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via })
+  // Запасной есть, но упал -- это не «запасного нет» (v0.50, спека п. 1.3).
+  // Когда шапка уже говорит о тревоге по VPN-туннелю, плитка молчит.
+  const deadReserve = backupLine ? null : deadReserveLine({ traffic, tunnels, incidents, via: path.via })
+  const heroCovers = Boolean(headline.check?.startsWith('tunnel_'))
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
@@ -715,11 +733,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
       )}
       {/* Обновление не удалось, а прошлые данные есть: экран остаётся, но
           говорит, что он не свежий (MINI-04). */}
-      {error && (
-        <p class="state state-error" role="status">
-          Не удалось обновить: {error}
-        </p>
-      )}
+      <ErrorLine text={error ? `Не удалось обновить: ${error}` : ''} onRetry={loadData} />
     </Hero>
   )
 
@@ -767,8 +781,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
 
   // Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не
   // было нигде, и человек узнавал ответ в момент падения.
-  const backup = backupCopy({ backupLine, carrierDown: path.tunnel === 'down' })
-  const backupBlock = (
+  const backup = backupCopy({ backupLine, carrierDown: path.tunnel === 'down', deadReserve, heroCovers })
+  const backupBlock = backup && (
     <div class="card row" style="margin-top:12px">
       <div>
         <div class="row-title">
@@ -799,6 +813,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     </button>
   )
 
+  const primaryCheck = incidents.find((i) => i.check_name.startsWith('tunnel_'))?.check_name
   const incidentsBlock =
     incidents.length > 0 ? (
       <section class="section">
@@ -809,11 +824,13 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
               key={inc.check_name}
               routerID={id}
               incident={inc}
-              whySuppressed={inc.check_name === headline.check && headline.tone === 'danger'}
+              whySuppressed={inc.check_name === headline.check}
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
               openSheet={openSheet}
+              tunnels={tunnels}
+              primary={inc.check_name === primaryCheck}
             />
           ))}
         </ul>
@@ -878,6 +895,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     ) : null
 
   if (!wide) {
+    // Порядок -- по срочности (v0.50, спека п. 1.1): при тревоге сразу под
+    // шапкой -- тревоги с «Починить», чтобы кнопка была в первом экране на
+    // 360 px; без тревоги incidentsBlock пуст, и порядок прежний.
     // Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
     // что сломано, потом куда идёт трафик, потом состояние туннелей, и
     // только затем действия. Тревога -- единственное, ради чего экран
@@ -885,10 +905,10 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     return (
       <div class="screen">
         {heroBlock}
+        {incidentsBlock}
         {maintBlock}
         {statsBlock}
         {backupBlock}
-        {incidentsBlock}
         {tunnelsNavBlock}
         {quickBlock}
         {compareBlock}

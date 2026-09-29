@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchAccess, addOperator, removeOperator, unbindOwner, setOwner } from '../api.js'
 import { localSheet } from '../sheet.js'
+import { errorText } from '../errorText.js'
 
 // Admin-only "Доступ" block on RouterDetail. Backend enforces admin
 // independently (see miniappRequireAdmin) -- this component is only ever
@@ -17,7 +18,7 @@ export function AccessSection({ routerID, openSheet }) {
   useEffect(() => {
     fetchAccess(routerID)
       .then(setAccess)
-      .catch((err) => setLoadError(err.message))
+      .catch((err) => setLoadError(errorText(err)))
   }, [routerID])
 
   function runMutation(call) {
@@ -25,7 +26,7 @@ export function AccessSection({ routerID, openSheet }) {
     setActionError(null)
     call()
       .then(setAccess)
-      .catch((err) => setActionError(err.message))
+      .catch((err) => setActionError(errorText(err)))
       .finally(() => setBusy(false))
   }
 
@@ -67,7 +68,7 @@ export function AccessSection({ routerID, openSheet }) {
         setAccess(data)
         setNewID('')
       })
-      .catch((err) => setActionError(err.message))
+      .catch((err) => setActionError(errorText(err)))
       .finally(() => setBusy(false))
   }
 
@@ -87,7 +88,7 @@ export function AccessSection({ routerID, openSheet }) {
         setActionError(
           err?.code === 'owner_exists'
             ? 'У роутера уже есть владелец — сначала отвяжите его.'
-            : err.message,
+            : errorText(err),
         ),
       )
       .finally(() => setBusy(false))

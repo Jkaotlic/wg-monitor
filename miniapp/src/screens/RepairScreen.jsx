@@ -3,6 +3,7 @@ import { fetchRepairStatus, startRepair } from '../api.js'
 import { repairView } from '../repair.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Quoted } from '../ui/Q.jsx'
+import { errorText } from '../errorText.js'
 
 // Экран починки VPN-туннеля.
 //
@@ -56,7 +57,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
           setPollError('')
         })
         .catch((e) => {
-          if (alive) setPollError(e?.message || 'сервер не ответил')
+          if (alive) setPollError(errorText(e))
         })
     }
     poll()
@@ -78,12 +79,12 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
         setJob(j)
         setOwnJobID(j?.job_id ?? '')
       })
-      .catch((e) => setError(e?.message || 'Починку начать не удалось.'))
+      .catch((e) => setError(errorText(e) || 'Починку начать не удалось.'))
       .finally(() => setStarting(false))
   }
 
   return (
-    <Overlay title="Починка" onClose={onClose}>
+    <Overlay title="Починка" onBack={onClose}>
       <div class="repair">
         <p class="repair-title">{view.title}</p>
         {running ? (
@@ -122,7 +123,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
         {pollError ? <p class="repair-error">Не удалось узнать ход починки: {pollError}</p> : null}
 
         {!running && !view.loading ? (
-          <button class="btn btn-accent repair-start" onClick={start} disabled={starting}>
+          <button class="btn btn-primary btn-wide repair-start" onClick={start} disabled={starting}>
             <Quoted text={starting ? 'Начинаю…' : view.done && view.scope === 'this' ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
           </button>
         ) : null}

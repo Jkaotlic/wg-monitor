@@ -44,7 +44,8 @@ describe('MINI-04', () => {
     document.body.appendChild(root)
     await mount(1, root)
     await flush()
-    expect(root.textContent).toContain('сервер не ответил')
+    // v0.50: ошибка словами (errorText), не err.message.
+    expect(root.textContent).toContain('Сервер не ответил')
     fail = false
     // Возврат к вкладке -- тот же повод перезагрузки, что и такт пульса.
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })

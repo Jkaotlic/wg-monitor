@@ -239,7 +239,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
             ) : (
               iface && (
                 <Section>
-                  <div class="awg3-actions settings-actions">
+                  <div class="awg3-actions action-row">
                     <button type="button" class={`btn ${mode === 'device' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => toggleMode('device')}>
                       {AWG3_TEXTS.device}
                     </button>

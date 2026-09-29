@@ -34,6 +34,7 @@ import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 import { HrneoBlock } from './HrneoBlock.jsx'
 import { NativeDNSSection } from './SignalSections.jsx'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -298,7 +299,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
       <p class="router-lastseen">Что отправлено в обход, а что идёт напрямую через провайдера.</p>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
-      {phase === 'error' && <p class="state state-error">{error}</p>}
+      {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={refresh} />}
       {phase === 'refused' && (
         <p class="state state-error">Роутер не отдал снимок маршрутизации: {result.output || result.status}</p>
       )}

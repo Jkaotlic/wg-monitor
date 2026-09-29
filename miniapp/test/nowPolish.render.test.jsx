@@ -102,14 +102,14 @@ describe('«Сейчас» без повторов', () => {
 })
 
 describe('карточка тревоги', () => {
-  it('«Починить» и «Перезапустить» -- пара, акцент один', async () => {
+  it('«Починить» -- лайм на всю ширину, «Перезапустить» -- в паре контурных', async () => {
     const { root } = await mount()
-    const pair = root.querySelector('.incident-pair')
-    const repair = buttons(pair, 'Починить')[0]
-    const restart = buttons(pair, 'Перезапустить VPN-туннель')[0]
-    expect(repair.classList.contains('btn-accent')).toBe(true)
-    expect(restart.classList.contains('btn-accent')).toBe(false)
+    const card = root.querySelector('.incident-card')
+    const repair = buttons(card, 'Починить')[0]
+    const restart = buttons(card.querySelector('.incident-actions-row'), 'Перезапустить VPN-туннель')[0]
+    expect(repair.classList.contains('btn-primary')).toBe(true)
     expect(restart.classList.contains('btn-primary')).toBe(false)
+    expect(restart.classList.contains('btn-ghost')).toBe(true)
     cleanup(root)
   })
 
@@ -117,7 +117,7 @@ describe('карточка тревоги', () => {
     mocks.silenced = []
     mocks.muted = []
     const { root, sheets } = await mount()
-    const card = root.querySelector('.incident-pair').closest('li')
+    const card = root.querySelector('.incident-card')
     expect(buttons(card, 'Час')).toHaveLength(0)
     await act(async () => buttons(card, 'Не беспокоить…')[0].click())
     expect(sheets).toHaveLength(1)

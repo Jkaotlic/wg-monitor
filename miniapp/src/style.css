@@ -78,8 +78,10 @@
   --fs-lg: 1.125rem;
   --fs-md: 0.9375rem;
   --fs-sm: 0.875rem;
-  --fs-xs: 0.6875rem;
-  --fs-xxs: 0.625rem;
+  --fs-xs: 0.75rem;
+  /* Машинные коды (awg10, check_direct, сырой ответ агента) -- 11 px; всё,
+     что человек читает, -- не мельче 12 px (v0.50). */
+  --fs-code: 0.6875rem;
 
   --lh-tight: 1.25;
   --lh-normal: 1.45;
@@ -468,25 +470,10 @@ body {
   color: var(--muted);
 }
 
-.incident-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.incident-actions-label {
-  flex-basis: 100%;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-
 /* ---------------- Async commands (Task 12) ----------------
    CommandButton's own two rules, in RouterDetail.jsx. The confirm step's
-   Yes/Cancel pair reuses the same flex-row shape as .incident-actions above
-   (it IS the same shape: a wrapping row of buttons) but gets its own class
-   rather than borrowing that incident-specific name into TrafficSection's
-   markup, which doesn't otherwise mention incidents at all. */
+   Yes/Cancel pair is a wrapping row of buttons with its own class,
+   TrafficSection's markup doesn't otherwise mention incidents at all. */
 .command-actions {
   display: flex;
   flex-wrap: wrap;
@@ -505,28 +492,6 @@ body {
 
 .incident-history-toggle {
   margin-top: var(--sp-3);
-}
-
-/* «Починить» и «Перезапустить VPN-туннель» -- пара одного размера (v0.41).
-   Обёртка перезапуска растворяется в ряду (display: contents): кнопка
-   встаёт второй, а строки хода команды -- на всю ширину под парой. Сам ряд
-   -- общее правило пар, у .settings-actions. */
-.incident-pair {
-  margin: var(--sp-3) 0;
-}
-
-.incident-pair .restart-block {
-  display: contents;
-}
-
-.incident-pair .btn {
-  min-width: 0;
-  margin: 0;
-}
-
-.incident-pair .state {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 /* Тихая ссылка: справка, а не действие («История за 24ч»). */
@@ -647,7 +612,7 @@ body {
    mono, the same convention the rest of the app marks readings with. */
 .tunnel-id {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-code);
   color: var(--muted);
 }
 
@@ -1556,7 +1521,7 @@ body {
   border-radius: var(--radius-sm);
   background: var(--surface);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-code);
   line-height: var(--lh-normal);
   color: var(--text);
   white-space: pre-wrap;
@@ -1686,7 +1651,7 @@ body {
 .stat-label {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
@@ -1711,7 +1676,7 @@ body {
 .stat-note {
   display: block;
   margin-top: 5px;
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   color: var(--dim);
 }
 
@@ -1796,7 +1761,7 @@ body {
 .data-row-code {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-code);
   letter-spacing: 0.05em;
   color: var(--dim);
   margin-top: 3px;
@@ -1821,7 +1786,7 @@ body {
 .data-row-value-sub {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   font-weight: 400;
   color: var(--dim);
   margin-top: 2px;
@@ -2142,7 +2107,7 @@ body {
    ширина времени ломает этот столбик на каждой второй строке. */
 .ev-time {
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   color: var(--dim);
   width: 36px;
   flex: none;
@@ -2161,7 +2126,7 @@ body {
   display: block;
   text-decoration: none;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-code);
   color: var(--dim);
   margin-top: 3px;
 }
@@ -2354,7 +2319,7 @@ body {
 
 /* Новость об обновлении -- столбиком: строка данных, текст новости, кнопка
    установки, пара «Отложить на неделю / Скрыть эту новость» (правило пар --
-   .settings-actions). Раньше это был .settings-row -- flex в одну линию без
+   .action-row). Раньше это был .settings-row -- flex в одну линию без
    переноса, и на 360 px пара уезжала за правый край (до 459 px). */
 .settings-news {
   display: flex;
@@ -2382,26 +2347,78 @@ body {
 /* Строка внутри группы «строка + предупреждение»: черта -- у группы. */
 .data-row-group > .settings-row { border-bottom: none; }
 
-/* Пара кнопок в строку («Осмотр роутера» / «Осмотр HydraRoute Neo»,
-   «Перезапустить HydraRoute» / «… awg-manager», «Починить» / «Перезапустить
-   VPN-туннель»). Кнопки одной высоты, а когда подписи в половине строки
-   тесно -- каждая встаёт на свою строку целиком: на 360 px подпись в две
-   строки делала пару разновысокой. Порог -- основа flex: две кнопки по
-   13,5rem встают рядом только там, где подпись помещается в одну строку. */
-.settings-actions,
-.incident-pair {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
+/* Ряд действий (v0.50) -- один на всё приложение. Кнопки равной ширины и
+   одной высоты, по две в ряд; когда половине ширины не хватает на подпись
+   в одну строку (13.5rem), -- столбиком. Сетка, а не flex: ячейки строки
+   тянутся до общей высоты сами. Нечётная последняя -- во всю ширину.
+   .action-row-pair -- всегда две колонки (пара тревоги: подпись может
+   переноситься, высота всё равно общая). Строки хода команды (.state) --
+   на всю ширину под кнопками. */
+.action-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(13.5rem, calc(50% - var(--sp-1)))), 1fr));
   gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
 }
 
-.settings-actions .btn,
-.incident-pair .btn {
-  flex: 1 1 13.5rem;
+.action-row-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.action-row > .btn,
+.action-row > .restart-block > .btn {
+  width: 100%;
+  min-width: 0;
   min-height: 44px;
+  margin: 0;
   white-space: normal;
   line-height: var(--lh-tight);
+}
+
+.action-row > .restart-block {
+  display: contents;
+}
+
+.action-row > .btn:last-child:nth-child(odd):not(:first-child),
+.action-row > :only-child,
+.action-row > .restart-block:only-child > .btn {
+  grid-column: 1 / -1;
+}
+
+.action-row .state,
+.action-row .hint {
+  grid-column: 1 / -1;
+  order: 1;
+  margin: 0;
+  padding: var(--sp-2) 0 0;
+}
+
+.incident-card .repair-open {
+  margin-top: var(--sp-2);
+}
+
+.incident-quiet {
+  display: inline-block;
+  margin-top: var(--sp-3);
+  white-space: normal;
+}
+
+/* Ошибка действия и «Повторить» рядом (v0.50). */
+.error-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+}
+
+.error-line .state {
+  padding: 0 var(--sp-4);
+}
+
+/* Схема в герое не прижата к нижнему краю карточки (v0.50, спека п. 1.5). */
+.hero .traffic-path {
+  margin-bottom: var(--sp-4);
 }
 
 /* ============================================================
@@ -3806,7 +3823,7 @@ body {
 }
 
 /* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,
-   что у .settings-actions (v0.48): одна высота, перенос на свою строку, а не
+   что у .action-row (v0.48): одна высота, перенос на свою строку, а не
    всегда столбиком. */
 .awg3-actions {
   margin: var(--sp-2) 0 0;
@@ -4454,10 +4471,6 @@ body {
 
   .wide-shell .restart-block > .btn {
     width: 100%;
-  }
-
-  .wide-shell .incident-pair .restart-block {
-    margin-top: 0;
   }
 
   /* Надзаголовок раздела и строка итога под ним (Парк): 4 px между ними,

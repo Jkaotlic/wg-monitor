@@ -20,6 +20,7 @@ import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
 import { TunnelScreen } from './TunnelScreen.jsx'
 import { ConfImportScreen } from './ConfImportScreen.jsx'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -210,7 +211,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       </div>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
-      {phase === 'error' && <p class="state state-error">{error}</p>}
+      {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}
       {phase === 'refused' && (
         <p class="state state-error">Роутер не отдал снимок: {result.output || result.status}</p>
       )}
@@ -303,7 +304,11 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           >
             {traffic.busy ? 'Считаем…' : 'Показать обмен'}
           </button>
-          {traffic.error && <p class="state state-error">{traffic.error}</p>}
+          <ErrorLine
+            text={traffic.error}
+            busy={traffic.busy}
+            onRetry={() => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)}
+          />
         </Section>
       )}
 

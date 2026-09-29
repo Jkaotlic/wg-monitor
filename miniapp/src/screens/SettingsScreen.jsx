@@ -284,7 +284,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
                     )}
                     {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
                     {mayHideNews && (
-                      <div class="settings-actions">
+                      <div class="action-row">
                         <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
                           Отложить на неделю
                         </button>
@@ -412,7 +412,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
         </Section>
 
         <Section title="Проверить роутер изнутри">
-          <div class="settings-actions">
+          <div class="action-row">
             <button type="button" class="btn btn-ghost" disabled={doctor.busy} onClick={() => doctor.run('router_doctor', {}, deadline)}>
               {doctor.busy ? 'Смотрим…' : 'Осмотр роутера'}
             </button>
@@ -477,7 +477,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
               </button>
             )}
             {!hrneoButtonVisible(versions) && <p class="hint">{MAINT_TEXTS.hrneoMissing}</p>}
-            <div class="settings-actions">
+            <div class="action-row">
               <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'hrneo', asleep }))}>
                 Перезапустить HydraRoute
               </button>
