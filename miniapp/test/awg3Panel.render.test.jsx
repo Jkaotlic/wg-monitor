@@ -264,13 +264,14 @@ describe('форма панели', () => {
     expect(root.querySelector('label[for="a3-p12"]')).toBeTruthy()
   })
 
-  // Правка 5 (ревью раунд 1): файл больше 100 КБ отклоняется в браузере, не
-  // читается и не уходит проверять readFileBase64.
-  it('.p12 больше 100 КБ -- отказ словами, файл не читается', async () => {
+  // Правка 5 (ревью раунд 1, сужено раундом 3 финального ревью): потолок
+  // сведён к бэкендовому 64 КБ (p12.go maxP12Size) -- отклоняется в
+  // браузере, не читается и не уходит проверять readFileBase64.
+  it('.p12 больше 64 КБ -- отказ словами, файл не читается', async () => {
     const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
-    await pickFile(root, 'big.p12', 100 * 1024 + 1)
+    await pickFile(root, 'big.p12', 64 * 1024 + 1)
     const field = root.querySelector('#a3-p12').closest('.field')
-    expect(field.textContent).toContain('Файл .p12 больше 100 КБ — это не похоже на сертификат.')
+    expect(field.textContent).toContain('Файл .p12 больше 64 КБ — это не похоже на сертификат.')
     expect(field.textContent).not.toContain('Выбран файл')
   })
 
@@ -335,7 +336,11 @@ describe('экран панели', () => {
     expect(peers[0].textContent).toContain('2 мин назад')
     expect(peers[0].textContent).not.toContain('handshake')
     expect(peers[0].textContent).toContain('↓ 1,5 КБ · ↑ 2,0 МБ')
-    expect(peers[0].textContent).toContain('роутер «home»')
+    // Ревью раунд 3 (finding 2): в тексте пилюли только ник, полная фраза --
+    // в title (проверяется отдельным тестом ниже), иначе фраза «роутер
+    // «nick»» вылезает за колонку на узком экране.
+    expect(peers[0].textContent).toContain('home')
+    expect(peers[0].textContent).not.toContain('роутер «home»')
     expect(peers[1].textContent).toContain('не подключался')
     expect(peers[0].querySelector('.data-row-dot-ok')).toBeTruthy()
     expect(peers[1].querySelector('.data-row-dot-muted')).toBeTruthy()
@@ -357,11 +362,14 @@ describe('экран панели', () => {
   // Ревью раунд 2: пилюля роутера обрезается многоточием в узкой колонке
   // (CSS, проверено измерением в песочнице), а полная фраза остаётся
   // доступной через title -- проверяем здесь структуру, не пиксели.
-  it('ярлык роутера у пира -- текст в .pill-text, полная фраза в title', async () => {
+  // Ревью раунд 3 (финальный, finding 2): полная фраза «роутер «nick»» в
+  // САМОМ тексте пилюли всё ещё вылезала за колонку на узком экране (360 px)
+  // -- в тексте остаётся только ник, слово «роутер» и ёлочки живут в title.
+  it('ярлык роутера у пира -- в .pill-text только ник, полная фраза в title', async () => {
     const { root } = await mountPanel()
     const tag = root.querySelector('.awg3-peer-tag .pill')
     expect(tag.getAttribute('title')).toBe('роутер «home»')
-    expect(tag.querySelector('.pill-text').textContent).toBe('роутер «home»')
+    expect(tag.querySelector('.pill-text').textContent).toBe('home')
   })
 
   it('состояния спеки: пароль, пауза ЧЧ:ММ, сертификат, недоступна с повтором', async () => {
@@ -468,5 +476,20 @@ describe('экран панели', () => {
     render(null, root)
     ;({ root } = await mountPanel())
     expect(root.querySelector('img.awg3-qr')).toBe(null)
+  })
+
+  // Ревью раунд 3 (финальный, finding 4): после успешного выпуска экран сам
+  // перечитывает страницу (load(iface)); если этот повтор упал, отказ
+  // раньше подменял ВСЮ страницу баннером, включая уже показанный QR --
+  // единственная копия секрета пропадала с экрана без вины админа. QR
+  // обязан пережить неудачный автоповтор.
+  it('QR переживает неудачный автоповтор чтения страницы после выпуска', async () => {
+    const { root } = await mountPanel()
+    await click(button(root, 'Конфиг на устройство'))
+    await fill(root, 'a3-device-name', 'ipad')
+    mocks.peersErr = new ApiError(502, 'awg3_unreachable', 'x', '')
+    await click(button(root, 'Выпустить'))
+    expect(root.querySelector('img.awg3-qr')).toBeTruthy()
+    expect(root.querySelector('.awg3-banner')).toBeTruthy()
   })
 })

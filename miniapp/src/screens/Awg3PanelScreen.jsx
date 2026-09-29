@@ -212,9 +212,14 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                             <p class="awg3-peer-tag">
                               {/* Ревью раунд 2: пилюля не резиновая -- в узкой
                                   колонке обрезаем текст многоточием и несём
-                                  полную фразу в title (long-press/tooltip). */}
+                                  полную фразу в title (long-press/tooltip).
+                                  Ревью раунд 3 (finding 2): полная фраза
+                                  «роутер «nick»» в САМОМ тексте всё ещё
+                                  вылезала за колонку на 360 px -- в тексте
+                                  только ник, слово «роутер» и ёлочки живут
+                                  в title. */}
                               <Pill tone="sig" title={`роутер «${r.router.nickname}»`}>
-                                <span class="pill-text">{`роутер «${r.router.nickname}»`}</span>
+                                <span class="pill-text">{r.router.nickname}</span>
                               </Pill>
                             </p>
                           ) : r.off ? (
@@ -278,23 +283,27 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                 </Section>
               )
             )}
-            {qr && (
-              <Section title={`QR «${qr.name}»`}>
-                <div class="card awg3-qr-card">
-                  <img class="awg3-qr" src={qr.src} alt={AWG3_TEXTS.qrAlt} />
-                  <p class="field-hint">{AWG3_TEXTS.qrNote}</p>
-                  <p class="hint" role="status">
-                    {qr.dm}
-                  </p>
-                </div>
-              </Section>
-            )}
             {routerOutcome && (
               <p class={`state awg3-outcome awg3-outcome-${routerOutcome.tone}`} role="status">
                 <Quoted text={routerOutcome.text} />
               </p>
             )}
           </>
+        )}
+        {/* Ревью раунд 3 (finding 4): QR -- ВНЕ ветки banner/page. После
+            успешного выпуска экран сам перечитывает страницу (load(iface));
+            если этот автоповтор упадёт, банер раньше подменял всю ветку
+            выше целиком, и единственная копия QR пропадала с экрана. */}
+        {qr && (
+          <Section title={`QR «${qr.name}»`}>
+            <div class="card awg3-qr-card">
+              <img class="awg3-qr" src={qr.src} alt={AWG3_TEXTS.qrAlt} />
+              <p class="field-hint">{AWG3_TEXTS.qrNote}</p>
+              <p class="hint" role="status">
+                {qr.dm}
+              </p>
+            </div>
+          </Section>
         )}
         {onEdit && (
           <button type="button" class={`btn ${banner?.fix ? 'btn-primary' : 'btn-ghost'} btn-wide awg3-settings`} onClick={() => onEdit(panelId)}>
