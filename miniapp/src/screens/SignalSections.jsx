@@ -53,19 +53,23 @@ export function ExitIPSection({ routerID, tunnels = [], deadline }) {
   }
   return (
     <Section title="Каким адресом видно каждый VPN-туннель">
-      <div class="card">
+      <div class="card card-rows">
         {list.map((t) => {
           const running = t.run_state === 'running'
           const line = exitLine(facts, t.tunnel_id, { running })
           return (
-            <div key={t.tunnel_id} class="settings-row">
-              <DataRow title={`«${t.name || t.tunnel_id}»`} value={line.value} valueSub={line.sub} valueTone={line.tone} />
-              {running && (
-                <button type="button" class="btn btn-ghost btn-row settings-row-btn" disabled={probe.busy} onClick={() => run(t.tunnel_id)}>
-                  {probing === t.tunnel_id ? 'Меряем…' : 'Проверить сейчас'}
-                </button>
-              )}
-              {line.warn && <p class="card-foot card-foot-bad">{line.warn}</p>}
+            // Предупреждение -- под строкой, а не третьей ячейкой её ряда:
+            // в .settings-row (flex без переноса) оно выталкивало ряд за край.
+            <div key={t.tunnel_id} class="data-row-group">
+              <div class="settings-row">
+                <DataRow title={`«${t.name || t.tunnel_id}»`} value={line.value} valueSub={line.sub} valueTone={line.tone} />
+                {running && (
+                  <button type="button" class="btn btn-ghost btn-row settings-row-btn" disabled={probe.busy} onClick={() => run(t.tunnel_id)}>
+                    {probing === t.tunnel_id ? 'Меряем…' : 'Проверить сейчас'}
+                  </button>
+                )}
+              </div>
+              {line.warn && <p class="diag-consequence">{line.warn}</p>}
             </div>
           )
         })}
@@ -82,7 +86,7 @@ export function WANSection({ routerID }) {
   if (!view) return null
   return (
     <Section title="Резервный интернет">
-      <div class="card">
+      <div class="card card-rows">
         {view.rows.map((r) => (
           <DataRow key={r.key} title={r.title} value={r.value} valueSub={r.sub} valueTone={r.tone} />
         ))}
@@ -130,7 +134,7 @@ export function AwgmLogsSection({ routerID, deadline }) {
       {logs.result && logs.result.status !== 'ok' && <p class="state state-error">{logs.result.output || 'Роутер не отдал журнал.'}</p>}
       {view?.note && <p class="hint">{view.note}</p>}
       {view && view.rows.length > 0 && (
-        <div class="card settings-card">
+        <div class="card card-rows settings-card">
           {view.rows.map((r) => (
             <DataRow key={r.key} title={r.title} value={r.value} valueSub={r.sub} valueTone={r.tone} />
           ))}
@@ -146,11 +150,11 @@ export function NativeDNSSection({ routerID, tunnels = [] }) {
   if (!view) return null
   return (
     <Section title="Списки сайтов в самой прошивке">
-      <div class="card">
+      <div class="card card-rows">
         {view.rows.map((r) => (
-          <div key={r.key}>
+          <div key={r.key} class="data-row-group">
             <DataRow title={r.title} value={r.value} valueSub={r.sub} valueTone={r.tone} />
-            {r.warn && <p class="card-foot card-foot-bad">{r.warn}</p>}
+            {r.warn && <p class="diag-consequence">{r.warn}</p>}
           </div>
         ))}
         {view.note && <p class="card-foot">{view.note}</p>}

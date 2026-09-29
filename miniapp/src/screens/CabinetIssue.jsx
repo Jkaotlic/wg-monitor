@@ -98,7 +98,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
 
   return (
     <Section title="Что произойдёт">
-      <div class="card">
+      <div class="card card-rows">
         <DataRow title="Откуда" code={own ? undefined : pending.provider} value={pending.title} />
         <DataRow title="Выпускаем" code={own ? undefined : pending.option.id} value={pending.option.label} />
         <p class="card-foot">

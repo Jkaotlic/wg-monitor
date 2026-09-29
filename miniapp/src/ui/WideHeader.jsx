@@ -1,4 +1,4 @@
-import { TABS, tabLabel } from '../nav.js'
+import { TABS, PARK_TAB, tabLabel } from '../nav.js'
 import { fleetRow } from '../fleet.js'
 import { Chip } from './Chip.jsx'
 import { PanelLine } from './PanelLine.jsx'
@@ -7,7 +7,10 @@ import { PanelLine } from './PanelLine.jsx'
 // одной строкой; справа вкладки (вместо нижнего таббара). Шестерёнки больше
 // нет: настройки стали вкладкой «Управление» (v0.41). Под именем -- адрес
 // панели awg-manager, если сервер его отдал.
-export function WideHeader({ router, tab, onTab }) {
+//
+// Админу первой вкладкой -- «Парк» (v0.48), как в нижней панели телефона.
+export function WideHeader({ router, tab, onTab, isAdmin = false }) {
+  const tabs = isAdmin ? [PARK_TAB, ...TABS] : TABS
   const row = fleetRow(router)
   return (
     <header class="main-head">
@@ -20,7 +23,7 @@ export function WideHeader({ router, tab, onTab }) {
         <p class="main-head-sub">{row.sub}</p>
       </div>
       <nav class="main-tabs" aria-label="Вкладки">
-        {TABS.map((key) => (
+        {tabs.map((key) => (
           <button
             key={key}
             type="button"

@@ -21,7 +21,11 @@ import { ExitIPSection, WANSection } from './SignalSections.jsx'
 // «спроси заново» (force_recheck), «покажи себя целиком» (diag_now) и «каким
 // адресом меня видно снаружи» (check_direct + check_via_tunnel). Один хук на
 // всех сделал бы ответ одной команды ответом любой другой.
-export function DiagTab({ routerID, asleep }) {
+//
+// Машинные имена проверок (dns, hydraroute, agent_heartbeat) -- для того, кто
+// полезет в консоль, то есть для админа. Владельцу они ничего не говорят и
+// только теснят вопрос: ему -- без них.
+export function DiagTab({ routerID, asleep, isAdmin = false }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -107,13 +111,13 @@ export function DiagTab({ routerID, asleep }) {
       </div>
 
       <Section title="Что спросили и что ответили">
-        <div class="card">
+        <div class="card card-rows">
           {rows.map((r) => (
-            <div key={r.key}>
+            <div key={r.key} class="data-row-group">
               <DataRow
                 dot={r.tone === 'ok' ? 'ok' : r.tone === 'danger' ? 'danger' : r.tone === 'warn' ? 'warn' : undefined}
                 title={r.title}
-                code={r.code}
+                code={isAdmin ? r.code : undefined}
                 value={r.answer}
                 valueSub={r.value}
                 valueTone={r.tone === 'muted' ? undefined : r.tone}
@@ -155,7 +159,7 @@ export function DiagTab({ routerID, asleep }) {
       {/* Кому роутер отдал русские зоны и как идут запросы к Яндексу. Ответ --
           по настройкам роутера, а не замер, и оговорка стоит здесь же. */}
       <Section title="Раздельный DNS">
-        <div class="card">
+        <div class="card card-rows">
           {split.missing && <p class="card-foot">{split.note}</p>}
           {split.rows.map((r) => (
             <DataRow
@@ -181,16 +185,16 @@ export function DiagTab({ routerID, asleep }) {
       </Section>
 
       <Section title="Каким адресом видно снаружи">
-        <div class="card">
+        <div class="card card-rows">
           <DataRow
             title="Напрямую, мимо VPN-туннеля"
-            code="check_direct"
+            code={isAdmin ? 'check_direct' : undefined}
             value={exits.direct || (direct.busy ? 'меряем…' : 'не измерен')}
             valueTone={exits.direct ? undefined : 'muted'}
           />
           <DataRow
             title="Через VPN-туннель"
-            code="check_via_tunnel"
+            code={isAdmin ? 'check_via_tunnel' : undefined}
             value={exits.viaTunnel || (viaTunnel.busy ? 'меряем…' : 'не измерен')}
             valueTone={exits.viaTunnel ? undefined : 'muted'}
           />

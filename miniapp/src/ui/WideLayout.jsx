@@ -4,7 +4,7 @@ import { SheetHost } from './Sheet.jsx'
 import { OverlayHost } from '../screens/OverlayHost.jsx'
 import { TabBody } from '../screens/TabBody.jsx'
 import { FleetHome } from '../screens/FleetHome.jsx'
-import { FLEET_OVERLAYS } from '../nav.js'
+import { FLEET_OVERLAYS, PARK_TAB } from '../nav.js'
 
 // Широкая раскладка: колонка роутеров слева, справа шапка с вкладками и
 // содержимое. Оверлеи открываются в основной области -- список роутеров
@@ -17,18 +17,13 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
   const fleetLayer = Boolean(isAdmin && FLEET_OVERLAYS.includes(nav.overlay))
   const overlayOpen = Boolean(nav.overlay && nav.overlay !== 'fleet' && (current || fleetLayer))
   const narrow = overlayOpen || nav.tab !== 'router'
+  // «Парк» (v0.48) -- вкладка, а не раздел под сводкой: открывается и с
+  // выбранным роутером (тогда над ним шапка роутера с вкладкой «Парк»), и
+  // без него -- в основной области вместо сводки.
+  const parkTab = Boolean(isAdmin) && nav.tab === PARK_TAB
 
-  // Парк от выбранного роутера не зависит и живёт под сводкой (#park).
-  // Роутер выбран -- снимаем выбор, чтобы сводка встала на место, и едем к
-  // Парку, когда она нарисуется.
   function openPark() {
-    const scroll = () => document.getElementById('park')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-    if (current || nav.overlay) {
-      dispatch({ type: 'router', id: null })
-      setTimeout(scroll, 0)
-      return
-    }
-    scroll()
+    dispatch({ type: 'tab', tab: PARK_TAB, closeOverlay: true })
   }
 
   const host = <OverlayHost nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} refreshRouters={refreshRouters} />
@@ -40,7 +35,7 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
         routers={routers}
         currentID={nav.routerID}
         isAdmin={isAdmin}
-        parkActive={Boolean(isAdmin) && !current}
+        parkActive={Boolean(isAdmin) && ((parkTab && !overlayOpen) || (!current && fleetLayer))}
         onPick={(id) => dispatch({ type: 'router', id })}
         onPark={openPark}
         onLogout={onLogout}
@@ -52,6 +47,7 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
             <WideHeader
               router={current}
               tab={nav.tab}
+              isAdmin={isAdmin}
               onTab={(tab) => dispatch({ type: 'tab', tab, closeOverlay: true })}
             />
             <div class={`main-content${narrow ? ' main-content-narrow' : ''}`}>
@@ -60,18 +56,16 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
           </>
         ) : fleetLayer ? (
           <div class="main-content main-content-narrow">{host}</div>
+        ) : parkTab ? (
+          <div class="main-content main-content-narrow">
+            <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
+          </div>
         ) : (
           <div class="main-content main-content-narrow">
             <FleetHome
               routers={routers}
               isAdmin={isAdmin}
               onPick={(id) => dispatch({ type: 'router', id })}
-              openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-              openLayer={(overlay, extra = {}) => dispatch({ type: 'overlay', overlay, params: { ...extra, returnTo: null } })}
-              onOpenConnection={(id) => {
-                dispatch({ type: 'router', id })
-                dispatch({ type: 'overlay', overlay: 'agentconn' })
-              }}
             />
           </div>
         )}

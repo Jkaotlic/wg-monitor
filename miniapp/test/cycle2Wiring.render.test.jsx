@@ -186,22 +186,37 @@ describe('OverlayHost: слои парка', () => {
     cleanup(root)
   })
 
-  it('«Мои роутеры»: Парк админу, openLayer с возвратом к списку', async () => {
+  // v0.48: Парк -- вкладка, а не хвост «Моих роутеров»; слои парка
+  // возвращаются в неё (returnTo 'park').
+  it('«Мои роутеры» админу: Парка под списком больше нет', async () => {
     const h = host(nav({ routerID: 1, overlay: 'fleet' }))
     const root = await mount(h.node)
-    expect(root.querySelector('.stub-park')).toBeTruthy()
-    mocks.props.park.openLayer('provision')
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'fleet' } })
-    mocks.props.park.openLayer('job', { jobId: 'j2', title: 't' })
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j2', title: 't', returnTo: 'fleet' } })
+    expect(root.querySelector('.stub-park')).toBe(null)
     cleanup(root)
   })
 
-  it('Парк в «Моих роутерах»: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
-    const h = host(nav({ routerID: 1, overlay: 'fleet' }))
-    const root = await mount(h.node)
+  it('вкладка «Парк»: openLayer с возвратом в Парк', async () => {
+    const actions = []
+    const root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'park' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
+    expect(root.querySelector('.park-tab .stub-park')).toBeTruthy()
+    mocks.props.park.openLayer('provision')
+    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'park' } })
+    mocks.props.park.openLayer('job', { jobId: 'j2', title: 't' })
+    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j2', title: 't', returnTo: 'park' } })
+    cleanup(root)
+  })
+
+  it('вкладка «Парк»: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
+    const actions = []
+    const root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'park' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
     mocks.props.park.onOpenConnection(2)
-    expect(h.actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
+    expect(actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
+    cleanup(root)
+  })
+
+  it('вкладка «Парк» не-админу не рисуется', async () => {
+    const root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'park' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
+    expect(root.querySelector('.stub-park')).toBe(null)
     cleanup(root)
   })
 
@@ -259,12 +274,16 @@ describe('раскладки', () => {
     cleanup(root)
   })
 
-  it('широкая без роутера: Парк под сводкой открывает слои с возвратом null', async () => {
+  it('широкая без роутера: сводка без Парка; вкладка «Парк» открывает слои с возвратом в неё', async () => {
     const actions = []
-    const root = await mount(<WideLayout mode="web" nav={nav({})} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
-    expect(root.querySelector('.fleet-home .stub-park')).toBeTruthy()
+    let root = await mount(<WideLayout mode="web" nav={nav({})} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
+    expect(root.querySelector('.fleet-home')).toBeTruthy()
+    expect(root.querySelector('.stub-park')).toBe(null)
+    cleanup(root)
+    root = await mount(<WideLayout mode="web" nav={nav({ tab: 'park' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
+    expect(root.querySelector('.main-content .park-tab .stub-park')).toBeTruthy()
     mocks.props.park.openLayer('provision')
-    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: null } })
+    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'park' } })
     cleanup(root)
   })
 
@@ -299,7 +318,7 @@ describe('раскладки', () => {
 
   it('App: новый роутер после установки открывается -- список переспрошен', async () => {
     window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} })
-    window.history.replaceState(null, '', '/dashboard/')
+    window.history.replaceState(null, '', '/dashboard/?tab=park')
     const root = await mount(<App />)
     await flush()
     mocks.routers = { routers: [...ROUTERS, { id: 9, nickname: 'car', status: 'online', last_seen_age_sec: 5 }] }
@@ -307,8 +326,8 @@ describe('раскладки', () => {
     await act(async () => mocks.props.park.openLayer('job', { jobId: 'j9', title: 'Установка агента на «car»' }))
     await flush()
     expect(root.querySelector('.stub-job').textContent).toBe('ход j9')
-    // Слой без адреса: адрес не меняется.
-    expect(window.location.search).toBe('')
+    // Слой без адреса: адрес не меняется -- остаётся вкладка Парка.
+    expect(window.location.search).toBe('?tab=park')
     await act(async () => mocks.props.job.onOpenRouter(9))
     await flush()
     expect(mocks.routerCalls).toBeGreaterThan(before)

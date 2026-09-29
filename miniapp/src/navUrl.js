@@ -1,4 +1,4 @@
-import { initialNav, normalizeTab, deepLinkOverlay, TABS, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS } from './nav.js'
+import { initialNav, normalizeTab, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS } from './nav.js'
 
 // Адрес веб-управления -- то же, что deep-link из тревоги, плюс вкладка:
 // ?router=<id>&tab=<tab>&open=<overlay>. Лист подтверждения в адрес не
@@ -13,13 +13,22 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
   const state = initialNav({ routerIDs, deepLinkID: Number.isFinite(id) ? id : null })
   const tab = normalizeTab(params.get('tab'))
   const open = params.get('open')
+  // Вкладка «Парк» (?tab=park, v0.48) -- только админу, с роутером и без:
+  // Парк от роутера не зависит. Остальным адрес ведёт на обычный экран.
+  const park = isAdmin && tab === PARK_TAB
   // Слой парка с адресом («Свои VPN-серверы») открывается и без роутера.
-  // Возврат -- к списку роутеров, если роутер выбран (Парк живёт там), иначе
-  // к сводке.
+  // Возврат -- во вкладку Парка, если адрес про неё; иначе к списку
+  // роутеров, если роутер выбран, иначе к сводке.
   if (isAdmin && URL_FLEET_OVERLAYS.includes(open)) {
-    if (state.routerID != null && TABS.includes(tab)) state.tab = tab
+    if (park) state.tab = PARK_TAB
+    else if (state.routerID != null && TABS.includes(tab)) state.tab = tab
     state.overlay = open
-    state.overlayParams = { returnTo: state.routerID != null ? 'fleet' : null }
+    state.overlayParams = { returnTo: park ? PARK_TAB : state.routerID != null ? 'fleet' : null }
+    return state
+  }
+  if (park) {
+    state.tab = PARK_TAB
+    state.overlay = null
     return state
   }
   if (state.routerID == null) return state
@@ -46,7 +55,13 @@ function addressLayer(nav) {
 
 export function urlFromNav(nav) {
   const open = addressLayer(nav)
-  if (nav?.routerID == null) return URL_FLEET_OVERLAYS.includes(open) ? `?open=${open}` : ''
+  if (nav?.routerID == null) {
+    const q = new URLSearchParams()
+    if (nav?.tab === PARK_TAB) q.set('tab', PARK_TAB)
+    if (URL_FLEET_OVERLAYS.includes(open)) q.set('open', open)
+    const str = q.toString()
+    return str ? `?${str}` : ''
+  }
   const params = new URLSearchParams()
   params.set('router', String(nav.routerID))
   if (nav.tab && nav.tab !== 'router') params.set('tab', nav.tab)

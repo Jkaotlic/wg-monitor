@@ -76,6 +76,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
 
 const { ParkSection } = await import('../src/screens/ParkSection.jsx')
 const { FleetOverlay } = await import('../src/screens/FleetOverlay.jsx')
+const { ParkTab } = await import('../src/screens/ParkTab.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { REVIVE_SECRET_NOTE } = await import('../src/revive.js')
 const { ApiError } = await import('../src/api.js')
@@ -181,7 +182,9 @@ describe('«Парк»: обновление агента', () => {
     mocks.updateReply = { queued: true, deferred: true, target_version: 'v0.33.0' }
     const { root, sheets } = await mountPark()
     const row = rowOf(root, 'office')
-    expect(row.textContent).toContain('Оговорка: проверяет адрес загрузки')
+    // v0.48: оговорка -- один раз над списком, на карточке -- метка.
+    expect(root.querySelector('.park-notes').textContent).toContain('проверяет адрес загрузки')
+    expect(row.querySelector('.park-tag')).toBeTruthy()
     await act(async () => buttons(row, 'Обновить агент')[0].click())
     expect(sheets).toHaveLength(1)
     expect(sheets[0].confirmPhrase).toBe('office')
@@ -359,12 +362,12 @@ describe('«Парк»: обновление агента', () => {
 })
 
 describe('устаревший текст про дашборд', () => {
-  it('в Парке на «Моих роутерах» нет «пока живут в браузерном дашборде»', async () => {
+  it('во вкладке «Парк» нет «пока живут в браузерном дашборде»', async () => {
     reset()
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<FleetOverlay routers={[]} currentID={11} isAdmin onPick={() => {}} onClose={() => {}} openSheet={() => {}} />, root)
+      render(<ParkTab routers={[]} onPick={() => {}} openSheet={() => {}} />, root)
     })
     await flush()
     expect(root.textContent).not.toContain('пока живут в браузерном')
@@ -379,6 +382,62 @@ describe('устаревший текст про дашборд', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const src = readFileSync(join(here, '../src/screens/RouterDetail.jsx'), 'utf8')
     expect(src).not.toContain('обслуживание пока в дашборде')
+  })
+})
+
+// v0.48: «Опросить все» у админа -- в Парке, среди действий над всеми
+// роутерами; из «Моих роутеров» он у админа ушёл (FleetOverlay).
+describe('«Парк»: опросить все', () => {
+  it('есть при двух роутерах и больше, до списка роутеров', async () => {
+    reset()
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const routers = [
+      { id: 1, nickname: 'a', status: 'online', last_seen_age_sec: 5 },
+      { id: 2, nickname: 'b', status: 'online', last_seen_age_sec: 5 },
+    ]
+    await act(async () => {
+      render(<ParkTab routers={routers} onPick={() => {}} openSheet={() => {}} />, root)
+    })
+    await flush()
+    const all = [...root.querySelectorAll('button')]
+    const poll = all.findIndex((b) => b.textContent.trim() === 'Опросить все')
+    const open = all.findIndex((b) => b.textContent.trim() === 'Открыть роутер')
+    expect(poll).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(poll)
+    expect(root.querySelectorAll('.fleet-count')).toHaveLength(3)
+    cleanup(root)
+  })
+})
+
+// v0.48: одна и та же оговорка под каждым роутером -- шум. Она говорится
+// один раз над списком с именами, на карточке -- короткая метка.
+describe('«Парк»: оговорки обновления агента', () => {
+  const SPACE = 'старая проверка места: нужно ≈10% раздела /opt свободно'
+  it('общая оговорка -- одна строка над списком со всеми именами, не под каждым', async () => {
+    reset()
+    mocks.fleet = {
+      ...FLEET,
+      routers: [
+        router({ id: 31, nickname: 'alpha', agent_version: 'v0.17.2', agent_behind: true, agent_update_warning: SPACE }),
+        router({ id: 32, nickname: 'beta', agent_version: 'v0.17.2', agent_behind: true, agent_update_warning: SPACE }),
+        router({ id: 33, nickname: 'gamma' }),
+      ],
+    }
+    const { root } = await mountPark()
+    const notes = root.querySelectorAll('.park-notes .hint')
+    expect(notes).toHaveLength(1)
+    expect(notes[0].textContent).toContain(SPACE)
+    expect(notes[0].textContent).toContain('alpha, beta')
+    expect(notes[0].textContent).not.toContain('gamma')
+    // Сама фраза в тексте экрана -- ровно один раз.
+    expect(root.textContent.split(SPACE)).toHaveLength(2)
+    expect(rowOf(root, 'alpha').querySelector('.park-tag')).toBeTruthy()
+    expect(rowOf(root, 'gamma').querySelector('.park-tag')).toBe(null)
+    // Список идёт после общей строки.
+    const list = root.querySelector('.park-row')
+    expect(notes[0].compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    cleanup(root)
   })
 })
 
@@ -614,13 +673,13 @@ describe('«Парк»: уведомлять меня', () => {
     cleanup(root)
   })
 
-  it('«Мои роутеры» пробрасывают переход на роутер из Парка', async () => {
+  it('вкладка «Парк» пробрасывает переход на роутер', async () => {
     reset()
     const opened = []
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<FleetOverlay routers={[]} currentID={15} isAdmin onClose={() => {}} openSheet={() => {}} onPick={(id) => opened.push(id)} />, root)
+      render(<ParkTab routers={[]} openSheet={() => {}} onPick={(id) => opened.push(id)} />, root)
     })
     await flush()
     await act(async () => buttons(rowOf(root, 'bronya'), 'Открыть роутер')[0].click())

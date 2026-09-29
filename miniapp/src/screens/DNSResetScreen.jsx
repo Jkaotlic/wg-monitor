@@ -159,7 +159,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               <Section title="После сброса">
                 <p class={`state${reset.status === 'ok' && reset.snapshot ? '' : ' state-error'}`}>{doneText(reset)}</p>
                 {reset.status !== 'err' && (
-                  <div class="card">
+                  <div class="card card-rows">
                     {postconditionRows({ before, after: after ?? before }).map((r) => (
                       <DataRow
                         key={r.key}

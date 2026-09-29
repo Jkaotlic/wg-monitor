@@ -123,6 +123,18 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 			}); err != nil {
 				return nil, err
 			}
+			// Новость о прошивке: карточка «Обновления» в «Управлении» с
+			// кнопками «Установить прошивку», «Отложить на неделю» и «Скрыть
+			// эту новость». Без неё песочница не показывала самую широкую
+			// строку экрана, и её вылет за край на 360 px прошёл мимо обхода.
+			if err := d.RouterVersions().Upsert(uid, db.RouterVersionSnapshot{
+				AwgmgrVersion:   "2.19.1",
+				FirmwareCurrent: "5.02.A.8.0-3",
+				FirmwareAvail:   "5.02.A.9.0-0",
+				Source:          "report",
+			}); err != nil {
+				return nil, err
+			}
 		}
 		if s.nick == "sandbox-broken" {
 			hardSince := now.Add(-2 * time.Hour)

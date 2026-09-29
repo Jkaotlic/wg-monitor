@@ -30,6 +30,7 @@ export function routerContext(routers, routerID) {
 // списку: «Обслуживания» как слоя больше нет.
 export function returnLabel(returnTo) {
   const to = normalizeReturn(returnTo)
+  if (to === 'park') return 'Парк'
   if (to === 'fleet') return 'Мои роутеры'
   if (to === 'manage') return 'Управление'
   if (to === 'selfhosted') return 'Свои серверы'
@@ -48,7 +49,6 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   const params = nav.overlayParams ?? {}
   const returnTo = normalizeReturn(params.returnTo ?? null)
   const leave = () => dispatch({ type: 'overlay', overlay: returnTo })
-  const layerOpener = (from) => (overlay, extra = {}) => dispatch({ type: 'overlay', overlay, params: { ...extra, returnTo: from } })
   // Новый роутер появляется в списке оболочки только после переспроса: без
   // него «Открыть роутер» открыл бы пустоту.
   const reloadRouters = () => Promise.resolve(refreshRouters ? refreshRouters() : undefined)
@@ -56,9 +56,8 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   // Экраны роутера глубже «Управления» закрываются обратно во вкладку.
   const toManage = () => dispatch({ type: 'overlay', overlay: 'manage' })
 
-  // «Мои роутеры» на телефоне: у админа под списком -- Парк (v0.41; раньше
-  // он жил в «Обслуживании» конкретного роутера). Слои парка возвращают
-  // сюда же.
+  // «Мои роутеры» на телефоне -- только список: Парк стал вкладкой (v0.48).
+  // Старые слои парка с возвратом 'fleet' по-прежнему возвращают сюда.
   if (nav.overlay === 'fleet') {
     return (
       <FleetOverlay
@@ -70,12 +69,6 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
         onClose={nav.routerID != null ? close : undefined}
         shortcut={!nav.sheet}
         isAdmin={isAdmin}
-        openSheet={openSheet}
-        openLayer={layerOpener('fleet')}
-        onOpenConnection={(id) => {
-          dispatch({ type: 'router', id })
-          dispatch({ type: 'overlay', overlay: 'agentconn' })
-        }}
       />
     )
   }

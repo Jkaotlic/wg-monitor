@@ -309,7 +309,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
 
       {view.chain.length > 0 && (
         <Section title="Порядок подхвата">
-          <div class="card" style="padding:0">
+          <div class="card card-rows">
             <Chain
               links={view.chain.map((c) => ({
                 ...c,
@@ -331,7 +331,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
 
       {view.unused.length > 0 && (
         <Section title={`Не используются · ${view.unused.length}`}>
-          <div class="card" style="padding:0">
+          <div class="card card-rows">
             {view.unused.map((t) => (
               <div key={t.id} class="settings-row">
                 <DataRow

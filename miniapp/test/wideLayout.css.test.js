@@ -44,7 +44,9 @@ describe('широкая раскладка в style.css', () => {
 
   it('правила широкой раскладки не протекают в телефонную', () => {
     const outside = css.slice(0, block.start) + css.slice(block.end)
-    for (const sel of ['.wide-shell', '.side-', '.side {', '.main-', '.now-grid', '.fleet-home', '.fleet-count', '.fleet-card']) {
+    // .fleet-count -- не только сводка широкого экрана: с v0.48 три числа
+    // открывают вкладку «Парк» и на телефоне.
+    for (const sel of ['.wide-shell', '.side-', '.side {', '.main-', '.now-grid', '.fleet-home', '.fleet-card']) {
       expect(outside.includes(sel), sel).toBe(false)
     }
   })

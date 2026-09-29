@@ -240,7 +240,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
         })()}
 
         <Section title="Уведомления">
-          <div class="card settings-card">
+          <div class="card card-rows settings-card">
             <DataRow
               title="Писать мне об этом роутере"
               value={settings?.notify_muted ? 'выключено' : 'включено'}
@@ -267,11 +267,14 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
       <ManageGroup title="Версии">
         <Section title="Обновления">
           {newsRows.length > 0 && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {newsRows.map((r) => {
                 const act = newsAction(r.component)
                 return (
-                  <div key={r.key} class="settings-row">
+                  // Новость -- столбиком (.settings-news): строка, текст,
+                  // кнопка и пара «Отложить / Скрыть» друг под другом. В
+                  // строку .settings-row они не влезали и уезжали за край.
+                  <div key={r.key} class="settings-news">
                     <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
                     <p class="card-foot">{r.text}</p>
                     {act && (
@@ -299,19 +302,19 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
               и «обновлений нет» обязаны звучать по-разному: раньше и то, и
               другое выглядело как отсутствие блока. */}
           {unknownLines.length > 0 && (
-            <div class="card">
+            <div class="card card-rows">
               {unknownLines.map((line) => (
                 <p key={line} class="card-foot">{line}</p>
               ))}
             </div>
           )}
           {versions && newsRows.length === 0 && unknownLines.length === 0 && (
-            <div class="card">
+            <div class="card card-rows">
               <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
             </div>
           )}
           {installedRows(versions).length > 0 && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {installedRows(versions).map((r) => (
                 <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
               ))}
@@ -323,7 +326,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
 
         <Section title="Что стоит на роутере">
           {agentRow(settings) && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
             </div>
           )}
@@ -335,7 +338,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
             <p class="state state-error">Роутер не ответил: {audit.result.output || audit.result.status}</p>
           )}
           {auditOut.length > 0 && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {auditOut.map((r) => (
                 <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.sub} valueTone={r.tone} />
               ))}
@@ -352,7 +355,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
             <p class="state state-error">Роутер не ответил: {firmware.result.output || firmware.result.status}</p>
           )}
           {fw?.known && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {fw.rows.map((r) => (
                 <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
               ))}
@@ -385,7 +388,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
               <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
             </div>
           ) : (
-            <div class="card">
+            <div class="card card-rows">
               {pings.map((r) => (
                 <div key={r.key} class="settings-row">
                   <DataRow dot={r.tone === 'muted' ? undefined : r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone === 'muted' ? undefined : r.tone} />
@@ -419,7 +422,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
           </div>
           {(doctor.error || hrneo.error) && <p class="state state-error">{doctor.error || hrneo.error}</p>}
           {[...doctorOut, ...hrneoOut].length > 0 && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {[...doctorOut, ...hrneoOut].map((r, i) => (
                 <DataRow key={`${r.key}-${i}`} dot={r.tone} title={r.title} value={r.value} valueTone={r.tone} />
               ))}
@@ -511,7 +514,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
       <ManageGroup title="Настройки и доступ">
         {settings && (
           <Section title="Опрос и тревоги">
-            <div class="card">
+            <div class="card card-rows">
               {thresholdRows(settings).map((r) => (
                 <DataRow key={r.key} title={r.title} code={r.code} value={r.value} />
               ))}
@@ -530,7 +533,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
       {dangerSlot}
 
       <Section title="Что умеет приложение">
-        <div class="card">
+        <div class="card card-rows">
           <p class="card-foot">
             <b>Сейчас</b> — работает ли обход прямо сейчас и что с ним не так.{' '}
             <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит и что через него уходит.{' '}

@@ -131,7 +131,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
               {!view ? (
                 <p class="state">Спрашиваем роутер…</p>
               ) : (
-                <div class="card settings-card">
+                <div class="card card-rows settings-card">
                   {agentConfigRows(view).map((r) => (
                     <DataRow key={r.key} title={r.title} value={r.value} />
                   ))}
