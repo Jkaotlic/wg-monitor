@@ -14,6 +14,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel/awg3paneltest"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 type fakeAwg3 struct {
@@ -377,5 +378,116 @@ func TestMiniappAwg3RealServiceEndToEnd(t *testing.T) {
 	}
 	if strings.Contains(env.logs.String(), "PW-MUST-NOT-LEAK") {
 		t.Fatal("секрет в журнале")
+	}
+}
+
+func seedDevice(env *cabinetEnv) {
+	env.awg3.issued = awg3panel.Issued{
+		ID: "a1b2c3d4e5f6", Name: "iphone anex", Address: "10.66.0.9/32",
+		Config:      "[Interface]\nPrivateKey = DEVICE-CONF-MUST-NOT-LEAK\n",
+		QRPNGBase64: base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nQR-BYTES")),
+	}
+}
+
+func TestMiniappAwg3DeviceAdminOnly(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedDevice(env)
+	for _, who := range []int64{cabStranger, cabOperator, cabOwner} {
+		rec := env.do(t, who, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"iphone"}`)
+		if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+			t.Fatalf("от %d: %d %s", who, rec.Code, rec.Body.String())
+		}
+	}
+	if len(env.awg3.devices) != 0 || len(env.docs.sent) != 0 {
+		t.Fatal("не-админ выпустил устройство")
+	}
+}
+
+func TestMiniappAwg3DeviceQRAndDM(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedDevice(env)
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"iphone anex"}`)
+	body := rec.Body.String()
+	if rec.Code != http.StatusCreated || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	var resp struct {
+		Name, Address, DM string
+		QR                string `json:"qr_png_base64"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Name != "iphone anex" || resp.QR == "" || resp.DM != "sent" || strings.Contains(body, "DEVICE-CONF") || strings.Contains(body, `"config"`) {
+		t.Fatalf("ответ: %s", body)
+	}
+	if env.awg3.devices[0] != "main|awg1|iphone anex" {
+		t.Fatalf("в сервис: %v", env.awg3.devices)
+	}
+	if len(env.docs.sent) != 2 {
+		t.Fatalf("в личку ушло %d", len(env.docs.sent))
+	}
+	doc, photo := env.docs.sent[0], env.docs.sent[1]
+	if doc.photo || doc.chatID != cabAdmin || doc.filename != "iphone-anex.conf" || !strings.Contains(string(doc.data), "DEVICE-CONF") || !strings.Contains(doc.caption, "В файле приватный ключ — не пересылайте его") {
+		t.Fatalf("документ: %+v", doc.filename)
+	}
+	if !photo.photo || photo.chatID != cabAdmin || !strings.HasSuffix(photo.filename, ".png") || !strings.Contains(string(photo.data), "QR-BYTES") {
+		t.Fatalf("фото: %+v", photo.filename)
+	}
+	for _, leak := range []string{"DEVICE-CONF", resp.QR} {
+		if strings.Contains(env.logs.String(), leak) {
+			t.Fatal("конфиг или QR в журнале")
+		}
+	}
+}
+
+func TestMiniappAwg3DeviceDMFailureStillShowsQR(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedDevice(env)
+	env.docs.err = &tg.APIError{Method: "sendDocument", Code: 403, Description: "Forbidden: bot can't initiate conversation with a user"}
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"iphone"}`)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"dm":"unreachable"`) || !strings.Contains(rec.Body.String(), `"qr_png_base64":"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	env.docs.err = errors.New("telegram 502")
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"ipad"}`)
+	if !strings.Contains(rec.Body.String(), `"dm":"failed"`) {
+		t.Fatalf("%s", rec.Body.String())
+	}
+	off := newCabinetEnv(t, func(d *Deps) { d.MiniappDocs = nil })
+	seedDevice(off)
+	rec = off.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"ipad"}`)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"dm":"not_configured"`) {
+		t.Fatalf("без лички: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappAwg3DeviceErrors(t *testing.T) {
+	cases := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{awg3panel.ErrNameTaken, http.StatusConflict, "awg3_name_taken"},
+		{&awg3panel.FieldError{Field: "name", Reason: "Имена «wgmon-…» бот оставляет роутерам — выберите другое"}, http.StatusBadRequest, "invalid_field"},
+		{&awg3panel.Error{Kind: awg3panel.KindReadonly}, http.StatusConflict, "awg3_readonly"},
+		{&awg3panel.Error{Kind: awg3panel.KindBadPassword}, http.StatusConflict, "awg3_bad_password"},
+	}
+	for _, tc := range cases {
+		env := newCabinetEnv(t)
+		env.awg3.issueErr = tc.err
+		rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"x"}`)
+		if code, _, _ := cabinetErrorBody(t, rec); rec.Code != tc.status || code != tc.code {
+			t.Errorf("%v: %d %s", tc.err, rec.Code, rec.Body.String())
+		}
+		if len(env.docs.sent) != 0 {
+			t.Error("отказ, а в личку что-то ушло")
+		}
+	}
+}
+
+func TestMiniappAwg3ConfFilename(t *testing.T) {
+	for in, want := range map[string]string{"iphone anex": "iphone-anex.conf", "Айфон/Аня": "Айфон-Аня.conf", "../..": "device.conf", "": "device.conf", "mac_book.2": "mac_book.2.conf"} {
+		if got := miniappAwg3ConfFilename(in); got != want {
+			t.Errorf("%q: %q, ждали %q", in, got, want)
+		}
 	}
 }
