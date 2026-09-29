@@ -1,0 +1,463 @@
+package awg3panel
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel/awg3paneltest"
+)
+
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) Add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+type svcEnv struct {
+	p    *awg3paneltest.Panel
+	s    *Service
+	path string
+	clk  *testClock
+	logs *bytes.Buffer
+	opts Options
+}
+
+func newSvcEnv(t *testing.T, o awg3paneltest.Options) *svcEnv {
+	t.Helper()
+	p := startPanel(t, o)
+	e := &svcEnv{p: p, path: filepath.Join(t.TempDir(), DefaultStoreName), clk: &testClock{t: time.Now()}, logs: &bytes.Buffer{}}
+	e.opts = Options{RootCAs: p.CA.Pool, Now: e.clk.Now, Logger: slog.New(slog.NewTextHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	e.s = NewService(e.path, e.opts)
+	return e
+}
+
+func (e *svcEnv) input(t *testing.T, id, pw string) Input {
+	t.Helper()
+	pfx, err := e.p.CA.P12("anex", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour), "p12-pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Input{ID: id, Label: "Main", BaseURL: e.p.URL, User: "admin", Password: pw, P12: pfx, P12Password: "p12-pw"}
+}
+
+// create -- годная панель; счётчики панели после неё обнулены.
+func (e *svcEnv) create(t *testing.T, id string) {
+	t.Helper()
+	if _, res, err := e.s.Create(context.Background(), e.input(t, id, testPanelPass)); err != nil || !res.OK {
+		t.Fatalf("создание: %+v %v", res, err)
+	}
+	e.p.ResetHits()
+}
+
+func respond429(w http.ResponseWriter, _ *http.Request) bool {
+	http.Error(w, "слишком много неудачных попыток, попробуйте позже", http.StatusTooManyRequests)
+	return true
+}
+
+func TestCreateChecksOnceAndStoresPEM(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	v, res, err := e.s.Create(context.Background(), e.input(t, "main", testPanelPass))
+	if err != nil || !res.Ran || !res.OK || res.Ifaces != 1 {
+		t.Fatalf("создание: %+v %v", res, err)
+	}
+	if e.p.TotalHits() != 1 || e.p.Hits("GET /api/ifaces") != 1 {
+		t.Fatalf("проверка должна быть ровно одним GET /api/ifaces, было %d", e.p.TotalHits())
+	}
+	if !v.PasswordSet || !v.CertSet || v.CertSubject != "anex" || !v.Enabled || v.Lock != LockNone {
+		t.Fatalf("вид: %+v", v)
+	}
+	raw, _ := os.ReadFile(e.path)
+	if !bytes.Contains(raw, []byte("BEGIN CERTIFICATE")) || bytes.Contains(raw, []byte("p12-pw")) {
+		t.Fatal("в файле нет PEM или лежит пароль .p12")
+	}
+	if fi, _ := os.Stat(e.path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("права: %v", fi.Mode())
+	}
+	if _, _, err := e.s.Create(context.Background(), e.input(t, "main", testPanelPass)); !errors.Is(err, ErrInstanceExists) {
+		t.Fatalf("повтор id: %v", err)
+	}
+	if e.p.TotalHits() != 1 {
+		t.Fatal("повтор id сходил в панель")
+	}
+}
+
+func TestCreateBadP12MakesNoRequest(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	in := e.input(t, "main", testPanelPass)
+	in.P12Password = "wrong"
+	if _, _, err := e.s.Create(context.Background(), in); fieldOf(err) != "p12_password" {
+		t.Fatalf("ждали отказ p12_password: %v", err)
+	}
+	if e.p.TotalHits() != 0 || e.p.Handshakes() != 0 {
+		t.Fatal("с неверным .p12 бот сходил в панель")
+	}
+	if views, _ := e.s.List(); len(views) != 0 {
+		t.Fatal("панель сохранена с неверным .p12")
+	}
+}
+
+func TestBadPasswordLocksUntilResave(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	ctx := context.Background()
+	_, res, err := e.s.Create(ctx, e.input(t, "main", "WRONG-PW-MUST-NOT-LEAK"))
+	if err != nil || !res.Ran || res.OK || res.Kind != KindBadPassword {
+		t.Fatalf("проверка: %+v %v", res, err)
+	}
+	for range 3 {
+		if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBadPassword {
+			t.Fatalf("экран: %v", err)
+		}
+	}
+	// Перезапуск бэкенда предохранитель не снимает.
+	if _, err := NewService(e.path, e.opts).Peers(ctx, "main", ""); KindOf(err) != KindBadPassword {
+		t.Fatalf("после перезапуска: %v", err)
+	}
+	if e.p.TotalHits() != 1 {
+		t.Fatalf("после 401 ушло ещё %d запросов", e.p.TotalHits()-1)
+	}
+	// Правка названия -- не пересохранение учётных данных.
+	_, res2, err := e.s.Update(ctx, "main", Input{Label: "Main 2", BaseURL: e.p.URL, User: "admin"})
+	if err != nil || res2 != nil || e.p.TotalHits() != 1 {
+		t.Fatalf("правка названия: %+v %v hits=%d", res2, err, e.p.TotalHits())
+	}
+	v, res3, err := e.s.Update(ctx, "main", Input{Label: "Main 2", BaseURL: e.p.URL, User: "admin", Password: testPanelPass})
+	if err != nil || res3 == nil || !res3.OK || v.Lock != LockNone || e.p.TotalHits() != 2 {
+		t.Fatalf("пересохранение: %+v %+v %v hits=%d", v, res3, err, e.p.TotalHits())
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); err != nil {
+		t.Fatalf("после пересохранения: %v", err)
+	}
+	if strings.Contains(e.logs.String(), "WRONG-PW") || strings.Contains(e.logs.String(), testPanelPass) {
+		t.Fatal("пароль в журнале")
+	}
+}
+
+func TestBanPausesFifteenMinutes(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	ctx := context.Background()
+	e.p.SetOverride(respond429)
+	_, err := e.s.Peers(ctx, "main", "")
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Kind != KindBanned || !pe.Until.Equal(e.clk.Now().Add(DefaultPause)) {
+		t.Fatalf("пауза: %v", err)
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBanned {
+		t.Fatalf("второй раз: %v", err)
+	}
+	if e.p.TotalHits() != 1 {
+		t.Fatalf("за паузу ушло %d запросов", e.p.TotalHits())
+	}
+	if views, _ := e.s.List(); !views[0].PausedUntil.Equal(pe.Until) {
+		t.Fatal("пауза не видна в списке")
+	}
+	e.p.SetOverride(nil)
+	e.clk.Add(DefaultPause + time.Second)
+	if _, err := e.s.Peers(ctx, "main", ""); err != nil {
+		t.Fatalf("после паузы: %v", err)
+	}
+}
+
+func TestCertRejectedLocks(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	foreign, _ := awg3paneltest.NewCA("чужой")
+	in := e.input(t, "main", testPanelPass)
+	in.P12, _ = foreign.P12("anex", time.Now().Add(-time.Hour), time.Now().Add(time.Hour), "p12-pw", false)
+	_, res, err := e.s.Create(context.Background(), in)
+	if err != nil || res.Kind != KindCert {
+		t.Fatalf("проверка: %+v %v", res, err)
+	}
+	h := e.p.Handshakes()
+	if _, err := e.s.Peers(context.Background(), "main", ""); KindOf(err) != KindCert {
+		t.Fatalf("экран: %v", err)
+	}
+	if e.p.Handshakes() != h {
+		t.Fatal("после отказа TLS бот снова стучится в панель")
+	}
+	if views, _ := e.s.List(); views[0].Lock != LockCert {
+		t.Fatalf("замок: %+v", views[0])
+	}
+}
+
+func TestPeersSingleflightAndCache(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Peers: map[string][]awg3paneltest.Peer{"awg1": {{ID: "aaaaaaaaaaa1", Name: "iphone", Enabled: true}}}})
+	e.create(t, "main") // интерфейсы уже в кэше после проверки
+	e.p.SetDelay(100 * time.Millisecond)
+	var wg sync.WaitGroup
+	errs := make(chan error, 10)
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			page, err := e.s.Peers(context.Background(), "main", "")
+			if err == nil && (page.Iface != "awg1" || len(page.Peers) != 1) {
+				err = errors.New("не та страница")
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.p.Hits("GET /api/ifaces/awg1/peers") != 1 || e.p.Hits("GET /api/ifaces/awg1/summary") != 1 || e.p.TotalHits() != 2 {
+		t.Fatalf("10 параллельных открытий: %d запросов", e.p.TotalHits())
+	}
+	e.p.SetDelay(0)
+	if _, err := e.s.Peers(context.Background(), "main", "awg1"); err != nil || e.p.TotalHits() != 2 {
+		t.Fatalf("кэш 30 с: %v hits=%d", err, e.p.TotalHits())
+	}
+	e.clk.Add(DefaultCacheTTL + time.Second)
+	if _, err := e.s.Peers(context.Background(), "main", ""); err != nil || e.p.TotalHits() != 5 {
+		t.Fatalf("после 30 с: %v hits=%d", err, e.p.TotalHits())
+	}
+}
+
+func TestPeersUnknownIfaceMakesNoRequest(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	if _, err := e.s.Peers(context.Background(), "main", "nope"); !errors.Is(err, ErrIfaceNotFound) {
+		t.Fatalf("%v", err)
+	}
+	if e.p.TotalHits() != 0 {
+		t.Fatal("неизвестный интерфейс спрошен у панели")
+	}
+}
+
+func TestIssueDeviceDoubleClickMakesOnePeer(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			issued, err := e.s.IssueDevice(context.Background(), "main", "awg1", "iphone-anex")
+			if err == nil && issued.QRPNGBase64 == "" {
+				err = errors.New("нет QR")
+			}
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var ok, taken int
+	for err := range results {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, ErrNameTaken):
+			taken++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if ok != 1 || taken != 1 || e.p.Hits("POST ") != 1 || len(e.p.PeerList("awg1")) != 1 {
+		t.Fatalf("ok=%d taken=%d post=%d", ok, taken, e.p.Hits("POST "))
+	}
+}
+
+func TestIssueDeviceRejectsBadNames(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	for _, name := range []string{"", "   ", strings.Repeat("я", 41), "a[b]", "x\ny", "wgmon-iphone", "WGMON-laptop"} {
+		if _, err := e.s.IssueDevice(context.Background(), "main", "awg1", name); fieldOf(err) != "name" {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	if e.p.TotalHits() != 0 {
+		t.Fatal("негодное имя ушло в панель")
+	}
+}
+
+func TestConfigForRouterPicksNewestDuplicate(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Peers: map[string][]awg3paneltest.Peer{"awg1": {
+		{ID: "old000000001", Name: "wgmon-router-owned", Address: "10.66.0.2/32", Enabled: true, CreatedAt: "2026-09-01T10:00:00Z"},
+		{ID: "new000000002", Name: "wgmon-router-owned", Address: "10.66.0.3/32", Enabled: true, CreatedAt: "2026-09-20T10:00:00Z"},
+		{ID: "man000000003", Name: "iphone", Address: "10.66.0.4/32", Enabled: true, CreatedAt: "2026-09-25T10:00:00Z"},
+	}}})
+	e.create(t, "main")
+	rc, err := e.s.ConfigForRouter(context.Background(), "main", "awg1", "router-owned")
+	if err != nil || !rc.Reused || rc.PeerID != "new000000002" || !bytes.Contains(rc.Conf, []byte("10.66.0.3/32")) {
+		t.Fatalf("реюз: %+v %v", rc.PeerID, err)
+	}
+	if e.p.Hits("POST ") != 0 || e.p.Hits("GET /api/ifaces/awg1/peers/new000000002/config") != 1 {
+		t.Fatal("реюз выпустил нового пира или не спросил конфиг")
+	}
+}
+
+func TestConfigForRouterRaceMakesOnePeer(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	var wg sync.WaitGroup
+	got := make(chan RouterConfig, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rc, err := e.s.ConfigForRouter(context.Background(), "main", "awg1", "router-owned")
+			if err != nil {
+				t.Error(err)
+			}
+			got <- rc
+		}()
+	}
+	wg.Wait()
+	close(got)
+	reused := 0
+	for rc := range got {
+		if rc.Reused {
+			reused++
+		}
+	}
+	if e.p.Hits("POST ") != 1 || reused != 1 || len(e.p.PeerList("awg1")) != 1 {
+		t.Fatalf("post=%d reused=%d", e.p.Hits("POST "), reused)
+	}
+}
+
+func TestReadonlyPanelIsRemembered(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Readonly: true})
+	e.create(t, "main")
+	ctx := context.Background()
+	if _, err := e.s.IssueDevice(ctx, "main", "awg1", "iphone"); KindOf(err) != KindReadonly {
+		t.Fatalf("%v", err)
+	}
+	hits := e.p.TotalHits()
+	if views, _ := e.s.List(); !views[0].Readonly {
+		t.Fatal("readonly не запомнен")
+	}
+	if _, err := e.s.IssueDevice(ctx, "main", "awg1", "ipad"); KindOf(err) != KindReadonly {
+		t.Fatalf("%v", err)
+	}
+	if _, err := e.s.ConfigForRouter(ctx, "main", "awg1", "router-owned"); KindOf(err) != KindReadonly {
+		t.Fatalf("%v", err)
+	}
+	if e.p.TotalHits() != hits {
+		t.Fatal("readonly-панель снова спрошена о выпуске")
+	}
+	if page, err := e.s.Peers(ctx, "main", ""); err != nil || !page.Panel.Readonly {
+		t.Fatalf("просмотр readonly-панели: %v", err)
+	}
+}
+
+func TestDisabledAndDeleted(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	ctx := context.Background()
+	off := false
+	if _, res, err := e.s.Update(ctx, "main", Input{Label: "Main", BaseURL: e.p.URL, User: "admin", Enabled: &off}); err != nil || res != nil {
+		t.Fatalf("выключение: %v", err)
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); !errors.Is(err, ErrInstanceDisabled) || e.p.TotalHits() != 0 {
+		t.Fatalf("выключенная: %v hits=%d", err, e.p.TotalHits())
+	}
+	if err := e.s.Delete("main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); !errors.Is(err, ErrInstanceNotFound) {
+		t.Fatalf("удалённая: %v", err)
+	}
+	if err := e.s.Delete("main"); !errors.Is(err, ErrInstanceNotFound) {
+		t.Fatalf("повторное удаление: %v", err)
+	}
+}
+
+func TestUpdateMovedAddressNeedsPassword(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	_, _, err := e.s.Update(context.Background(), "main", Input{Label: "Main", BaseURL: "https://other.example.com", User: "admin"})
+	if fieldOf(err) != "password" {
+		t.Fatalf("%v", err)
+	}
+	if e.p.TotalHits() != 0 {
+		t.Fatal("сходили в панель")
+	}
+}
+
+func TestSecretsNeverInLogs(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	ctx := context.Background()
+	_, _, _ = e.s.Create(ctx, e.input(t, "bad", "WRONG-PW-MUST-NOT-LEAK"))
+	e.create(t, "main")
+	_, _ = e.s.IssueDevice(ctx, "main", "awg1", "iphone")
+	_, _ = e.s.ConfigForRouter(ctx, "main", "awg1", "router-owned")
+	logs := e.logs.String()
+	for _, bad := range []string{"WRONG-PW", testPanelPass, "PRIVATE KEY", "FAKE-PRIVATE-KEY", "p12-pw", "iVBOR"} {
+		if strings.Contains(logs, bad) {
+			t.Fatalf("в журнале %q:\n%s", bad, logs)
+		}
+	}
+}
+
+func TestRouterPeerName(t *testing.T) {
+	if n, err := RouterPeerName("router-owned"); err != nil || n != "wgmon-router-owned" {
+		t.Fatalf("%q %v", n, err)
+	}
+	for _, nick := range []string{"", "  ", strings.Repeat("a", 35), "a[b", "a\nb"} {
+		if _, err := RouterPeerName(nick); fieldOf(err) != "router" {
+			t.Errorf("%q: %v", nick, err)
+		}
+	}
+	if n, _ := RouterPeerName(strings.Repeat("a", 34)); len([]rune(n)) != 40 {
+		t.Fatal("34 знака ника -- ровно 40 рун имени")
+	}
+}
+
+func TestPeerState(t *testing.T) {
+	now := time.Unix(1_790_000_000, 0)
+	cases := []struct {
+		p     Peer
+		state string
+		age   int64
+	}{
+		{Peer{Enabled: true, LastHandshake: 0}, "never", -1},
+		{Peer{Enabled: true, NeverConnected: true, LastHandshake: 0}, "never", -1},
+		{Peer{Enabled: true, LastHandshake: now.Unix() - 60}, "online", 60},
+		{Peer{Enabled: true, LastHandshake: now.Unix() - 180}, "online", 180},
+		{Peer{Enabled: true, LastHandshake: now.Unix() - 181}, "idle", 181},
+		{Peer{Enabled: true, LastHandshake: now.Unix() + 30}, "online", 0}, // часы VPS спешат
+		{Peer{Enabled: false, LastHandshake: now.Unix() - 60}, "off", 60},
+	}
+	for _, tc := range cases {
+		if st, age := PeerState(tc.p, now); st != tc.state || age != tc.age {
+			t.Errorf("%+v: %s %d, ждали %s %d", tc.p, st, age, tc.state, tc.age)
+		}
+	}
+}
+
+func TestTunnelName(t *testing.T) {
+	for in, want := range map[[2]string]string{
+		{"nl2", "awg1"}:                     "nl2_awg1",
+		{"Main", "AWG.2"}:                   "main_awg-2",
+		{"1x", "awg1"}:                      "awg3-1x_awg1",
+		{"verylongpanelname", "wg-long-01"}: "verylongpanelname_wg-long-01",
+	} {
+		if got := TunnelName(in[0], in[1]); got != want || len(got) > 32 {
+			t.Errorf("%v: %q, ждали %q", in, got, want)
+		}
+	}
+}
