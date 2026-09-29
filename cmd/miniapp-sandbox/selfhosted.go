@@ -191,3 +191,11 @@ func (d sandboxDocs) SendDocument(_ context.Context, chatID int64, _ *int64, fil
 	slog.Info("песочница: .conf в личку", "chat", chatID, "file", filename, "bytes", len(data), "caption", caption)
 	return 1, nil
 }
+
+func (d sandboxDocs) SendPhoto(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
+	if d.unreachable {
+		return 0, &tg.APIError{Method: "sendPhoto", Code: 403, Description: "Forbidden: bot can't initiate conversation with a user"}
+	}
+	slog.Info("песочница: QR в личку", "chat", chatID, "file", filename, "bytes", len(data), "caption", caption)
+	return 2, nil
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 // Контракт кабинетов VPN и своих серверов для мини-аппа (цикл 3 программы
@@ -68,7 +69,10 @@ type SelfHostedVPS interface {
 	Issue(ctx context.Context, id, clientName string) (selfhostedamnezia.IssuedConfig, selfhostedamnezia.Instance, error)
 }
 
-// MiniappDocSender -- .conf документом в личку нажавшему (*tg.Client).
+// MiniappDocSender -- .conf документом и QR картинкой в личку нажавшему (*tg.Client).
 type MiniappDocSender interface {
 	SendDocument(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error)
+	SendPhoto(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error)
 }
+
+var _ MiniappDocSender = (*tg.Client)(nil)

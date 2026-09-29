@@ -297,6 +297,16 @@ func (c *Client) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64,
 
 // SendDocument uploads a small in-memory document to a chat/topic.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
+	return c.sendFile(ctx, "sendDocument", "document", chatID, threadID, filename, data, caption)
+}
+
+// SendPhoto uploads a small in-memory image as a photo: QR конфига в личке
+// должен открываться картинкой, а не файлом.
+func (c *Client) SendPhoto(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
+	return c.sendFile(ctx, "sendPhoto", "photo", chatID, threadID, filename, data, caption)
+}
+
+func (c *Client) sendFile(ctx context.Context, method, field string, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	_ = mw.WriteField("chat_id", strconv.FormatInt(chatID, 10))
@@ -306,41 +316,41 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, threadID *int64
 	if caption != "" {
 		_ = mw.WriteField("caption", caption)
 	}
-	part, err := mw.CreateFormFile("document", filename)
+	part, err := mw.CreateFormFile(field, filename)
 	if err != nil {
-		return 0, fmt.Errorf("tg sendDocument: create form file: %w", err)
+		return 0, fmt.Errorf("tg %s: create form file: %w", method, err)
 	}
 	if _, err := part.Write(data); err != nil {
-		return 0, fmt.Errorf("tg sendDocument: write file: %w", err)
+		return 0, fmt.Errorf("tg %s: write file: %w", method, err)
 	}
 	if err := mw.Close(); err != nil {
-		return 0, fmt.Errorf("tg sendDocument: close multipart: %w", err)
+		return 0, fmt.Errorf("tg %s: close multipart: %w", method, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+c.Token+"/sendDocument", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+c.Token+"/"+method, &body)
 	if err != nil {
-		return 0, fmt.Errorf("tg sendDocument: build request: %w", err)
+		return 0, fmt.Errorf("tg %s: build request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		safe := redactURLError(err)
-		c.warn("sendDocument", "transport error", "err", safe)
-		return 0, fmt.Errorf("tg sendDocument: %s", safe)
+		c.warn(method, "transport error", "err", safe)
+		return 0, fmt.Errorf("tg %s: %s", method, safe)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	var ar apiResp
 	if err := json.Unmarshal(raw, &ar); err != nil {
-		c.warn("sendDocument", "bad response", "status", resp.StatusCode, "body_len", len(raw))
-		return 0, fmt.Errorf("tg sendDocument: bad response (status %d): %s", resp.StatusCode, string(raw))
+		c.warn(method, "bad response", "status", resp.StatusCode, "body_len", len(raw))
+		return 0, fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
 	}
 	if !ar.OK {
-		c.warn("sendDocument", "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
-		return 0, &APIError{Method: "sendDocument", Description: ar.Description, Code: ar.ErrorCode, RetryAfter: ar.retryAfter()}
+		c.warn(method, "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
+		return 0, &APIError{Method: method, Description: ar.Description, Code: ar.ErrorCode, RetryAfter: ar.retryAfter()}
 	}
 	var out sendMessageResult
 	if err := json.Unmarshal(ar.Result, &out); err != nil {
-		return 0, fmt.Errorf("tg sendDocument: decode result: %w", err)
+		return 0, fmt.Errorf("tg %s: decode result: %w", method, err)
 	}
 	return out.MessageID, nil
 }

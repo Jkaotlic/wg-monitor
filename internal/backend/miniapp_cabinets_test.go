@@ -216,6 +216,7 @@ type fakeSentDoc struct {
 	filename string
 	data     []byte
 	caption  string
+	photo    bool
 }
 
 type fakeDocSender struct {
@@ -232,6 +233,16 @@ func (f *fakeDocSender) SendDocument(_ context.Context, chatID int64, _ *int64, 
 	}
 	f.sent = append(f.sent, fakeSentDoc{chatID: chatID, filename: filename, data: append([]byte{}, data...), caption: caption})
 	return 1, nil
+}
+
+func (f *fakeDocSender) SendPhoto(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.sent = append(f.sent, fakeSentDoc{chatID: chatID, filename: filename, data: append([]byte{}, data...), caption: caption, photo: true})
+	return 2, nil
 }
 
 type cabinetEnv struct {

@@ -245,6 +245,52 @@ func TestSendDocumentUploadsMultipart(t *testing.T) {
 	}
 }
 
+func TestSendPhotoUploadsMultipart(t *testing.T) {
+	var gotPath, gotFile, gotCaption, gotChat string
+	var gotBytes []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		gotChat = r.MultipartForm.Value["chat_id"][0]
+		gotCaption = r.MultipartForm.Value["caption"][0]
+		if _, ok := r.MultipartForm.Value["message_thread_id"]; ok {
+			t.Error("личка без темы, а message_thread_id ушёл")
+		}
+		files := r.MultipartForm.File["photo"]
+		if len(files) != 1 {
+			t.Fatalf("photo files = %d", len(files))
+		}
+		gotFile = files[0].Filename
+		f, _ := files[0].Open()
+		gotBytes, _ = io.ReadAll(f)
+		w.Write([]byte(`{"ok":true,"result":{"message_id":12}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	png := []byte("\x89PNG\r\n\x1a\nQR")
+	mid, err := c.SendPhoto(context.Background(), 999, nil, "iphone.png", png, "QR «iphone»")
+	if err != nil || mid != 12 {
+		t.Fatalf("send: %d %v", mid, err)
+	}
+	if gotPath != "/bottok/sendPhoto" || gotFile != "iphone.png" || gotCaption != "QR «iphone»" || gotChat != "999" || string(gotBytes) != string(png) {
+		t.Fatalf("path=%q file=%q caption=%q chat=%q", gotPath, gotFile, gotCaption, gotChat)
+	}
+}
+
+func TestSendPhotoAPIErrorIsTyped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"ok":false,"error_code":403,"description":"Forbidden: bot can't initiate conversation with a user"}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	_, err := c.SendPhoto(context.Background(), 999, nil, "q.png", []byte("x"), "")
+	if !IsUnreachableChat(err) {
+		t.Fatalf("ждали «бот не может написать», получили %v", err)
+	}
+}
+
 func TestDeleteMessage(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
