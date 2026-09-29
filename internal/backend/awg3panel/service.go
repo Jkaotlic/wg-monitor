@@ -141,6 +141,19 @@ type Service struct {
 	pages   map[string]cachedPage   // id|iface
 	ifaces  map[string]cachedIfaces // id
 	clients map[string]cachedClient // id
+
+	memMu sync.Mutex
+	mem   map[string]memBreaker // id -- предохранитель, живой даже если диск не пишется
+}
+
+// memBreaker -- то же, что Instance.Lock/PausedUntil, но в памяти: trip()
+// взводит его ДО попытки SaveStore, ready() смотрит сюда наравне с диском.
+// Без этого отказавшая запись на диск (например, SD-карта Pi на чтение)
+// оставляла бы предохранитель снятым, и каждое открытие экрана снова слало
+// бы неверный пароль панели, приближая бан оператора по её RemoteAddr.
+type memBreaker struct {
+	lock        Lock
+	pausedUntil time.Time
 }
 
 func NewService(path string, o Options) *Service {
@@ -159,7 +172,7 @@ func NewService(path string, o Options) *Service {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{path: path, opts: o, pages: map[string]cachedPage{}, ifaces: map[string]cachedIfaces{}, clients: map[string]cachedClient{}}
+	return &Service{path: path, opts: o, pages: map[string]cachedPage{}, ifaces: map[string]cachedIfaces{}, clients: map[string]cachedClient{}, mem: map[string]memBreaker{}}
 }
 
 func normID(id string) string { return strings.ToLower(strings.TrimSpace(id)) }
@@ -324,8 +337,10 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (View, *Check
 		credsChanged = in.Password != "" || in.P12 != nil || moved
 		if credsChanged {
 			next.Lock = LockNone
-		}
-		if next.BaseURL != cur.BaseURL {
+			// Readonly -- тоже про учётные данные: панель могла обновиться и
+			// получить мутирующие маршруты с тех пор, как её пометили
+			// read-only; сменой одного пароля (без смены адреса) это раньше
+			// не снималось.
 			next.Readonly = false
 		}
 		st.Instances[i] = next
@@ -335,6 +350,9 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (View, *Check
 		return View{}, nil, err
 	}
 	s.forget(id)
+	if credsChanged {
+		s.clearMem(id)
+	}
 	s.opts.Logger.Info("awg3-панель изменена", "panel", id, "credentials_changed", credsChanged)
 	var res *CheckResult
 	if credsChanged {
@@ -363,6 +381,7 @@ func (s *Service) Delete(id string) error {
 	})
 	if err == nil {
 		s.forget(id)
+		s.clearMem(id)
 		s.opts.Logger.Info("awg3-панель удалена", "panel", id)
 	}
 	return err
@@ -397,7 +416,9 @@ func (s *Service) checkLocked(ctx context.Context, id string) CheckResult {
 }
 
 // ready -- предохранитель и клиент. Ни одного запроса, если панель выключена,
-// под замком 401/TLS или на паузе 429.
+// под замком 401/TLS или на паузе 429. Замок и пауза смотрятся и в памяти
+// (memBreaker), и на диске -- шире побеждает: если SaveStore в trip() не
+// смог записать отказ, память всё равно не пускает следующий запрос.
 func (s *Service) ready(id string) (Instance, *Client, error) {
 	inst, err := s.find(id)
 	if err != nil {
@@ -406,7 +427,12 @@ func (s *Service) ready(id string) (Instance, *Client, error) {
 	if !inst.Enabled {
 		return Instance{}, nil, ErrInstanceDisabled
 	}
-	switch inst.Lock {
+	mem := s.memFor(id)
+	lock := inst.Lock
+	if mem.lock != LockNone {
+		lock = mem.lock
+	}
+	switch lock {
 	case LockBadPassword:
 		return Instance{}, nil, &Error{Kind: KindBadPassword, Msg: "панель не приняла логин или пароль — пересохраните учётные данные"}
 	case LockCert:
@@ -414,14 +440,48 @@ func (s *Service) ready(id string) (Instance, *Client, error) {
 	case LockServerCert:
 		return Instance{}, nil, &Error{Kind: KindServerCert, Msg: "сертификат панели не прошёл проверку — проверьте адрес и сертификат на сервере"}
 	}
-	if s.opts.Now().Before(inst.PausedUntil) {
-		return Instance{}, nil, &Error{Kind: KindBanned, Until: inst.PausedUntil, Msg: "панель ограничила вход"}
+	pausedUntil := inst.PausedUntil
+	if mem.pausedUntil.After(pausedUntil) {
+		pausedUntil = mem.pausedUntil
+	}
+	if s.opts.Now().Before(pausedUntil) {
+		return Instance{}, nil, &Error{Kind: KindBanned, Until: pausedUntil, Msg: "панель ограничила вход"}
 	}
 	c, err := s.client(inst)
 	if err != nil {
 		return Instance{}, nil, s.trip(id, err)
 	}
 	return inst, c, nil
+}
+
+func (s *Service) memFor(id string) memBreaker {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	return s.mem[id]
+}
+
+func (s *Service) setMemLock(id string, l Lock) {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	b := s.mem[id]
+	b.lock = l
+	s.mem[id] = b
+}
+
+func (s *Service) setMemPause(id string, until time.Time) {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	b := s.mem[id]
+	b.pausedUntil = until
+	s.mem[id] = b
+}
+
+// clearMem -- снимает замок и паузу в памяти: тем же пересохранением
+// учётных данных, что снимает их на диске, и при удалении панели.
+func (s *Service) clearMem(id string) {
+	s.memMu.Lock()
+	defer s.memMu.Unlock()
+	delete(s.mem, id)
 }
 
 func (s *Service) client(inst Instance) (*Client, error) {
@@ -440,7 +500,11 @@ func (s *Service) client(inst Instance) (*Client, error) {
 	return c, nil
 }
 
-// trip взводит предохранитель по отказу и возвращает отказ (у паузы -- с Until).
+// trip взводит предохранитель по отказу и возвращает отказ (у паузы -- с
+// Until). Память -- ДО диска: если Pi не может записать (SD-карта на
+// чтение), следующий ready() всё равно не пустит запрос к панели --
+// s.persist() при отказе SaveStore только логирует и не возвращает ошибку
+// вызывающему.
 func (s *Service) trip(id string, err error) error {
 	var pe *Error
 	if !errors.As(err, &pe) {
@@ -448,13 +512,17 @@ func (s *Service) trip(id string, err error) error {
 	}
 	switch pe.Kind {
 	case KindBadPassword:
+		s.setMemLock(id, LockBadPassword)
 		s.persist(id, func(i *Instance) { i.Lock = LockBadPassword })
 	case KindCert:
+		s.setMemLock(id, LockCert)
 		s.persist(id, func(i *Instance) { i.Lock = LockCert })
 	case KindServerCert:
+		s.setMemLock(id, LockServerCert)
 		s.persist(id, func(i *Instance) { i.Lock = LockServerCert })
 	case KindBanned:
 		until := s.opts.Now().Add(s.opts.Pause)
+		s.setMemPause(id, until)
 		s.persist(id, func(i *Instance) { i.PausedUntil = until })
 		cp := *pe
 		cp.Until = until
@@ -736,8 +804,12 @@ func PeerState(p Peer, now time.Time) (string, int64) {
 	}
 }
 
-// TunnelName -- имя VPN-туннеля на роутере: «<панель>_<интерфейс>», по тем же
-// правилам, что selfhostedamnezia.TunnelName (латиница, цифры, «_», «-», до 32).
+// TunnelName -- имя VPN-туннеля на роутере: «a3-<панель>_<интерфейс>», по тем
+// же правилам, что selfhostedamnezia.TunnelName (латиница, цифры, «_», «-»,
+// до 32). Префикс «a3-» -- ревью: у selfhostedamnezia.TunnelName та же форма
+// «<id>_<x>», и панель awg3 с тем же коротким именем, что self-hosted
+// инстанс (независимые пространства имён), дала бы одинаковое имя туннеля;
+// с replace:true выпуск с одной могло бы заменить туннель от другой.
 // Повторный выпуск с той же панели и интерфейса заменяет туннель (replace:true).
 func TunnelName(instanceID, iface string) string {
 	s := strings.ToLower(instanceID + "_" + iface)
@@ -750,10 +822,7 @@ func TunnelName(instanceID, iface string) string {
 			b.WriteByte('-')
 		}
 	}
-	out := strings.Trim(b.String(), "-_")
-	if out == "" || out[0] < 'a' || out[0] > 'z' {
-		out = "awg3-" + out
-	}
+	out := "a3-" + strings.Trim(b.String(), "-_")
 	if len(out) > 32 {
 		out = out[:32]
 	}

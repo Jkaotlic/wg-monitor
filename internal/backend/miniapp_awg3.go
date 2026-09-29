@@ -574,7 +574,7 @@ func miniappAwg3SendDevice(d Deps, r *http.Request, tgUser int64, panelID string
 	case len(png) == 0:
 		// Панель не прислала картинку -- редкий случай, но не ошибка.
 	default:
-		if _, err := d.MiniappDocs.SendPhoto(ctx, tgUser, nil, strings.TrimSuffix(filename, ".conf")+".png", png, "QR «"+issued.Name+"»"+miniappSendConfCaption); err != nil {
+		if _, err := d.MiniappDocs.SendPhoto(ctx, tgUser, nil, strings.TrimSuffix(filename, ".conf")+".png", png, "QR «"+issued.Name+"»"+miniappSendQRCaption); err != nil {
 			miniappCabinetLogger(d).Warn("awg3-панель: QR в личку не ушёл", "panel", panelID, "err", err)
 		} else {
 			photoSent = true

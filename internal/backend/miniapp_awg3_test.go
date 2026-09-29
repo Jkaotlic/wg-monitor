@@ -434,6 +434,11 @@ func TestMiniappAwg3DeviceQRAndDM(t *testing.T) {
 	if !photo.photo || photo.chatID != cabAdmin || !strings.HasSuffix(photo.filename, ".png") || !strings.Contains(string(photo.data), "QR-BYTES") {
 		t.Fatalf("фото: %+v", photo.filename)
 	}
+	// Ревью: подпись под QR-фото своя, а не «В файле…» от .conf -- в фото
+	// файла нет, есть сам QR.
+	if !strings.Contains(photo.caption, "В QR приватный ключ — не пересылайте его.") || strings.Contains(photo.caption, "В файле") {
+		t.Fatalf("подпись фото: %q", photo.caption)
+	}
 	for _, leak := range []string{"DEVICE-CONF", resp.QR} {
 		if strings.Contains(env.logs.String(), leak) {
 			t.Fatal("конфиг или QR в журнале")
@@ -508,14 +513,14 @@ func TestMiniappVPNIssueAwg3(t *testing.T) {
 		t.Fatal("не-админ дошёл до панели")
 	}
 	rec := env.do(t, cabAdmin, http.MethodPost, path, `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`)
-	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"tunnel_name":"main_awg1"`) || strings.Contains(rec.Body.String(), "ROUTER-CONF") {
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"tunnel_name":"a3-main_awg1"`) || strings.Contains(rec.Body.String(), "ROUTER-CONF") {
 		t.Fatalf("админ: %d %s", rec.Code, rec.Body.String())
 	}
 	if env.awg3.routerCalls[0] != "main|awg1|router-owned" {
 		t.Fatalf("в сервис: %v", env.awg3.routerCalls)
 	}
 	cmd := env.sink.enqueued[0]
-	if cmd.Action != "tunnel_import" || cmd.Args["name"] != "main_awg1" || cmd.Args["replace"] != true || cmd.Args["backend"] != "nativewg" {
+	if cmd.Action != "tunnel_import" || cmd.Args["name"] != "a3-main_awg1" || cmd.Args["replace"] != true || cmd.Args["backend"] != "nativewg" {
 		t.Fatalf("команда: %+v", cmd)
 	}
 	raw, _ := base64.StdEncoding.DecodeString(cmd.Args["conf"].(string))

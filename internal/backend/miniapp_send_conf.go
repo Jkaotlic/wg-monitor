@@ -27,6 +27,10 @@ type miniappSendConfResp struct {
 // miniappSendConfCaption -- подпись под файлом: чей роутер и что внутри.
 const miniappSendConfCaption = "\nВ файле приватный ключ — не пересылайте его."
 
+// miniappSendQRCaption -- та же оговорка под QR-фото awg3-панели (ревью:
+// фото — не файл, «В файле…» там сбивает с толку).
+const miniappSendQRCaption = "\nВ QR приватный ключ — не пересылайте его."
+
 func miniappSendConfHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Самый широкий гейт маршрута -- админ или владелец -- до тела; свой

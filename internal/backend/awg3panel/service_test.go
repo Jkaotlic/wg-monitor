@@ -339,6 +339,108 @@ func TestConfigForRouterRaceMakesOnePeer(t *testing.T) {
 	}
 }
 
+// TestBreakerLocksInMemoryEvenWhenPersistFails -- ревью: trip() писал только
+// на диск; если SaveStore не смог (SD-карта Pi на чтение), ready() читал
+// только хранилище, и каждое открытие экрана снова слало неверный пароль,
+// приближая бан по RemoteAddr самого оператора (Caddy банит источник за 5
+// неудач/5 мин). trip() должен взводить замок в памяти ДО попытки записи, а
+// ready() -- смотреть и туда: второй запрос обязан уйти в отказ без единого
+// обращения к панели, даже если диск не пишется.
+func TestBreakerLocksInMemoryEvenWhenPersistFails(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	ctx := context.Background()
+	dir := filepath.Dir(e.path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	// Панель теперь отвергает пароль, но каталог хранилища read-only --
+	// SaveStore внутри trip() провалится и только залогируется.
+	e.p.SetPassword("NOW-WRONG-MUST-NOT-LEAK")
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBadPassword {
+		t.Fatalf("первый отказ: %v", err)
+	}
+	hits := e.p.TotalHits()
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBadPassword {
+		t.Fatalf("второй раз (замок в памяти): %v", err)
+	}
+	if e.p.TotalHits() != hits {
+		t.Fatalf("второй Peers сходил в панель, хотя диск не пишется: было %d, стало %d", hits, e.p.TotalHits())
+	}
+	// Диск снова доступен на запись, пароль на панели -- прежний: пересохранение
+	// снимает и дисковый, и оперативный замок.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e.p.SetPassword(testPanelPass)
+	_, res, err := e.s.Update(ctx, "main", Input{Label: "Main", BaseURL: e.p.URL, User: "admin", Password: testPanelPass})
+	if err != nil || res == nil || !res.OK {
+		t.Fatalf("пересохранение: %+v %v", res, err)
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); err != nil {
+		t.Fatalf("после пересохранения: %v", err)
+	}
+}
+
+// TestBreakerPauseLocksInMemoryEvenWhenPersistFails -- то же самое для паузы
+// 429: PausedUntil должен блокировать следующий запрос из памяти, даже если
+// SaveStore не смог записать его на диск.
+func TestBreakerPauseLocksInMemoryEvenWhenPersistFails(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	ctx := context.Background()
+	dir := filepath.Dir(e.path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	e.p.SetOverride(respond429)
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBanned {
+		t.Fatalf("первый отказ: %v", err)
+	}
+	hits := e.p.TotalHits()
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBanned {
+		t.Fatalf("второй раз (замок в памяти): %v", err)
+	}
+	if e.p.TotalHits() != hits {
+		t.Fatalf("второй Peers сходил в панель на паузе, хотя диск не пишется: было %d, стало %d", hits, e.p.TotalHits())
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e.p.SetOverride(nil)
+	_, res, err := e.s.Update(ctx, "main", Input{Label: "Main", BaseURL: e.p.URL, User: "admin", Password: testPanelPass})
+	if err != nil || res == nil || !res.OK {
+		t.Fatalf("пересохранение: %+v %v", res, err)
+	}
+	if _, err := e.s.Peers(ctx, "main", ""); err != nil {
+		t.Fatalf("после пересохранения: %v", err)
+	}
+}
+
+// TestReadonlyClearsOnCredentialResave -- ревью: Readonly раньше снимался
+// только сменой BaseURL; пересохранение одного пароля (адрес и логин те же)
+// его не трогало, хотя это тоже «пересохранение учётных данных».
+func TestReadonlyClearsOnCredentialResave(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Readonly: true})
+	e.create(t, "main")
+	ctx := context.Background()
+	if _, err := e.s.IssueDevice(ctx, "main", "awg1", "iphone"); KindOf(err) != KindReadonly {
+		t.Fatalf("%v", err)
+	}
+	if views, _ := e.s.List(); !views[0].Readonly {
+		t.Fatal("readonly не запомнен")
+	}
+	_, res, err := e.s.Update(ctx, "main", Input{Label: "Main", BaseURL: e.p.URL, User: "admin", Password: testPanelPass})
+	if err != nil || res == nil {
+		t.Fatalf("пересохранение пароля: %+v %v", res, err)
+	}
+	if views, _ := e.s.List(); views[0].Readonly {
+		t.Fatal("readonly не снят пересохранением пароля без смены адреса")
+	}
+}
+
 func TestReadonlyPanelIsRemembered(t *testing.T) {
 	e := newSvcEnv(t, awg3paneltest.Options{Readonly: true})
 	e.create(t, "main")
@@ -449,12 +551,16 @@ func TestPeerState(t *testing.T) {
 	}
 }
 
+// TestTunnelName -- решение задачи ревью «Коллизия имён»: у
+// selfhostedamnezia.TunnelName та же форма «<id>_<x>», префикс «a3-»
+// отличает имена панелей awg3, чтобы replace:true не мог заменить чужой
+// VPN-туннель одноимённым.
 func TestTunnelName(t *testing.T) {
 	for in, want := range map[[2]string]string{
-		{"nl2", "awg1"}:                     "nl2_awg1",
-		{"Main", "AWG.2"}:                   "main_awg-2",
-		{"1x", "awg1"}:                      "awg3-1x_awg1",
-		{"verylongpanelname", "wg-long-01"}: "verylongpanelname_wg-long-01",
+		{"nl2", "awg1"}:                     "a3-nl2_awg1",
+		{"Main", "AWG.2"}:                   "a3-main_awg-2",
+		{"1x", "awg1"}:                      "a3-1x_awg1",
+		{"verylongpanelname", "wg-long-01"}: "a3-verylongpanelname_wg-long-01",
 	} {
 		if got := TunnelName(in[0], in[1]); got != want || len(got) > 32 {
 			t.Errorf("%v: %q, ждали %q", in, got, want)
