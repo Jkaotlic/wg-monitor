@@ -12,7 +12,7 @@ export function DataRow({ dot, title, code, value, valueSub, valueTone }) {
       {dot ? <span class={`data-row-dot data-row-dot-${dot}`} /> : null}
       <span class="data-row-main">
         <Quoted text={title} />
-        {code ? <u class="data-row-code">{code}</u> : null}
+        {code ? <u class="data-row-code" title={code}>{code}</u> : null}
       </span>
       <span class={valueTone ? `data-row-value data-row-value-${valueTone}` : 'data-row-value'}>
         <Quoted text={value} />

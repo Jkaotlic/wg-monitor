@@ -2352,6 +2352,36 @@ body {
   margin-top: var(--sp-3);
 }
 
+/* Новость об обновлении -- столбиком: строка данных, текст новости, кнопка
+   установки, пара «Отложить на неделю / Скрыть эту новость» (правило пар --
+   .settings-actions). Раньше это был .settings-row -- flex в одну линию без
+   переноса, и на 360 px пара уезжала за правый край (до 459 px). */
+.settings-news {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-news:last-child { border-bottom: none; }
+.settings-news > .data-row { border-bottom: none; }
+
+.settings-news > .card-foot {
+  border-top: none;
+  background: none;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.settings-news > :not(.data-row):not(.card-foot) {
+  margin: 0 14px;
+}
+
+/* Строка внутри группы «строка + предупреждение»: черта -- у группы. */
+.data-row-group > .settings-row { border-bottom: none; }
+
 /* Пара кнопок в строку («Осмотр роутера» / «Осмотр HydraRoute Neo»,
    «Перезапустить HydraRoute» / «… awg-manager», «Починить» / «Перезапустить
    VPN-туннель»). Кнопки одной высоты, а когда подписи в половине строки

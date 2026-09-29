@@ -58,14 +58,18 @@ export function ExitIPSection({ routerID, tunnels = [], deadline }) {
           const running = t.run_state === 'running'
           const line = exitLine(facts, t.tunnel_id, { running })
           return (
-            <div key={t.tunnel_id} class="settings-row">
-              <DataRow title={`«${t.name || t.tunnel_id}»`} value={line.value} valueSub={line.sub} valueTone={line.tone} />
-              {running && (
-                <button type="button" class="btn btn-ghost btn-row settings-row-btn" disabled={probe.busy} onClick={() => run(t.tunnel_id)}>
-                  {probing === t.tunnel_id ? 'Меряем…' : 'Проверить сейчас'}
-                </button>
-              )}
-              {line.warn && <p class="card-foot card-foot-bad">{line.warn}</p>}
+            // Предупреждение -- под строкой, а не третьей ячейкой её ряда:
+            // в .settings-row (flex без переноса) оно выталкивало ряд за край.
+            <div key={t.tunnel_id} class="data-row-group">
+              <div class="settings-row">
+                <DataRow title={`«${t.name || t.tunnel_id}»`} value={line.value} valueSub={line.sub} valueTone={line.tone} />
+                {running && (
+                  <button type="button" class="btn btn-ghost btn-row settings-row-btn" disabled={probe.busy} onClick={() => run(t.tunnel_id)}>
+                    {probing === t.tunnel_id ? 'Меряем…' : 'Проверить сейчас'}
+                  </button>
+                )}
+              </div>
+              {line.warn && <p class="diag-consequence">{line.warn}</p>}
             </div>
           )
         })}

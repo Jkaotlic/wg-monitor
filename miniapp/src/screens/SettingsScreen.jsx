@@ -267,11 +267,14 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
       <ManageGroup title="Версии">
         <Section title="Обновления">
           {newsRows.length > 0 && (
-            <div class="card settings-card">
+            <div class="card card-rows settings-card">
               {newsRows.map((r) => {
                 const act = newsAction(r.component)
                 return (
-                  <div key={r.key} class="settings-row">
+                  // Новость -- столбиком (.settings-news): строка, текст,
+                  // кнопка и пара «Отложить / Скрыть» друг под другом. В
+                  // строку .settings-row они не влезали и уезжали за край.
+                  <div key={r.key} class="settings-news">
                     <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
                     <p class="card-foot">{r.text}</p>
                     {act && (
