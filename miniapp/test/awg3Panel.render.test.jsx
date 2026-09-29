@@ -253,6 +253,17 @@ describe('форма панели', () => {
     expect(root.querySelector('#a3-p12_password').getAttribute('autocomplete')).toBe('new-password')
   })
 
+  // Ревью раунд 2: невидимый нативный input не должен быть отдельной
+  // остановкой Tab перед кнопкой «Выбрать файл .p12»; доступное имя
+  // остаётся -- через <label for="a3-p12"> над кнопкой.
+  it('невидимый input .p12 не ловит Tab, но подписан label', async () => {
+    const root = await mountNode(<Awg3PanelFormScreen onClose={() => {}} openSheet={() => {}} />)
+    const input = root.querySelector('#a3-p12')
+    expect(input.getAttribute('tabindex')).toBe('-1')
+    expect(input.hasAttribute('aria-hidden')).toBe(false)
+    expect(root.querySelector('label[for="a3-p12"]')).toBeTruthy()
+  })
+
   // Правка 5 (ревью раунд 1): файл больше 100 КБ отклоняется в браузере, не
   // читается и не уходит проверять readFileBase64.
   it('.p12 больше 100 КБ -- отказ словами, файл не читается', async () => {
@@ -341,6 +352,16 @@ describe('экран панели', () => {
     expect(rows[0].textContent).toContain('выключен')
     expect(rows[0].textContent).not.toContain('роутер')
     expect(rows[0].querySelector('.data-row-dot-muted')).toBeTruthy()
+  })
+
+  // Ревью раунд 2: пилюля роутера обрезается многоточием в узкой колонке
+  // (CSS, проверено измерением в песочнице), а полная фраза остаётся
+  // доступной через title -- проверяем здесь структуру, не пиксели.
+  it('ярлык роутера у пира -- текст в .pill-text, полная фраза в title', async () => {
+    const { root } = await mountPanel()
+    const tag = root.querySelector('.awg3-peer-tag .pill')
+    expect(tag.getAttribute('title')).toBe('роутер «home»')
+    expect(tag.querySelector('.pill-text').textContent).toBe('роутер «home»')
   })
 
   it('состояния спеки: пароль, пауза ЧЧ:ММ, сертификат, недоступна с повтором', async () => {

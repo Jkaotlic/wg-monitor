@@ -221,8 +221,11 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
                   <label for="a3-p12">{AWG3_TEXTS.p12Label}</label>
                   {/* Правка 6: родная подпись «Choose File / No file chosen» --
                       по-английски и её не перекрасить; вход спрятан, кнопка --
-                      своя, имя файла показывает certHint из состояния формы. */}
-                  <input ref={fileInputRef} id="a3-p12" type="file" accept=".p12,.pfx,application/x-pkcs12" onChange={pickFile} />
+                      своя, имя файла показывает certHint из состояния формы.
+                      Ревью раунд 2: tabindex=-1 -- невидимый вход не должен
+                      быть отдельной остановкой Tab перед кнопкой; label
+                      сверху по-прежнему даёт ему доступное имя. */}
+                  <input ref={fileInputRef} id="a3-p12" type="file" tabindex="-1" accept=".p12,.pfx,application/x-pkcs12" onChange={pickFile} />
                   <button type="button" class="btn btn-ghost btn-wide awg3-file-btn" onClick={() => fileInputRef.current?.click()}>
                     {AWG3_TEXTS.p12Pick}
                   </button>

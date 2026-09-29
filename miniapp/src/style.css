@@ -3775,7 +3775,28 @@ body {
    черту уже рисует .data-row сама на себе. Ярлык (роутер или «выключен»)
    живёт внутри той же строки, под именем. */
 .awg3-peer-tag {
+  min-width: 0;
+  max-width: 100%;
   margin: 2px 0 0;
+}
+
+/* Ревью раунд 2: на 360 px пилюля роутера натурального размера вылезала за
+   колонку заголовка и наезжала на трафик справа (.pill -- inline-flex без
+   потолка ширины). Порог -- по колонке; обрезаем многоточием сам текст
+   (обёрнут в .pill-text): text-overflow на самой .pill (flex-контейнер с
+   точкой ::before) не срабатывает, а вложенному flex-элементу нужен свой
+   min-width: 0, иначе он не сжимается меньше содержимого.
+   Полная фраза остаётся в title (long-press/tooltip) -- см. Pill.jsx. */
+.awg3-peer-tag .pill {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.awg3-peer-tag .pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Единица трафика не должна остаться одна на своей строке: «↑ 200,3» /

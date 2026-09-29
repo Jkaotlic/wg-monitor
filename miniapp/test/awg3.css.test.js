@@ -14,6 +14,8 @@ describe('CSS awg3-панелей', () => {
       '.awg3-check-bad {',
       '.data-row-dot-muted {',
       '.awg3-peer-tag {',
+      '.awg3-peer-tag .pill {',
+      '.awg3-peer-tag .pill-text {',
       '.awg3-file-btn {',
       '.awg3-actions {',
       '.awg3-qr {',

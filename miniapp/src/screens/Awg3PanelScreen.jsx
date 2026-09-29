@@ -210,7 +210,12 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                         titleExtra={
                           r.router ? (
                             <p class="awg3-peer-tag">
-                              <Pill tone="sig">{`роутер «${r.router.nickname}»`}</Pill>
+                              {/* Ревью раунд 2: пилюля не резиновая -- в узкой
+                                  колонке обрезаем текст многоточием и несём
+                                  полную фразу в title (long-press/tooltip). */}
+                              <Pill tone="sig" title={`роутер «${r.router.nickname}»`}>
+                                <span class="pill-text">{`роутер «${r.router.nickname}»`}</span>
+                              </Pill>
                             </p>
                           ) : r.off ? (
                             <p class="awg3-peer-tag hint">выключен</p>
