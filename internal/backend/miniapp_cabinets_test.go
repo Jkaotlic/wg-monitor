@@ -223,6 +223,9 @@ type fakeDocSender struct {
 	mu   sync.Mutex
 	sent []fakeSentDoc
 	err  error
+	// photoErr -- отдельный отказ только SendPhoto (.conf уходит успешно, QR
+	// нет). Пусто -- SendPhoto подчиняется общему err, как раньше.
+	photoErr error
 }
 
 func (f *fakeDocSender) SendDocument(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
@@ -238,6 +241,9 @@ func (f *fakeDocSender) SendDocument(_ context.Context, chatID int64, _ *int64, 
 func (f *fakeDocSender) SendPhoto(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.photoErr != nil {
+		return 0, f.photoErr
+	}
 	if f.err != nil {
 		return 0, f.err
 	}

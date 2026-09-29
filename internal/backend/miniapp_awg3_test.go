@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -145,6 +146,7 @@ func TestMiniappAwg3ListNeverShowsSecrets(t *testing.T) {
 		{ID: "main", Label: "Main", BaseURL: "https://panel.example.com", User: "admin", Enabled: true, PasswordSet: true, CertSet: true, CertSubject: "anex", CertNotAfter: time.Date(2028, 11, 26, 0, 0, 0, 0, time.UTC)},
 		{ID: "nl2", Enabled: true, Lock: awg3panel.LockBadPassword, Readonly: true},
 		{ID: "bad", Enabled: true, Lock: awg3panel.LockCert},
+		{ID: "srvcert", Enabled: true, Lock: awg3panel.LockServerCert},
 		{ID: "ban", Enabled: true, PausedUntil: until},
 		{ID: "off", Enabled: false},
 	}
@@ -156,10 +158,10 @@ func TestMiniappAwg3ListNeverShowsSecrets(t *testing.T) {
 	var resp struct {
 		Panels []map[string]any `json:"panels"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Panels) != 5 {
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Panels) != 6 {
 		t.Fatalf("%v %s", err, body)
 	}
-	want := []string{"ok", "bad_password", "cert_rejected", "paused", "disabled"}
+	want := []string{"ok", "bad_password", "cert_rejected", "server_cert_rejected", "paused", "disabled"}
 	for i, p := range resp.Panels {
 		if p["state"] != want[i] {
 			t.Errorf("%v: state=%v, ждали %s", p["id"], p["state"], want[i])
@@ -173,8 +175,8 @@ func TestMiniappAwg3ListNeverShowsSecrets(t *testing.T) {
 	if resp.Panels[0]["password_set"] != true || resp.Panels[0]["cert_set"] != true || resp.Panels[0]["cert_not_after"] != "2028-11-26T00:00:00Z" || resp.Panels[1]["readonly"] != true {
 		t.Fatalf("поля: %s", body)
 	}
-	if resp.Panels[3]["paused_until"] != until.UTC().Format(time.RFC3339) {
-		t.Fatalf("paused_until: %v", resp.Panels[3]["paused_until"])
+	if resp.Panels[4]["paused_until"] != until.UTC().Format(time.RFC3339) {
+		t.Fatalf("paused_until: %v", resp.Panels[4]["paused_until"])
 	}
 }
 
@@ -576,5 +578,187 @@ func TestAwg3IsNotAReplaceOrRepairProvider(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != http.StatusBadRequest || body.Code != "unknown_provider" {
 		t.Fatalf("мастер замены принял awg3panel: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ctxCheckingDocSender -- в отличие от fakeDocSender, ведёт себя как
+// настоящий *tg.Client: если ctx уже отменён, запрос не уходит вовсе. Нужен,
+// чтобы тест на отмену запроса мини-аппа мог отличить «личка ушла с ctx
+// r.Context()» от «личка ушла с ctx, переживающим отмену».
+type ctxCheckingDocSender struct{ *fakeDocSender }
+
+func (f *ctxCheckingDocSender) SendDocument(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return f.fakeDocSender.SendDocument(ctx, chatID, threadID, filename, data, caption)
+}
+
+func (f *ctxCheckingDocSender) SendPhoto(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return f.fakeDocSender.SendPhoto(ctx, chatID, threadID, filename, data, caption)
+}
+
+// TestMiniappAwg3DeviceDMSurvivesRequestCancel -- отмена запроса мини-аппа
+// (закрытая вкладка) во время POST /peers на настоящую панель не должна
+// стоить личку: пир уже выпущен (WithoutCancel внутри Service.IssueDevice,
+// Task 3), а личка обязана уйти тоже с ctx, переживающим отмену -- иначе
+// второй попытки не будет (повтор -- 409 awg3_name_taken).
+func TestMiniappAwg3DeviceDMSurvivesRequestCancel(t *testing.T) {
+	p, err := awg3paneltest.Start(awg3paneltest.Options{Password: "PANEL-PW-MUST-NOT-LEAK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	svc := awg3panel.NewService(filepath.Join(t.TempDir(), awg3panel.DefaultStoreName), awg3panel.Options{RootCAs: p.CA.Pool})
+	docs := &ctxCheckingDocSender{fakeDocSender: &fakeDocSender{}}
+	env := newCabinetEnv(t, func(d *Deps) { d.Awg3Panels = svc; d.MiniappDocs = docs })
+
+	pfx, err := p.CA.P12("anex", time.Now().Add(-time.Hour), time.Now().Add(time.Hour), "P12-PW-MUST-NOT-LEAK", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	panelBody, _ := json.Marshal(map[string]string{
+		"id": "main", "label": "Main", "base_url": p.URL, "user": "admin",
+		"password": "PANEL-PW-MUST-NOT-LEAK", "p12_base64": base64.StdEncoding.EncodeToString(pfx), "p12_password": "P12-PW-MUST-NOT-LEAK",
+	})
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels", string(panelBody))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("панель не добавлена: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Панель блокирует ровно POST .../peers (выпуск пира) до release: успеваем
+	// отменить ctx запроса мини-аппа, пока панель ещё «думает».
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	p.SetOverride(func(_ http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/peers") {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return false
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/awg3panels/main/device", strings.NewReader(`{"iface":"awg1","name":"iphone anex"}`)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", cabAdmin))
+	rec2 := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		env.h.ServeHTTP(rec2, req)
+		close(done)
+	}()
+	<-started
+	cancel()
+	close(release)
+	<-done
+
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("device: %d %s", rec2.Code, rec2.Body.String())
+	}
+	var resp struct {
+		DM string `json:"dm"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.DM != "sent" {
+		t.Fatalf("dm=%q, ждали sent несмотря на отмену запроса мини-аппа", resp.DM)
+	}
+	if len(docs.sent) != 2 {
+		t.Fatalf("в личку ушло %d записей, ждали .conf и QR", len(docs.sent))
+	}
+	if docs.sent[0].photo || !strings.Contains(string(docs.sent[0].data), "PrivateKey") {
+		t.Fatalf(".conf не дошёл: %+v", docs.sent[0])
+	}
+	if !docs.sent[1].photo {
+		t.Fatalf("QR не дошёл: %+v", docs.sent[1])
+	}
+}
+
+// TestMiniappAwg3DeviceDMHonestAboutMissingQR -- .conf ушёл, а QR нет (панель
+// не отдала картинку, или Telegram не принял фото) -- ответ обязан отличать
+// это от полного успеха: "sent_no_qr", а не молчаливое "sent".
+func TestMiniappAwg3DeviceDMHonestAboutMissingQR(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(env *cabinetEnv)
+	}{
+		{"QR не декодируется", func(env *cabinetEnv) {
+			env.awg3.issued = awg3panel.Issued{
+				Name: "iphone anex", Address: "10.66.0.9/32",
+				Config:      "[Interface]\nPrivateKey = DEVICE-CONF-MUST-NOT-LEAK\n",
+				QRPNGBase64: "@@@не-base64",
+			}
+		}},
+		{"SendPhoto отказал", func(env *cabinetEnv) {
+			seedDevice(env)
+			env.docs.photoErr = errors.New("telegram 502 на фото")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newCabinetEnv(t)
+			tc.mutate(env)
+			rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"iphone anex"}`)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("%d %s", rec.Code, rec.Body.String())
+			}
+			var resp struct {
+				DM string `json:"dm"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.DM != "sent_no_qr" {
+				t.Fatalf("dm=%q, ждали sent_no_qr", resp.DM)
+			}
+			if len(env.docs.sent) != 1 || env.docs.sent[0].photo {
+				t.Fatalf(".conf должен был уйти один, без QR: %+v", env.docs.sent)
+			}
+		})
+	}
+}
+
+// TestMiniappAwg3RoutersTrimsNickname -- ник роутера с пробелами по краям
+// (легаси-данные, ручной импорт) обязан матчиться так же, как
+// awg3panel.RouterPeerName строит имя пира на панели -- иначе ярлык роутера
+// на экране пиров молча пропадает.
+func TestMiniappAwg3RoutersTrimsNickname(t *testing.T) {
+	env := newCabinetEnv(t)
+	spacedID, err := env.d.Users().Insert(" router-spacey ", "tok-router-spacey", "", "awg0")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	env.awg3.page = awg3panel.Page{
+		Panel:  awg3panel.View{ID: "main", Label: "Main", Enabled: true},
+		Ifaces: []awg3panel.Iface{{ID: "awg1", Title: "main", Interface: "awg1"}},
+		Iface:  "awg1",
+		Peers: []awg3panel.Peer{
+			{ID: "p1", Name: "wgmon-router-spacey", Address: "10.66.0.5/32", Enabled: true, LastHandshake: time.Now().Unix()},
+		},
+		FetchedAt: time.Now(),
+	}
+	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/awg3panels/main/peers?iface=awg1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Peers []struct {
+			Router *struct {
+				ID       int64  `json:"id"`
+				Nickname string `json:"nickname"`
+			} `json:"router"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Peers) != 1 || resp.Peers[0].Router == nil || resp.Peers[0].Router.ID != spacedID || resp.Peers[0].Router.Nickname != "router-spacey" {
+		t.Fatalf("ярлык не сматчился при пробелах в нике роутера: %+v", resp.Peers)
 	}
 }

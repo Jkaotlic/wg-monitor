@@ -423,7 +423,14 @@ func miniappAwg3Routers(d Deps) map[string]miniappAwg3Router {
 		return out
 	}
 	for _, u := range users {
-		out[awg3panel.RouterPeerPrefix+u.Nickname] = miniappAwg3Router{ID: u.ID, Nickname: u.Nickname}
+		// RouterPeerName -- та же функция, которой Service строит имя пира
+		// «wgmon-<ник>» на панели (тримминг внутри неё). Строить ключ иначе
+		// здесь -- ник с пробелами по краям тихо теряет ярлык роутера.
+		name, err := awg3panel.RouterPeerName(u.Nickname)
+		if err != nil {
+			continue
+		}
+		out[name] = miniappAwg3Router{ID: u.ID, Nickname: strings.TrimSpace(u.Nickname)}
 	}
 	return out
 }
@@ -533,24 +540,49 @@ func miniappAwg3DeviceHandler(d Deps) http.HandlerFunc {
 
 // miniappAwg3SendDevice -- .conf документом и QR фото в личку. Пир уже
 // выпущен: отказ Telegram не отменяет ответ, экран скажет словами.
+//
+// ctx -- НЕ r.Context() напрямую: пир на панели создаётся под
+// context.WithoutCancel (Service.IssueDevice, Task 3) и к этому моменту уже
+// готов, а закрытая вкладка мини-аппа отменяет r.Context() раньше, чем
+// личка успевает уйти -- второй попытки не будет (повтор -- 409
+// awg3_name_taken на занятое имя). WithoutCancel + свой таймаут 30 с
+// переживают отмену запроса, но не висят вечно, если Telegram не отвечает.
 func miniappAwg3SendDevice(d Deps, r *http.Request, tgUser int64, panelID string, issued awg3panel.Issued) string {
 	if d.MiniappDocs == nil {
 		return "not_configured"
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+	defer cancel()
 	filename := miniappAwg3ConfFilename(issued.Name)
 	caption := "«" + issued.Name + "» — панель " + panelID + miniappSendConfCaption
-	if _, err := d.MiniappDocs.SendDocument(r.Context(), tgUser, nil, filename, []byte(issued.Config), caption); err != nil {
+	if _, err := d.MiniappDocs.SendDocument(ctx, tgUser, nil, filename, []byte(issued.Config), caption); err != nil {
 		if tg.IsUnreachableChat(err) {
 			return "unreachable"
 		}
 		miniappCabinetLogger(d).Warn("awg3-панель: .conf в личку не ушёл", "panel", panelID, "err", err)
 		return "failed"
 	}
-	if png, err := base64.StdEncoding.DecodeString(issued.QRPNGBase64); err == nil && len(png) > 0 {
-		if _, err := d.MiniappDocs.SendPhoto(r.Context(), tgUser, nil, strings.TrimSuffix(filename, ".conf")+".png", png, "QR «"+issued.Name+"»"+miniappSendConfCaption); err != nil {
+	// photoSent -- .conf ушёл, а QR может не дойти (панель не отдала
+	// картинку, битый base64, Telegram не принял фото): ответ обязан
+	// отличать это от полного успеха, иначе экран молча покажет «отправлено»
+	// про то, чего не было.
+	photoSent := false
+	png, decErr := base64.StdEncoding.DecodeString(issued.QRPNGBase64)
+	switch {
+	case decErr != nil:
+		miniappCabinetLogger(d).Warn("awg3-панель: QR не декодирован", "panel", panelID, "err", decErr)
+	case len(png) == 0:
+		// Панель не прислала картинку -- редкий случай, но не ошибка.
+	default:
+		if _, err := d.MiniappDocs.SendPhoto(ctx, tgUser, nil, strings.TrimSuffix(filename, ".conf")+".png", png, "QR «"+issued.Name+"»"+miniappSendConfCaption); err != nil {
 			miniappCabinetLogger(d).Warn("awg3-панель: QR в личку не ушёл", "panel", panelID, "err", err)
+		} else {
+			photoSent = true
 		}
 	}
-	miniappCabinetLogger(d).Info("awg3-панель: устройство в личку", "panel", panelID, "tg_user", tgUser)
+	miniappCabinetLogger(d).Info("awg3-панель: устройство в личку", "panel", panelID, "tg_user", tgUser, "photo_sent", photoSent)
+	if !photoSent {
+		return "sent_no_qr"
+	}
 	return "sent"
 }

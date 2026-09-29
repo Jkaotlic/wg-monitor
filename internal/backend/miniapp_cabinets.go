@@ -73,6 +73,10 @@ var miniappCabinetTexts = map[string]string{
 	"awg3_iface_not_found":      "Такого интерфейса на панели нет — обновите экран",
 	"awg3_name_taken":           "Устройство с таким именем уже есть на этом интерфейсе — выберите другое имя",
 	"awg3_invalid_name":         "Панель не приняла имя — до 40 знаков, без «[» и «]»",
+	// awg3_dm_sent_no_qr -- не код ошибки, а расшифровка значения "dm":
+	// "sent_no_qr" в ответе POST …/device для фронтенда (Task 8+): файл
+	// .conf ушёл в личку, а QR — нет (QR всё равно есть на экране).
+	"awg3_dm_sent_no_qr": "Файл в личке, QR не отправился — он на экране",
 }
 
 func miniappCabinetErrorText(code string) string {
