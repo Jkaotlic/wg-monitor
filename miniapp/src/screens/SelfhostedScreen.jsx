@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchSelfhosted } from '../api.js'
+import { fetchSelfhosted, fetchAwg3Panels } from '../api.js'
 import { instanceRows, SELFHOSTED_TEXTS } from '../selfhostedForm.js'
+import { AWG3_TEXTS, panelRows } from '../awg3Panel.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
+import { Section } from '../ui/Section.jsx'
 
 // «Свои VPN-серверы» -- Парк, только админ. Серверы общие для всех роутеров:
-// слой всего парка, в адрес пишется (?open=selfhosted).
-export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInstance }) {
+// слой всего парка, в адрес пишется (?open=selfhosted). Ниже -- awg3-панели
+// отдельной группой (v0.49); группа есть, только когда экран умеет их
+// открывать (onOpenAwg3), и только тогда панели спрашиваются.
+export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInstance, onOpenAwg3, onAddAwg3 }) {
   const [rows, setRows] = useState(null)
   const [error, setError] = useState('')
+  const [panels, setPanels] = useState(null)
+  const [panelsError, setPanelsError] = useState('')
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -19,6 +25,15 @@ export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInst
       .catch(() => {
         if (alive.current) setError(SELFHOSTED_TEXTS.loadError)
       })
+    if (onOpenAwg3) {
+      fetchAwg3Panels()
+        .then((resp) => {
+          if (alive.current) setPanels(panelRows(resp?.panels))
+        })
+        .catch((err) => {
+          if (alive.current) setPanelsError(err?.code === 'awg3_not_configured' ? AWG3_TEXTS.notConfigured : AWG3_TEXTS.loadError)
+        })
+    }
     return () => {
       alive.current = false
     }
@@ -45,6 +60,29 @@ export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInst
         <button type="button" class="btn btn-primary btn-wide selfhosted-add" onClick={() => onOpenInstance('')}>
           {SELFHOSTED_TEXTS.add}
         </button>
+        {onOpenAwg3 && (
+          <Section title={AWG3_TEXTS.group}>
+            <p class="hint">{AWG3_TEXTS.groupIntro}</p>
+            {panelsError ? (
+              <p class="state state-error">{panelsError}</p>
+            ) : panels == null ? (
+              <p class="state">{AWG3_TEXTS.loading}</p>
+            ) : panels.length === 0 ? (
+              <p class="state">{AWG3_TEXTS.empty}</p>
+            ) : (
+              <ul class="card list-reset settings-card awg3-list">
+                {panels.map((p) => (
+                  <ListRow key={p.id} title={p.title} sub={p.sub} tone={p.tone} onClick={() => onOpenAwg3(p.id)} />
+                ))}
+              </ul>
+            )}
+            {!panelsError && (
+              <button type="button" class="btn btn-ghost btn-wide awg3-add" onClick={() => onAddAwg3?.()}>
+                {AWG3_TEXTS.add}
+              </button>
+            )}
+          </Section>
+        )}
       </div>
     </Overlay>
   )

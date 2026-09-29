@@ -62,7 +62,9 @@ export const OPEN_OVERLAYS = ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'pa
 // тоже слои парка: серверы общие для всех роутеров. Параметры экрана
 // сервера -- id сервера и returnParams (куда вернуть сам список); SSH-пароля
 // в параметрах не бывает никогда.
-export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst']
+// awg3-панели (awg3panel) и их форма (awg3form) -- слои парка без адреса; в
+// параметрах только id панели.
+export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst', 'awg3panel', 'awg3form']
 
 // Слои парка, которые всё же пишутся в адрес: список своих серверов -- это
 // место, а не процесс, и закладка на него имеет смысл. Открывается и без
@@ -258,4 +260,16 @@ export function escapeAction(state, opts) {
   if (state?.sheet) return null
   const overlay = visibleOverlay(state, opts)
   return overlay && !navPinned(state) && !fleetIsHome(state) ? { type: 'back' } : null
+}
+
+// awg3ListParams -- параметры списка «Свои VPN-серверы» для экрана или формы
+// панели: цепочка returnParams до слоя selfhosted. Нужна после удаления
+// панели -- возвращаться на её экран уже некуда.
+export function awg3ListParams(params) {
+  let p = params
+  for (let i = 0; i < 4 && p; i++) {
+    if (p.returnTo === 'selfhosted') return p.returnParams ?? { returnTo: null }
+    p = p.returnParams
+  }
+  return { returnTo: null }
 }

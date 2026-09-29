@@ -69,6 +69,8 @@ func main() {
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
+	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
+	awg3P12 := flag.String("awg3-p12-out", "", "куда записать .p12 поддельной панели main (пароль sandbox) для формы «Добавить панель»; рядом -- .json с адресом и паролем")
 	flag.Parse()
 	setSandboxEgress(*egress)
 
@@ -107,6 +109,26 @@ func main() {
 	}
 	updatePath := filepath.Join(updateDir, "backend-update.json")
 	go watchBackendUpdate(context.Background(), updatePath, *backendUpdate == "apply")
+
+	// Панели awg3 -- настоящий сервис над поддельными TLS-панелями.
+	var awg3Panels backend.Awg3Panels
+	if *awg3Mode == "on" {
+		awg3Dir, err := os.MkdirTemp("", "wgm-sandbox-awg3-")
+		if err != nil {
+			fatal(err)
+		}
+		if !*keep {
+			defer os.RemoveAll(awg3Dir)
+		}
+		sbAwg3, err := newSandboxAwg3(awg3Dir, *awg3P12)
+		if err != nil {
+			fatal(err)
+		}
+		defer sbAwg3.Close()
+		// Интерфейсная переменная присваивается только живым сервисом: nil
+		// *Service в интерфейсе был бы «настроено», а не 503.
+		awg3Panels = sbAwg3.svc
+	}
 
 	// Без доступа парк принадлежит другому человеку: так открывается экран
 	// пустого доступа, и он единственный, который иначе нечем посмотреть.
@@ -192,6 +214,7 @@ func main() {
 		// фейки: приёмка экранов кабинета без кабинетов, VPS и Telegram.
 		VPNCabinetKeys:        cabinet,
 		SelfHosted:            newSandboxSelfHosted(),
+		Awg3Panels:            awg3Panels,
 		MiniappDocs:           sandboxDocs{unreachable: *dm == "unreachable"},
 		Replace:               replaceEngine,
 		LinkRepair:            repairEngine,

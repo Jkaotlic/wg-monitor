@@ -216,12 +216,16 @@ type fakeSentDoc struct {
 	filename string
 	data     []byte
 	caption  string
+	photo    bool
 }
 
 type fakeDocSender struct {
 	mu   sync.Mutex
 	sent []fakeSentDoc
 	err  error
+	// photoErr -- отдельный отказ только SendPhoto (.conf уходит успешно, QR
+	// нет). Пусто -- SendPhoto подчиняется общему err, как раньше.
+	photoErr error
 }
 
 func (f *fakeDocSender) SendDocument(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
@@ -234,6 +238,19 @@ func (f *fakeDocSender) SendDocument(_ context.Context, chatID int64, _ *int64, 
 	return 1, nil
 }
 
+func (f *fakeDocSender) SendPhoto(_ context.Context, chatID int64, _ *int64, filename string, data []byte, caption string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.photoErr != nil {
+		return 0, f.photoErr
+	}
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.sent = append(f.sent, fakeSentDoc{chatID: chatID, filename: filename, data: append([]byte{}, data...), caption: caption, photo: true})
+	return 2, nil
+}
+
 type cabinetEnv struct {
 	h       http.Handler
 	d       *db.DB
@@ -244,6 +261,7 @@ type cabinetEnv struct {
 	logs    *bytes.Buffer
 	docs    *fakeDocSender
 	vps     *fakeSelfHosted
+	awg3    *fakeAwg3
 }
 
 func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
@@ -261,6 +279,7 @@ func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
 		logs:    &bytes.Buffer{},
 		docs:    &fakeDocSender{},
 		vps:     &fakeSelfHosted{},
+		awg3:    &fakeAwg3{},
 	}
 	deps := Deps{
 		DB:                  d,
@@ -271,6 +290,7 @@ func newCabinetEnv(t *testing.T, mods ...func(*Deps)) *cabinetEnv {
 		VPNCabinet:          env.cab,
 		VPNCabinetKeys:      env.keys,
 		SelfHosted:          env.vps,
+		Awg3Panels:          env.awg3,
 		MiniappDocs:         env.docs,
 	}
 	for _, m := range mods {

@@ -13,6 +13,13 @@ import {
   toggleSelfhosted,
   deleteSelfhosted,
   checkSelfhosted,
+  fetchAwg3Panels,
+  createAwg3Panel,
+  updateAwg3Panel,
+  deleteAwg3Panel,
+  fetchAwg3Peers,
+  issueAwg3Device,
+  issueAwg3ToRouter,
   ApiError,
 } from '../src/api.js'
 
@@ -165,5 +172,49 @@ describe('свои серверы: запросы', () => {
     calls = stubFetch({ ok: false, message: 'SSH: неверный пароль' })
     expect(await checkSelfhosted('ams')).toEqual({ ok: false, message: 'SSH: неверный пароль' })
     expect(calls[0]).toMatchObject({ url: '/v1/miniapp/selfhosted/ams/check', method: 'POST' })
+  })
+})
+
+describe('awg3-панели: запросы', () => {
+  it('список и пиры -- GET, интерфейс в запросе', async () => {
+    let calls = stubFetch({ panels: [] })
+    await fetchAwg3Panels()
+    expect(calls[0]).toMatchObject({ url: '/v1/miniapp/awg3panels', method: 'GET' })
+    calls = stubFetch({ peers: [] })
+    await fetchAwg3Peers('main', 'awg 2')
+    expect(calls[0].url).toBe('/v1/miniapp/awg3panels/main/peers?iface=awg%202')
+    calls = stubFetch({ peers: [] })
+    await fetchAwg3Peers('main')
+    expect(calls[0].url).toBe('/v1/miniapp/awg3panels/main/peers')
+  })
+
+  it('пароль и .p12 -- только в теле POST/PUT', async () => {
+    let calls = stubFetch({ panel: {}, check: null }, { status: 201 })
+    await createAwg3Panel({ id: 'main', password: 'pw', p12_base64: 'UDEy' })
+    expect(calls[0]).toMatchObject({ url: '/v1/miniapp/awg3panels', method: 'POST', body: { id: 'main', password: 'pw', p12_base64: 'UDEy' } })
+    expect(calls[0].url).not.toContain('pw')
+    calls = stubFetch({ panel: {}, check: null })
+    await updateAwg3Panel('main', { label: 'x' })
+    expect(calls[0]).toMatchObject({ url: '/v1/miniapp/awg3panels/main', method: 'PUT', body: { label: 'x' } })
+    calls = stubFetch(null, { status: 204 })
+    await deleteAwg3Panel('main', 'Main')
+    expect(calls[0]).toMatchObject({ method: 'DELETE', body: { confirm: 'Main' } })
+  })
+
+  it('выпуск: устройство -- /device, роутер -- vpn/issue с провайдером awg3panel', async () => {
+    let calls = stubFetch({ qr_png_base64: 'x', dm: 'sent' }, { status: 201 })
+    await issueAwg3Device('main', 'awg1', 'iphone')
+    expect(calls[0]).toMatchObject({ url: '/v1/miniapp/awg3panels/main/device', method: 'POST', body: { iface: 'awg1', name: 'iphone' } })
+    calls = stubFetch({ cmd_id: 'c1', tunnel_name: 'main_awg1' }, { status: 202 })
+    await issueAwg3ToRouter(7, 'main', 'awg1')
+    expect(calls[0]).toMatchObject({ url: '/v1/miniapp/routers/7/vpn/issue', method: 'POST', body: { provider: 'awg3panel', instance_id: 'main', iface: 'awg1' } })
+  })
+
+  it('отказ с retry_at доходит до экрана в data', async () => {
+    stubFetch({ code: 'awg3_paused', message: 'Панель ограничила вход', retry_at: '2026-09-29T12:00:00Z' }, { ok: false, status: 409 })
+    const err = await fetchAwg3Peers('main').catch((e) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.code).toBe('awg3_paused')
+    expect(err.data.retry_at).toBe('2026-09-29T12:00:00Z')
   })
 })

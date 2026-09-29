@@ -3724,6 +3724,137 @@ body {
   margin-top: var(--sp-3);
 }
 
+/* awg3-панели (v0.49) */
+.awg3-add {
+  margin-top: var(--sp-3);
+}
+
+.list-row-warn .list-row-sub {
+  color: var(--warn);
+}
+
+/* Правка 6 (ревью раунд 1): родная подпись «Choose File / No file chosen»
+   по-английски и не красится -- вход спрятан визуально (доступен для
+   клавиатуры и скринридера через свою кнопку .awg3-file-btn), а видимую
+   часть рисует кнопка plus certHint из awg3Panel.js. */
+.awg3-file input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.awg3-file-btn {
+  margin-top: var(--sp-2);
+}
+
+.awg3-check {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-sm);
+}
+
+.awg3-check-ok {
+  color: var(--ok);
+}
+
+.awg3-check-bad {
+  color: var(--danger);
+}
+
+.data-row-dot-muted {
+  background: var(--muted);
+}
+
+/* Правка 1 (ревью раунд 1): пир -- один .data-row (правило v0.48 «строка
+   данных»), без обёртки .awg3-peer и без отдельной черты-разделителя --
+   черту уже рисует .data-row сама на себе. Ярлык (роутер или «выключен»)
+   живёт внутри той же строки, под именем. */
+.awg3-peer-tag {
+  min-width: 0;
+  max-width: 100%;
+  margin: 2px 0 0;
+}
+
+/* Ревью раунд 2: на 360 px пилюля роутера натурального размера вылезала за
+   колонку заголовка и наезжала на трафик справа (.pill -- inline-flex без
+   потолка ширины). Порог -- по колонке; обрезаем многоточием сам текст
+   (обёрнут в .pill-text): text-overflow на самой .pill (flex-контейнер с
+   точкой ::before) не срабатывает, а вложенному flex-элементу нужен свой
+   min-width: 0, иначе он не сжимается меньше содержимого.
+   Полная фраза остаётся в title (long-press/tooltip) -- см. Pill.jsx. */
+.awg3-peer-tag .pill {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.awg3-peer-tag .pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Единица трафика не должна остаться одна на своей строке: «↑ 200,3» /
+   «МБ» на переносе читается хуже прочерка. */
+.awg3-peers .data-row-value-sub {
+  white-space: nowrap;
+}
+
+/* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,
+   что у .settings-actions (v0.48): одна высота, перенос на свою строку, а не
+   всегда столбиком. */
+.awg3-actions {
+  margin: var(--sp-2) 0 0;
+}
+
+.awg3-device {
+  margin-top: var(--sp-3);
+}
+
+.awg3-qr-card {
+  text-align: center;
+}
+
+/* QR читается камерой только на светлом поле: белая рамка -- тихая зона. */
+.awg3-qr {
+  display: block;
+  width: min(240px, 100%);
+  height: auto;
+  margin: 0 auto var(--sp-3);
+  padding: var(--sp-2);
+  background: white;
+  border-radius: var(--radius-sm);
+  image-rendering: pixelated;
+}
+
+.awg3-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  color: var(--warn);
+}
+
+.awg3-outcome-ok {
+  color: var(--ok);
+}
+
+.awg3-outcome-warn {
+  color: var(--warn);
+}
+
+.awg3-outcome-error {
+  color: var(--danger);
+}
+
+.awg3-settings {
+  margin-top: var(--sp-4);
+}
+
 .selfhosted-form .card + .field-hint {
   margin-top: var(--sp-2);
 }

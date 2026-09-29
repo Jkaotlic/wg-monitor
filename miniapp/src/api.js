@@ -480,6 +480,44 @@ export function deleteTunnel(routerID, tunnelID, confirm) {
   })
 }
 
+// awg3-панели оператора -- только админ. Пароль панели и .p12 (base64) уходят
+// только телом POST/PUT и только когда введены; ответы их не содержат.
+export function fetchAwg3Panels() {
+  return request('/awg3panels')
+}
+
+export function createAwg3Panel(body) {
+  return request('/awg3panels', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateAwg3Panel(id, body) {
+  return request(`/awg3panels/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export function deleteAwg3Panel(id, confirm) {
+  return request(`/awg3panels/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirm }) })
+}
+
+export function fetchAwg3Peers(id, iface = '') {
+  const q = iface ? `?iface=${encodeURIComponent(iface)}` : ''
+  return request(`/awg3panels/${encodeURIComponent(id)}/peers${q}`)
+}
+
+// Конфиг на устройство: ответ несёт QR (он и нужен экрану), сам .conf уходит
+// только в личку.
+export function issueAwg3Device(id, iface, name) {
+  return request(`/awg3panels/${encodeURIComponent(id)}/device`, { method: 'POST', body: JSON.stringify({ iface, name }) })
+}
+
+// Выпуск на роутер: тот же vpn/issue, что у кабинетов; конфиг через
+// приложение не проходит -- сервер кладёт его в команду агенту.
+export function issueAwg3ToRouter(routerID, instanceID, iface) {
+  return request(`/routers/${routerID}/vpn/issue`, {
+    method: 'POST',
+    body: JSON.stringify({ provider: 'awg3panel', instance_id: instanceID, iface }),
+  })
+}
+
 // Загрузка своего .conf. Конфиг (в нём приватный ключ) уходит один раз, телом
 // этого POST, в base64; сервер держит его под одноразовым токеном
 // предпросмотра и обратно не отдаёт. В адрес запроса он не попадает никогда.

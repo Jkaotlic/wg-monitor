@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -103,6 +104,8 @@ type miniappVPNIssueReq struct {
 	OptionID string `json:"option_id"`
 	// InstanceID -- свой сервер при provider "selfhosted" (только админ).
 	InstanceID string `json:"instance_id"`
+	// Iface -- интерфейс awg3-панели при provider "awg3panel" (только админ).
+	Iface string `json:"iface"`
 }
 
 type miniappVPNIssueResp struct {
@@ -150,6 +153,11 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 		// из тела; поэтому сужение прав -- здесь, сразу после разбора.
 		if provider == "selfhosted" {
 			miniappVPNIssueSelfHosted(d, w, r, telegramUserID, routerID, req)
+			return
+		}
+		// awg3-панель (v0.49) -- тоже общий сервер парка: только админ.
+		if provider == "awg3panel" {
+			miniappVPNIssueAwg3(d, w, r, telegramUserID, routerID, req)
 			return
 		}
 		if d.VPNCabinet == nil {
@@ -256,6 +264,54 @@ func miniappVPNIssueSelfHosted(d Deps, w http.ResponseWriter, r *http.Request, t
 	}
 	miniappCabinetLogger(d).Info("miniapp vpn config issued",
 		"nickname", u.Nickname, "user_id", u.ID, "provider", "selfhosted", "instance", inst.ID, "address", issued.Address, "cmd_id", cmdID)
+	writeMiniappCabinetJSON(w, http.StatusAccepted, miniappVPNIssueResp{CmdID: cmdID, TunnelName: tunnelName})
+}
+
+// miniappVPNIssueAwg3 -- выпуск с awg3-панели на роутер (спека v0.49, решение
+// 7): пир «wgmon-<ник>» уже есть -- его конфиг заново, нет -- новый пир.
+// Только админ. Происхождение туннеля не пишется -- как у своего сервера.
+func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser, routerID int64, req miniappVPNIssueReq) {
+	if !miniappIsAdmin(tgUser, d.TelegramAdminUserID) {
+		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
+		return
+	}
+	if d.Awg3Panels == nil {
+		writeMiniappCabinetError(w, http.StatusServiceUnavailable, "awg3_not_configured")
+		return
+	}
+	instID := strings.ToLower(strings.TrimSpace(req.InstanceID))
+	if instID == "" {
+		writeMiniappCabinetError(w, http.StatusBadRequest, "missing_instance")
+		return
+	}
+	iface := strings.TrimSpace(req.Iface)
+	if iface == "" {
+		writeMiniappCabinetError(w, http.StatusBadRequest, "missing_iface")
+		return
+	}
+	u, err := d.DB.Users().GetByID(routerID)
+	if errors.Is(err, db.ErrUserNotFound) || (err == nil && u == nil) {
+		writeMiniappCabinetError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if err != nil {
+		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
+		return
+	}
+	rc, err := d.Awg3Panels.ConfigForRouter(r.Context(), instID, iface, u.Nickname)
+	if err != nil {
+		writeMiniappAwg3Error(d, w, "выпуск на роутер", err)
+		return
+	}
+	tunnelName := awg3panel.TunnelName(instID, iface)
+	cmdID, err := miniappEnqueueTunnelImport(d, u.ID, rc.Conf, tunnelName, "nativewg")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+	miniappCabinetLogger(d).Info("miniapp vpn config issued",
+		"nickname", u.Nickname, "user_id", u.ID, "provider", "awg3panel", "panel", instID, "iface", iface,
+		"peer_id", rc.PeerID, "reused", rc.Reused, "cmd_id", cmdID)
 	writeMiniappCabinetJSON(w, http.StatusAccepted, miniappVPNIssueResp{CmdID: cmdID, TunnelName: tunnelName})
 }
 

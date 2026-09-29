@@ -267,6 +267,7 @@ func main() {
 		VPNCabinetKeys: cb,
 		// Свои VPN-серверы -- только админу в мини-аппе.
 		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
+		Awg3Panels:          newAwg3PanelService(cfg.SelfHostedAmnezia, logger),
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,

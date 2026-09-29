@@ -6,13 +6,18 @@ import { Quoted } from './Q.jsx'
 //
 // Тексты строки собирают чистые функции, и в них бывают имена в «ёлочках»:
 // они идут через <Quoted>, чтобы имя не рвалось по дефису.
-export function DataRow({ dot, title, code, value, valueSub, valueTone }) {
+// titleExtra -- необязательная строка под заголовком (ярлык, пилюля): своя
+// строка внутри той же ячейки, а не отдельная строка данных -- ряд остаётся
+// ОДНИМ .data-row (v0.49, awg3-панели: ярлык роутера или «выключен» под
+// именем пира).
+export function DataRow({ dot, title, code, titleExtra, value, valueSub, valueTone }) {
   return (
     <div class="data-row">
       {dot ? <span class={`data-row-dot data-row-dot-${dot}`} /> : null}
       <span class="data-row-main">
         <Quoted text={title} />
         {code ? <u class="data-row-code" title={code}>{code}</u> : null}
+        {titleExtra}
       </span>
       <span class={valueTone ? `data-row-value data-row-value-${valueTone}` : 'data-row-value'}>
         <Quoted text={value} />
