@@ -83,21 +83,22 @@ describe('широкая раскладка в браузере', () => {
     // Роутер не выбран -- сводка.
     expect([...root.querySelectorAll('.fleet-count-value')].map((n) => n.textContent)).toEqual(['1', '1', '1'])
     expect(root.querySelectorAll('.fleet-card')).toHaveLength(2)
-    // Админу Парк -- прямо под сводкой: от выбранного роутера он не зависит.
-    expect(root.querySelector('.fleet-home .stub-park')).toBeTruthy()
+    // v0.48: Парк -- своя вкладка, под сводкой его больше нет.
+    expect(root.querySelector('.fleet-home .stub-park')).toBe(null)
     cleanup(root)
   })
 
-  it('«Парк» без выбранного роутера не погашен и остаётся на сводке с Парком', async () => {
+  it('«Парк» без выбранного роутера не погашен и открывает вкладку Парка', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/')
     const park = button(root.querySelector('aside.side'), 'Парк')
     expect(park.disabled).toBe(false)
     await act(async () => park.click())
     await flush()
-    expect(root.querySelector('.fleet-home .stub-park')).toBeTruthy()
+    expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
+    expect(root.querySelector('.fleet-home')).toBe(null)
     expect(root.querySelector('.stub-admin')).toBe(null)
-    expect(window.location.search).toBe('')
+    expect(window.location.search).toBe('?tab=park')
     cleanup(root)
   })
 
@@ -108,7 +109,8 @@ describe('широкая раскладка в браузере', () => {
     await act(async () => row.click())
     await flush()
     expect(root.querySelector('.main-head-name').textContent).toBe('Дача')
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).toEqual(['Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
+    // Админу первой -- «Парк» (v0.48); в шапке «VPN-туннели» полностью.
+    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).toEqual(['Парк', 'Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
     expect(root.querySelector('.main-tab-active').textContent).toBe('Сейчас')
     expect(row.getAttribute('aria-current')).toBe('page')
     expect(root.textContent).toContain('Сейчас 2')
@@ -128,7 +130,7 @@ describe('широкая раскладка в браузере', () => {
     cleanup(root)
   })
 
-  it('шестерёнки нет: «Управление» -- вкладка; «Парк» -- сводка с Парком, подсвечивается', async () => {
+  it('шестерёнки нет: «Управление» -- вкладка; «Парк» -- вкладка Парка, подсвечивается', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/?router=2')
     expect(root.querySelector('.main-gear')).toBe(null)
@@ -139,7 +141,10 @@ describe('широкая раскладка в браузере', () => {
     expect(window.location.search).toBe('?router=2&tab=manage')
     await act(async () => button(root.querySelector('aside.side'), 'Парк').click())
     await flush()
-    expect(root.querySelector('.fleet-home #park .stub-park')).toBeTruthy()
+    // Роутер остаётся выбранным: Парк открывается под его шапкой.
+    expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
+    expect(root.querySelector('.main-tab-active').textContent).toBe('Парк')
+    expect(window.location.search).toBe('?router=2&tab=park')
     expect(button(root.querySelector('aside.side'), 'Парк').classList.contains('side-link-active')).toBe(true)
     cleanup(root)
   })

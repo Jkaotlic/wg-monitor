@@ -1,7 +1,6 @@
 import { Overlay } from '../ui/Overlay.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
-import { ParkSection } from './ParkSection.jsx'
 import { FleetFilterBar } from '../ui/FleetFilterBar.jsx'
 import { sortByUrgency, fleetRow, batchProgress } from '../fleet.js'
 import { emptyFilterText } from '../fleetFilter.js'
@@ -18,10 +17,11 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 // Поиск и фильтры сужают только список; заголовок и «Опросить все» говорят
 // про весь парк -- иначе «все в порядке» читалось бы про отфильтрованных.
 //
-// Админу под списком -- Парк (v0.41): он про весь флот, и держать его в
-// «Обслуживании» одного роутера значило искать его не там. Список поэтому
-// открывается админу и при одном роутере.
-export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false, openSheet, openLayer, onOpenConnection }) {
+// Парк -- своя вкладка админа (v0.48), а не хвост под списком: здесь только
+// список. «Опросить все» у админа тоже переехал в Парк; владелец нескольких
+// роутеров видит его здесь, как и раньше. Список открывается админу и при
+// одном роутере: из него есть путь в Парк (нижняя панель).
+export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false }) {
   const all = sortByUrgency(routers).map(fleetRow)
   const broken = all.filter((r) => r.pill.tone === 'danger').length
   const f = useFleetFilter(routers)
@@ -83,7 +83,7 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
           )
         )}
 
-        {all.length > 1 && (
+        {all.length > 1 && !isAdmin && (
           <>
             <button type="button" class="btn btn-ghost btn-wide" disabled={batch?.running} onClick={recheckAll}>
               {batch?.running ? 'Опрашиваем…' : 'Опросить все'}
@@ -93,12 +93,6 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
                 'Каждый роутер переспросит себя сам. Ничего не меняет; спящие ответят, когда проснутся.'}
             </p>
           </>
-        )}
-
-        {isAdmin && (
-          <div class="fleet-park" id="park">
-            <ParkSection openSheet={openSheet} onOpenRouter={onPick} currentID={currentID} openLayer={openLayer} onOpenConnection={onOpenConnection} />
-          </div>
         )}
       </div>
     </Overlay>

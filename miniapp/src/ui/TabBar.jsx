@@ -1,10 +1,28 @@
-import { tabLabel } from '../nav.js'
+import { barLabel } from '../nav.js'
 import { GearIcon } from './GearIcon.jsx'
 
 // Нижняя навигация. Четыре таба -- четыре вопроса оператора: что с роутером,
 // куда идёт трафик, что показывает диагностика, что происходило раньше; пятый
-// -- «Управление»: настройки, обслуживание и доступы этого роутера.
+// -- «Управление»: настройки, обслуживание и доступы этого роутера. Админу
+// первым -- «Парк» (v0.48): весь парк целиком; без роутера рядом с ним --
+// «Роутеры», сам список.
+const FLEET_ICON = (
+  <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+    <rect x="3" y="4" width="16" height="5.5" rx="1.6" />
+    <rect x="3" y="12.5" width="16" height="5.5" rx="1.6" />
+  </svg>
+)
+
 const ICONS = {
+  park: (
+    <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2.5" y="3" width="7" height="7" rx="1.6" />
+      <rect x="12.5" y="3" width="7" height="7" rx="1.6" />
+      <rect x="2.5" y="12" width="7" height="7" rx="1.6" />
+      <rect x="12.5" y="12" width="7" height="7" rx="1.6" />
+    </svg>
+  ),
+  fleet: FLEET_ICON,
   router: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
       <rect x="2.5" y="7" width="17" height="9" rx="2.5" />
@@ -35,9 +53,9 @@ const ICONS = {
 
 
 
-export function TabBar({ tab, onTab, tabs }) {
+export function TabBar({ tab, onTab, tabs, over = false }) {
   return (
-    <nav class="tabbar">
+    <nav class={over ? 'tabbar tabbar-over' : 'tabbar'}>
       {tabs.map((key) => (
         <button
           key={key}
@@ -47,7 +65,7 @@ export function TabBar({ tab, onTab, tabs }) {
           onClick={() => onTab(key)}
         >
           {ICONS[key]}
-          {tabLabel(key)}
+          {barLabel(key)}
         </button>
       ))}
     </nav>

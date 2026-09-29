@@ -1086,9 +1086,12 @@ body {
   bottom: 0;
   z-index: 10;
   display: grid;
-  /* Столбцов столько, сколько вкладок: с v0.41 их пять. */
+  /* Столбцов столько, сколько вкладок: с v0.41 их пять, у админа с v0.48
+     шесть. Столбцы поровну, но не уже своей подписи: на 360 px шестая
+     часть -- 60 px, а «Управление» -- 64; ей достаётся своё за счёт
+     коротких «Парк» и «Сейчас». */
   grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  grid-auto-columns: minmax(max-content, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -1100,18 +1103,34 @@ body {
   align-items: center;
   gap: 2px;
   min-height: 56px;
-  padding: var(--sp-2) var(--sp-1);
+  /* Шесть вкладок у админа (v0.48) на 360 px -- по 60 px на вкладку:
+     подпись в одну строку и без боковых полей, иначе «Что было» ломалась
+     на две строки и панель вставала неровно. */
+  min-width: 0;
+  padding: var(--sp-2) 0;
   border: none;
   background: transparent;
   color: var(--muted);
   font-family: inherit;
   font-size: 0.6875rem;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .tabbar-item-active {
   color: var(--accent);
+}
+
+/* Панель над главным экраном-списком (админ, v0.48): крышка списка лежит
+   поверх всего, панель -- поверх крышки, и список не прячет под ней свой
+   хвост. */
+.tabbar-over {
+  z-index: 21;
+}
+
+.tabbar-over ~ .overlay .overlay-body {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 .overlay {
@@ -2311,11 +2330,6 @@ body {
   font-weight: 600;
 }
 
-/* Парк под списком «Моих роутеров» (админ, телефон). */
-.fleet-park {
-  margin-top: var(--sp-5);
-}
-
 /* Строка настройки с кнопкой справа: строка данных занимает ширину, кнопка
    держится следом и не растягивается. */
 .settings-row {
@@ -2678,6 +2692,66 @@ body {
    обновления и кнопки, и без разделителя они прилипают к соседнему роутеру. */
 .park-row + .park-row {
   border-top: 1px solid var(--border);
+}
+
+/* Карточка роутеров Парка -- одна рамка (.card-rows): строка данных несёт
+   свои поля, всё под ней -- версии, кнопки, оговорки -- встаёт по её левому
+   краю. Черты между именем роутера и его кнопками нет: это одна строка. */
+.park-row {
+  padding-bottom: var(--sp-3);
+}
+
+.park-row > .data-row {
+  border-bottom: none;
+}
+
+.park-row > :not(.data-row) {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+
+/* Карточка бэкенда: сторож и кнопка раскатки -- уже с полями строки, снизу
+   нужен только воздух. */
+.park-backend {
+  padding-bottom: var(--sp-3);
+}
+
+/* Три числа парка во вкладке «Парк» на телефоне; широкий экран крупнее
+   (@media ниже). */
+.fleet-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.fleet-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  background: var(--surf);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.fleet-count-ok { border-top-color: var(--ok); }
+.fleet-count-attention { border-top-color: var(--bad); }
+.fleet-count-silent { border-top-color: var(--warn); }
+
+.fleet-count-value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.fleet-count-label {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  color: var(--dim);
 }
 
 /* Состояние обновления говорится словом; тон -- подсказка, а не смысл. */
@@ -4304,18 +4378,6 @@ body {
   }
 
   .fleet-home-recheck .hint { margin-top: var(--sp-2); }
-
-  /* Парк под сводкой -- отдельный большой раздел, а не ещё одна строка
-     после «Опросить все». */
-  .fleet-home-park {
-    margin-top: var(--sp-6);
-    padding-top: var(--sp-5);
-    border-top: 1px solid var(--line);
-  }
-
-  .fleet-home-park > .section:first-child {
-    margin-top: 0;
-  }
 
   /* --- Поиск в боковой колонке (цикл 2): компактно, чипы переносятся --- */
   .side-filter {

@@ -59,9 +59,11 @@ describe('адрес панели под именем роутера', () => {
     cleanup(root)
   })
 
-  it('«Мои роутеры» админу -- Парк под списком', async () => {
+  // v0.48: Парк -- своя вкладка; под списком его больше нет.
+  it('«Мои роутеры» админу -- только список, без Парка', async () => {
     const root = await mount(<FleetOverlay routers={ROUTERS} currentID={1} onPick={() => {}} onClose={() => {}} isAdmin />)
-    expect(root.querySelector('.fleet-park .stub-park')).toBeTruthy()
+    expect(root.querySelector('.stub-park')).toBe(null)
+    expect(root.querySelectorAll('.fleet-row')).toHaveLength(ROUTERS.length)
     cleanup(root)
   })
 
@@ -99,7 +101,8 @@ describe('пятая вкладка', () => {
   it('нижняя панель: «Управление» последней', async () => {
     const root = await mount(<TabBar tabs={TABS} tab="manage" onTab={() => {}} />)
     const items = [...root.querySelectorAll('.tabbar-item')].map((b) => b.textContent)
-    expect(items).toEqual(['Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
+    // В панели «Туннели» (v0.48: шесть вкладок у админа на 360 px).
+    expect(items).toEqual(['Сейчас', 'Туннели', 'Проверки', 'Что было', 'Управление'])
     expect(root.querySelector('.tabbar-item-active').textContent).toBe('Управление')
     cleanup(root)
   })

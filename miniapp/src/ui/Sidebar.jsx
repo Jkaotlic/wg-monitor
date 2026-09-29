@@ -9,7 +9,8 @@ import { PanelLine } from './PanelLine.jsx'
 // нужна и при одном роутере: Парк и «Выйти» живут здесь.
 //
 // «Парк» не гаснет никогда: Парк -- про весь флот и от выбранного роутера не
-// зависит. Ведёт он на сводку (#park), куда -- решает оболочка (WideLayout).
+// зависит. Ведёт он во вкладку «Парк» (v0.48), как -- решает оболочка
+// (WideLayout).
 //
 // Поиск -- только когда искать есть в чём (два роутера и больше).
 export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick, onPark, onLogout, shortcut = true }) {

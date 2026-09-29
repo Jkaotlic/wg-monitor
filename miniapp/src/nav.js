@@ -7,6 +7,22 @@
 // стали функцией для всех, а не спрятанным входом.
 export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
 
+// «Парк» (v0.48) -- вкладка админа, первая в панели: весь парк, от
+// выбранного роутера не зависит и открывается без него. Раньше он жил хвостом
+// под «Моими роутерами», и список роутеров становился экраном инструментов.
+// Кому она видна, решает оболочка по is_admin -- тот же признак, по которому
+// Парк показывался под списком; редьюсер вкладку не прячет.
+export const PARK_TAB = 'park'
+
+// barTabs -- что в нижней панели. Админу с роутером -- Парк и пять вкладок
+// роутера. Без роутера (главный экран -- список) вкладкам роутера показывать
+// нечего: панель -- Парк и сам список ('fleet' -- не вкладка, а слой; его
+// открывает оболочка). Остальным -- прежние пять, как было.
+export function barTabs({ isAdmin = false, routerID = null } = {}) {
+  if (!isAdmin) return TABS
+  return routerID != null ? [PARK_TAB, ...TABS] : [PARK_TAB, 'fleet']
+}
+
 // Таб "Маршруты" стал табом "Туннели": маршруты уехали внутрь туннеля, потому
 // что оператор сначала спрашивает "какой VPN-туннель поднят", и только потом --
 // "что через него идёт". Прежнее имя остаётся псевдонимом не из вежливости:
@@ -104,10 +120,19 @@ const TAB_LABELS = {
   diag: 'Проверки',
   events: 'Что было',
   manage: 'Управление',
+  park: 'Парк',
 }
 
 export function tabLabel(tab) {
   return TAB_LABELS[tab] ?? tab
+}
+
+// Подпись в нижней панели. Шесть вкладок на 360 px: «VPN-туннели» там --
+// «Туннели», заголовок экрана и шапка широкого экрана остаются полными.
+const BAR_LABELS = { tunnels: 'Туннели', fleet: 'Роутеры' }
+
+export function barLabel(tab) {
+  return BAR_LABELS[tab] ?? tabLabel(tab)
 }
 
 export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
@@ -147,7 +172,7 @@ export function navReducer(state, action) {
       return action.state ?? state
     case 'tab': {
       const tab = normalizeTab(action.tab)
-      if (!TABS.includes(tab) || navPinned(state)) return state
+      if (!(TABS.includes(tab) || tab === PARK_TAB) || navPinned(state)) return state
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
       if (action.closeOverlay) return { ...withoutParams(state), tab, overlay: null, sheet: null }
@@ -159,6 +184,8 @@ export function navReducer(state, action) {
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
       const overlay = action.overlay ?? null
+      // Возврат слоя парка во вкладку Парк: она есть и без роутера.
+      if (overlay === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null, sheet: null }
       if (OVERLAY_TABS[overlay] && state.routerID != null) {
         return { ...withoutParams(state), tab: OVERLAY_TABS[overlay], overlay: null, sheet: null }
       }
@@ -197,6 +224,7 @@ export function navReducer(state, action) {
       // возвращает на список, и списку нужен его собственный returnTo.
       const params = state.overlayParams
       const target = normalizeReturn(params?.returnTo ?? null)
+      if (target === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null }
       // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
       // есть вкладка -- иначе «назад» оставил бы пустую основную область.
       if (OVERLAY_TABS[target] && state.routerID != null) {

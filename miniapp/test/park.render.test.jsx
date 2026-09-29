@@ -76,6 +76,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
 
 const { ParkSection } = await import('../src/screens/ParkSection.jsx')
 const { FleetOverlay } = await import('../src/screens/FleetOverlay.jsx')
+const { ParkTab } = await import('../src/screens/ParkTab.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { REVIVE_SECRET_NOTE } = await import('../src/revive.js')
 const { ApiError } = await import('../src/api.js')
@@ -359,12 +360,12 @@ describe('«Парк»: обновление агента', () => {
 })
 
 describe('устаревший текст про дашборд', () => {
-  it('в Парке на «Моих роутерах» нет «пока живут в браузерном дашборде»', async () => {
+  it('во вкладке «Парк» нет «пока живут в браузерном дашборде»', async () => {
     reset()
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<FleetOverlay routers={[]} currentID={11} isAdmin onPick={() => {}} onClose={() => {}} openSheet={() => {}} />, root)
+      render(<ParkTab routers={[]} onPick={() => {}} openSheet={() => {}} />, root)
     })
     await flush()
     expect(root.textContent).not.toContain('пока живут в браузерном')
@@ -379,6 +380,31 @@ describe('устаревший текст про дашборд', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const src = readFileSync(join(here, '../src/screens/RouterDetail.jsx'), 'utf8')
     expect(src).not.toContain('обслуживание пока в дашборде')
+  })
+})
+
+// v0.48: «Опросить все» у админа -- в Парке, среди действий над всеми
+// роутерами; из «Моих роутеров» он у админа ушёл (FleetOverlay).
+describe('«Парк»: опросить все', () => {
+  it('есть при двух роутерах и больше, до списка роутеров', async () => {
+    reset()
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const routers = [
+      { id: 1, nickname: 'a', status: 'online', last_seen_age_sec: 5 },
+      { id: 2, nickname: 'b', status: 'online', last_seen_age_sec: 5 },
+    ]
+    await act(async () => {
+      render(<ParkTab routers={routers} onPick={() => {}} openSheet={() => {}} />, root)
+    })
+    await flush()
+    const all = [...root.querySelectorAll('button')]
+    const poll = all.findIndex((b) => b.textContent.trim() === 'Опросить все')
+    const open = all.findIndex((b) => b.textContent.trim() === 'Открыть роутер')
+    expect(poll).toBeGreaterThan(-1)
+    expect(open).toBeGreaterThan(poll)
+    expect(root.querySelectorAll('.fleet-count')).toHaveLength(3)
+    cleanup(root)
   })
 })
 
@@ -614,13 +640,13 @@ describe('«Парк»: уведомлять меня', () => {
     cleanup(root)
   })
 
-  it('«Мои роутеры» пробрасывают переход на роутер из Парка', async () => {
+  it('вкладка «Парк» пробрасывает переход на роутер', async () => {
     reset()
     const opened = []
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => {
-      render(<FleetOverlay routers={[]} currentID={15} isAdmin onClose={() => {}} openSheet={() => {}} onPick={(id) => opened.push(id)} />, root)
+      render(<ParkTab routers={[]} openSheet={() => {}} onPick={(id) => opened.push(id)} />, root)
     })
     await flush()
     await act(async () => buttons(rowOf(root, 'bronya'), 'Открыть роутер')[0].click())

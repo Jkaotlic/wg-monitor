@@ -3,9 +3,28 @@ import { TunnelsTab } from './TunnelsTab.jsx'
 import { DiagTab } from './DiagTab.jsx'
 import { EventsTab } from './EventsTab.jsx'
 import { ManageTab } from './ManageTab.jsx'
+import { ParkTab } from './ParkTab.jsx'
+import { PARK_TAB } from '../nav.js'
 import { routerContext } from './OverlayHost.jsx'
 
 export function TabBody({ nav, dispatch, routers, isAdmin }) {
+  // «Парк» (v0.48) от роутера не зависит: открывается и без него. Слои парка
+  // возвращаются сюда же (returnTo 'park'). Вкладка -- только админу; сервер
+  // остальным всё равно ответит 404.
+  if (nav.tab === PARK_TAB && isAdmin) {
+    return (
+      <ParkTab
+        routers={routers}
+        onPick={(id) => dispatch({ type: 'router', id })}
+        openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+        openLayer={(overlay, extra = {}) => dispatch({ type: 'overlay', overlay, params: { ...extra, returnTo: PARK_TAB } })}
+        onOpenConnection={(id) => {
+          dispatch({ type: 'router', id })
+          dispatch({ type: 'overlay', overlay: 'agentconn' })
+        }}
+      />
+    )
+  }
   if (nav.routerID == null) return <p class="state">Выберите роутер в списке.</p>
   const { current, asleep } = routerContext(routers, nav.routerID)
   const openSheet = (sheet) => dispatch({ type: 'sheet', sheet })
@@ -16,7 +35,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // key -- номер роутера: переход A→B пересоздаёт вкладку, и ни состояние,
   // ни поздний ответ по A не переезжают на экран B (MINI-04).
   const key = nav.routerID
-  switch (nav.tab) {
+  switch (nav.tab === PARK_TAB ? 'router' : nav.tab) {
     case 'router':
       return (
         <RouterDetail

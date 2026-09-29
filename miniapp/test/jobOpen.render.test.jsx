@@ -52,21 +52,27 @@ describe('открытие «Хода работы»', () => {
     root.remove()
   })
 
-  it('из Парка на «Моих роутерах» -- с возвратом к списку', async () => {
-    const dispatch = vi.fn()
-    const nav = { routerID: 22, tab: 'router', overlay: 'fleet', sheet: null }
-    const root = await mount(<OverlayHost nav={nav} dispatch={dispatch} routers={ROUTERS} isAdmin />)
-    await act(async () => root.querySelector('.stub-park').click())
-    expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'job', params: { ...JOB, returnTo: 'fleet' } })
-    render(null, root)
-    root.remove()
+  // v0.48: Парк -- вкладка; «Ход работы» из него возвращается в неё, с
+  // роутером и без.
+  it('из вкладки «Парк» -- с возвратом в Парк', async () => {
+    for (const routerID of [22, null]) {
+      const dispatch = vi.fn()
+      const nav = { routerID, tab: 'park', overlay: null, sheet: null }
+      const root = await mount(<TabBody nav={nav} dispatch={dispatch} routers={ROUTERS} isAdmin />)
+      await act(async () => root.querySelector('.stub-park').click())
+      expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'job', params: { ...JOB, returnTo: 'park' } })
+      render(null, root)
+      root.remove()
+    }
   })
 
-  it('из Парка под сводкой широкого экрана -- тем же пропом', async () => {
-    const openLayer = vi.fn()
-    const root = await mount(<FleetHome routers={ROUTERS} isAdmin onPick={() => {}} openSheet={() => {}} openLayer={openLayer} />)
-    await act(async () => root.querySelector('.stub-park').click())
-    expect(openLayer).toHaveBeenCalledWith('job', JOB)
+  it('ни «Мои роутеры», ни сводка широкого экрана Парка больше не несут', async () => {
+    let root = await mount(<OverlayHost nav={{ routerID: 22, tab: 'router', overlay: 'fleet', sheet: null }} dispatch={() => {}} routers={ROUTERS} isAdmin />)
+    expect(root.querySelector('.stub-park')).toBe(null)
+    render(null, root)
+    root.remove()
+    root = await mount(<FleetHome routers={ROUTERS} isAdmin onPick={() => {}} />)
+    expect(root.querySelector('.stub-park')).toBe(null)
     render(null, root)
     root.remove()
   })

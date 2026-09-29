@@ -1,34 +1,21 @@
 import { Chip } from '../ui/Chip.jsx'
+import { FleetCounts } from '../ui/FleetCounts.jsx'
 import { fleetSummary, batchProgress } from '../fleet.js'
 import { useFleetRecheck } from '../useFleetRecheck.js'
-import { ParkSection } from './ParkSection.jsx'
 
 // Роутер не выбран на широком экране: сводка вместо пустоты. Три числа --
 // ответ на «всё ли в порядке», карточки -- куда идти, если нет.
 //
-// Админу под сводкой -- Парк целиком: он про весь флот, а не про один
-// роутер, и ждать выбора роутера, чтобы до него добраться, незачем.
-// «Парк» в боковой колонке при пустом выборе ведёт сюда (id="park").
-export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLayer, onOpenConnection }) {
+// Парк здесь больше не живёт (v0.48): у админа это своя вкладка, в боковой
+// колонке -- «Парк». Туда же уехал его «Опросить все»; не-админу с
+// несколькими роутерами кнопка остаётся здесь.
+export function FleetHome({ routers, onPick, isAdmin = false }) {
   const s = fleetSummary(routers)
   const { batch, recheckAll } = useFleetRecheck(routers)
   return (
     <div class="screen fleet-home">
       <h1 class="screen-title">Роутеры</h1>
-      <div class="fleet-counts">
-        <div class="fleet-count fleet-count-ok">
-          <span class="fleet-count-value">{s.ok}</span>
-          <span class="fleet-count-label">в порядке</span>
-        </div>
-        <div class="fleet-count fleet-count-attention">
-          <span class="fleet-count-value">{s.attention}</span>
-          <span class="fleet-count-label">требуют внимания</span>
-        </div>
-        <div class="fleet-count fleet-count-silent">
-          <span class="fleet-count-value">{s.silent}</span>
-          <span class="fleet-count-label">молчат</span>
-        </div>
-      </div>
+      <FleetCounts summary={s} />
 
       {s.broken.length === 0 ? (
         <p class="state fleet-home-calm">Все {s.total} в порядке.</p>
@@ -49,7 +36,7 @@ export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLay
         </section>
       )}
 
-      {s.total > 1 && (
+      {s.total > 1 && !isAdmin && (
         <section class="section fleet-home-recheck">
           <button type="button" class="btn btn-ghost" disabled={batch?.running} onClick={recheckAll}>
             {batch?.running ? 'Опрашиваем…' : 'Опросить все'}
@@ -58,12 +45,6 @@ export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLay
             {batchProgress(batch) || 'Каждый роутер переспросит себя сам. Ничего не меняет; спящие ответят, когда проснутся.'}
           </p>
         </section>
-      )}
-
-      {isAdmin && (
-        <div class="fleet-home-park" id="park">
-          <ParkSection openSheet={openSheet} onOpenRouter={onPick} currentID={null} openLayer={openLayer} onOpenConnection={onOpenConnection} />
-        </div>
       )}
     </div>
   )
