@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, URL_FLEET_OVERLAYS, normalizeTab, escapeAction, navPinned } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, URL_FLEET_OVERLAYS, normalizeTab, escapeAction, navPinned, awg3ListParams } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -230,7 +230,7 @@ describe('слои парка', () => {
   const base = { routerID: null, tab: 'router', overlay: null, sheet: null }
 
   it('список слоёв парка', () => {
-    expect(FLEET_OVERLAYS).toEqual(['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst'])
+    expect(FLEET_OVERLAYS).toEqual(['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst', 'awg3panel', 'awg3form'])
   })
 
   it('параметры слоя кладутся рядом с ним и уходят вместе с ним', () => {
@@ -401,5 +401,30 @@ describe('вкладка «Управление»', () => {
   it('экраны глубже «Управления» закрываются во вкладку', () => {
     const s = { ...base, tab: 'router', overlay: 'agentcfg' }
     expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage' })
+  })
+})
+
+describe('слои awg3-панелей', () => {
+  it('не пишутся в адрес и не открываются ссылкой', () => {
+    expect(URL_FLEET_OVERLAYS).not.toContain('awg3panel')
+    expect(URL_FLEET_OVERLAYS).not.toContain('awg3form')
+    expect(deepLinkOverlay('?open=awg3panel', { routerID: 7 })).toBe(null)
+  })
+
+  it('«назад» с формы, открытой с экрана панели, -- на экран панели, оттуда -- на список', () => {
+    const list = { returnTo: 'park' }
+    const panel = { panelId: 'main', returnTo: 'selfhosted', returnParams: list }
+    let s = { routerID: null, tab: 'park', overlay: 'awg3form', overlayParams: { panelId: 'main', returnTo: 'awg3panel', returnParams: panel }, sheet: null }
+    s = navReducer(s, { type: 'back' })
+    expect(s).toMatchObject({ overlay: 'awg3panel', overlayParams: panel })
+    s = navReducer(s, { type: 'back' })
+    expect(s).toMatchObject({ overlay: 'selfhosted', overlayParams: list })
+  })
+
+  it('список после удаления -- параметры списка из цепочки', () => {
+    const list = { returnTo: 'park' }
+    expect(awg3ListParams({ panelId: 'main', returnTo: 'selfhosted', returnParams: list })).toBe(list)
+    expect(awg3ListParams({ panelId: 'main', returnTo: 'awg3panel', returnParams: { panelId: 'main', returnTo: 'selfhosted', returnParams: list } })).toBe(list)
+    expect(awg3ListParams(undefined)).toEqual({ returnTo: null })
   })
 })

@@ -3724,6 +3724,39 @@ body {
   margin-top: var(--sp-3);
 }
 
+/* awg3-панели (v0.49) */
+.awg3-add {
+  margin-top: var(--sp-3);
+}
+
+.list-row-warn .list-row-sub {
+  color: var(--warn);
+}
+
+.awg3-file input {
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.awg3-check {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-sm);
+}
+
+.awg3-check-ok {
+  color: var(--ok);
+}
+
+.awg3-check-bad {
+  color: var(--danger);
+}
+
+.data-row-dot-muted {
+  background: var(--muted);
+}
+
 .selfhosted-form .card + .field-hint {
   margin-top: var(--sp-2);
 }
