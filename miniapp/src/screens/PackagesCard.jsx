@@ -64,10 +64,15 @@ export function PackagesCard({ kind, routerID, asleep }) {
 
           <div class="field packages-time">
             <label for={`packages-time-${kind}`}>Время запуска, каждый день</label>
+            {/* Текстом, а не type=time: браузер с английской локалью рисовал
+                «04:30 AM»; расписание на роутере — 24 ч. */}
             <input
               id={`packages-time-${kind}`}
-              type="time"
+              type="text"
+              inputMode="numeric"
               autocomplete="off"
+              maxLength={5}
+              placeholder={job.defaultTime}
               value={time}
               onInput={(e) => {
                 touched.current = true
@@ -80,8 +85,8 @@ export function PackagesCard({ kind, routerID, asleep }) {
             <p class="hint">Сейчас стоит своё расписание cron. «Изменить время» заменит его ежедневным запуском.</p>
           )}
 
-          <div class="packages-actions">
-            <button type="button" class="btn btn-primary btn-row" disabled={cmd.busy || !timeOK} onClick={() => run('install')}>
+          <div class="packages-actions action-row">
+            <button type="button" class="btn btn-ghost btn-row" disabled={cmd.busy || !timeOK} onClick={() => run('install')}>
               {status?.installed ? 'Изменить время' : 'Включить'}
             </button>
             {job.canRun && (

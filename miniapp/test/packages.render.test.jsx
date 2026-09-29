@@ -48,7 +48,7 @@ const cleanup = (root) => { render(null, root); root.remove() }
 const card = (root, kind) => root.querySelector(`.packages-card-${kind}`)
 const button = (el, text) => [...el.querySelectorAll('button')].find((b) => b.textContent === text)
 async function setTime(el, value) {
-  const input = el.querySelector('input[type="time"]')
+  const input = el.querySelector('input[id^="packages-time-"]')
   await act(async () => {
     input.value = value
     input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -77,15 +77,15 @@ describe('«Пакеты по расписанию»', () => {
     const opkg = card(root, 'opkg')
     expect(opkg.textContent).toContain('Обновление пакетов по расписанию')
     expect(opkg.textContent).toContain('каждый день в 04:30')
-    expect(opkg.querySelector('input[type="time"]').value).toBe('04:30')
-    expect(opkg.querySelector('input[type="time"]').getAttribute('autocomplete')).toBe('off')
+    expect(opkg.querySelector('input[id^="packages-time-"]').value).toBe('04:30')
+    expect(opkg.querySelector('input[id^="packages-time-"]').getAttribute('autocomplete')).toBe('off')
     expect(button(opkg, 'Изменить время')).toBeTruthy()
     expect(button(opkg, 'Выключить')).toBeTruthy()
     expect(button(opkg, 'Запустить сейчас')).toBeUndefined()
     const clean = card(root, 'clean')
     expect(clean.textContent).toContain('Очистка Entware')
     expect(clean.textContent).toContain('выключено')
-    expect(clean.querySelector('input[type="time"]').value).toBe('05:15')
+    expect(clean.querySelector('input[id^="packages-time-"]').value).toBe('05:15')
     expect(button(clean, 'Включить')).toBeTruthy()
     expect(button(clean, 'Выключить')).toBeUndefined()
     expect(button(clean, 'Запустить сейчас')).toBeTruthy()
@@ -180,6 +180,19 @@ describe('проводка экрана', () => {
     expect(root.querySelector('.overlay-title').textContent).toBe('Пакеты по расписанию')
     await act(async () => root.querySelector('.overlay-back').click())
     expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'manage' })
+    cleanup(root)
+  })
+})
+
+describe('v0.50: ряд действий и 24 ч (спека п. 3.3)', () => {
+  it('время -- текстом ЧЧ:ММ, без AM/PM; кнопки -- общий ряд; лаймов на экране нет', async () => {
+    const root = await mount()
+    const input = root.querySelector('#packages-time-opkg')
+    expect(input.type).toBe('text')
+    expect(input.getAttribute('inputmode')).toBe('numeric')
+    expect(input.value).toBe('04:30')
+    expect(card(root, 'opkg').querySelector('.packages-actions').className).toContain('action-row')
+    expect(root.querySelectorAll('.btn-primary')).toHaveLength(0)
     cleanup(root)
   })
 })

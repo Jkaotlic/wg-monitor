@@ -77,9 +77,9 @@ describe('Парк: порядок карточек (спека п. 2.4)', () =>
   })
 
   it('оговорки одной свёрнутой строкой', () => {
-    expect(warningFoldTitle(1)).toBe('1 оговорка к обновлению')
-    expect(warningFoldTitle(3)).toBe('3 оговорки к обновлению')
-    expect(warningFoldTitle(5)).toBe('5 оговорок к обновлению')
+    expect(warningFoldTitle(1)).toBe('Что может помешать обновлению · 1')
+    expect(warningFoldTitle(3)).toBe('Что может помешать обновлению · 3')
+    expect(warningFoldTitle(5)).toBe('Что может помешать обновлению · 5')
   })
 })
 

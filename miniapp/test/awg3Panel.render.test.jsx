@@ -345,7 +345,7 @@ describe('экран панели', () => {
     expect(peers.length).toBe(3)
     expect(peers[0].textContent).toContain('2 мин назад')
     expect(peers[0].textContent).not.toContain('handshake')
-    expect(peers[0].textContent).toContain('↓\u00a01,5\u00a0КБ · ↑\u00a02,0\u00a0МБ')
+    expect(peers[0].textContent).toContain('↓\u00a01,5\u202fКБ · ↑\u00a02,0\u202fМБ')
     // Ревью раунд 3 (finding 2): в тексте пилюли только ник, полная фраза --
     // в title (проверяется отдельным тестом ниже), иначе фраза «роутер
     // «nick»» вылезает за колонку на узком экране.

@@ -139,14 +139,14 @@ describe('пиры', () => {
       { id: 'p2', name: 'laptop', state: 'never', handshake_age_sec: -1, rx_bytes: 0, tx_bytes: 0, router: null },
       { id: 'p3', name: 'tablet', state: 'off', handshake_age_sec: -1 },
     ])
-    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'только что', valueSub: '↓\u00a01,5\u00a0КБ · ↑\u00a02,0\u00a0МБ', router: { id: 7, nickname: 'home' }, off: false })
+    expect(rows[0]).toMatchObject({ dot: 'ok', value: 'только что', valueSub: '↓\u00a01,5\u202fКБ · ↑\u00a02,0\u202fМБ', router: { id: 7, nickname: 'home' }, off: false })
     expect(rows[1]).toMatchObject({ dot: 'muted', value: 'не подключался', valueSub: '', router: null, off: false })
     // off -- своя точка (muted, как у never) и свой ярлык под именем, а не
     // текст в колонке времени.
     expect(rows[2]).toMatchObject({ dot: 'muted', value: 'не подключался', router: null, off: true })
     expect(trafficText(0, 0)).toBe('')
     expect(summaryText({ peers_total: 6, peers_online: 4 })).toBe('онлайн 4 из 6')
-    expect(summaryText({ peers_total: 0 })).toBe('пиров нет')
+    expect(summaryText({ peers_total: 0 })).toBe('устройств нет')
   })
 
   it('имя устройства -- правила панели и бота', () => {
@@ -160,8 +160,8 @@ describe('пиры', () => {
   it('выбор роутера: по алфавиту, с пометкой, у кого пир уже есть', () => {
     const rows = routerPickRows([{ id: 2, nickname: 'work' }, { id: 7, nickname: 'home' }, { id: 9 }], [{ router: { id: 7, nickname: 'home' } }])
     expect(rows.map((r) => r.title)).toEqual(['home', 'work'])
-    expect(rows[0].sub).toContain('уже есть')
-    expect(rows[1].sub).toContain('«wgmon-work»')
+    expect(rows[0].sub).toBe('запись на панели уже есть — возьмём её конфиг')
+    expect(rows[1].sub).toBe('на панели появится запись «wgmon-work»')
   })
 
   it('личка словами', () => {

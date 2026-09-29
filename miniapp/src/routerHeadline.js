@@ -9,6 +9,7 @@
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy } from './labels.js'
+import { agoText } from './when.js'
 import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
 import { isStale } from './staleness.js'
 
@@ -127,7 +128,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
     tone: 'off',
     cold: false,
     stale,
-    tag: age != null ? `роутер на связи · ответ ${humanAge(age)} назад` : 'роутер на связи',
+    tag: age != null ? `роутер на связи · ответ ${agoText(age)}` : 'роутер на связи',
     // Правила не прочитались (список перерос то, что агент читает): туннель
     // роутер назвал, а повтор проверки упрётся в тот же список -- звать
     // «соберите заново» значит гонять человека по кругу.

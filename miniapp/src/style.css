@@ -146,6 +146,7 @@
 }
 
 .manage-group-title {
+  display: inline;
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: 700;
@@ -153,7 +154,7 @@
   color: var(--text);
 }
 
-.manage-group > .section:first-of-type {
+.manage-group > .fold-body > .section:first-of-type {
   margin-top: var(--sp-3);
 }
 
@@ -166,6 +167,12 @@
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   padding: var(--sp-4);
+}
+
+/* Соседние карточки одного раздела -- единый отступ (v0.50, спека п. 3.3):
+   раньше предупреждение прилипало к списку («Заменить конфиг»). */
+:where(.section, .screen) > .card + .card {
+  margin-top: var(--sp-3);
 }
 
 .row {
@@ -1125,7 +1132,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
   border: none;
   background: transparent;
@@ -1404,7 +1411,7 @@ body {
 }
 
 .filter-chip {
-  min-height: 32px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -1676,7 +1683,6 @@ body {
 .stat-unit {
   font-size: var(--fs-sm);
   font-weight: 500;
-  margin-left: 3px;
 }
 
 .stat-note {
@@ -2236,8 +2242,9 @@ body {
 .panel-line {
   display: block;
   max-width: 100%;
-  margin: 2px 0 0;
-  padding: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  min-height: 40px;
   border: none;
   background: transparent;
   color: var(--accent);
@@ -2260,6 +2267,8 @@ body {
 /* В строке-кнопке списка хост -- текст, не ссылка: без подчёркивания и
    без своей реакции на наведение. */
 .panel-line-text {
+  padding: 0;
+  min-height: 0;
   text-decoration: none;
   cursor: inherit;
 }
@@ -3536,9 +3545,6 @@ body {
 }
 
 .packages-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
   margin-top: var(--sp-3);
 }
 
@@ -3613,6 +3619,7 @@ body {
   display: inline-flex;
   align-items: baseline;
   gap: var(--sp-1);
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -3661,7 +3668,7 @@ body {
 
 .segment-tab {
   flex: 1;
-  min-height: 36px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 0;
   border-radius: var(--radius-pill);
@@ -3892,9 +3899,6 @@ body {
 }
 
 .selfhosted-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
   margin: var(--sp-3) 0 var(--sp-2);
 }
 
@@ -4045,6 +4049,15 @@ body {
    не тронуты, а оболочку с этим классом рисует только WideLayout.
    ============================================================ */
 @media (min-width: 1024px) {
+  .wide-shell .manage-anchors {
+    top: 0;
+  }
+
+  .wide-shell .manage-group,
+  .wide-shell .manage-anchor-target {
+    scroll-margin-top: 64px;
+  }
+
   .wide-shell {
     display: grid;
     grid-template-columns: 288px minmax(0, 1fr);
@@ -4702,14 +4715,12 @@ body {
     text-decoration: underline;
   }
 
-  .wide-shell .cabinet-secret-actions,
-  .wide-shell .selfhosted-actions {
+  .wide-shell .cabinet-secret-actions {
     justify-content: flex-end;
   }
 
   .wide-shell .selfhosted-actions .btn {
-    flex: none;
-    min-width: 160px;
+    min-width: 0;
   }
 
   .wide-shell .hrneo-actions .btn {
@@ -4941,4 +4952,59 @@ body {
   font-weight: 600;
   text-transform: none;
   color: var(--ink);
+}
+
+/* Чипы-якоря «Управления» (v0.50, спека п. 3.1): липнут под шапкой, едут
+   вбок, если не помещаются. Цель касания 40 px. */
+.manage-anchors {
+  position: sticky;
+  top: var(--app-header-h);
+  z-index: 5;
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  margin: 0 calc(var(--sp-4) * -1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.manage-anchor {
+  flex: none;
+  min-height: 40px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Прокрутка к группе останавливается под шапкой и чипами. */
+.manage-group,
+.manage-anchor-target {
+  scroll-margin-top: calc(var(--app-header-h) + 64px);
+}
+
+.versions-empty .btn-wide {
+  margin-top: var(--sp-3);
+}
+
+/* Плитка-приглашение «Обмен за сутки»: текст и кнопка -- в одной карточке. */
+.traffic-invite .traffic-detail {
+  margin: 0;
+}
+
+.card > .btn-wide {
+  margin-top: var(--sp-3);
+}
+
+/* Строка адреса панели в «Сейчас» -- часть героя, а не цель касания. */
+.hero .panel-line {
+  min-height: 0;
+  padding: 0;
 }

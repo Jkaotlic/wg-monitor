@@ -344,7 +344,7 @@ describe('«Парк»: обновление агента', () => {
     }
     const { root } = await mountPark()
     const row = rowOf(root, 'antique')
-    expect(row.textContent).toContain('Оговорка: агент слишком старый — нужна переустановка')
+    expect(row.textContent).toContain('Что может помешать обновлению: агент слишком старый — нужна переустановка')
     expect(buttons(row, 'Обновить агент')).toHaveLength(0)
     // office (agent_behind:true) -- единственный в счётчике; antique его не увеличивает.
     expect(root.textContent).toContain('Обновить всех отставших (1)')

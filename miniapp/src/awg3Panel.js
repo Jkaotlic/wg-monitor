@@ -1,4 +1,5 @@
 import { formatBytes } from './traffic.js'
+import { agoText } from './when.js'
 
 // awg3-панели оператора (v0.49): форма, строки списка, состояния, пиры и
 // тексты. Только админ. Пароль панели и .p12 живут только в значениях формы
@@ -8,7 +9,7 @@ export const PANEL_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/
 
 export const AWG3_TEXTS = {
   group: 'Панели awg3',
-  groupIntro: 'Панели выпуска конфигов на ваших VPS: пиры, «Конфиг на устройство» и «Выпустить на роутер».',
+  groupIntro: 'Панели выпуска конфигов на ваших VPS: устройства, «Конфиг на устройство» и «Выпустить на роутер».',
   empty: 'Панелей пока нет.',
   add: 'Добавить панель',
   loading: 'Читаем панели…',
@@ -31,11 +32,11 @@ export const AWG3_TEXTS = {
   readonly: 'Панель только для просмотра: выпускать с неё нельзя.',
   peersLoading: 'Спрашиваем панель…',
   peersHint: 'Время — с последнего обмена ключами; ниже — трафик за интерфейс.',
-  noPeers: 'На этом интерфейсе пиров нет.',
+  noPeers: 'На этом интерфейсе устройств нет.',
   noIfaces: 'Панель не назвала ни одного интерфейса.',
   retry: 'Повторить',
   device: 'Конфиг на устройство',
-  deviceHint: 'На панели появится новый пир. QR покажется здесь, а файл .conf и QR придут вам в личку.',
+  deviceHint: 'На панели появится новое устройство. QR покажется здесь, а файл .conf и QR придут вам в личку.',
   deviceName: 'Имя устройства',
   devicePlaceholder: 'iphone-anex',
   deviceIssue: 'Выпустить',
@@ -43,7 +44,7 @@ export const AWG3_TEXTS = {
   qrAlt: 'QR-код конфига',
   qrNote: 'В QR и в файле приватный ключ — не пересылайте их.',
   router: 'Выпустить на роутер',
-  routerHint: 'Если на панели уже есть пир «wgmon-<роутер>», бот возьмёт его конфиг заново — нового пира не будет. Конфиг встанет на роутер VPN-туннелем.',
+  routerHint: 'Если на панели уже есть запись «wgmon-<роутер>», бот возьмёт её конфиг заново — новой записи не будет. Конфиг встанет на роутер VPN-туннелем.',
   routerPick: 'Какому роутеру',
   routerNone: 'В парке нет роутеров.',
   routerWaiting: 'Конфиг выпущен, ждём подтверждения роутера…',
@@ -206,13 +207,6 @@ export function errorBanner(err) {
   }
 }
 
-function agoText(sec) {
-  if (sec < 60) return 'только что'
-  if (sec < 3600) return `${Math.floor(sec / 60)} мин назад`
-  if (sec < 86400) return `${Math.floor(sec / 3600)} ч назад`
-  return `${Math.floor(sec / 86400)} дн назад`
-}
-
 // handshake_age_sec -1 -- ни одного handshake: «не подключался», а не
 // «55 лет назад».
 // Правка 1-2 (ревью раунд 1): колонка времени -- ТОЛЬКО короткая форма, без
@@ -258,7 +252,7 @@ export function peerRows(peers) {
 
 export function summaryText(summary) {
   const total = summary?.peers_total ?? 0
-  if (!total) return 'пиров нет'
+  if (!total) return 'устройств нет'
   return `онлайн ${summary.peers_online ?? 0} из ${total}`
 }
 
@@ -280,7 +274,7 @@ export function routerPickRows(routers, peers) {
     .map((r) => ({
       id: r.id,
       title: String(r.nickname),
-      sub: taken.has(r.id) ? 'пир на панели уже есть — возьмём его конфиг' : `на панели появится пир «wgmon-${r.nickname}»`,
+      sub: taken.has(r.id) ? 'запись на панели уже есть — возьмём её конфиг' : `на панели появится запись «wgmon-${r.nickname}»`,
     }))
     .sort((a, b) => a.title.localeCompare(b.title))
 }
@@ -339,7 +333,7 @@ export function deletePanelSheetText(panel) {
   const name = panel?.label || panel?.id || ''
   return {
     title: `Удалить панель «${name}»?`,
-    body: 'Панель пропадёт из бота. На самой панели и на роутерах ничего не меняется: выпущенные пиры и VPN-туннели остаются.',
+    body: 'Панель пропадёт из бота. На самой панели и на роутерах ничего не меняется: выпущенные устройства и VPN-туннели остаются.',
     phrase: name,
   }
 }

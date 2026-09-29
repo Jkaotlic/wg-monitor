@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
+import { fetchRouterSettings, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, agentRow } from '../settings.js'
+import { thresholdRows, auditRows, firmwareStatus, panelRow, agentRow } from '../settings.js'
 import { versionsRows, unknownLine, installedRows, checkedAtText } from '../versions.js'
-import { confirmSheet, localSheet } from '../sheet.js'
+import { localSheet } from '../sheet.js'
 import {
   MAINT_TEXTS,
   mayMaintain,
@@ -25,8 +25,9 @@ import {
 import { Section } from '../ui/Section.jsx'
 import { ManageGroup } from '../ui/ManageGroup.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
-import { HooksRow, AwgmLogsSection } from './SignalSections.jsx'
-import { agentAtLeast } from '../agentConfig.js'
+import { HooksRow } from './SignalSections.jsx'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
+import { manageAnchors, manageSummaries, versionsKnown } from '../manage.js'
 
 // Настройки роутера и обслуживание -- то, за чем оператор раньше шёл в бота.
 //
@@ -42,12 +43,10 @@ import { agentAtLeast } from '../agentConfig.js'
 // Проверить · Починить · Настройки и доступ. Админские разделы вкладка
 // вставляет слотами (repairSlot, settingsSlot, dangerSlot) -- так они стоят
 // рядом с родственными, а не отдельным хвостом после справки.
-export function SettingsSections({ routerID, routerName, asleep, openSheet, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
+export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
-  const [tunnels, setTunnels] = useState([])
   const [error, setError] = useState(null)
-  const [showHelp, setShowHelp] = useState(false)
   // Версии живут своим запросом: если срез не ответил, экран настроек обязан
   // остаться рабочим, а не погаснуть целиком из-за новостей.
   const [versions, setVersions] = useState(null)
@@ -67,15 +66,11 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
 
   const audit = useCommand(routerID)
   const firmware = useCommand(routerID)
-  const doctor = useCommand(routerID)
-  const hrneo = useCommand(routerID)
-  const pingNow = useCommand(routerID)
 
   function load() {
-    return Promise.all([fetchRouterSettings(routerID), fetchRouterChecks(routerID)])
-      .then(([s, c]) => {
+    return fetchRouterSettings(routerID)
+      .then((s) => {
         setSettings(s)
-        setTunnels(c.tunnels ?? [])
         setError(null)
       })
       .catch(() => setError('Не удалось прочитать настройки роутера.'))
@@ -112,9 +107,6 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
   }
 
   const auditOut = audit.result?.status === 'ok' ? auditRows(audit.result.output) : []
-  const doctorOut = doctor.result?.status === 'ok' ? doctorRows(doctor.result.output) : []
-  const hrneoOut = hrneo.result?.status === 'ok' ? doctorRows(hrneo.result.output) : []
-  const pings = pingRows(tunnels)
   const fw = firmware.result?.status === 'ok' ? firmwareStatus(firmware.result.output) : null
   // Обслуживание -- админу, владельцу и операторам: тот же круг, что у сервера.
   // Прошивку с цикла 1 ставят и операторы (решение оператора 14.09).
@@ -186,31 +178,67 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
     )
   }
 
-  // Включение и выключение проверки связи -- переключатель, а не правка
-  // конфига: обратное действие стоит на той же строке.
-  const askPingToggle = (row) => {
-    openSheet(
-      confirmSheet({
-        routerID,
-        title: row.enabled ? `Выключить проверку связи у «${row.title}»?` : `Включить проверку связи у «${row.title}»?`,
-        body: row.enabled
-          ? 'Роутер перестанет сам проверять этот VPN-туннель и поднимать его. Тревога о падении по-прежнему придёт — по обмену ключами.'
-          : 'Роутер начнёт сам проверять VPN-туннель и поднимать его, если ответа не будет.',
-        action: 'pingcheck_toggle',
-        args: { tunnel_id: row.tunnelID, enable: !row.enabled },
-        buttonLabel: row.enabled ? 'Выключить' : 'Включить',
-        danger: Boolean(row.enabled),
-        asleep,
-        onDone: load,
-      }),
-    )
-  }
+  // Какие группы раскрыты (v0.50, спека п. 3.1): «Роутер» -- всегда при
+  // входе; группа по старой ссылке или возврату из слоя -- тоже.
+  const [openGroups, setOpenGroups] = useState(() => new Set(['router', focusGroup].filter(Boolean)))
+  const setGroup = (group, on) =>
+    setOpenGroups((prev) => {
+      if (prev.has(group) === on) return prev
+      const next = new Set(prev)
+      if (on) next.add(group)
+      else next.delete(group)
+      return next
+    })
+  // Прокрутка -- после перерисовки: раскрытая группа должна успеть вырасти.
+  const scrollToAnchor = (id) => setTimeout(() => document.getElementById(id)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }), 0)
+  useEffect(() => {
+    if (!focusGroup) return
+    setGroup(focusGroup, true)
+    scrollToAnchor(`mg-${focusGroup}`)
+  }, [focusGroup])
+
+  const known = versionsKnown(versions)
+  const canRepair = Boolean((maintain && openSheet) || repairSlot)
+  const anchors = manageAnchors({ canRepair, isAdmin })
+  const notes = manageSummaries({ settings, versions, showReboot, agentReady, isAdmin })
+  const runAudit = () => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })
+  const auditBlock = (
+    <>
+      <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={runAudit}>
+        {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
+      </button>
+      <ErrorLine text={audit.error} busy={audit.busy} onRetry={runAudit} />
+      {audit.result && audit.result.status !== 'ok' && <p class="state state-error">Роутер не ответил на сверку версий — попробуйте ещё раз.</p>}
+      {auditOut.length > 0 && (
+        <div class="card card-rows settings-card">
+          {auditOut.map((r) => (
+            <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.sub} valueTone={r.tone} />
+          ))}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <>
-      {error && <p class="state state-error">{error}</p>}
+      <nav class="manage-anchors" aria-label="Разделы «Управления»">
+        {anchors.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            class="manage-anchor"
+            onClick={() => {
+              setGroup(a.group, true)
+              scrollToAnchor(a.id)
+            }}
+          >
+            {a.label}
+          </button>
+        ))}
+      </nav>
+      <ErrorLine text={error} onRetry={load} />
 
-      <ManageGroup title="Роутер">
+      <ManageGroup id="mg-router" title="Роутер" open={openGroups.has('router')} onToggle={(o) => setGroup('router', o)}>
         {/* Панель роутера -- первой: за ней чаще всего и приходят. Владельцу
             и админу; оператору роутера сервер адреса не отдаёт, и секции нет
             вовсе. Адрес открывается напрямую во внешнем браузере. */}
@@ -264,95 +292,100 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
         </Section>
       </ManageGroup>
 
-      <ManageGroup title="Версии">
-        <Section title="Обновления">
-          {newsRows.length > 0 && (
-            <div class="card card-rows settings-card">
-              {newsRows.map((r) => {
-                const act = newsAction(r.component)
-                return (
-                  // Новость -- столбиком (.settings-news): строка, текст,
-                  // кнопка и пара «Отложить / Скрыть» друг под другом. В
-                  // строку .settings-row они не влезали и уезжали за край.
-                  <div key={r.key} class="settings-news">
-                    <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
-                    <p class="card-foot">{r.text}</p>
-                    {act && (
-                      <button type="button" class={r.component === 'firmware' ? 'btn btn-danger btn-row' : 'btn btn-primary btn-row'} onClick={act.open}>
-                        {act.label}
-                      </button>
-                    )}
-                    {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
-                    {mayHideNews && (
-                      <div class="action-row">
-                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
-                          Отложить на неделю
-                        </button>
-                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
-                          Скрыть эту новость
-                        </button>
+      <ManageGroup id="mg-versions" title="Версии" note={notes.versions} open={openGroups.has('versions')} onToggle={(o) => setGroup('versions', o)}>
+        {known || newsRows.length > 0 ? (
+          <>
+            <Section title="Обновления">
+              {newsRows.length > 0 && (
+                <div class="card card-rows settings-card">
+                  {newsRows.map((r) => {
+                    const act = newsAction(r.component)
+                    return (
+                      // Новость -- столбиком (.settings-news): строка, текст,
+                      // кнопка и пара «Отложить / Скрыть» друг под другом. В
+                      // строку .settings-row они не влезали и уезжали за край.
+                      <div key={r.key} class="settings-news">
+                        <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+                        <p class="card-foot">{r.text}</p>
+                        {act && (
+                          <button type="button" class={r.component === 'firmware' ? 'btn btn-danger btn-row' : 'btn btn-ghost btn-row'} onClick={act.open}>
+                            {act.label}
+                          </button>
+                        )}
+                        {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
+                        {mayHideNews && (
+                          <div class="action-row">
+                            <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
+                              Отложить на неделю
+                            </button>
+                            <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
+                              Скрыть эту новость
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
-              и «обновлений нет» обязаны звучать по-разному: раньше и то, и
-              другое выглядело как отсутствие блока. */}
-          {unknownLines.length > 0 && (
-            <div class="card card-rows">
-              {unknownLines.map((line) => (
-                <p key={line} class="card-foot">{line}</p>
-              ))}
-            </div>
-          )}
-          {versions && newsRows.length === 0 && unknownLines.length === 0 && (
-            <div class="card card-rows">
-              <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
-            </div>
-          )}
-          {installedRows(versions).length > 0 && (
-            <div class="card card-rows settings-card">
-              {installedRows(versions).map((r) => (
-                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
-              ))}
-              {versions?.checked_at && <p class="card-foot">Роутер рассказал про версии {checkedAgo}.</p>}
-            </div>
-          )}
-          {versionsError && <p class="state state-error">{versionsError}</p>}
-        </Section>
+                    )
+                  })}
+                </div>
+              )}
+              {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
+                  и «обновлений нет» обязаны звучать по-разному: раньше и то, и
+                  другое выглядело как отсутствие блока. */}
+              {unknownLines.length > 0 && (
+                <div class="card card-rows">
+                  {unknownLines.map((line) => (
+                    <p key={line} class="card-foot">{line}</p>
+                  ))}
+                </div>
+              )}
+              {versions && newsRows.length === 0 && unknownLines.length === 0 && (
+                <div class="card card-rows">
+                  <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
+                </div>
+              )}
+              {installedRows(versions).length > 0 && (
+                <div class="card card-rows settings-card">
+                  {installedRows(versions).map((r) => (
+                    <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
+                  ))}
+                  {versions?.checked_at && <p class="card-foot">Роутер рассказал про версии {checkedAgo}.</p>}
+                </div>
+              )}
+              <ErrorLine text={versionsError} onRetry={loadVersions} />
+            </Section>
 
-        <Section title="Что стоит на роутере">
-          {agentRow(settings) && (
-            <div class="card card-rows settings-card">
-              <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
-            </div>
-          )}
-          <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
-            {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
-          </button>
-          {audit.error && <p class="state state-error">{audit.error}</p>}
-          {audit.result && audit.result.status !== 'ok' && (
-            <p class="state state-error">Роутер не ответил: {audit.result.output || audit.result.status}</p>
-          )}
-          {auditOut.length > 0 && (
-            <div class="card card-rows settings-card">
-              {auditOut.map((r) => (
-                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.sub} valueTone={r.tone} />
+            <Section title="Что стоит на роутере">
+              {agentRow(settings) && (
+                <div class="card card-rows settings-card">
+                  <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
+                </div>
+              )}
+              {auditBlock}
+            </Section>
+          </>
+        ) : (
+          // Ничего не известно -- один блок, а не три «сведений нет» (п. 3.7).
+          <Section title="Что стоит на роутере">
+            <div class="card versions-empty">
+              <p class="traffic-detail">Версии ещё не получены.</p>
+              {settings?.agent_version && <p class="hint">Агент на роутере: {settings.agent_version}.</p>}
+              {[...new Set(unknownLines)].map((line) => (
+                <p key={line} class="hint">
+                  {line}
+                </p>
               ))}
+              {auditBlock}
+              <ErrorLine text={versionsError} onRetry={loadVersions} />
             </div>
-          )}
-        </Section>
-
+          </Section>
+        )}
         <Section title="Прошивка роутера">
           <button type="button" class="btn btn-ghost btn-wide" disabled={firmware.busy} onClick={() => firmware.run('firmware_status', {}, deadline)}>
             {firmware.busy ? 'Спрашиваем роутер…' : 'Проверить прошивку'}
           </button>
-          {firmware.error && <p class="state state-error">{firmware.error}</p>}
+          <ErrorLine text={firmware.error} busy={firmware.busy} onRetry={() => firmware.run('firmware_status', {}, deadline)} />
           {firmware.result && firmware.result.status !== 'ok' && (
-            <p class="state state-error">Роутер не ответил: {firmware.result.output || firmware.result.status}</p>
+            <p class="state state-error">Роутер не ответил на вопрос о прошивке — попробуйте ещё раз.</p>
           )}
           {fw?.known && (
             <div class="card card-rows settings-card">
@@ -381,77 +414,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
         </Section>
       </ManageGroup>
 
-      <ManageGroup title="Проверить">
-        <Section title="Проверка связи">
-          {pings.length === 0 ? (
-            <div class="card">
-              <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
-            </div>
-          ) : (
-            <div class="card card-rows">
-              {pings.map((r) => (
-                <div key={r.key} class="settings-row">
-                  <DataRow dot={r.tone === 'muted' ? undefined : r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone === 'muted' ? undefined : r.tone} />
-                  {r.enabled != null && openSheet && (
-                    <button type="button" class="btn btn-ghost btn-row settings-row-btn" onClick={() => askPingToggle(r)}>
-                      {r.enabled ? 'Выключить' : 'Включить'}
-                    </button>
-                  )}
-                </div>
-              ))}
-              <p class="card-foot">
-                Роутер сам проверяет VPN-туннель и поднимает его, если ответа нет. Задержка — это
-                то, что он намерил последним замером.
-              </p>
-            </div>
-          )}
-          <button type="button" class="btn btn-ghost btn-wide" disabled={pingNow.busy} onClick={() => pingNow.run('pingcheck_now', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}>
-            {pingNow.busy ? 'Проверяем…' : 'Проверить связь сейчас'}
-          </button>
-          {pingNow.error && <p class="state state-error">{pingNow.error}</p>}
-        </Section>
-
-        <Section title="Проверить роутер изнутри">
-          <div class="action-row">
-            <button type="button" class="btn btn-ghost" disabled={doctor.busy} onClick={() => doctor.run('router_doctor', {}, deadline)}>
-              {doctor.busy ? 'Смотрим…' : 'Осмотр роутера'}
-            </button>
-            <button type="button" class="btn btn-ghost" disabled={hrneo.busy} onClick={() => hrneo.run('hrneo_doctor', {}, deadline)}>
-              {hrneo.busy ? 'Смотрим…' : 'Осмотр HydraRoute Neo'}
-            </button>
-          </div>
-          {(doctor.error || hrneo.error) && <p class="state state-error">{doctor.error || hrneo.error}</p>}
-          {[...doctorOut, ...hrneoOut].length > 0 && (
-            <div class="card card-rows settings-card">
-              {[...doctorOut, ...hrneoOut].map((r, i) => (
-                <DataRow key={`${r.key}-${i}`} dot={r.tone} title={r.title} value={r.value} valueTone={r.tone} />
-              ))}
-            </div>
-          )}
-          {/* Доктор отвечает текстом; разобранные строки -- это его пересказ,
-              и сам ответ обязан остаться доступным целиком. */}
-          {(doctor.result?.status === 'ok' || hrneo.result?.status === 'ok') && (
-            <>
-              <button type="button" class="btn btn-ghost raw-toggle" onClick={() => setShowHelp((v) => !v)}>
-                {showHelp ? 'Скрыть ответ целиком' : 'Ответ роутера целиком'}
-              </button>
-              {showHelp && (
-                <pre class="raw-dump">{[doctor.result?.output, hrneo.result?.output].filter(Boolean).join('\n\n')}</pre>
-              )}
-            </>
-          )}
-        </Section>
-
-        {/* Круг -- владелец и админ (P3): оператору сервер отказывает сам
-            (owner_only), а старый агент (< v0.47) журнал не отдаёт вовсе --
-            вторая, независимая от сервера преграда, как и у остальных
-            v0.47-секций. */}
-        {settings && settings.role !== 'operator' && agentAtLeast(settings.agent_version, 'v0.47.0') && (
-          <AwgmLogsSection routerID={routerID} deadline={deadline} />
-        )}
-      </ManageGroup>
-
-      <ManageGroup title="Починить">
+      <ManageGroup id="mg-repair" title="Починить" note={notes.repair} open={openGroups.has('repair')} onToggle={(o) => setGroup('repair', o)}>
         {maintain && openSheet && (
           <Section title="Обслуживание">
             {showReboot && (
@@ -511,7 +474,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
         {repairSlot}
       </ManageGroup>
 
-      <ManageGroup title="Настройки и доступ">
+      <ManageGroup id="mg-settings" title="Настройки и доступ" note={notes.settings} open={openGroups.has('settings')} onToggle={(o) => setGroup('settings', o)}>
         {settings && (
           <Section title="Опрос и тревоги">
             <div class="card card-rows">
@@ -537,8 +500,8 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, repa
           <p class="card-foot">
             <b>Сейчас</b> — работает ли обход прямо сейчас и что с ним не так.{' '}
             <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит и что через него уходит.{' '}
-            <b>Проверки</b> — те же вопросы, заданные роутеру заново, и адрес, которым вас
-            видно снаружи. <b>Что было</b> — что происходило за неделю.{' '}
+            <b>Проверки</b> — те же вопросы, заданные роутеру заново, проверка связи, осмотр
+            роутера и адрес, которым вас видно снаружи. <b>Что было</b> — что происходило за неделю.{' '}
             <b>Управление</b> — панель роутера, обновления, перезапуск служб и перезагрузка роутера.
           </p>
           <p class="card-foot">

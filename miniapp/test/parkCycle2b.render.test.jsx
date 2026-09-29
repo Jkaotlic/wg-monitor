@@ -126,7 +126,7 @@ describe('Парк: сторож и отложенное', () => {
   it('строка «Сторож» -- в карточке бэкенда, старой строки внизу нет', async () => {
     const { root } = await mountPark()
     const wd = root.querySelector('.park-watchdog')
-    expect(wd.querySelector('.park-watchdog-line').textContent).toBe('Сторож: последний обход 40 с назад · молчат 2 · заглушено 1')
+    expect(wd.querySelector('.park-watchdog-line').textContent).toBe('Проверка молчащих роутеров: последний обход только что · 2 молчат · 1 заглушён')
     expect(wd.textContent).toContain('1234 обхода с запуска')
     expect(wd.classList.contains('park-watchdog-ok')).toBe(true)
     expect(root.textContent).not.toContain('Сторож парка:')
@@ -142,10 +142,10 @@ describe('Парк: сторож и отложенное', () => {
 
   it('в строках роутеров -- ожидание, раскатка и тревога со временем', async () => {
     const { root } = await mountPark()
-    expect(rowOf(root, 'bronya').textContent).toMatch(/ждёт обновления с \d\d\.\d\d \d\d:\d\d/)
+    expect(rowOf(root, 'bronya').textContent).toMatch(/ждёт обновления (?:сегодня|вчера|\d{1,2} [а-я]{3}(?: \d{4})?) с \d\d:\d\d/)
     const home = rowOf(root, 'home').textContent
-    expect(home).toMatch(/последняя раскатка v0\.35\.0 · \d\d\.\d\d \d\d:\d\d · прошла/)
-    expect(home).toMatch(/тревога с \d\d\.\d\d \d\d:\d\d \(5 раз\)/)
+    expect(home).toMatch(/последняя раскатка v0\.35\.0 · (?:сегодня|вчера|\d{1,2} [а-я]{3}(?: \d{4})?), \d\d:\d\d · прошла/)
+    expect(home).toMatch(/тревога (?:сегодня|вчера|\d{1,2} [а-я]{3}(?: \d{4})?) с \d\d:\d\d \(5 раз\)/)
     expect(rowOf(root, 'car').querySelectorAll('.park-delay')).toHaveLength(0)
     cleanup(root)
   })

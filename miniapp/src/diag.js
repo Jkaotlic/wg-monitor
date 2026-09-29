@@ -155,7 +155,7 @@ function collectDuration(ms) {
 
 export function reportStamp(iso, durationMs) {
   if (!iso) return ''
-  const when = new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  const when = whenText(iso)
   return Number.isFinite(durationMs) && durationMs > 0
     ? `${when} · сбор занял ${collectDuration(durationMs)}`
     : when
@@ -181,9 +181,10 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount } from './labels.js'
+import { pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount } from './labels.js'
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
+import { agoText, whenText } from './when.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -199,7 +200,7 @@ function measuredAt(ts, clock = {}) {
   if (!ts) return 'измерено — когда, роутер не сказал'
   const sec = ageByServerClock(ts, clock)
   if (sec == null) return Number.isNaN(Date.parse(ts)) ? 'измерено — когда, роутер не сказал' : `измерено ${clockTime(ts)}`
-  return `измерено ${humanAge(sec)} назад`
+  return `измерено ${agoText(sec)}`
 }
 
 function dnsRow(check, clock) {
@@ -309,7 +310,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
         code: 'agent_heartbeat',
         answer: silent ? 'нет' : 'да',
         tone: silent ? 'danger' : 'ok',
-        value: age != null ? `${humanAge(age)} назад` : 'ни разу не отчитывался',
+        value: age != null ? agoText(age) : 'ни разу не отчитывался',
       })
       continue
     }

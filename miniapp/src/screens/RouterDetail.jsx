@@ -4,6 +4,7 @@ import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
+import { whenText, sinceText } from '../when.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
@@ -30,7 +31,6 @@ import {
   workingTunnelNote,
   uncheckedTunnelCount,
   commandOutcomeLabel,
-  humanAge,
   incidentCopy,
   legendLabel,
   pingLabel,
@@ -69,7 +69,7 @@ function formatTime(iso) {
 
 function formatDateTime(iso) {
   if (!iso) return ''
-  return new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return whenText(iso)
 }
 
 function isSuppressed(incident) {
@@ -206,7 +206,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           <Quoted text={what} />
         </span>
         {code && <u class="data-row-code">{code}</u>}
-        {incident.hard_since && <span class="incident-since">с {formatDateTime(incident.hard_since)}</span>}
+        {incident.hard_since && <span class="incident-since">{sinceText(incident.hard_since)}</span>}
       </div>
 
       {why && !whySuppressed && <p class="incident-why">{why}</p>}

@@ -38,7 +38,7 @@ describe('fleetRow', () => {
   it('живой роутер без тревог говорит, когда отчитался', () => {
     const row = fleetRow({ id: 1, nickname: 'Дом', status: 'online', last_seen_age_sec: 42 })
     expect(row.pill).toEqual({ tone: 'ok', text: 'в порядке' })
-    expect(row.sub).toBe('отчёт 42 сек назад')
+    expect(row.sub).toBe('отчёт только что')
   })
 
   // На строке флота важно не «сколько тревог», а «что именно сломалось»:
@@ -86,7 +86,7 @@ describe('fleetRow', () => {
       ],
     })
     expect(row.dots).toBeUndefined()
-    expect(row.sub).toBe('отчёт 42 сек назад')
+    expect(row.sub).toBe('отчёт только что')
   })
 })
 

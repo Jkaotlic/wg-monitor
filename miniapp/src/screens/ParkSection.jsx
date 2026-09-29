@@ -507,7 +507,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
             {watchdog && (
               <div class={`park-watchdog park-watchdog-${watchdog.tone}`}>
-                <p class="park-watchdog-line">Сторож: {watchdog.text}</p>
+                <p class="park-watchdog-line">{watchdog.title}: {watchdog.text}</p>
                 {watchdog.alarm && <p class="state state-error">{watchdog.alarm}</p>}
                 {watchdog.sub && <p class="hint">{watchdog.sub}</p>}
               </div>
@@ -604,7 +604,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 <div class="park-notes">
                   {warningNotes.map((n) => (
                     <p class="hint" key={n.text}>
-                      Оговорка к обновлению: {n.text}. Касается: {n.names.join(', ')}.
+                      {n.text}. Касается: {n.names.join(', ')}.
                     </p>
                   ))}
                 </div>
@@ -664,7 +664,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                             {line.text}
                           </p>
                         ))}
-                        {warn.text && <p class="hint">Оговорка: {warn.text}</p>}
+                        {warn.text && <p class="hint">Что может помешать обновлению: {warn.text}</p>}
                         {rv.text && <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>}
                         {blocked && <p class="hint">{blocked}</p>}
                         {saved && <p class="hint">{saved.text}</p>}

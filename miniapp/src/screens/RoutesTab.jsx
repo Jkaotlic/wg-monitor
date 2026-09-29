@@ -354,7 +354,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
               }}
             />
           </div>
-          <div class="command-actions">
+          <div class="command-actions action-row">
             <button type="submit" class="btn btn-ghost" disabled={siteBusy || !normalizeSiteInput(siteInput)}>
               {site.busy ? 'Проверяю…' : 'Проверить'}
             </button>
@@ -430,7 +430,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
                     {badge && <Chip tone={badge.tone}>{badge.text}</Chip>}
                     <span class="tunnel-sub">{tunnelRuleSummary(t)}</span>
                     {(canRebind || canPromote) && (
-                      <span class="row-actions">
+                      <span class="row-actions action-row">
                         {canRebind && (
                           <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(t)}>
                             Перенести всё
@@ -455,7 +455,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
                   </span>
                   <span class="tunnel-sub">{otherSourceSummary(other)}</span>
                   {canMutate && rebindTargets(rows, OTHER_SOURCE_ID).length > 0 && (
-                    <span class="row-actions">
+                    <span class="row-actions action-row">
                       <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(other)}>
                         Перенести всё
                       </button>

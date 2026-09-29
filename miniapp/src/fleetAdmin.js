@@ -8,6 +8,7 @@
 // срок ссылки приходят с сервера. Вторая копия сравнения версий разошлась бы
 // с первой, а второй текст про 12 часов -- с тем, что сказал бот.
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
+import { agoText } from './when.js'
 import { agentUpdateState, isAway } from './agentUpdate.js'
 import { isStale, reachStatus } from './staleness.js'
 import { fleetRow } from './fleet.js'
@@ -76,7 +77,7 @@ export function parkCardTone(row, rv) {
 }
 
 export function warningFoldTitle(n) {
-  return `${n} ${pluralRu(n, 'оговорка', 'оговорки', 'оговорок')} к обновлению`
+  return `Что может помешать обновлению · ${n}`
 }
 
 function routerSub(router) {
@@ -93,7 +94,7 @@ function routerSub(router) {
   }
   if (age == null) return 'отчётов от него ещё не было'
   if (away) return `не на связи ${humanAge(age)}`
-  return `отчёт ${humanAge(age)} назад`
+  return `отчёт ${agoText(age)}`
 }
 
 // «агент X · бэкенд Y» стоят рядом намеренно: отставание видно глазом, без

@@ -109,7 +109,7 @@ describe('Парк как пульт (спека пакет 2)', () => {
   it('оговорки -- одной свёрнутой строкой над списком', async () => {
     const root = await mountPark()
     const fold = root.querySelector('details.park-warnings')
-    expect(fold.querySelector('.fold-title').textContent).toBe('1 оговорка к обновлению')
+    expect(fold.querySelector('.fold-title').textContent).toBe('Что может помешать обновлению · 1')
     expect(fold.open).toBe(false)
     expect(fold.textContent).toContain('проверяет адрес загрузки')
     cleanup(root)

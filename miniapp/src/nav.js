@@ -40,6 +40,23 @@ export function normalizeTab(tab) {
 // 'manage' -- возврат слоя («Ход работы» перенаправления) во вкладку.
 export const OVERLAY_TABS = { settings: 'manage', admin: 'manage', manage: 'manage' }
 
+// Группа «Управления», которую раскрыть, когда туда ведёт старая ссылка
+// (?open=settings / ?open=admin) или возврат из слоя глубже вкладки (v0.50):
+// группы свёрнуты, и без этого человек приходил бы в стену заголовков.
+export const MANAGE_FOCUS = { settings: 'router', admin: 'repair', packages: 'repair', dnsreset: 'repair', agentcfg: 'settings', agentconn: 'settings' }
+
+// Фокус -- как параметры слоя: ключ есть только когда он задан, чтобы
+// прежние снимки навигации не меняли форму.
+function withoutFocus(state) {
+  if (!state || !('manageFocus' in state)) return state
+  const { manageFocus: _drop, ...rest } = state
+  return rest
+}
+
+function withFocus(state, focus) {
+  return focus ? { ...state, manageFocus: focus } : state
+}
+
 // Старый возврат слоёв парка «в Обслуживание» ведёт теперь к списку роутеров:
 // Парк живёт там.
 export function normalizeReturn(returnTo) {
@@ -177,8 +194,8 @@ export function navReducer(state, action) {
       if (!(TABS.includes(tab) || tab === PARK_TAB) || navPinned(state)) return state
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
-      if (action.closeOverlay) return { ...withoutParams(state), tab, overlay: null, sheet: null }
-      return { ...state, tab }
+      if (action.closeOverlay) return withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null })
+      return withoutFocus({ ...state, tab })
     }
     case 'router': {
       if (navPinned(state)) return state
@@ -187,7 +204,7 @@ export function navReducer(state, action) {
       const wanted = action.tab ? normalizeTab(action.tab) : null
       const kept = action.keepTab && TABS.includes(state.tab) ? state.tab : null
       const tab = wanted && TABS.includes(wanted) ? wanted : kept ?? 'router'
-      return { ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null }
+      return withoutFocus({ ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null })
     }
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
@@ -195,9 +212,13 @@ export function navReducer(state, action) {
       // Возврат слоя парка во вкладку Парк: она есть и без роутера.
       if (overlay === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null, sheet: null }
       if (OVERLAY_TABS[overlay] && state.routerID != null) {
-        return { ...withoutParams(state), tab: OVERLAY_TABS[overlay], overlay: null, sheet: null }
+        return withFocus(
+          { ...withoutParams(withoutFocus(state)), tab: OVERLAY_TABS[overlay], overlay: null, sheet: null },
+          MANAGE_FOCUS[overlay] ?? MANAGE_FOCUS[state.overlay] ?? null,
+        )
       }
       const next = { ...withoutParams(state), overlay }
+      if (!overlay && state.routerID != null && state.tab === 'manage') return withFocus(next, MANAGE_FOCUS[state.overlay] ?? null)
       return overlay && action.params ? { ...next, overlayParams: action.params } : next
     }
     case 'sheet': {
@@ -236,9 +257,12 @@ export function navReducer(state, action) {
       // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
       // есть вкладка -- иначе «назад» оставил бы пустую основную область.
       if (OVERLAY_TABS[target] && state.routerID != null) {
-        return { ...withoutParams(state), tab: OVERLAY_TABS[target], overlay: null }
+        return withFocus({ ...withoutParams(state), tab: OVERLAY_TABS[target], overlay: null }, MANAGE_FOCUS[state.overlay] ?? null)
       }
       const next = { ...withoutParams(state), overlay: target }
+      // Слой «Управления» (пакеты, сброс DNS, настройки агента) закрыт --
+      // возвращаемся в его группу, а не в стену свёрнутых.
+      if (!next.overlay && state.routerID != null && state.tab === 'manage') return withFocus(next, MANAGE_FOCUS[state.overlay] ?? null)
       return next.overlay && params?.returnParams ? { ...next, overlayParams: params.returnParams } : next
     }
     default:

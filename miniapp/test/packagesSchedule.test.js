@@ -97,16 +97,16 @@ describe('разбор ответа агента', () => {
   })
 
   it('строки карточки обновления пакетов', () => {
-    const rows = packagesStatusRows(parsePackagesStatus(ok(OPKG)), 'opkg', { timeZone: 'UTC' })
+    const rows = packagesStatusRows(parsePackagesStatus(ok(OPKG)), 'opkg', { timeZone: 'UTC', now: Date.parse('2026-09-29T12:00:00Z') })
     expect(rows).toEqual([
       { key: 'state', title: 'Состояние', value: 'каждый день в 04:30' },
-      { key: 'last', title: 'Последний запуск', value: '17.09 01:30 · прошёл' },
+      { key: 'last', title: 'Последний запуск', value: '17 сен, 01:30 · прошёл' },
       { key: 'space', title: 'Свободно на накопителе', value: '500 МБ · нужно от 100 МБ' },
     ])
   })
 
   it('строки карточки очистки: выключено, мало места, память, освобождено', () => {
-    const rows = packagesStatusRows(parsePackagesStatus(ok(CLEAN)), 'clean', { timeZone: 'UTC' })
+    const rows = packagesStatusRows(parsePackagesStatus(ok(CLEAN)), 'clean', { timeZone: 'UTC', now: Date.parse('2026-09-29T12:00:00Z') })
     expect(rows).toEqual([
       { key: 'state', title: 'Состояние', value: 'выключено', tone: 'warn' },
       { key: 'last', title: 'Последний запуск', value: 'ещё не запускалось' },
@@ -118,9 +118,9 @@ describe('разбор ответа агента', () => {
 
   it('своё расписание cron и итог запуска с ошибкой', () => {
     const custom = parsePackagesStatus(ok({ ...OPKG, schedule: '*/30 * * * *', last_status: 'err' }))
-    const rows = packagesStatusRows(custom, 'opkg', { timeZone: 'UTC' })
+    const rows = packagesStatusRows(custom, 'opkg', { timeZone: 'UTC', now: Date.parse('2026-09-29T12:00:00Z') })
     expect(rows[0]).toEqual({ key: 'state', title: 'Состояние', value: 'своё расписание: */30 * * * *' })
-    expect(rows[1]).toEqual({ key: 'last', title: 'Последний запуск', value: '17.09 01:30 · с ошибкой', tone: 'danger' })
+    expect(rows[1]).toEqual({ key: 'last', title: 'Последний запуск', value: '17 сен, 01:30 · с ошибкой', tone: 'danger' })
   })
 })
 

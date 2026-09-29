@@ -8,6 +8,7 @@
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
 // человеку ничего не говорит, фраза говорит.
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
+import { agoText } from './when.js'
 import { isStale, reachStatus } from './staleness.js'
 import { localSheet } from './sheet.js'
 
@@ -61,7 +62,7 @@ export function fleetRow(router) {
   } else if (never) {
     sub = 'агент установлен, но отчётов от него не было'
   } else {
-    sub = `отчёт ${humanAge(age)} назад`
+    sub = `отчёт ${agoText(age)}`
   }
 
   return { id: router?.id, nickname: router?.nickname ?? '', pill, sub, panelURL: router?.panel_url ?? '' }

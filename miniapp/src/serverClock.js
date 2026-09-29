@@ -1,3 +1,5 @@
+import { whenText } from './when.js'
+
 // Часы сервера на экране (MINI-10).
 //
 // Часы телефона врут: спешат, отстают, стоят в чужом поясе. Возраст
@@ -27,10 +29,5 @@ export function ageByServerClock(ts, { clockOffsetMs = null, nowMs = Date.now() 
 }
 
 export function clockTime(ts) {
-  const d = new Date(ts)
-  const dd = String(d.getDate()).padStart(2, '0')
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mi = String(d.getMinutes()).padStart(2, '0')
-  return `${dd}.${mm} в ${hh}:${mi}`
+  return whenText(ts)
 }

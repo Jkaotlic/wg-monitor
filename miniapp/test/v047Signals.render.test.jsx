@@ -19,7 +19,7 @@ vi.mock('../src/api.js', async (importOriginal) => ({
 }))
 
 const { ExitRow, ExitIPSection, WANSection, HooksRow, AwgmLogsSection, NativeDNSSection } = await import('../src/screens/SignalSections.jsx')
-const { SettingsSections } = await import('../src/screens/SettingsScreen.jsx')
+const { CheckToolsSections } = await import('../src/screens/CheckToolsSections.jsx')
 
 const FACTS = {
   supported: true,
@@ -88,7 +88,7 @@ describe('секции v0.47', () => {
   it('строка хука', async () => {
     mocks.facts = FACTS
     const { root, unmount } = await mount(<HooksRow routerID={2} />)
-    expect(root.textContent).toContain('Мгновенная реакция на смену линии')
+    expect(root.textContent).toContain('Мгновенная реакция, когда меняется VPN-туннель')
     expect(root.textContent).toContain('включена')
     unmount()
   })
@@ -116,7 +116,7 @@ describe('секции v0.47', () => {
     mocks.facts = FACTS
     for (const [role, visible] of [['owner', true], ['operator', false]]) {
       mocks.settings = { role, agent_version: 'v0.47.0' }
-      const { root, unmount } = await mount(<SettingsSections routerID={2} routerName="home" asleep={false} openSheet={() => {}} />)
+      const { root, unmount } = await mount(<CheckToolsSections routerID={2} asleep={false} openSheet={() => {}} />)
       expect(root.textContent.includes('Журнал awg-manager')).toBe(visible)
       unmount()
     }
@@ -125,7 +125,7 @@ describe('секции v0.47', () => {
   it('владелец со старым агентом -- секции журнала нет', async () => {
     mocks.facts = FACTS
     mocks.settings = { role: 'owner', agent_version: 'v0.46.0' }
-    const { root, unmount } = await mount(<SettingsSections routerID={2} routerName="home" asleep={false} openSheet={() => {}} />)
+    const { root, unmount } = await mount(<CheckToolsSections routerID={2} asleep={false} openSheet={() => {}} />)
     expect(root.textContent.includes('Журнал awg-manager')).toBe(false)
     unmount()
   })

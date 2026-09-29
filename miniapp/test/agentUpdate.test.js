@@ -237,9 +237,9 @@ describe('лист обновления одного роутера', () => {
   })
 
   it('оговорку сервера пересказывает дословно', () => {
-    expect(agentUpdateSheetText(BEHIND, 'v0.33.0').body).toContain('Оговорка: проверяет адрес загрузки, должен совпасть с адресом бэкенда.')
-    expect(agentUpdateSheetText({ ...BEHIND, agent_update_warning: '' }, 'v0.33.0').body).not.toContain('Оговорка')
-    expect(agentUpdateSheetText({ ...BEHIND, agent_update_warning: 'нужно место.' }, 'v0.33.0').body).toContain('Оговорка: нужно место. Агент')
+    expect(agentUpdateSheetText(BEHIND, 'v0.33.0').body).toContain('Что может помешать: проверяет адрес загрузки, должен совпасть с адресом бэкенда.')
+    expect(agentUpdateSheetText({ ...BEHIND, agent_update_warning: '' }, 'v0.33.0').body).not.toContain('Что может помешать')
+    expect(agentUpdateSheetText({ ...BEHIND, agent_update_warning: 'нужно место.' }, 'v0.33.0').body).toContain('Что может помешать: нужно место. Агент')
   })
 
   it('без известной версии агента -- только «до»', () => {

@@ -155,7 +155,7 @@ export function AccessSection({ routerID, openSheet }) {
                   onInput={(e) => setOwnerID(e.currentTarget.value)}
                 />
               </div>
-              <button class="btn btn-primary" type="submit" disabled={busy}>
+              <button class="btn btn-ghost" type="submit" disabled={busy}>
                 Назначить
               </button>
             </form>
@@ -200,7 +200,7 @@ export function AccessSection({ routerID, openSheet }) {
               onInput={(e) => setNewID(e.currentTarget.value)}
             />
           </div>
-          <button class="btn btn-primary" type="submit" disabled={busy}>
+          <button class="btn btn-ghost" type="submit" disabled={busy}>
             Добавить
           </button>
         </form>

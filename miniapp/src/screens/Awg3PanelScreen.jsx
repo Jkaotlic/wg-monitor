@@ -210,7 +210,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
             {tabs.length === 0 ? (
               <p class="state">{AWG3_TEXTS.noIfaces}</p>
             ) : (
-              <Section title={`Пиры · ${summaryText(page.summary)}`}>
+              <Section title={`Устройства · ${summaryText(page.summary)}`}>
                 {/* Правка 2 (ревью раунд 1): что значит время -- сказано ОДИН
                     раз здесь, а не словом «handshake» на каждой строке. */}
                 {rows.length > 0 && <p class="hint">{AWG3_TEXTS.peersHint}</p>}

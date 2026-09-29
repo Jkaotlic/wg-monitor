@@ -6,7 +6,7 @@ import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
 import { IMPORT_TEXTS } from '../confImport.js'
-import { trafficSummary } from '../traffic.js'
+import { trafficSummary, trafficView } from '../traffic.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
@@ -276,41 +276,31 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {view.active && (
-        <Section title="Обмен за сутки">
-          <div class="card">
-            <div class="stat-grid" style="padding:14px">
-              {/* Пока ряд не спрошен, плитка говорит «неизвестно» -- и
-                  подпись «роутер посчитал сам» под этим словом обещала
-                  посчитанное там, где не считали вовсе. */}
-              <Stat
-                label="принято"
-                value={trafficOut?.known ? trafficOut.rx : null}
-                note={!trafficOut?.known ? 'ещё не спрашивали' : trafficOut.empty ? 'за сутки ничего' : 'роутер посчитал сам'}
-              />
-              <Stat label="отдано" value={trafficOut?.known ? trafficOut.tx : null} note={trafficOut?.known ? `точек в ряду: ${trafficOut.points}` : 'нажмите «Показать обмен»'} />
+      {view.active && (() => {
+        const tv = trafficView(trafficOut, { busy: traffic.busy })
+        const again = () => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)
+        return (
+          <Section title="Обмен за сутки">
+            <div class={tv.invite ? 'card traffic-invite' : 'card'}>
+              {tv.invite ? (
+                <p class="traffic-detail">{tv.text}</p>
+              ) : (
+                <div class="stat-grid" style="padding:14px">
+                  <Stat label="принято" value={tv.rx} note={tv.note} />
+                  <Stat label="отдано" value={tv.tx} />
+                </div>
+              )}
+              {traffic.result && traffic.result.status !== 'ok' && (
+                <p class="card-foot card-foot-bad">Роутер не отдал обмен за сутки — попробуйте ещё раз.</p>
+              )}
+              <button type="button" class="btn btn-ghost btn-wide" disabled={traffic.busy} onClick={again}>
+                {tv.button}
+              </button>
             </div>
-            {traffic.result && traffic.result.status !== 'ok' && (
-              <p class="card-foot card-foot-bad">
-                Роутер не отдал ряд: {traffic.result.output || traffic.result.status}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            class="btn btn-ghost btn-wide"
-            disabled={traffic.busy}
-            onClick={() => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)}
-          >
-            {traffic.busy ? 'Считаем…' : 'Показать обмен'}
-          </button>
-          <ErrorLine
-            text={traffic.error}
-            busy={traffic.busy}
-            onRetry={() => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)}
-          />
-        </Section>
-      )}
+            <ErrorLine text={traffic.error} busy={traffic.busy} onRetry={again} />
+          </Section>
+        )
+      })()}
 
       {view.chain.length > 0 && (
         <Section title="Порядок подхвата">

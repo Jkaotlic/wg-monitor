@@ -6,6 +6,7 @@ import {
   SELFHOSTED_TEXTS,
   instanceFormValues,
   fieldPlaceholder,
+  groupSummary,
   validateInstance,
   instanceRequestBody,
   instanceChanged,
@@ -24,6 +25,7 @@ import {
 } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
+import { Fold } from '../ui/Fold.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { TextField } from '../ui/FormField.jsx'
 
@@ -291,7 +293,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                   <p class="traffic-detail">
                     {inst.enabled ? 'Включён: с него выпускаются VPN-туннели.' : 'Выключен: выпускать с него VPN-туннели нельзя.'}
                   </p>
-                  <div class="selfhosted-actions">
+                  <div class="selfhosted-actions action-row action-row-pair">
                     <button type="button" class="btn btn-ghost" disabled={toggling} onClick={toggle}>
                       {toggling ? 'Сохраняем…' : toggleLabel(inst)}
                     </button>
@@ -308,30 +310,49 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                 </div>
               </Section>
             )}
-            {SELFHOSTED_GROUPS.map((group) => (
-              <Section key={group.title} title={group.title}>
-                <div class="card form-group">
-                  {group.fields
-                    .filter((f) => isNew || !f.newOnly)
-                    .map((f) => (
-                      <TextField
-                        key={f.key}
-                        id={`sh-${f.key}`}
-                        label={f.label}
-                        type={f.kind === 'password' ? 'password' : 'text'}
-                        value={values[f.key]}
-                        placeholder={fieldPlaceholder(f, defaults)}
-                        inputMode={f.inputMode}
-                        hint={f.kind === 'password' ? passwordHint(inst, { isNew }, values) : f.hint}
-                        error={fieldError?.key === f.key ? fieldError.text : ''}
-                        warn={f.key === 'ssh_host' && !isNew ? sshHostWarning(inst, values) : ''}
-                        onInput={(v) => set(f.key, v)}
-                      />
-                    ))}
-                </div>
-                {group.note && <p class="field-hint">{group.note}</p>}
-              </Section>
-            ))}
+            {SELFHOSTED_GROUPS.map((group) => {
+              const body = (
+                <>
+                  <div class="card form-group">
+                    {group.fields
+                      .filter((f) => isNew || !f.newOnly)
+                      .map((f) => (
+                        <TextField
+                          key={f.key}
+                          id={`sh-${f.key}`}
+                          label={f.label}
+                          type={f.kind === 'password' ? 'password' : 'text'}
+                          value={values[f.key]}
+                          placeholder={fieldPlaceholder(f, defaults)}
+                          inputMode={f.inputMode}
+                          hint={f.kind === 'password' ? passwordHint(inst, { isNew }, values) : f.hint}
+                          error={fieldError?.key === f.key ? fieldError.text : ''}
+                          warn={f.key === 'ssh_host' && !isNew ? sshHostWarning(inst, values) : ''}
+                          onInput={(v) => set(f.key, v)}
+                        />
+                      ))}
+                  </div>
+                  {group.note && <p class="field-hint">{group.note}</p>}
+                </>
+              )
+              if (!group.fold) {
+                return (
+                  <Section key={group.key} title={group.title}>
+                    {body}
+                  </Section>
+                )
+              }
+              // Редко правят -- свёрнуто (спека п. 3.2); ошибка поля внутри
+              // раскрывает группу, иначе человек не увидел бы, куда вводить.
+              const forced = group.fields.some((f) => fieldError?.key === f.key)
+              return (
+                <section key={group.key} class="section">
+                  <Fold class="form-fold" title={group.title} note={groupSummary(group, values)} titleTag="h2" titleClass="section-title" open={forced ? true : undefined}>
+                    {body}
+                  </Fold>
+                </section>
+              )
+            })}
             <p class="field-hint connection-keep">{SELFHOSTED_TEXTS.keepNote}</p>
             {error && (
               <p class="wizard-error" role="alert">

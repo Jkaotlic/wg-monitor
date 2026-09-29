@@ -13,7 +13,7 @@ export function Stat({ label, value, unit, note, tone }) {
       <span class="stat-label">{label}</span>
       <span class="stat-value">
         {known ? <Quoted text={value} /> : 'неизвестно'}
-        {known && unit ? <span class="stat-unit">{unit}</span> : null}
+        {known && unit ? <span class="stat-unit">{'\u202f'}{unit}</span> : null}
       </span>
       {note ? (
         <span class="stat-note">

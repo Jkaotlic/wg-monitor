@@ -6,11 +6,13 @@ import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
+import { agoText } from '../when.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { ExitIPSection, WANSection } from './SignalSections.jsx'
+import { CheckToolsSections } from './CheckToolsSections.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
@@ -26,7 +28,7 @@ import { ErrorLine } from '../ui/ErrorLine.jsx'
 // Машинные имена проверок (dns, hydraroute, agent_heartbeat) -- для того, кто
 // полезет в консоль, то есть для админа. Владельцу они ничего не говорят и
 // только теснят вопрос: ему -- без них.
-export function DiagTab({ routerID, asleep, isAdmin = false }) {
+export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -86,7 +88,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
       </div>
       <p class="router-lastseen">
         {rows.length} {rows.length === 1 ? 'вопрос' : 'вопросов'} роутеру
-        {age != null ? ` · последний отчёт ${humanAge(age)} назад` : ''}
+        {age != null ? ` · последний отчёт ${agoText(age)}` : ''}
       </p>
 
       <div class="stat-grid">
@@ -228,6 +230,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
 
       <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
       <WANSection routerID={routerID} />
+      <CheckToolsSections routerID={routerID} asleep={asleep} openSheet={openSheet} />
 
       <Section title="Отчёт роутера о себе">
         <button
