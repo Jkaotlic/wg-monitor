@@ -161,6 +161,8 @@ describe('«Сейчас» при тревоге (спека п. 1.1–1.3)', ()
     const { root } = await mountNow()
     expect(root.querySelector('.hero').textContent).toContain('vpn-nl')
     expect(root.textContent).not.toContain('Запасного VPN-туннеля нет')
+    // Про упавший запасной говорит один вердикт -- шапка; плитка резерва не дублирует.
+    expect(root.textContent).not.toContain('подхватить будет некому')
     cleanup(root)
   })
 
