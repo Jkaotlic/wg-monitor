@@ -7,9 +7,14 @@ import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 	"golang.org/x/sync/errgroup"
 )
+
+// FirmwareServerSilent -- начало ошибки, когда KeenOS ответил без блока
+// local: сервер обновлений Keenetic не ответил. Мини-апп ищет эту строку.
+const FirmwareServerSilent = "firmware server did not answer"
 
 // GetFirmwareStatus runs `ndmc -c "components list"` and parses the output
 // into a wire.FirmwareStatus. The command returns two YAML-ish blocks:
@@ -18,9 +23,20 @@ import (
 func GetFirmwareStatus(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus, error) {
 	out, err := exec(ctx, "ndmc", "-c", "components list")
 	if err != nil {
+		if ex := keenetic.Excerpt(string(out), 3); ex != "" {
+			return wire.FirmwareStatus{}, fmt.Errorf("ndmc components list: %w: %s", err, ex)
+		}
 		return wire.FirmwareStatus{}, fmt.Errorf("ndmc components list: %w", err)
 	}
-	return parseComponentsList(string(out))
+	fs, perr := parseComponentsList(string(out))
+	if perr != nil {
+		ex := keenetic.Excerpt(string(out), 3)
+		if strings.Contains(string(out), "firmware:") && !strings.Contains(string(out), "local:") {
+			return fs, fmt.Errorf("%s: %s", FirmwareServerSilent, ex)
+		}
+		return fs, fmt.Errorf("%w: %s", perr, ex)
+	}
+	return fs, nil
 }
 
 // InstallFirmware kicks the KeeneticOS firmware install via

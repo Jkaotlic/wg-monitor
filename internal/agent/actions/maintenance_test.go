@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -607,5 +608,35 @@ func TestRouteTemplatesJSON_CountsUnappliablePresets(t *testing.T) {
 	}
 	if got.Skipped != 2 {
 		t.Fatalf("skipped = %d, want 2", got.Skipped)
+	}
+}
+
+func TestGetFirmwareStatus_ParseErrorCarriesExcerpt(t *testing.T) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("\x1b[K\n   Components::Manager: list is being updated, try later.\n"), nil
+	}
+	_, err := GetFirmwareStatus(context.Background(), exec)
+	if err == nil || !strings.Contains(err.Error(), "list is being updated, try later.") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGetFirmwareStatus_FirmwareWithoutLocalMeansServerSilent(t *testing.T) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("\x1b[K\n         firmware: \n          sandbox: stable\n"), nil
+	}
+	_, err := GetFirmwareStatus(context.Background(), exec)
+	if err == nil || !strings.HasPrefix(err.Error(), FirmwareServerSilent) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGetFirmwareStatus_ExecErrorCarriesExcerpt(t *testing.T) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("Core::Ndss: cannot connect to the server.\n"), errors.New("exit status 1")
+	}
+	_, err := GetFirmwareStatus(context.Background(), exec)
+	if err == nil || !strings.Contains(err.Error(), "cannot connect to the server") {
+		t.Fatalf("err = %v", err)
 	}
 }
