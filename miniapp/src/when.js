@@ -47,3 +47,17 @@ export function agoText(sec) {
 export function sinceText(iso, opts) {
   return whenText(iso, opts).replace(', ', ' с ')
 }
+
+// «до» -- конец тишины, всегда в будущем: «09:00» (сегодня), «завтра 09:00»,
+// «3 окт 09:00». Запятой нет: «скрыты до завтра, 09:00» читается рублено.
+export function untilText(iso, { now = Date.now(), timeZone } = {}) {
+  if (!iso) return ''
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return ''
+  const at = parts(t, timeZone)
+  const time = `${at.hh}:${at.mi}`
+  const today = parts(new Date(now), timeZone)
+  if (sameDay(at, today)) return time
+  if (sameDay(at, parts(new Date(now + 86_400_000), timeZone))) return `завтра ${time}`
+  return whenText(iso, { now, timeZone, absolute: true }).replace(', ', ' ')
+}

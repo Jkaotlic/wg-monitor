@@ -30,3 +30,12 @@ export function errorText(err, codes = {}) {
   if (!err.status) return OFFLINE_ERROR_TEXT
   return FALLBACK_ERROR_TEXT
 }
+
+// Не-ok ответ агента на команду (result.status/result.output). Вывод агента --
+// английский технический текст, а status -- голое «timeout»; ни то ни другое
+// на экран не идёт. Экран говорит своей фразой, а русский вывод агента (если он
+// есть) дописывается после неё.
+export function agentReplyText(result, fallback) {
+  const said = String(result?.output ?? '').trim()
+  return said && RUSSIAN.test(said) ? `${fallback} ${said}` : fallback
+}

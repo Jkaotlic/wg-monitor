@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { useCommand } from '../useCommand.js'
@@ -127,7 +128,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               </button>
               {preview.error && <p class="state state-error">{preview.error}</p>}
               {preview.result && preview.result.status !== 'ok' && (
-                <p class="state state-error">Роутер не показал предпросмотр: {preview.result.output || preview.result.status}</p>
+                <p class="state state-error">{agentReplyText(preview.result, 'Роутер не показал предпросмотр — попробуйте ещё раз через минуту.')}</p>
               )}
               {notAPreview && (
                 <p class="state state-error">

@@ -35,7 +35,7 @@ describe('unknownLine', () => {
     expect(unknownLine('upstream_unavailable')).toContain('Проверить обновления не удалось')
     expect(unknownLine('upstream_not_configured')).toBe('Проверка обновлений не настроена — мы не знаем, что вышло.')
     expect(unknownLine('no_snapshot')).toBe('Роутер ещё не рассказал про версии.')
-    expect(unknownLine('agent_too_old')).toBe('Агент на роутере старый и про модуль ядра не сообщает.')
+    expect(unknownLine('agent_too_old')).toBe('Версию модуля ядра роутер не сообщил.')
   })
 
   // Обещание без метки времени говорит больше, чем мы знаем.

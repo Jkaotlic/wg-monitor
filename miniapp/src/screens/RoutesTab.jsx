@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
@@ -301,7 +302,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={refresh} />}
       {phase === 'refused' && (
-        <p class="state state-error">Роутер не отдал снимок маршрутизации: {result.output || result.status}</p>
+        <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок маршрутизации — попробуйте ещё раз через минуту.')}</p>
       )}
       {phase === 'unreadable' && (
         <p class="state state-error">Снимок пришёл, но разобрать его не удалось — покажем как есть ниже.</p>

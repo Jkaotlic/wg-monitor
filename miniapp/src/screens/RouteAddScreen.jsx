@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { tunnelRows, rebindTargets, tunnelRuleSummary } from '../routes.js'
@@ -250,7 +251,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
               {plan.busy && <p class="state">Роутер считает, что получится…</p>}
               {plan.error && <p class="state state-error">{plan.error}</p>}
               {plan.result && plan.result.status !== 'ok' && (
-                <p class="state state-error">{plan.result.output || 'Роутер не смог собрать превью'}</p>
+                <p class="state state-error">{agentReplyText(plan.result, 'Роутер не смог собрать превью — попробуйте ещё раз через минуту.')}</p>
               )}
               {summary && (
                 <>

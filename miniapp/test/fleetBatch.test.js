@@ -39,8 +39,8 @@ describe('кого опрашивать', () => {
   it('действия -- осмотр и аудит из белого списка', () => {
     expect(BATCH.doctor.action).toBe('router_doctor')
     expect(BATCH.audit.action).toBe('version_audit')
-    expect(BATCH.doctor.idle).toBe('Проверить все')
-    expect(BATCH.audit.idle).toBe('Аудит всех')
+    expect(BATCH.doctor.idle).toBe('Осмотреть все')
+    expect(BATCH.audit.idle).toBe('Сверить версии у всех')
   })
 })
 

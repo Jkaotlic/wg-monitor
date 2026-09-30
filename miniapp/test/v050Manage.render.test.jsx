@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
-const mocks = vi.hoisted(() => ({ settings: null, versions: null }))
+const mocks = vi.hoisted(() => ({ settings: null, versions: null, settingsFn: null }))
 
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  fetchRouterSettings: () => Promise.resolve(mocks.settings),
+  fetchRouterSettings: () => (mocks.settingsFn ? mocks.settingsFn() : Promise.resolve(mocks.settings)),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'ok', ping_check_status: 'pass' }] }),
   fetchRouterVersions: () => Promise.resolve(mocks.versions),
   fetchAccess: () => Promise.resolve({ owner: null, operators: [] }),
@@ -57,6 +57,7 @@ const chips = (root) => [...root.querySelectorAll('.manage-anchors .manage-ancho
 beforeEach(() => {
   mocks.settings = { role: 'admin', agent_version: 'v0.47.0', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
   mocks.versions = null
+  mocks.settingsFn = null
 })
 
 describe('«Управление» без простыни (спека п. 3.1)', () => {
@@ -113,6 +114,19 @@ describe('«Управление» без простыни (спека п. 3.1)'
     mocks.versions = { installed: { awgmgr: '2.19.9' }, rows: [] }
     const root = await manage(true)
     expect(opened(root)).toEqual({ 'mg-router': true, 'mg-versions': false, 'mg-repair': false, 'mg-settings': false })
+    cleanup(root)
+  })
+
+  it('настройки ещё грузятся или не прочитались -- «агент старый» не выдумывается', async () => {
+    mocks.settingsFn = () => new Promise(() => {})
+    let root = await manage(true)
+    expect(root.querySelector('#mg-repair')).toBeTruthy()
+    expect(root.textContent).not.toContain('агент старый')
+    cleanup(root)
+    mocks.settingsFn = () => Promise.reject(new Error('boom'))
+    root = await manage(true)
+    expect(root.querySelector('#mg-repair')).toBeTruthy()
+    expect(root.textContent).not.toContain('агент старый')
     cleanup(root)
   })
 

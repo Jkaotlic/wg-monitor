@@ -4,7 +4,7 @@ import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
-import { whenText, sinceText } from '../when.js'
+import { whenText, sinceText, untilText } from '../when.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
@@ -56,15 +56,6 @@ export function silenceChoices() {
     { value: 'ack', label: ACTION_LABELS.ack },
     { value: 'mute', label: ACTION_LABELS.mute, danger: true },
   ]
-}
-
-// Локаль прибита к ru-RU, как в остальных экранах: с локалью браузера
-// русский интерфейс показывал время тревоги как «8/21/26, 9:40 AM» --
-// оператор сверяет эти отметки с логами роутера, и чужой формат тут не
-// украшение, а лишний перевод в уме.
-function formatTime(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatDateTime(iso) {
@@ -268,7 +259,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
         <span class="badge badge-offline incident-quiet">
           {incident.acked
             ? 'Вижу проблему — напомним после восстановления'
-            : `Уведомления скрыты до ${formatTime(incident.silenced_until)}`}
+            : `Уведомления скрыты до ${untilText(incident.silenced_until)}`}
         </span>
       )}
 
@@ -288,7 +279,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
               <ul class="list-reset history-list">
                 {history.map((t, i) => (
                   <li key={`${t.ts}-${i}`} class={`history-entry history-entry-${t.status}`}>
-                    {formatTime(t.ts)} · {t.label}
+                    {whenText(t.ts)} · {t.label}
                   </li>
                 ))}
               </ul>

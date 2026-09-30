@@ -441,11 +441,11 @@ describe('«Парк»: оговорки обновления агента', () 
 
 describe('«Парк»: массовые проверки', () => {
   // FLEET: bronya -- offline, office -- sleeping, car -- online.
-  it('«Проверить все»: осмотр уходит только роутеру на связи, пропущенные названы, итог словами', async () => {
+  it('«Осмотреть все»: осмотр уходит только роутеру на связи, пропущенные названы, итог словами', async () => {
     reset()
     mocks.results = { 15: { id: 'c15', status: 'ok', output: '🩺 Проверка роутера\n✅ awg-manager API: 2.19.1\n❌ tunnels: awg12 down' } }
     const { root } = await mountPark()
-    await act(async () => buttons(root, 'Проверить все')[0].click())
+    await act(async () => buttons(root, 'Осмотреть все')[0].click())
     await flush()
     await flush()
     expect(mocks.sent).toEqual([{ routerID: 15, action: 'router_doctor', args: {} }])
@@ -457,13 +457,13 @@ describe('«Парк»: массовые проверки', () => {
     cleanup(root)
   })
 
-  it('«Аудит всех»: сверка версий, после неё список перечитан', async () => {
+  it('«Сверить версии у всех»: сверка версий, после неё список перечитан', async () => {
     reset()
     mocks.results = {
       15: { id: 'c15', status: 'ok', output: JSON.stringify({ awgmgr_version: '2.19.1', awgmgr_running: true, firmware_current: '4.2.7', firmware_avail: '4.3.0' }) },
     }
     const { root } = await mountPark()
-    await act(async () => buttons(root, 'Аудит всех')[0].click())
+    await act(async () => buttons(root, 'Сверить версии у всех')[0].click())
     await flush()
     await flush()
     expect(mocks.sent).toEqual([{ routerID: 15, action: 'version_audit', args: {} }])
@@ -477,9 +477,9 @@ describe('«Парк»: массовые проверки', () => {
     reset()
     mocks.results = {} // ответа нет -- опрос не разрешается
     const { root } = await mountPark()
-    await act(async () => buttons(root, 'Проверить все')[0].click())
+    await act(async () => buttons(root, 'Осмотреть все')[0].click())
     expect(buttons(root, 'Проверяем…')[0].disabled).toBe(true)
-    expect(buttons(root, 'Аудит всех')[0].disabled).toBe(true)
+    expect(buttons(root, 'Сверить версии у всех')[0].disabled).toBe(true)
     expect(root.textContent).toContain('Готово 0 из 1…')
     cleanup(root)
   })
@@ -487,11 +487,11 @@ describe('«Парк»: массовые проверки', () => {
   // F1(b): двойной тап (два клика раньше, чем Preact перерисует disabled)
   // не должен отправить вторую пачку поверх первой -- защита обязана быть
   // синхронным ref-флагом, а не state, который обновится только на кадре позже.
-  it('двойной тап по «Проверить все» шлёт только одну пачку', async () => {
+  it('двойной тап по «Осмотреть все» шлёт только одну пачку', async () => {
     reset()
     mocks.fleet = { ...FLEET, routers: [FLEET.routers[2]] } // один roundtrip -- car
     const { root } = await mountPark()
-    const btn = buttons(root, 'Проверить все')[0]
+    const btn = buttons(root, 'Осмотреть все')[0]
     await act(async () => {
       btn.click()
       btn.click() // синхронно, до перерисовки -- как настоящий двойной тап
@@ -512,7 +512,7 @@ describe('«Парк»: массовые проверки', () => {
     const routers = [15, 16, 17, 18, 19].map((id) => ({ ...FLEET.routers[2], id, nickname: `r${id}` }))
     mocks.fleet = { ...FLEET, routers }
     const { root } = await mountPark()
-    await act(async () => buttons(root, 'Аудит всех')[0].click())
+    await act(async () => buttons(root, 'Сверить версии у всех')[0].click())
     await flush()
     expect(mocks.sent).toHaveLength(3) // пул на 3 -- 4-й и 5-й в очереди
     expect(mocks.fleetCalls).toBe(1) // только монтирование

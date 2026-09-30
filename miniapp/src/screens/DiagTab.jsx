@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
@@ -160,7 +161,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         onRetry={() => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}
       />
       {recheck.result && recheck.result.status !== 'ok' && (
-        <p class="state state-error">Роутер не переспросил: {recheck.result.output || recheck.result.status}</p>
+        <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
       )}
 
       {/* Кому роутер отдал русские зоны и как идут запросы к Яндексу. Ответ --
@@ -251,7 +252,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
 
         <ErrorLine text={report.error} busy={report.busy} onRetry={() => report.run('diag_now', {}, deadline)} />
         {report.result && report.result.status !== 'ok' && (
-          <p class="state state-error">Роутер не собрал отчёт: {report.result.output || report.result.status}</p>
+          <p class="state state-error">{agentReplyText(report.result, 'Роутер не собрал отчёт — попробуйте ещё раз через минуту.')}</p>
         )}
 
         {parsedReport && parsedReport.cards.length > 0 && (

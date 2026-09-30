@@ -33,7 +33,7 @@ export function routerContext(routers, routerID) {
 export function returnLabel(returnTo) {
   const to = normalizeReturn(returnTo)
   if (to === 'park') return 'Парк'
-  if (to === 'fleet') return 'Мои роутеры'
+  if (to === 'fleet') return 'Все роутеры'
   if (to === 'manage') return 'Управление'
   if (to === 'selfhosted') return 'Свои серверы'
   if (to === 'awg3panel') return 'Панель'

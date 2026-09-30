@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouterSettings } from '../api.js'
 import { useCommand } from '../useCommand.js'
@@ -127,7 +128,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
             <Section title="Что сейчас на роутере">
               {read.error && <p class="state state-error">{read.error}</p>}
               {read.result && read.result.status !== 'ok' && (
-                <p class="state state-error">Роутер не ответил: {read.result.output || read.result.status}</p>
+                <p class="state state-error">{agentReplyText(read.result, 'Роутер не ответил — попробуйте ещё раз через минуту.')}</p>
               )}
               {!view ? (
                 <p class="state">Спрашиваем роутер…</p>

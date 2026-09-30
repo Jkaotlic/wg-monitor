@@ -18,7 +18,8 @@ export function watchdogLine(fleet) {
   const sec = secondsBetween(wd.last_scan_at, fleet?.generated_at)
   parts.push(sec == null ? 'обхода ещё не было' : `последний обход ${agoText(sec)}`)
   // Старый бэкенд счётчиков не отдаёт: «молчат 0» было бы выдумкой.
-  if (num(wd.stale_users)) parts.push(`${wd.stale_users} ${pluralRu(wd.stale_users, 'молчит', 'молчат', 'молчат')}`)
+  // «Молчат» -- слово плиток Парка про другой счёт (без спящих); здесь считаются все без отчёта.
+  if (num(wd.stale_users)) parts.push(`без отчёта: ${wd.stale_users}`)
   if (num(wd.suppressed_users)) parts.push(`${wd.suppressed_users} ${pluralRu(wd.suppressed_users, 'заглушён', 'заглушены', 'заглушено')}`)
 
   const sub = []

@@ -102,7 +102,7 @@ describe('кабинет роутера -- слой навигации', () => {
 describe('свои серверы -- слои парка', () => {
   it('подпись возврата на список', () => {
     expect(returnLabel('selfhosted')).toBe('Свои серверы')
-    expect(returnLabel('fleet')).toBe('Мои роутеры')
+    expect(returnLabel('fleet')).toBe('Все роутеры')
     expect(returnLabel(null)).toBe('Роутеры')
   })
 
@@ -110,7 +110,7 @@ describe('свои серверы -- слои парка', () => {
     const h = host(nav({ routerID: 1, overlay: 'selfhosted', overlayParams: { returnTo: 'fleet' } }))
     const root = await mount(h.node)
     const p = mocks.props.list
-    expect(p.backLabel).toBe('Мои роутеры')
+    expect(p.backLabel).toBe('Все роутеры')
     p.onOpenInstance('ams')
     expect(h.actions.pop()).toEqual({
       type: 'overlay',

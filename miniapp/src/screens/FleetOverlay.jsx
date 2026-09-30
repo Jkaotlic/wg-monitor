@@ -28,9 +28,9 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
   const { batch, recheckAll } = useFleetRecheck(routers)
 
   return (
-    <Overlay title="Мои роутеры" onBack={onClose} showBack={Boolean(onClose)}>
+    <Overlay title="Все роутеры" onBack={onClose} showBack={Boolean(onClose)}>
       <div class="screen">
-        <h1 class="screen-title">Мои роутеры</h1>
+        <h1 class="screen-title">Все роутеры</h1>
         <p class="router-lastseen">{fleetSummaryLine(fleetSummary(routers))}</p>
 
         {all.length > 1 && (

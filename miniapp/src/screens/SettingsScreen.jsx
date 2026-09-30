@@ -200,7 +200,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
   const known = versionsKnown(versions)
   const canRepair = Boolean((maintain && openSheet) || repairSlot)
   const anchors = manageAnchors({ canRepair, isAdmin })
-  const notes = manageSummaries({ settings, versions, showReboot, agentReady, isAdmin })
+  const notes = manageSummaries({ settings, versions, showReboot, agentReady: settings ? agentReady : true, isAdmin })
   const tones = manageTones({ versions, showReboot, agentReady: settings ? agentReady : true })
   // Группа с заботой раскрывается сама -- один раз, когда забота появилась;
   // закрытую человеком обратно не открываем.

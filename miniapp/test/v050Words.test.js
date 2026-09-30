@@ -1,5 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
-import { whenText, agoText, sinceText } from '../src/when.js'
+import { whenText, agoText, sinceText, untilText } from '../src/when.js'
 import { watchdogLine } from '../src/watchdogLine.js'
 import { SIGNAL_TEXTS } from '../src/signals.js'
 import { agentConfigFields, agentConfigRows } from '../src/agentConfig.js'
@@ -37,6 +38,14 @@ describe('одно время (спека п. 3.5)', () => {
     expect(sinceText('', { now: NOW })).toBe('')
   })
 
+  it('«до» -- будущее без запятой: время / «завтра 09:00» / «27 сен 09:00»', () => {
+    expect(untilText('2026-09-29T17:00:00Z', { now: NOW, timeZone: TZ })).toBe('20:00')
+    expect(untilText('2026-09-30T06:00:00Z', { now: NOW, timeZone: TZ })).toBe('завтра 09:00')
+    expect(untilText('2026-10-03T06:00:00Z', { now: NOW, timeZone: TZ })).toBe('3 окт 09:00')
+    expect(untilText('2027-01-03T06:00:00Z', { now: NOW, timeZone: TZ })).toBe('3 янв 2027 09:00')
+    expect(untilText('', { now: NOW })).toBe('')
+  })
+
   it('отсчёт -- один хелпер', () => {
     expect(agoText(30)).toBe('только что')
     expect(agoText(125)).toBe('2 мин назад')
@@ -60,7 +69,7 @@ describe('слова (спека п. 3.4)', () => {
       watchdog: { alive: true, last_scan_at: '2026-09-17T10:00:00Z', scans_total: 1234, stale_users: 2, suppressed_users: 1, last_scan_ms: 85, offline_errors: 0 },
     })
     expect(wd.title).toBe('Проверка молчащих роутеров')
-    expect(wd.text).toBe('последний обход только что · 2 молчат · 1 заглушён')
+    expect(wd.text).toBe('последний обход только что · без отчёта: 2 · 1 заглушён')
     expect(wd.sub).toBe('1234 обхода с запуска')
     expect(JSON.stringify(wd)).not.toMatch(/Сторож|обход занял/)
   })
@@ -98,5 +107,22 @@ describe('числа с единицами (спека п. 3.6)', () => {
     expect(failed).toMatchObject({ invite: true, error: true, text: 'Не получилось.', button: 'Повторить' })
     expect(trafficView(null, { error: 'Не получилось.', busy: true })).toMatchObject({ button: 'Считаем…' })
     expect(trafficView(null, { error: 'x', busy: true }).error).toBeUndefined()
+  })
+})
+
+// Сырой ответ агента в JSX («{x.output || x.status}») на экран не выходит.
+describe('исходники: ни «output || status» в разметке', () => {
+  it('ни один экран не печатает result.output/status напрямую', () => {
+    const dir = new URL('../src/screens/', import.meta.url)
+    const bad = []
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.jsx')) continue
+      const src = readFileSync(new URL(f, dir), 'utf8')
+      for (const [i, line] of src.split('\n').entries()) {
+        if (/\{[^}]*\.output\s*\|\|[^}]*\}/.test(line) && /state-error|<p|<span|<div/.test(line)) bad.push(`${f}:${i + 1}`)
+        if (/\{[^{}]*\.status\}/.test(line) && /result|res\./.test(line) && /<p|<span|<div/.test(line)) bad.push(`${f}:${i + 1}`)
+      }
+    }
+    expect(bad).toEqual([])
   })
 })

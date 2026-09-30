@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
@@ -213,7 +214,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}
       {phase === 'refused' && (
-        <p class="state state-error">Роутер не отдал снимок: {result.output || result.status}</p>
+        <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок — попробуйте ещё раз через минуту.')}</p>
       )}
       {/* Ответ пришёл, а снимка в нём нет. Молчать здесь нельзя: пустой экран
           неотличим от «туннелей нет», и человек будет искать поломку в

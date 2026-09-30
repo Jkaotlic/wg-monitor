@@ -126,7 +126,7 @@ describe('Парк: сторож и отложенное', () => {
   it('строка «Сторож» -- в карточке бэкенда, старой строки внизу нет', async () => {
     const { root } = await mountPark()
     const wd = root.querySelector('.park-watchdog')
-    expect(wd.querySelector('.park-watchdog-line').textContent).toBe('Проверка молчащих роутеров: последний обход только что · 2 молчат · 1 заглушён')
+    expect(wd.querySelector('.park-watchdog-line').textContent).toBe('Проверка молчащих роутеров: последний обход только что · без отчёта: 2 · 1 заглушён')
     expect(wd.textContent).toContain('1234 обхода с запуска')
     expect(wd.classList.contains('park-watchdog-ok')).toBe(true)
     expect(root.textContent).not.toContain('Сторож парка:')

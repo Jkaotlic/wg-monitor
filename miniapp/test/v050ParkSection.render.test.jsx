@@ -119,7 +119,7 @@ describe('Парк как пульт (спека пакет 2)', () => {
     const root = await mountPark()
     const grid = root.querySelector('.park-batch')
     expect(grid.className).toContain('action-row-pair')
-    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)', 'Опросить все', 'Проверить все', 'Аудит всех'])
+    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)', 'Опросить все', 'Осмотреть все', 'Сверить версии у всех'])
     expect([...root.querySelectorAll('.btn-primary')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)'])
     cleanup(root)
   })
@@ -127,7 +127,7 @@ describe('Парк как пульт (спека пакет 2)', () => {
   it('Парк с одним роутером: «Опросить все» нет, сетка на месте (Review Focus 2)', async () => {
     const root = await mountPark([R({ id: 1, nickname: 'solo' })])
     const grid = root.querySelector('.park-batch')
-    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Проверить все', 'Аудит всех'])
+    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Осмотреть все', 'Сверить версии у всех'])
     expect(root.querySelectorAll('.btn-primary')).toHaveLength(0)
     cleanup(root)
   })
