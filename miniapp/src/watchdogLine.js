@@ -1,16 +1,13 @@
-// Строка «Сторож» в Парке и строки отложенного в строке роутера. Только
+// Строка «Проверка молчащих роутеров» (бывший «Сторож») в Парке и строки отложенного в строке роутера. Только
 // чистые функции -- экран собирает из них текст.
 //
-// Сторож -- тот, кто пишет «роутер не на связи». Он молчит в двух случаях:
+// Проверка -- то, что пишет «роутер не на связи». Он молчит в двух случаях:
 // когда в парке всё хорошо и когда он сам мёртв. Строка обязана эту разницу
 // показать: когда был последний обход и сколько роутеров он сейчас держит
 // молчащими и заглушёнными.
-import { humanAge, pluralRu } from './labels.js'
-import { secondsBetween, stampText } from './stamp.js'
-
-function ago(sec) {
-  return sec < 60 ? `${sec} с` : humanAge(sec)
-}
+import { pluralRu } from './labels.js'
+import { secondsBetween, stampText, sinceStamp } from './stamp.js'
+import { agoText } from './when.js'
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v)
 
@@ -19,16 +16,16 @@ export function watchdogLine(fleet) {
   if (!wd) return null
   const parts = []
   const sec = secondsBetween(wd.last_scan_at, fleet?.generated_at)
-  parts.push(sec == null ? 'обхода ещё не было' : `последний обход ${ago(sec)} назад`)
+  parts.push(sec == null ? 'обхода ещё не было' : `последний обход ${agoText(sec)}`)
   // Старый бэкенд счётчиков не отдаёт: «молчат 0» было бы выдумкой.
-  if (num(wd.stale_users)) parts.push(`молчат ${wd.stale_users}`)
-  if (num(wd.suppressed_users)) parts.push(`заглушено ${wd.suppressed_users}`)
+  // «Молчат» -- слово плиток Парка про другой счёт (без спящих); здесь считаются все без отчёта.
+  if (num(wd.stale_users)) parts.push(`без отчёта: ${wd.stale_users}`)
+  if (num(wd.suppressed_users)) parts.push(`${wd.suppressed_users} ${pluralRu(wd.suppressed_users, 'заглушён', 'заглушены', 'заглушено')}`)
 
   const sub = []
   if (num(wd.scans_total) && wd.scans_total > 0) {
     sub.push(`${wd.scans_total} ${pluralRu(wd.scans_total, 'обход', 'обхода', 'обходов')} с запуска`)
   }
-  if (num(wd.last_scan_ms) && wd.last_scan_ms > 0) sub.push(`обход занял ${wd.last_scan_ms} мс`)
   const errors = num(wd.offline_errors) ? wd.offline_errors : 0
   if (errors > 0) {
     sub.push(`${errors} ${pluralRu(errors, 'отправка не ушла', 'отправки не ушли', 'отправок не ушло')}`)
@@ -36,17 +33,18 @@ export function watchdogLine(fleet) {
 
   const dead = wd.alive === false
   return {
+    title: 'Проверка молчащих роутеров',
     text: parts.join(' · '),
     sub: sub.join(' · '),
     tone: dead ? 'danger' : errors > 0 ? 'warn' : 'ok',
-    alarm: dead ? String(wd.reason ?? '').trim() || 'сторож не обходит парк' : '',
+    alarm: dead ? String(wd.reason ?? '').trim() || 'проверка молчащих роутеров не идёт' : '',
   }
 }
 
 export function routerDelayLines(router, opts = {}) {
   const lines = []
-  const since = stampText(router?.pending_since, opts)
-  if (since) lines.push({ key: 'pending', tone: 'muted', text: `ждёт обновления с ${since}` })
+  const since = sinceStamp(router?.pending_since, opts)
+  if (since) lines.push({ key: 'pending', tone: 'muted', text: `ждёт обновления ${since}` })
 
   const deploy = router?.last_deploy
   if (deploy) {
@@ -57,11 +55,11 @@ export function routerDelayLines(router, opts = {}) {
   }
 
   const incident = router?.incident
-  const hard = stampText(incident?.hard_since, opts)
+  const hard = sinceStamp(incident?.hard_since, opts)
   if (hard) {
     const n = num(incident.fail_count) ? incident.fail_count : 0
     const times = n > 0 ? ` (${n} ${pluralRu(n, 'раз', 'раза', 'раз')})` : ''
-    lines.push({ key: 'incident', tone: 'danger', text: `тревога с ${hard}${times}` })
+    lines.push({ key: 'incident', tone: 'danger', text: `тревога ${hard}${times}` })
   }
   return lines
 }

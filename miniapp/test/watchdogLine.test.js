@@ -16,8 +16,9 @@ const fleet = (wd, generated = '2026-09-17T10:00:40Z') => ({ generated_at: gener
 describe('строка «Сторож»', () => {
   it('когда был обход, сколько молчит и сколько заглушено', () => {
     expect(watchdogLine(fleet(WD))).toEqual({
-      text: 'последний обход 40 с назад · молчат 2 · заглушено 1',
-      sub: '1234 обхода с запуска · обход занял 85 мс',
+      title: 'Проверка молчащих роутеров',
+      text: 'последний обход только что · без отчёта: 2 · 1 заглушён',
+      sub: '1234 обхода с запуска',
       tone: 'ok',
       alarm: '',
     })
@@ -42,7 +43,7 @@ describe('строка «Сторож»', () => {
 
   it('старый бэкенд без новых счётчиков -- не выдумываем нули', () => {
     const old = watchdogLine(fleet({ alive: true, reason: '', last_scan_at: '2026-09-17T10:00:00Z', offline_errors: 0 }))
-    expect(old.text).toBe('последний обход 40 с назад')
+    expect(old.text).toBe('последний обход только что')
     expect(old.sub).toBe('')
   })
 
@@ -53,33 +54,33 @@ describe('строка «Сторож»', () => {
 })
 
 describe('строки отложенного в строке роутера', () => {
-  const tz = { timeZone: 'UTC' }
+  const tz = { timeZone: 'UTC', now: Date.parse('2026-09-29T12:00:00Z') }
 
   it('ждёт обновления с …', () => {
     expect(routerDelayLines({ pending_version: 'v0.36.0', pending_since: '2026-09-12T14:20:00Z' }, tz)).toEqual([
-      { key: 'pending', tone: 'muted', text: 'ждёт обновления с 12.09 14:20' },
+      { key: 'pending', tone: 'muted', text: 'ждёт обновления 12 сен с 14:20' },
     ])
   })
 
   it('последняя раскатка: прошла, не прошла, итог неизвестен', () => {
     const at = '2026-09-15T08:05:00Z'
     expect(routerDelayLines({ last_deploy: { version: 'v0.35.0', at, ok: true } }, tz)).toEqual([
-      { key: 'deploy', tone: 'ok', text: 'последняя раскатка v0.35.0 · 15.09 08:05 · прошла' },
+      { key: 'deploy', tone: 'ok', text: 'последняя раскатка v0.35.0 · 15 сен, 08:05 · прошла' },
     ])
     expect(routerDelayLines({ last_deploy: { version: 'v0.35.0', at, ok: false } }, tz)[0]).toEqual({
       key: 'deploy',
       tone: 'danger',
-      text: 'последняя раскатка v0.35.0 · 15.09 08:05 · не прошла',
+      text: 'последняя раскатка v0.35.0 · 15 сен, 08:05 · не прошла',
     })
-    expect(routerDelayLines({ last_deploy: { version: 'v0.35.0', at } }, tz)[0].text).toBe('последняя раскатка v0.35.0 · 15.09 08:05')
+    expect(routerDelayLines({ last_deploy: { version: 'v0.35.0', at } }, tz)[0].text).toBe('последняя раскатка v0.35.0 · 15 сен, 08:05')
   })
 
   it('тревога с … (N раз), с правильным склонением', () => {
     const inc = (n) => routerDelayLines({ incident: { hard_since: '2026-09-17T06:00:00Z', fail_count: n } }, tz)[0].text
-    expect(inc(5)).toBe('тревога с 17.09 06:00 (5 раз)')
-    expect(inc(2)).toBe('тревога с 17.09 06:00 (2 раза)')
-    expect(inc(1)).toBe('тревога с 17.09 06:00 (1 раз)')
-    expect(inc(0)).toBe('тревога с 17.09 06:00')
+    expect(inc(5)).toBe('тревога 17 сен с 06:00 (5 раз)')
+    expect(inc(2)).toBe('тревога 17 сен с 06:00 (2 раза)')
+    expect(inc(1)).toBe('тревога 17 сен с 06:00 (1 раз)')
+    expect(inc(0)).toBe('тревога 17 сен с 06:00')
   })
 
   it('порядок: ожидание, раскатка, тревога; пустые поля -- без строк', () => {

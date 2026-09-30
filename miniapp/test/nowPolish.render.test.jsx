@@ -6,12 +6,13 @@ import SNAP from './fixtures/split_reserve_dead.json'
 
 // v0.41, спека C1–C2: «Сейчас» без повторов и карточка тревоги с меньшим
 // числом кнопок до сути.
-const mocks = vi.hoisted(() => ({ router: null, checks: null, silenced: [], acked: [], muted: [] }))
+const mocks = vi.hoisted(() => ({ router: null, checks: null, silenced: [], acked: [], muted: [], history: [] }))
 
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouter: () => Promise.resolve(mocks.router),
   fetchRouterChecks: () => Promise.resolve(mocks.checks),
+  fetchIncidentHistory: () => Promise.resolve({ transitions: mocks.history }),
   silenceIncident: (id, check, ttl) => {
     mocks.silenced.push([id, check, ttl])
     return Promise.resolve({ incident: { check_name: check, silenced_until: new Date(Date.now() + 3600e3).toISOString() } })
@@ -36,8 +37,9 @@ const { AppContext } = await import('../src/appContext.js')
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
-async function mount() {
+async function mount(tweak) {
   mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
+  if (tweak) tweak(mocks.router)
   const events = structuredClone(SNAP.events)
   // Одна служебная проверка проваливается -- она обязана встать над спойлером.
   events.checks = events.checks.map((c) => (c.check_name === 'dns' ? { ...c, status: 'fail' } : c))
@@ -102,14 +104,14 @@ describe('«Сейчас» без повторов', () => {
 })
 
 describe('карточка тревоги', () => {
-  it('«Починить» и «Перезапустить» -- пара, акцент один', async () => {
+  it('«Починить» -- лайм на всю ширину, «Перезапустить» -- в паре контурных', async () => {
     const { root } = await mount()
-    const pair = root.querySelector('.incident-pair')
-    const repair = buttons(pair, 'Починить')[0]
-    const restart = buttons(pair, 'Перезапустить VPN-туннель')[0]
-    expect(repair.classList.contains('btn-accent')).toBe(true)
-    expect(restart.classList.contains('btn-accent')).toBe(false)
+    const card = root.querySelector('.incident-card')
+    const repair = buttons(card, 'Починить')[0]
+    const restart = buttons(card.querySelector('.incident-actions-row'), 'Перезапустить VPN-туннель')[0]
+    expect(repair.classList.contains('btn-primary')).toBe(true)
     expect(restart.classList.contains('btn-primary')).toBe(false)
+    expect(restart.classList.contains('btn-ghost')).toBe(true)
     cleanup(root)
   })
 
@@ -117,7 +119,7 @@ describe('карточка тревоги', () => {
     mocks.silenced = []
     mocks.muted = []
     const { root, sheets } = await mount()
-    const card = root.querySelector('.incident-pair').closest('li')
+    const card = root.querySelector('.incident-card')
     expect(buttons(card, 'Час')).toHaveLength(0)
     await act(async () => buttons(card, 'Не беспокоить…')[0].click())
     expect(sheets).toHaveLength(1)
@@ -136,6 +138,24 @@ describe('карточка тревоги', () => {
     expect(card.textContent).toContain('Уведомления скрыты до')
     render(null, host)
     host.remove()
+    cleanup(root)
+  })
+
+  it('тишина до завтра -- «до завтра 09:00», история -- «вчера, 22:10» (одно время на всё приложение)', async () => {
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    tomorrow.setHours(9, 0, 0, 0)
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    yesterday.setHours(22, 10, 0, 0)
+    mocks.history = [{ ts: yesterday.toISOString(), status: 'fail', label: 'Проверка не прошла' }]
+    const { root } = await mount((r) => { r.incidents[0].silenced_until = tomorrow.toISOString() })
+    const card = root.querySelector('.incident-card')
+    expect(card.querySelector('.incident-quiet').textContent).toBe('Уведомления скрыты до завтра 09:00')
+    await act(async () => buttons(card, 'История за 24ч')[0].click())
+    await flush()
+    expect(card.querySelector('.history-entry').textContent).toBe('вчера, 22:10 · Проверка не прошла')
+    mocks.history = []
     cleanup(root)
   })
 

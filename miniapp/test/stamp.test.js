@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { stampText, secondsBetween } from '../src/stamp.js'
 
 describe('stampText', () => {
+  const NOW = Date.parse('2026-09-29T12:00:00Z')
   it('день.месяц часы:минуты в заданном поясе', () => {
-    expect(stampText('2026-09-12T14:20:00Z', { timeZone: 'UTC' })).toBe('12.09 14:20')
-    expect(stampText('2026-09-12T14:20:00Z', { timeZone: 'Europe/Moscow' })).toBe('12.09 17:20')
-    expect(stampText('2026-01-02T03:04:00Z', { timeZone: 'UTC' })).toBe('02.01 03:04')
+    expect(stampText('2026-09-12T14:20:00Z', { timeZone: 'UTC', now: NOW })).toBe('12 сен, 14:20')
+    expect(stampText('2026-09-12T14:20:00Z', { timeZone: 'Europe/Moscow', now: NOW })).toBe('12 сен, 17:20')
+    expect(stampText('2026-01-02T03:04:00Z', { timeZone: 'UTC', now: NOW })).toBe('2 янв, 03:04')
   })
 
   it('пусто и мусор -- пустая строка, а не «Invalid Date»', () => {

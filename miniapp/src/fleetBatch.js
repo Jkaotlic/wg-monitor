@@ -1,4 +1,4 @@
-// Массовые проверки на экране «Парк»: «Проверить все» и «Аудит всех».
+// Массовые проверки на экране «Парк»: «Осмотреть все» и «Сверить версии у всех».
 //
 // Это N обычных команд, а не новая власть над парком: каждая идёт по своему
 // роутеру через тот же белый список и ту же проверку доступа, что кнопка на
@@ -13,8 +13,8 @@ import { pluralRu } from './labels.js'
 import { isAway } from './agentUpdate.js'
 
 export const BATCH = {
-  doctor: { action: 'router_doctor', idle: 'Проверить все', busy: 'Проверяем…' },
-  audit: { action: 'version_audit', idle: 'Аудит всех', busy: 'Сверяем версии…' },
+  doctor: { action: 'router_doctor', idle: 'Осмотреть все', busy: 'Осматриваем…' },
+  audit: { action: 'version_audit', idle: 'Сверить версии у всех', busy: 'Сверяем версии…' },
 }
 
 export function batchTargets(routers) {
@@ -209,7 +209,7 @@ export function batchSummary(state) {
     const tail = withProblems
       ? `внимания ${pluralRu(withProblems, 'требует', 'требуют', 'требуют')} ${withProblems}`
       : 'всё свежее и работает'
-    headline = `Аудит: ответили ${answered} из ${state.total}, ${tail}.`
+    headline = `Сверка версий: ответили ${answered} из ${state.total}, ${tail}.`
   }
 
   // id -- router_id, не текст: у двух роутеров бывает одинаковый исход

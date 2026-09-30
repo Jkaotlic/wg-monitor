@@ -16,7 +16,8 @@
 // Пре-флайт 15.09 (решение координатора): без пароля root переустановка
 // отказывает (revive.Secrets.Usable), вход в панель его дополняет, но не
 // заменяет. Поэтому root обязателен, остальные поля входа -- по желанию.
-import { humanAge, pluralRu } from './labels.js'
+import { pluralRu } from './labels.js'
+import { agoText } from './when.js'
 import { isAway } from './agentUpdate.js'
 
 export const REVIVE_NOT_CONFIGURED = 'Оживление агента не настроено на сервере.'
@@ -43,7 +44,7 @@ function probeAgo(revive, generatedAt) {
   const now = Date.parse(generatedAt ?? '')
   if (Number.isNaN(at) || Number.isNaN(now)) return ''
   const sec = Math.max(0, Math.round((now - at) / 1000))
-  return sec < 60 ? 'только что' : `${humanAge(sec)} назад`
+  return agoText(sec)
 }
 
 function trimmed(v) {

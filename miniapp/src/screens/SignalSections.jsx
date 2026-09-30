@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterFacts } from '../api.js'
 import { useCommand } from '../useCommand.js'
@@ -131,7 +132,7 @@ export function AwgmLogsSection({ routerID, deadline }) {
       </div>
       {logs.busy && <p class="state">Читаем журнал…</p>}
       {logs.error && <p class="state state-error">{logs.error}</p>}
-      {logs.result && logs.result.status !== 'ok' && <p class="state state-error">{logs.result.output || 'Роутер не отдал журнал.'}</p>}
+      {logs.result && logs.result.status !== 'ok' && <p class="state state-error">{agentReplyText(logs.result, 'Роутер не отдал журнал — попробуйте ещё раз через минуту.')}</p>}
       {view?.note && <p class="hint">{view.note}</p>}
       {view && view.rows.length > 0 && (
         <div class="card card-rows settings-card">

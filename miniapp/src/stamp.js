@@ -1,19 +1,14 @@
-// Время события словами: «12.09 14:20». Пояс -- того, кто смотрит (так же
-// показывал время старый дашборд); timeZone задают тесты.
-export function stampText(iso, { timeZone } = {}) {
-  if (!iso) return ''
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return ''
-  const parts = new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone,
-  }).formatToParts(t)
-  const get = (type) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${get('day')}.${get('month')} ${get('hour')}:${get('minute')}`
+import { whenText, sinceText } from './when.js'
+
+// Время события -- одним модулем (when.js): «сегодня, 17:56», «27 сен, 17:56».
+// Пояс -- того, кто смотрит; timeZone и now задают тесты.
+export function stampText(iso, { timeZone, now } = {}) {
+  return whenText(iso, { timeZone, now })
+}
+
+// Начало состояния: «сегодня с 17:56».
+export function sinceStamp(iso, { timeZone, now } = {}) {
+  return sinceText(iso, { timeZone, now })
 }
 
 // «N назад» считается между двумя временами сервера: часы телефона и Pi

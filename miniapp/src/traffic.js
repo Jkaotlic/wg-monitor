@@ -13,9 +13,9 @@ const UNITS = [
 export function formatBytes(bytes) {
   if (bytes == null || Number.isNaN(bytes)) return ''
   for (const u of UNITS) {
-    if (bytes >= u.limit) return `${(bytes / u.limit).toFixed(1).replace('.', ',')} ${u.suffix}`
+    if (bytes >= u.limit) return `${(bytes / u.limit).toFixed(1).replace('.', ',')} ${u.suffix}`
   }
-  return `${bytes} Б`
+  return `${bytes} Б`
 }
 
 export function trafficSummary(output) {
@@ -39,5 +39,21 @@ export function trafficSummary(output) {
     // Ряд без точек -- это ответ «за период обмена не было»: роутер посчитал
     // и ничего не нашёл. Отличать его от «не спрашивали» обязательно.
     empty: points === 0,
+  }
+}
+
+// «Обмен за сутки» (v0.50, спека п. 3.6): до ответа роутера -- одна
+// плитка-приглашение, а не «неизвестно / неизвестно»; после -- два числа без
+// служебного «точек в ряду».
+export function trafficView(summary, { busy = false, error = '' } = {}) {
+  if (summary?.known) {
+    return { invite: false, rx: summary.rx, tx: summary.tx, note: summary.empty ? 'за сутки ничего' : 'роутер посчитал сам', button: busy ? 'Считаем…' : 'Пересчитать' }
+  }
+  // Ошибка -- внутри плитки, с одной кнопкой «Повторить» на одно действие.
+  if (error && !busy) return { invite: true, error: true, text: error, button: 'Повторить' }
+  return {
+    invite: true,
+    text: busy ? 'Роутер считает, сколько прошло через VPN-туннель за сутки…' : 'Сколько прошло через VPN-туннель за сутки, роутер посчитает по запросу.',
+    button: busy ? 'Считаем…' : 'Показать обмен',
   }
 }

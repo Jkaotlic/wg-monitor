@@ -4,9 +4,10 @@ import { Quoted } from './Q.jsx'
 // сигнальный лайм допустим: это и есть "иди сюда".
 //
 // Заголовок и пояснение -- готовые строки, имена в них идут через <Quoted>.
-export function NavCard({ title, note, onClick }) {
+// quiet -- нейтральная плитка-вход (Парк): лайм на экране остаётся у главной кнопки.
+export function NavCard({ title, note, onClick, quiet = false }) {
   return (
-    <button type="button" class="nav-card" onClick={onClick}>
+    <button type="button" class={quiet ? 'nav-card nav-card-quiet' : 'nav-card'} onClick={onClick}>
       <span class="nav-card-title">
         <Quoted text={title} />
       </span>

@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
@@ -6,11 +7,14 @@ import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
+import { agoText } from '../when.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { ExitIPSection, WANSection } from './SignalSections.jsx'
+import { CheckToolsSections } from './CheckToolsSections.jsx'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
 // моргнула»: пять строк данных, у каждой -- ответ и измерение. Числа берутся
@@ -25,7 +29,7 @@ import { ExitIPSection, WANSection } from './SignalSections.jsx'
 // Машинные имена проверок (dns, hydraroute, agent_heartbeat) -- для того, кто
 // полезет в консоль, то есть для админа. Владельцу они ничего не говорят и
 // только теснят вопрос: ему -- без них.
-export function DiagTab({ routerID, asleep, isAdmin = false }) {
+export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -85,7 +89,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
       </div>
       <p class="router-lastseen">
         {rows.length} {rows.length === 1 ? 'вопрос' : 'вопросов'} роутеру
-        {age != null ? ` · последний отчёт ${humanAge(age)} назад` : ''}
+        {age != null ? ` · последний отчёт ${agoText(age)}` : ''}
       </p>
 
       <div class="stat-grid">
@@ -151,9 +155,13 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
       <p class="hint">
         Проверка ничего не меняет на роутере: он заново спрашивает те же вещи и присылает ответ.
       </p>
-      {recheck.error && <p class="state state-error">{recheck.error}</p>}
+      <ErrorLine
+        text={recheck.error}
+        busy={recheck.busy}
+        onRetry={() => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}
+      />
       {recheck.result && recheck.result.status !== 'ok' && (
-        <p class="state state-error">Роутер не переспросил: {recheck.result.output || recheck.result.status}</p>
+        <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
       )}
 
       {/* Кому роутер отдал русские зоны и как идут запросы к Яндексу. Ответ --
@@ -211,13 +219,19 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
         >
           {measuring ? 'Меряем оба адреса…' : 'Сравнить адреса'}
         </button>
-        {(direct.error || viaTunnel.error) && (
-          <p class="state state-error">{direct.error || viaTunnel.error}</p>
-        )}
+        <ErrorLine
+          text={direct.error || viaTunnel.error}
+          busy={measuring}
+          onRetry={() => {
+            direct.run('check_direct', {}, deadline)
+            viaTunnel.run('check_via_tunnel', {}, deadline)
+          }}
+        />
       </Section>
 
       <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
       <WANSection routerID={routerID} />
+      <CheckToolsSections routerID={routerID} asleep={asleep} openSheet={openSheet} tunnels={data.tunnels} onChanged={load} />
 
       <Section title="Отчёт роутера о себе">
         <button
@@ -236,9 +250,9 @@ export function DiagTab({ routerID, asleep, isAdmin = false }) {
           ))}
         </p>
 
-        {report.error && <p class="state state-error">{report.error}</p>}
+        <ErrorLine text={report.error} busy={report.busy} onRetry={() => report.run('diag_now', {}, deadline)} />
         {report.result && report.result.status !== 'ok' && (
-          <p class="state state-error">Роутер не собрал отчёт: {report.result.output || report.result.status}</p>
+          <p class="state state-error">{agentReplyText(report.result, 'Роутер не собрал отчёт — попробуйте ещё раз через минуту.')}</p>
         )}
 
         {parsedReport && parsedReport.cards.length > 0 && (

@@ -9,6 +9,7 @@
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy } from './labels.js'
+import { agoText } from './when.js'
 import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
 import { isStale } from './staleness.js'
 
@@ -127,7 +128,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
     tone: 'off',
     cold: false,
     stale,
-    tag: age != null ? `роутер на связи · ответ ${humanAge(age)} назад` : 'роутер на связи',
+    tag: age != null ? `роутер на связи · ответ ${agoText(age)}` : 'роутер на связи',
     // Правила не прочитались (список перерос то, что агент читает): туннель
     // роутер назвал, а повтор проверки упрётся в тот же список -- звать
     // «соберите заново» значит гонять человека по кругу.
@@ -182,7 +183,9 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
         return {
           ...base,
           tone: 'warn',
-          tag: 'всё работает, резерва нет',
+          // Запасной настроен, но не отвечает -- это не «резерва нет» (ревью):
+          // «нет» -- когда туннеля в списке вовсе нет.
+          tag: dead ? 'всё работает, запасной упал' : 'всё работает, резерва нет',
           verdict: `Обход идёт через «${via}». Запасной «${deadName}» не отвечает — если основной ляжет, подхватить некому.`,
         }
       }

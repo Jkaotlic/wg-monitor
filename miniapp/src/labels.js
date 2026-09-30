@@ -29,9 +29,21 @@ const CHECK_LABELS = {
 
 // Check names are identifiers, not prose. Anything we don't have a human name
 // for is shown as-is rather than mangled -- an honest unknown beats a wrong guess.
-export function checkLabel(name) {
+// VPN-туннель из имени проверки: id и человеческое имя из списка роутера
+// (tunnels[] ответа /checks -- тот же источник, из которого шапка «Сейчас»
+// берёт имя). Имя, совпадающее с id, именем не считается.
+export function tunnelOf(checkName, tunnels = []) {
+  if (!checkName?.startsWith('tunnel_')) return null
+  const id = checkName.slice('tunnel_'.length)
+  const t = (tunnels ?? []).find((x) => x?.tunnel_id === id)
+  const name = t?.name && t.name !== id ? t.name : ''
+  return { id, name }
+}
+
+export function checkLabel(name, tunnels = []) {
   if (CHECK_LABELS[name]) return CHECK_LABELS[name]
-  if (name?.startsWith('tunnel_')) return `VPN-туннель ${name.slice('tunnel_'.length)}`
+  const t = tunnelOf(name, tunnels)
+  if (t) return t.name ? `VPN-туннель «${t.name}»` : `VPN-туннель ${t.id}`
   return name
 }
 
@@ -89,15 +101,20 @@ const INCIDENT_COPY = {
 // copy for gets checkLabel's honest name and an empty "why" rather than a
 // guessed explanation, the same rule checkLabel itself follows for a name it
 // doesn't recognize.
-export function incidentCopy(checkName) {
-  if (INCIDENT_COPY[checkName]) return INCIDENT_COPY[checkName]
-  if (checkName?.startsWith('tunnel_')) {
+// tunnels -- список VPN-туннелей роутера: тревога называет туннель тем же
+// именем, что шапка (v0.50, спека п. 1.3); id уходит в code -- мелкой
+// подписью рядом, только когда имя есть.
+export function incidentCopy(checkName, tunnels = []) {
+  if (INCIDENT_COPY[checkName]) return { ...INCIDENT_COPY[checkName], code: '' }
+  const t = tunnelOf(checkName, tunnels)
+  if (t) {
     return {
-      what: `${checkLabel(checkName)} не отвечает`,
+      what: `${checkLabel(checkName, tunnels)} не отвечает`,
       why: 'Трафик через этот VPN-туннель не проходит: сервер не обменивается ключами или не отвечает на проверку.',
+      code: t.name ? t.id : '',
     }
   }
-  return { what: checkLabel(checkName), why: '' }
+  return { what: checkLabel(checkName), why: '', code: '' }
 }
 
 // Та же фраза, но БЕЗ машинного идентификатора VPN-туннеля.

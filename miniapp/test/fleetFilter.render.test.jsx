@@ -108,7 +108,7 @@ describe('«Мои роутеры» на телефоне', () => {
     expect(names()).toHaveLength(4)
     await act(async () => chip(root, 'тревога').click())
     expect(names()).toEqual(['dom-kiev'])
-    expect(root.querySelector('.router-lastseen').textContent).toContain('из 4')
+    expect(root.querySelector('.router-lastseen').textContent).toContain('4 роутера')
     cleanup(root)
   })
 })

@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
@@ -34,6 +35,7 @@ import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 import { HrneoBlock } from './HrneoBlock.jsx'
 import { NativeDNSSection } from './SignalSections.jsx'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -298,9 +300,9 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
       <p class="router-lastseen">Что отправлено в обход, а что идёт напрямую через провайдера.</p>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
-      {phase === 'error' && <p class="state state-error">{error}</p>}
+      {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={refresh} />}
       {phase === 'refused' && (
-        <p class="state state-error">Роутер не отдал снимок маршрутизации: {result.output || result.status}</p>
+        <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок маршрутизации — попробуйте ещё раз через минуту.')}</p>
       )}
       {phase === 'unreadable' && (
         <p class="state state-error">Снимок пришёл, но разобрать его не удалось — покажем как есть ниже.</p>
@@ -353,7 +355,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
               }}
             />
           </div>
-          <div class="command-actions">
+          <div class="command-actions action-row">
             <button type="submit" class="btn btn-ghost" disabled={siteBusy || !normalizeSiteInput(siteInput)}>
               {site.busy ? 'Проверяю…' : 'Проверить'}
             </button>
@@ -429,7 +431,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
                     {badge && <Chip tone={badge.tone}>{badge.text}</Chip>}
                     <span class="tunnel-sub">{tunnelRuleSummary(t)}</span>
                     {(canRebind || canPromote) && (
-                      <span class="row-actions">
+                      <span class="row-actions action-row">
                         {canRebind && (
                           <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(t)}>
                             Перенести всё
@@ -454,7 +456,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
                   </span>
                   <span class="tunnel-sub">{otherSourceSummary(other)}</span>
                   {canMutate && rebindTargets(rows, OTHER_SOURCE_ID).length > 0 && (
-                    <span class="row-actions">
+                    <span class="row-actions action-row">
                       <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(other)}>
                         Перенести всё
                       </button>

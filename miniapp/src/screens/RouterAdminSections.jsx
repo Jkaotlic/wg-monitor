@@ -95,7 +95,11 @@ export function AdminSettingsSections({ routerID, isAdmin = false, openSheet, on
       )}
 
       {/* Доступ -- только админ: сервер проверяет роль сам (miniappRequireAdmin). */}
-      {isAdmin && <AccessSection routerID={routerID} openSheet={openSheet} />}
+      {isAdmin && (
+        <div id="mg-access" class="manage-anchor-target">
+          <AccessSection routerID={routerID} openSheet={openSheet} />
+        </div>
+      )}
     </>
   )
 }

@@ -160,12 +160,14 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
                 никуда не денется.
               </p>
             </div>
-            <button type="button" class="btn btn-primary btn-wide" disabled={starting} onClick={start}>
-              {starting ? 'Запускаем…' : 'Заменить конфиг'}
-            </button>
-            <button type="button" class="btn btn-ghost btn-wide" onClick={() => setPick(null)}>
-              Выбрать другой
-            </button>
+            <div class="action-row">
+              <button type="button" class="btn btn-primary" disabled={starting} onClick={start}>
+                {starting ? 'Запускаем…' : 'Заменить конфиг'}
+              </button>
+              <button type="button" class="btn btn-ghost" onClick={() => setPick(null)}>
+                Выбрать другой
+              </button>
+            </div>
           </Section>
         )}
 

@@ -48,7 +48,7 @@ export function agentConfigConfirmBody(routerName) {
 // то, что меняют часто, потом разрешения на действия с самим устройством.
 const FIELDS = [
   { key: 'interval_sec', title: 'Как часто роутер отчитывается', kind: 'int', unit: 'сек', min: 10, max: 86400 },
-  { key: 'wake_hooks_off', title: 'Выключить мгновенную реакцию на смену линии', kind: 'bool' },
+  { key: 'wake_hooks_off', title: 'Выключить мгновенную реакцию, когда меняется VPN-туннель', kind: 'bool' },
   { key: 'external_reach_enabled', title: 'Проверять выход в интернет', kind: 'bool' },
   { key: 'external_reach_fail_threshold', title: 'Считать выход потерянным после', kind: 'int', unit: 'провалов', min: 1, max: 20 },
   { key: 'awgm_base_url', title: 'Адрес панели роутера', kind: 'string' },
@@ -128,7 +128,7 @@ export function agentConfigRows(view = {}) {
   if ('wake_hooks_off' in v) {
     rows.push({
       key: 'wake_hooks',
-      title: 'Мгновенная реакция на смену линии',
+      title: 'Мгновенная реакция, когда меняется VPN-туннель',
       value: v.wake_hooks_off ? 'выключена' : 'включена',
     })
   }

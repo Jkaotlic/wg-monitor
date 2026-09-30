@@ -144,7 +144,7 @@ export function agentUpdateSheetText(router, backendVersion) {
   }
   // Точку в конце фразы сервера срезаем: иначе вышло бы «…бэкенда..».
   const warning = String(router?.agent_update_warning ?? '').trim().replace(/[.\s]+$/, '')
-  if (warning) parts.push(`Оговорка: ${warning}.`)
+  if (warning) parts.push(`Что может помешать: ${warning}.`)
   parts.push('Агент перезапустится, проверки на минуту замолчат.')
   return { title: `Обновить агент на «${name}»?`, body: parts.join(' ') }
 }

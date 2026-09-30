@@ -448,3 +448,32 @@ describe('смена адреса SSH и перечитывание', () => {
   })
 })
 
+
+describe('v0.50: форма сервера без простыни (спека п. 3.2)', () => {
+  it('«Контейнер и пути» и «SSH» свёрнуты с итоговой строкой; «Адрес» раскрыт', async () => {
+    const { root } = await mountInstance('ams')
+    const folds = [...root.querySelectorAll('details.form-fold')]
+    expect(folds.map((d) => d.querySelector('.fold-title').textContent)).toEqual(['Контейнер и пути', 'SSH'])
+    expect(folds.map((d) => d.open)).toEqual([false, false])
+    expect(folds[0].querySelector('.fold-note').textContent).toBe('2 поля заданы')
+    expect(folds[1].querySelector('.fold-note').textContent).toBe('root@203.0.113.10:22')
+    expect(root.querySelector('#sh-endpoint_host').closest('details')).toBe(null)
+    cleanup(root)
+  })
+
+  it('ошибка поля в свёрнутой группе раскрывает её', async () => {
+    const { root } = await mountInstance('ams')
+    await fill(root, 'sh-ssh_host', '203.0.113.99')
+    await click(button(root, 'Сохранить'))
+    expect(root.querySelector('#sh-ssh_password').closest('details').open).toBe(true)
+    cleanup(root)
+  })
+
+  it('кнопки состояния -- ряд пополам', async () => {
+    const { root } = await mountInstance('ams')
+    const row = root.querySelector('.selfhosted-actions')
+    expect(row.className).toContain('action-row-pair')
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Выключить', 'Проверить подключение'])
+    cleanup(root)
+  })
+})

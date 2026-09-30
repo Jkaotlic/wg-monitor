@@ -4,6 +4,8 @@ import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldVal
 import { commandOutcomeLabel } from '../labels.js'
 import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
+import { plainHyphens } from '../text.js'
+import { Chip } from './Chip.jsx'
 
 // Нижний шит -- единственное место, где приложение спрашивает "точно?" и
 // показывает ход выполнения. Команду он и запускает сам: раньше это жило
@@ -27,6 +29,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
   // это то, что задумал экран, а набранное -- то, что делает человек прямо
   // сейчас, и смешивать их значило бы переписывать намерение вводом.
   const [typed, setTyped] = useState('')
+  const [query, setQuery] = useState('')
   // Поля формы (оживление агента: пароль, логин, срок). Значения -- здесь, а
   // не в описании листа: описание лежит в состоянии App, и пароль не должен
   // туда попасть. Стираются при отправке (до ответа) и при закрытии.
@@ -136,6 +139,10 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
     })
   }
 
+  // Поиск по вариантам (выбор роутера при > 6): без регистра и вида дефиса.
+  const needle = plainHyphens(query).trim().toLowerCase()
+  const shownChoices = (sheet.choices ?? []).filter((c) => !needle || plainHyphens(String(c.label)).toLowerCase().includes(needle))
+
   return (
     <div class="sheet-layer">
       {/* Подложка закрывает шит только до запуска: обрывать наблюдение за
@@ -235,17 +242,33 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
             {local && sheet.choices?.length > 0 ? (
               // Лист выбора: варианты столбиком, каждый выполняется сразу.
               <div class="sheet-choices">
-                {sheet.choices.map((c) => (
+                {sheet.search && (
+                  <input
+                    class="sheet-search"
+                    type="search"
+                    aria-label="Найти"
+                    placeholder="Найти по имени"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck={false}
+                    value={query}
+                    onInput={(e) => setQuery(e.currentTarget.value)}
+                  />
+                )}
+                {shownChoices.map((c) => (
                   <button
                     key={c.value}
                     type="button"
-                    class={`btn btn-wide ${c.danger ? 'btn-danger' : 'btn-ghost'}`}
+                    class={`btn btn-wide sheet-choice ${c.danger ? 'btn-danger' : 'btn-ghost'}${c.current ? ' sheet-choice-current' : ''}`}
+                    aria-current={c.current ? 'true' : undefined}
                     disabled={localBusy}
                     onClick={() => start(c.value)}
                   >
-                    {c.label}
+                    <span class="sheet-choice-label">{c.label}</span>
+                    {c.pill && <Chip tone={c.pill.tone}>{c.pill.text}</Chip>}
                   </button>
                 ))}
+                {shownChoices.length === 0 && <p class="hint">Ничего не нашлось.</p>}
                 <button type="button" class="btn btn-ghost btn-wide sheet-choices-cancel" disabled={localBusy} onClick={dismiss}>
                   Отмена
                 </button>

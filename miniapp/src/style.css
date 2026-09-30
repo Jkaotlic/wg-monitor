@@ -60,6 +60,9 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
+  /* Высота телефонной шапки: под ней липнут чипы «Управления» (задача 3) */
+  --app-header-h: 64px;
+
   /* Radius: 20 герой -- 14 карточка и кнопка -- 999 пилюля */
   --radius-hero: 20px;
   --radius: 14px;
@@ -78,8 +81,10 @@
   --fs-lg: 1.125rem;
   --fs-md: 0.9375rem;
   --fs-sm: 0.875rem;
-  --fs-xs: 0.6875rem;
-  --fs-xxs: 0.625rem;
+  --fs-xs: 0.75rem;
+  /* Машинные коды (awg10, check_direct, сырой ответ агента) -- 11 px; всё,
+     что человек читает, -- не мельче 12 px (v0.50). */
+  --fs-code: 0.6875rem;
 
   --lh-tight: 1.25;
   --lh-normal: 1.45;
@@ -141,6 +146,7 @@
 }
 
 .manage-group-title {
+  display: inline;
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: 700;
@@ -148,7 +154,7 @@
   color: var(--text);
 }
 
-.manage-group > .section:first-of-type {
+.manage-group > .fold-body > .section:first-of-type {
   margin-top: var(--sp-3);
 }
 
@@ -161,6 +167,12 @@
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   padding: var(--sp-4);
+}
+
+/* Соседние карточки одного раздела -- единый отступ (v0.50, спека п. 3.3):
+   раньше предупреждение прилипало к списку («Заменить конфиг»). */
+:where(.section, .screen) > .card + .card {
+  margin-top: var(--sp-3);
 }
 
 .row {
@@ -468,25 +480,10 @@ body {
   color: var(--muted);
 }
 
-.incident-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.incident-actions-label {
-  flex-basis: 100%;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-
 /* ---------------- Async commands (Task 12) ----------------
    CommandButton's own two rules, in RouterDetail.jsx. The confirm step's
-   Yes/Cancel pair reuses the same flex-row shape as .incident-actions above
-   (it IS the same shape: a wrapping row of buttons) but gets its own class
-   rather than borrowing that incident-specific name into TrafficSection's
-   markup, which doesn't otherwise mention incidents at all. */
+   Yes/Cancel pair is a wrapping row of buttons with its own class,
+   TrafficSection's markup doesn't otherwise mention incidents at all. */
 .command-actions {
   display: flex;
   flex-wrap: wrap;
@@ -505,28 +502,6 @@ body {
 
 .incident-history-toggle {
   margin-top: var(--sp-3);
-}
-
-/* «Починить» и «Перезапустить VPN-туннель» -- пара одного размера (v0.41).
-   Обёртка перезапуска растворяется в ряду (display: contents): кнопка
-   встаёт второй, а строки хода команды -- на всю ширину под парой. Сам ряд
-   -- общее правило пар, у .settings-actions. */
-.incident-pair {
-  margin: var(--sp-3) 0;
-}
-
-.incident-pair .restart-block {
-  display: contents;
-}
-
-.incident-pair .btn {
-  min-width: 0;
-  margin: 0;
-}
-
-.incident-pair .state {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 /* Тихая ссылка: справка, а не действие («История за 24ч»). */
@@ -647,7 +622,7 @@ body {
    mono, the same convention the rest of the app marks readings with. */
 .tunnel-id {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-code);
   color: var(--muted);
 }
 
@@ -1045,7 +1020,9 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  box-sizing: border-box;
+  height: var(--app-header-h);
+  padding: 0 var(--sp-4);
   background: var(--page);
   border-bottom: 1px solid var(--border);
 }
@@ -1062,7 +1039,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  flex: none;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-2);
   border: none;
   background: transparent;
@@ -1154,7 +1132,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
   border: none;
   background: transparent;
@@ -1433,7 +1411,7 @@ body {
 }
 
 .filter-chip {
-  min-height: 32px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -1556,7 +1534,7 @@ body {
   border-radius: var(--radius-sm);
   background: var(--surface);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-code);
   line-height: var(--lh-normal);
   color: var(--text);
   white-space: pre-wrap;
@@ -1686,7 +1664,7 @@ body {
 .stat-label {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
@@ -1705,13 +1683,12 @@ body {
 .stat-unit {
   font-size: var(--fs-sm);
   font-weight: 500;
-  margin-left: 3px;
 }
 
 .stat-note {
   display: block;
   margin-top: 5px;
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   color: var(--dim);
 }
 
@@ -1796,7 +1773,7 @@ body {
 .data-row-code {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-code);
   letter-spacing: 0.05em;
   color: var(--dim);
   margin-top: 3px;
@@ -1821,7 +1798,7 @@ body {
 .data-row-value-sub {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   font-weight: 400;
   color: var(--dim);
   margin-top: 2px;
@@ -2142,7 +2119,7 @@ body {
    ширина времени ломает этот столбик на каждой второй строке. */
 .ev-time {
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-xs);
   color: var(--dim);
   width: 36px;
   flex: none;
@@ -2161,7 +2138,7 @@ body {
   display: block;
   text-decoration: none;
   font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
+  font-size: var(--fs-code);
   color: var(--dim);
   margin-top: 3px;
 }
@@ -2265,8 +2242,9 @@ body {
 .panel-line {
   display: block;
   max-width: 100%;
-  margin: 2px 0 0;
-  padding: 0;
+  margin: 0;
+  padding: var(--sp-3) 0;
+  min-height: 40px;
   border: none;
   background: transparent;
   color: var(--accent);
@@ -2289,6 +2267,8 @@ body {
 /* В строке-кнопке списка хост -- текст, не ссылка: без подчёркивания и
    без своей реакции на наведение. */
 .panel-line-text {
+  padding: 0;
+  min-height: 0;
   text-decoration: none;
   cursor: inherit;
 }
@@ -2354,7 +2334,7 @@ body {
 
 /* Новость об обновлении -- столбиком: строка данных, текст новости, кнопка
    установки, пара «Отложить на неделю / Скрыть эту новость» (правило пар --
-   .settings-actions). Раньше это был .settings-row -- flex в одну линию без
+   .action-row). Раньше это был .settings-row -- flex в одну линию без
    переноса, и на 360 px пара уезжала за правый край (до 459 px). */
 .settings-news {
   display: flex;
@@ -2382,26 +2362,78 @@ body {
 /* Строка внутри группы «строка + предупреждение»: черта -- у группы. */
 .data-row-group > .settings-row { border-bottom: none; }
 
-/* Пара кнопок в строку («Осмотр роутера» / «Осмотр HydraRoute Neo»,
-   «Перезапустить HydraRoute» / «… awg-manager», «Починить» / «Перезапустить
-   VPN-туннель»). Кнопки одной высоты, а когда подписи в половине строки
-   тесно -- каждая встаёт на свою строку целиком: на 360 px подпись в две
-   строки делала пару разновысокой. Порог -- основа flex: две кнопки по
-   13,5rem встают рядом только там, где подпись помещается в одну строку. */
-.settings-actions,
-.incident-pair {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
+/* Ряд действий (v0.50) -- один на всё приложение. Кнопки равной ширины и
+   одной высоты, по две в ряд; когда половине ширины не хватает на подпись
+   в одну строку (13.5rem), -- столбиком. Сетка, а не flex: ячейки строки
+   тянутся до общей высоты сами. Нечётная последняя -- во всю ширину.
+   .action-row-pair -- всегда две колонки (пара тревоги: подпись может
+   переноситься, высота всё равно общая). Строки хода команды (.state) --
+   на всю ширину под кнопками. */
+.action-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(13.5rem, calc(50% - var(--sp-1)))), 1fr));
   gap: var(--sp-2);
+  margin: var(--sp-3) 0 0;
 }
 
-.settings-actions .btn,
-.incident-pair .btn {
-  flex: 1 1 13.5rem;
+.action-row-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.action-row > .btn,
+.action-row > .restart-block > .btn {
+  width: 100%;
+  min-width: 0;
   min-height: 44px;
+  margin: 0;
   white-space: normal;
   line-height: var(--lh-tight);
+}
+
+.action-row > .restart-block {
+  display: contents;
+}
+
+.action-row > .btn:last-child:nth-child(odd):not(:first-child),
+.action-row > :only-child,
+.action-row > .restart-block:only-child > .btn {
+  grid-column: 1 / -1;
+}
+
+.action-row .state,
+.action-row .hint {
+  grid-column: 1 / -1;
+  order: 1;
+  margin: 0;
+  padding: var(--sp-2) 0 0;
+}
+
+.incident-card .repair-open {
+  margin-top: var(--sp-2);
+}
+
+.incident-quiet {
+  display: inline-block;
+  margin-top: var(--sp-3);
+  white-space: normal;
+}
+
+/* Ошибка действия и «Повторить» рядом (v0.50). */
+.error-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+}
+
+.error-line .state {
+  padding: 0 var(--sp-4);
+}
+
+/* Схема в герое не прижата к нижнему краю карточки (v0.50, спека п. 1.5). */
+.hero .traffic-path {
+  margin-bottom: var(--sp-4);
 }
 
 /* ============================================================
@@ -2720,24 +2752,24 @@ body {
 
 /* Строки парка разделены линией: под строкой данных живут версии, состояние
    обновления и кнопки, и без разделителя они прилипают к соседнему роутеру. */
-.park-row + .park-row {
-  border-top: 1px solid var(--border);
-}
-
 /* Карточка роутеров Парка -- одна рамка (.card-rows): строка данных несёт
    свои поля, всё под ней -- версии, кнопки, оговорки -- встаёт по её левому
    краю. Черты между именем роутера и его кнопками нет: это одна строка. */
 .park-row {
-  padding-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
 .park-row > .data-row {
   border-bottom: none;
+  padding-left: 0;
+  padding-right: 0;
 }
 
-.park-row > :not(.data-row) {
-  margin-left: 14px;
-  margin-right: 14px;
+/* Пилюля состояния -- по своему содержимому («резерв не работает»), не в 45%
+   колонки значения: имя роутера переносится, пилюля не вылезает за карточку. */
+.park-row .data-row-value {
+  flex: none;
+  max-width: none;
 }
 
 /* Карточка бэкенда: сторож и кнопка раскатки -- уже с полями строки, снизу
@@ -2814,41 +2846,12 @@ body {
    сеткой по две равной ширины и высоты; нечётная последняя -- во всю
    ширину. Раньше каждая была шириной своей подписи, и строка шла лесенкой. */
 .park-open {
-  display: flex;
-  /* Кнопка сама по ширине подписи и в блоке не растягивается: ширина --
-     строка за вычетом полей строки (.park-row > …, по 14px). */
-  width: calc(100% - 28px);
-  margin-top: var(--sp-2);
   min-height: 44px;
-}
-
-.park-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-2);
-  margin: var(--sp-2) 0 0;
-}
-
-.park-actions .btn {
-  min-width: 0;
-  min-height: 44px;
-  white-space: normal;
-  line-height: var(--lh-tight);
-}
-
-.park-actions > .btn:last-child:nth-child(odd) {
-  grid-column: 1 / -1;
 }
 
 /* Общие оговорки обновления -- один раз над списком; на карточке -- метка. */
 .park-notes {
   margin-bottom: var(--sp-2);
-}
-
-.park-tag {
-  margin: var(--sp-1) 0 0;
-  font-size: var(--fs-xs);
-  color: var(--dim);
 }
 
 .park-result {
@@ -2857,6 +2860,7 @@ body {
 
 .park-batch {
   margin-top: var(--sp-3);
+  grid-auto-rows: 1fr;
 }
 
 /* Под строкой роутера: «уведомлять меня» и переход на его экран. */
@@ -3451,6 +3455,8 @@ body {
   font-size: var(--fs-xs);
 }
 
+/* Классы .park-add и .park-selfhosted больше не на кнопках (v0.50: входы --
+   .park-entries); правило держим ради порядка стилей и тестов CSS. */
 .park-add {
   margin-top: var(--sp-3);
 }
@@ -3539,9 +3545,6 @@ body {
 }
 
 .packages-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
   margin-top: var(--sp-3);
 }
 
@@ -3616,6 +3619,7 @@ body {
   display: inline-flex;
   align-items: baseline;
   gap: var(--sp-1);
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
@@ -3664,7 +3668,7 @@ body {
 
 .segment-tab {
   flex: 1;
-  min-height: 36px;
+  min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
   border: 0;
   border-radius: var(--radius-pill);
@@ -3799,14 +3803,15 @@ body {
   white-space: nowrap;
 }
 
-/* Единица трафика не должна остаться одна на своей строке: «↑ 200,3» /
-   «МБ» на переносе читается хуже прочерка. */
+/* Единица трафика не должна остаться одна на своей строке: внутри половин
+   «↓ 1,2 ГБ» и «↑ 200,3 МБ» -- неразрывные пробелы (trafficText), между ними
+   строка может перенестись, а не вылезти за карточку. */
 .awg3-peers .data-row-value-sub {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* Пара «Конфиг на устройство» / «Выпустить на роутер» -- те же правила пары,
-   что у .settings-actions (v0.48): одна высота, перенос на свою строку, а не
+   что у .action-row (v0.48): одна высота, перенос на свою строку, а не
    всегда столбиком. */
 .awg3-actions {
   margin: var(--sp-2) 0 0;
@@ -3894,9 +3899,6 @@ body {
 }
 
 .selfhosted-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
   margin: var(--sp-3) 0 var(--sp-2);
 }
 
@@ -4047,6 +4049,17 @@ body {
    не тронуты, а оболочку с этим классом рисует только WideLayout.
    ============================================================ */
 @media (min-width: 1024px) {
+  .wide-shell .manage-anchors {
+    top: 0;
+    margin: 0 0 var(--sp-2);
+    padding: var(--sp-2) 0;
+  }
+
+  .wide-shell .manage-group,
+  .wide-shell .manage-anchor-target {
+    scroll-margin-top: 64px;
+  }
+
   .wide-shell {
     display: grid;
     grid-template-columns: 288px minmax(0, 1fr);
@@ -4456,10 +4469,6 @@ body {
     width: 100%;
   }
 
-  .wide-shell .incident-pair .restart-block {
-    margin-top: 0;
-  }
-
   /* Надзаголовок раздела и строка итога под ним (Парк): 4 px между ними,
      12 px до карточки. На телефоне строка прижата вплотную к карточке. */
   .wide-shell .section-head + .router-lastseen {
@@ -4708,14 +4717,12 @@ body {
     text-decoration: underline;
   }
 
-  .wide-shell .cabinet-secret-actions,
-  .wide-shell .selfhosted-actions {
+  .wide-shell .cabinet-secret-actions {
     justify-content: flex-end;
   }
 
   .wide-shell .selfhosted-actions .btn {
-    flex: none;
-    min-width: 160px;
+    min-width: 0;
   }
 
   .wide-shell .hrneo-actions .btn {
@@ -4773,4 +4780,246 @@ body {
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--sig);
+}
+
+/* Переключатель роутера в шапке (v0.50): имя кнопкой «Дача ▾». Длинный ник
+   режется многоточием, а не раздвигает шапку за край 360 px. */
+.router-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--sp-2) 0 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.router-switch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.router-switch svg {
+  flex: none;
+  color: var(--dim);
+}
+
+/* Лист выбора: поиск над вариантами, вариант -- имя слева, пилюля справа. */
+.sheet-search {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.sheet-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sheet-choice {
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: 0;
+  text-align: left;
+}
+
+.sheet-choice-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-choice-current {
+  border-color: var(--sig);
+}
+
+/* Свёртка (v0.50): заголовок и итог -- строкой-кнопкой, стрелка -- сама. */
+.fold > .fold-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  min-height: 44px;
+  padding: var(--sp-2) 0;
+  list-style: none;
+  cursor: pointer;
+}
+
+.fold > .fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > .fold-summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--dim);
+}
+
+.fold[open] > .fold-summary::after {
+  content: "▾";
+}
+
+.fold-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.fold-note {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+
+/* Заголовок слоя -- один (v0.50, общие правила): на телефоне, когда в теле
+   есть H1, полоса сверху несёт только «‹ назад» (на широком экране H1 прячет
+   правило широкой раскладки выше, там остаётся заголовок полосы). Слои без своего H1 («Починка»,
+   кабинет, мастер сайта) оставляют заголовок в полосе. Селекторы -- через
+   дочерние комбинаторы: вложенный слой («Добавить сайт» внутри «Маршрутов»)
+   свой заголовок сохраняет. */
+@media (max-width: 1023.98px) {
+  .overlay:has(> .overlay-head > .overlay-back):has(> .overlay-body > .screen > .screen-title, > .overlay-body > .screen > .router-header > .screen-title) > .overlay-head > .overlay-title {
+    display: none;
+  }
+}
+
+/* Парк (v0.50): входы наверх, карточки роутеров -- отдельными карточками. */
+.park-entries {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.nav-card-quiet {
+  background: var(--surf);
+  border-color: var(--line);
+  color: var(--ink);
+  white-space: normal;
+  line-height: var(--lh-tight);
+}
+
+.park-cards {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.park-card-line {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.park-card-line.park-update-warn { color: var(--warn); }
+.park-card-line.park-update-danger { color: var(--danger); }
+.park-card-line.park-update-ok { color: var(--ok); }
+.park-card-line.park-update-sig { color: var(--sig); }
+
+.park-more-body {
+  margin-top: var(--sp-2);
+}
+
+.park-warnings {
+  margin-bottom: var(--sp-2);
+}
+
+@media (min-width: 1100px) {
+  .park-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Заголовок QR -- обычным регистром (спека п. 2.7). */
+.awg3-qr-title {
+  margin: var(--sp-5) 0 var(--sp-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-transform: none;
+  color: var(--ink);
+}
+
+/* Чипы-якоря «Управления» (v0.50, спека п. 3.1): липнут под шапкой, едут
+   вбок, если не помещаются. Цель касания 40 px. */
+.manage-anchors {
+  position: sticky;
+  top: var(--app-header-h);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 calc(var(--sp-4) * -1) var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+}
+
+.manage-anchor {
+  flex: none;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Прокрутка к группе останавливается под шапкой и чипами. */
+.manage-group,
+.manage-anchor-target {
+  scroll-margin-top: calc(var(--app-header-h) + 64px);
+}
+
+.versions-empty .btn-wide {
+  margin-top: var(--sp-3);
+}
+
+/* Плитка-приглашение «Обмен за сутки»: текст и кнопка -- в одной карточке. */
+.traffic-invite .traffic-detail {
+  margin: 0;
+}
+
+.card > .btn-wide {
+  margin-top: var(--sp-3);
+}
+
+/* Строка адреса панели в «Сейчас» -- часть героя, а не цель касания. */
+.hero .panel-line {
+  min-height: 0;
+  padding: 0;
+}
+
+.fold-note-warn {
+  color: var(--warn);
+}
+
+.fold-note-danger {
+  color: var(--danger);
+}
+
+.traffic-invite .state {
+  margin: 0;
+  padding: 0;
+  text-align: left;
 }

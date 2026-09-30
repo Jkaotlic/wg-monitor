@@ -5,10 +5,10 @@ describe('formatBytes', () => {
   // Байты человек не читает: 3 200 000 000 -- это «3 ГБ», а не число с
   // девятью знаками.
   it('переводит байты в человеческие единицы', () => {
-    expect(formatBytes(0)).toBe('0 Б')
-    expect(formatBytes(900)).toBe('900 Б')
-    expect(formatBytes(1536)).toBe('1,5 КБ')
-    expect(formatBytes(3_200_000_000)).toBe('3,0 ГБ')
+    expect(formatBytes(0)).toBe('0 Б')
+    expect(formatBytes(900)).toBe('900 Б')
+    expect(formatBytes(1536)).toBe('1,5 КБ')
+    expect(formatBytes(3_200_000_000)).toBe('3,0 ГБ')
   })
 
   it('неизвестное остаётся неизвестным', () => {
@@ -28,8 +28,8 @@ describe('trafficSummary', () => {
   it('суммы приезжают от агента и печатаются как есть', () => {
     const s = trafficSummary(OUT)
     expect(s.known).toBe(true)
-    expect(s.rx).toBe('3,0 ГБ')
-    expect(s.tx).toBe('256,0 МБ')
+    expect(s.rx).toBe('3,0 ГБ')
+    expect(s.tx).toBe('256,0 МБ')
     expect(s.points).toBe(1)
   })
 
@@ -37,7 +37,7 @@ describe('trafficSummary', () => {
   it('пустой ряд отличается от отсутствия ответа', () => {
     const s = trafficSummary(JSON.stringify({ tunnel_id: 'awg11', rx_total: 0, tx_total: 0, points: [] }))
     expect(s.known).toBe(true)
-    expect(s.rx).toBe('0 Б')
+    expect(s.rx).toBe('0 Б')
     expect(s.empty).toBe(true)
   })
 

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   EMPTY_PARK,
-  fleetHeadline,
   backendRow,
   fleetRouterRows,
   notifyGapLines,
@@ -65,19 +64,10 @@ const FLEET = {
   watchdog: { alive: true, last_scan_at: '2026-09-12T09:59:00Z', offline_errors: 2, last_offline_error: 'forbidden', last_offline_error_router: 'Дача' },
 }
 
-describe('строка о парке', () => {
-  it('считает состояния, а не просто число роутеров', () => {
-    const line = fleetHeadline(FLEET)
-    expect(line).toContain('3')
-    expect(line).toContain('на связи')
-    expect(line).toContain('спит')
-    expect(line).toContain('тревог')
-  })
-
-  it('пустой парк -- это строка, а не пустой экран', () => {
-    expect(fleetHeadline({ totals: { routers: 0 }, routers: [] })).toBe(EMPTY_PARK)
+describe('пустой парк', () => {
+  it('строк нет, фраза для пустого экрана есть', () => {
     expect(fleetRouterRows({ routers: [] })).toEqual([])
-    expect(fleetHeadline(undefined)).toBe(EMPTY_PARK)
+    expect(EMPTY_PARK).toBe('В парке нет ни одного роутера.')
   })
 })
 
@@ -98,10 +88,10 @@ describe('строка о бэкенде', () => {
 describe('строки роутеров', () => {
   const rows = fleetRouterRows(FLEET)
 
-  it('состояние сказано словом, а не цветом', () => {
-    expect(rows[0].state).toBe('есть тревога')
-    expect(rows.find((r) => r.id === 2).state).toBe('спит')
-    expect(rows.find((r) => r.id === 3).state).toBe('работает')
+  it('состояние сказано словом той же пилюлей, что в «Мои роутеры»', () => {
+    expect(rows[0].pill.text).toBe('тревога')
+    expect(rows.find((r) => r.id === 2).pill.text).toMatch(/^спит/)
+    expect(rows.find((r) => r.id === 3).pill.text).toBe('в порядке')
   })
 
   it('сломанное сверху: тревога впереди спящего и живого', () => {

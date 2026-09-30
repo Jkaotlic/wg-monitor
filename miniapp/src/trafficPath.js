@@ -50,7 +50,7 @@ export function carrierKnown({ traffic, tunnels }) {
 // Мёртвый -- тот, кто должен работать, но не работает: тревога по нему или
 // поднятый с проваленной проверкой. Выключенный руками (stopped/disabled без
 // тревоги) не мёртв: трафик на него и не рассчитан.
-function isDead(t, incidents = []) {
+export function isDead(t, incidents = []) {
   if (incidents?.some((i) => i.check_name === `tunnel_${t.tunnel_id}`)) return true
   return isRunning(t) && t.status === 'fail'
 }
@@ -95,11 +95,39 @@ export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' })
   return alive.length > 1 ? { tunnel_id: '' } : undefined
 }
 
+// Запасной, который есть, но мёртв (тревога по нему или поднят с проваленной
+// проверкой), -- не то же, что «запасного нет» (v0.50, спека п. 1.3).
+// Несущий исключается по id и по имени, которое схема написала на ветке.
+// Выключенный руками мёртвым не считается: на него трафик и не рассчитан.
+export function deadReserveLine({ traffic, tunnels = [], incidents = [], via = '' }) {
+  const carrierID = traffic?.egress_tunnel_id
+  return tunnels.find((t) => t.tunnel_id !== carrierID && (t.name || t.tunnel_id) !== via && isDead(t, incidents))
+}
+
 // Слова строки резерва под схемой. Несущий молчит, а запасной жив -- «готов,
 // подхватит» было бы неправдой: у opkg-туннелей автофолбэка нет, политика
 // сама на запасной не уйдёт. Уводит трафик «Починить» (движок починки сам
 // роняет мёртвое звено, и политика переходит на резерв).
-export function backupCopy({ backupLine, carrierDown = false }) {
+// Шапка закрывает плитку резерва, только когда её тревога -- про сам упавший
+// запасной. Несущий упал, а запасной «поплыл» без своей тревоги -- шапка про
+// несущего, и о запасном не говорит ничего: плитка обязана.
+export function heroCoversReserve(deadReserve, headlineCheck) {
+  return deadReserve != null && headlineCheck === `tunnel_${deadReserve.tunnel_id}`
+}
+
+// deadReserve -- запасной, который упал; heroCovers -- шапка экрана уже
+// говорит о нём (тревога по VPN-туннелю). Тогда плитки нет вовсе: четыре
+// вердикта про одно и то же -- это шум, а не подробность.
+export function backupCopy({ backupLine, carrierDown = false, deadReserve = null, heroCovers = false }) {
+  if (!backupLine && deadReserve) {
+    if (heroCovers) return null
+    const dead = deadReserve.name ? `«${deadReserve.name}»` : ''
+    return {
+      title: dead ? `Запасной ${dead} не отвечает` : 'Запасной VPN-туннель не отвечает',
+      note: 'если основной ляжет, подхватить будет некому — почините запасной',
+      tone: 'warn',
+    }
+  }
   if (!backupLine) {
     return { title: 'Запасного VPN-туннеля нет', note: 'если VPN-туннель ляжет, обход блокировок пропадёт до починки', tone: 'warn' }
   }

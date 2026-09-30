@@ -1,6 +1,6 @@
 import { Chip } from '../ui/Chip.jsx'
 import { FleetCounts } from '../ui/FleetCounts.jsx'
-import { fleetSummary, batchProgress } from '../fleet.js'
+import { fleetSummary, fleetSummaryLine, batchProgress } from '../fleet.js'
 import { useFleetRecheck } from '../useFleetRecheck.js'
 
 // Роутер не выбран на широком экране: сводка вместо пустоты. Три числа --
@@ -18,7 +18,7 @@ export function FleetHome({ routers, onPick, isAdmin = false }) {
       <FleetCounts summary={s} />
 
       {s.broken.length === 0 ? (
-        <p class="state fleet-home-calm">Все {s.total} в порядке.</p>
+        <p class="state fleet-home-calm">{fleetSummaryLine(s)}</p>
       ) : (
         <section class="section">
           <h2 class="section-title">Требуют внимания</h2>

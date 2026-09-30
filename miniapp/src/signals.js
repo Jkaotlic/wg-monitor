@@ -1,4 +1,4 @@
-import { humanAge } from './labels.js'
+import { agoText, whenText } from './when.js'
 
 // Тексты v0.47. Словарь экрана: «VPN-туннель» полной формой; ни одна строка
 // не обещает «весь трафик через VPN» -- адрес всегда про ЭТОТ VPN-туннель.
@@ -12,7 +12,7 @@ export const SIGNAL_TEXTS = {
     'Без Ping-Check роутер переходит на резерв, только когда кабель отключён совсем. Если провайдер пропал, а кабель на месте, резерв не включится. Настройка: веб-панель роутера → Интернет → Проверка доступности.',
   wanUnsupported: 'эта версия awg-manager не сообщает о подключениях',
   stale: 'на момент последнего отчёта',
-  hooksTitle: 'Мгновенная реакция на смену линии',
+  hooksTitle: 'Мгновенная реакция, когда меняется VPN-туннель',
   logsUnsupported: 'Эта версия awg-manager журнал наружу не отдаёт.',
   logsDisabled: 'Журнал выключен в awg-manager.',
   logsEmpty: 'awg-manager ничего не писал за это время.',
@@ -41,7 +41,7 @@ export function exitLine(facts, tunnelID, { running = true, nowMs = Date.now() }
   const p = facts.exit?.tunnels?.[tunnelID]
   if (!p) return { value: running ? SIGNAL_TEXTS.notMeasured : SIGNAL_TEXTS.stopped, tone: 'muted', sub: '', warn: '' }
   const age = ageSec(p.at, nowMs)
-  const sub = age == null ? '' : `${humanAge(age)} назад`
+  const sub = age == null ? '' : agoText(age)
   if (p.failed || !p.vpn_ip) return { value: SIGNAL_TEXTS.failed, tone: 'muted', sub, warn: '' }
   if (p.changed === false) return { value: `${p.vpn_ip} — как напрямую`, tone: 'warn', sub, warn: SIGNAL_TEXTS.sameIP }
   const direct = p.direct_ip ? `, напрямую ${p.direct_ip}` : ''
@@ -84,7 +84,7 @@ export function hooksRow(facts, nowMs = Date.now()) {
   switch (h.state) {
     case 'installed': {
       const age = h.last_wake_at ? ageSec(h.last_wake_at, nowMs) : null
-      return { title, value: age == null ? 'включена' : `включена · последний раз ${humanAge(age)} назад`, tone: 'ok' }
+      return { title, value: age == null ? 'включена' : `включена · последний раз ${agoText(age)}`, tone: 'ok' }
     }
     case 'unsupported':
       return { title, value: 'прошивка не умеет — роутер опрашивается по расписанию', tone: 'muted' }
@@ -115,12 +115,6 @@ export function nativeDNSView(facts, tunnels = []) {
     }
   })
   return { rows, note: nd.stale ? SIGNAL_TEXTS.stale : '' }
-}
-
-function whenText(iso) {
-  const t = new Date(iso)
-  if (Number.isNaN(t.getTime())) return ''
-  return t.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 // Ответ команды awgm_logs (wire.AwgmLogs).

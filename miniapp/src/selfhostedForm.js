@@ -3,6 +3,8 @@
 // значений формы -- чтобы положить его в тело, когда он введён. Сервер его
 // наружу не отдаёт: вместо него password_set.
 
+import { pluralRu } from './labels.js'
+
 export const INSTANCE_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/
 
 export const INSTANCE_KEYS = [
@@ -26,6 +28,7 @@ export const INSTANCE_KEYS = [
 // withDefaults): пустое поле и означает их.
 export const SELFHOSTED_GROUPS = [
   {
+    key: 'endpoint',
     title: 'Адрес для клиентов',
     fields: [
       { key: 'label', label: 'Название', kind: 'text', placeholder: 'Амстердам' },
@@ -36,6 +39,8 @@ export const SELFHOSTED_GROUPS = [
     ],
   },
   {
+    key: 'paths',
+    fold: true,
     title: 'Контейнер и пути',
     note: 'Пустое поле — значение Amnezia по умолчанию.',
     fields: [
@@ -48,6 +53,8 @@ export const SELFHOSTED_GROUPS = [
     ],
   },
   {
+    key: 'ssh',
+    fold: true,
     title: 'SSH',
     note: 'Адрес SSH пустой — контейнер на той же машине, что и сервер wg-monitor; тогда пароль не нужен.',
     fields: [
@@ -58,6 +65,22 @@ export const SELFHOSTED_GROUPS = [
     ],
   },
 ]
+
+// Итог свёрнутой группы формы (v0.50, спека п. 3.2): что там сейчас, не
+// раскрывая. SSH -- «пользователь@адрес:порт» или «не задан»; пути -- сколько
+// полей заданы своими значениями.
+export function groupSummary(group, values) {
+  const v = (key) => String(values?.[key] ?? '').trim()
+  if (group?.key === 'ssh') {
+    if (!v('ssh_host')) return 'не задан — контейнер на этой машине'
+    return `${v('ssh_user') || 'root'}@${v('ssh_host')}:${v('ssh_port') || '22'}`
+  }
+  if (group?.key === 'paths') {
+    const n = group.fields.filter((f) => v(f.key)).length
+    return n ? `${n} ${pluralRu(n, 'поле задано', 'поля заданы', 'полей задано')}` : 'как у Amnezia по умолчанию'
+  }
+  return ''
+}
 
 // Плейсхолдер поля -- значение сервера по умолчанию из ответа списка
 // (defaults), если сервер его прислал; иначе зашитое. Пароля в defaults не

@@ -60,8 +60,11 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
     const tunnelsTile = [...root.querySelectorAll('.stat-grid > *')].find((n) => /VPN-туннели/i.test(n.textContent))
     expect(tunnelsTile.textContent).toMatch(/^VPN-туннели\s*1/i)
     expect(tunnelsTile.textContent).toContain('работает из 2')
-    expect(root.querySelector('.hero').textContent).toContain('всё работает, резерва нет')
-    expect(root.textContent).toContain('Запасного VPN-туннеля нет')
+    expect(root.querySelector('.hero').textContent).toContain('всё работает, запасной упал')
+    // v0.50: запасной есть, но упал, и шапка о нём говорит (тревога по
+    // vpn-nl) -- плитки «Запасного нет» нет, вердикт один.
+    expect(root.querySelector('.hero').textContent).toContain('Запасной «vpn-nl» не отвечает')
+    expect(root.textContent).not.toContain('Запасного VPN-туннеля нет')
     // Адрес панели -- строкой под именем роутера в шапке телефона.
     expect(root.querySelector('.hero .panel-line').textContent).toBe('awg.example.com')
     render(null, root)

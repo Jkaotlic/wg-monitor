@@ -10,9 +10,9 @@ describe('BUG 1: «всё работает» -- только по слову с�
   const tunnels = SNAP.events.tunnels
   const incidents = SNAP.incidents
 
-  it('reserve_only_alert=true -- «всё работает, резерва нет»', () => {
+  it('reserve_only_alert=true -- «всё работает, запасной упал»', () => {
     const h = routerHeadline({ router: ONLINE, traffic: WORK_TRAFFIC, incidents, tunnels, reserveOnlyAlert: true })
-    expect(h.tag).toBe('всё работает, резерва нет')
+    expect(h.tag).toBe('всё работает, запасной упал')
   })
 
   // Две политики: несущий одной жив, туннель ДРУГОЙ политики мёртв. Сервер

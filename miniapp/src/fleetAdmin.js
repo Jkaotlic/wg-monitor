@@ -8,36 +8,12 @@
 // срок ссылки приходят с сервера. Вторая копия сравнения версий разошлась бы
 // с первой, а второй текст про 12 часов -- с тем, что сказал бот.
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
+import { agoText } from './when.js'
 import { agentUpdateState, isAway } from './agentUpdate.js'
-import { isStale } from './staleness.js'
+import { isStale, reachStatus } from './staleness.js'
+import { fleetRow } from './fleet.js'
 
 export const EMPTY_PARK = 'В парке нет ни одного роутера.'
-
-// Состояние словом. Тот же словарь, что у бота: «работает» / «есть тревога» /
-// «молчит» / «спит».
-const STATE_WORD = {
-  alert: 'есть тревога',
-  offline: 'молчит',
-  sleeping: 'спит',
-  online: 'работает',
-}
-
-// Порядок -- по срочности: сломанное сверху.
-const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
-
-export function fleetHeadline(fleet) {
-  const totals = fleet?.totals ?? {}
-  const routers = totals.routers ?? 0
-  if (!routers) return EMPTY_PARK
-  const parts = [`${totals.online ?? 0} на связи`]
-  if (totals.sleeping) parts.push(`${totals.sleeping} спит`)
-  if (totals.offline) parts.push(`${totals.offline} молчит`)
-  if (totals.alerts) {
-    parts.push(`${totals.alerts} ${pluralRu(totals.alerts, 'с тревогой', 'с тревогами', 'с тревогами')}`)
-  }
-  const word = pluralRu(routers, 'роутер', 'роутера', 'роутеров')
-  return `${routers} ${word}: ${parts.join(', ')}.`
-}
 
 // Строка о бэкенде: своя версия и «доступна X», если вышла новее. Судит о
 // новизне сервер -- у него же лежит сравнение версий.
@@ -49,32 +25,59 @@ export function backendRow(fleet) {
   }
 }
 
-export function fleetRouterRows(fleet) {
+// Порядок карточек Парка (v0.50, спека п. 2.4): тревога → молчит → агент
+// отстаёт → остальные. Молчащая тревога -- среди молчащих (reachStatus):
+// пока нет связи, чинить её нечем.
+export function parkRank(router) {
+  if (router?.last_seen_age_sec == null) return 1
+  const s = reachStatus(router)
+  if (s === 'alert') return 0
+  if (s === 'offline' || s === 'sleeping') return 1
+  if (router?.agent_behind) return 2
+  return 3
+}
+
+// listRouters -- список /routers оболочки: пилюля карточки берётся из него,
+// чтобы Парк и «Мои роутеры» говорили одно слово (резерв, молчание).
+export function fleetRouterRows(fleet, listRouters = []) {
   const list = fleet?.routers ?? []
   const backendVersion = fleet?.backend?.version ?? ''
+  const byID = new Map((listRouters ?? []).map((x) => [x.id, x]))
   return [...list]
-    .sort((a, b) => {
-      const ua = URGENCY[a?.status] ?? 99
-      const ub = URGENCY[b?.status] ?? 99
-      if (ua !== ub) return ua - ub
-      return (a?.nickname ?? '').localeCompare(b?.nickname ?? '', 'ru')
-    })
+    .sort((a, b) => parkRank(a) - parkRank(b) || (a?.nickname ?? '').localeCompare(b?.nickname ?? '', 'ru'))
     .map((router) => ({
       id: router?.id,
       name: router?.nickname ?? '',
-      state: STATE_WORD[router?.status] ?? router?.status ?? '',
+      pill: fleetRow(byID.get(router?.id) ?? router).pill,
       sub: routerSub(router),
       versions: versionsLine(router, backendVersion),
-      // Готовая фраза сервера. Пустая строка -- это «обновлять нечего», а не
-      // «мы не знаем»: про незнание сервер говорит отдельно.
       hint: router?.update_hint ?? '',
-      // Обновление агента -- своим полем: у строки про него есть кнопки, и
-      // склеенное в строку версий «ставится vX» кнопкам не за что держаться.
       update: agentUpdateState(router),
       warning: router?.agent_update_warning ?? '',
       notify: notifySwitch(router),
       router,
     }))
+}
+
+// Одна строка под именем: где роутер (или что с ним) и что с агентом --
+// обновление, если оно в пути, иначе версия.
+export function parkCardLine(row, rv) {
+  const agent = row?.router?.agent_version ? `агент ${row.router.agent_version}` : ''
+  // Оживление в пути важнее версии: оно объясняет, почему роутер молчит.
+  const tail = rv?.text ? `оживление: ${rv.text}` : row?.update?.text || agent
+  return [row?.sub, tail].filter(Boolean).join(' · ')
+}
+
+// Тон строки карточки: оживление, иначе обновление агента. Красное и
+// жёлтое остаются красным и жёлтым, как на прежней карточке; приглушённое и
+// «всё хорошо» цвета не получают.
+export function parkCardTone(row, rv) {
+  const tone = rv?.text ? rv.tone : row?.update?.text ? row.update.tone : ''
+  return ['warn', 'danger', 'sig', 'ok'].includes(tone) ? tone : ''
+}
+
+export function warningFoldTitle(n) {
+  return `Что может помешать обновлению · ${n}`
 }
 
 function routerSub(router) {
@@ -91,7 +94,7 @@ function routerSub(router) {
   }
   if (age == null) return 'отчётов от него ещё не было'
   if (away) return `не на связи ${humanAge(age)}`
-  return `отчёт ${humanAge(age)} назад`
+  return `отчёт ${agoText(age)}`
 }
 
 // «агент X · бэкенд Y» стоят рядом намеренно: отставание видно глазом, без

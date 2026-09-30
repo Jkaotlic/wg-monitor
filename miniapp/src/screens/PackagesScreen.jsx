@@ -8,7 +8,8 @@ export function PackagesScreen({ routerID, routerName, asleep, onClose }) {
   return (
     <Overlay title="Пакеты по расписанию" backLabel="Управление" onBack={onClose}>
       <div class="screen">
-        <h1 class="screen-title">{routerName || 'Роутер'}</h1>
+        <h1 class="screen-title">Пакеты по расписанию</h1>
+        {routerName && <p class="router-lastseen">{routerName}</p>}
         {asleep && <p class="hint">Роутер сейчас не на связи — команды подождут его несколько минут.</p>}
         <PackagesCard kind="opkg" routerID={routerID} asleep={asleep} />
         <PackagesCard kind="clean" routerID={routerID} asleep={asleep} />

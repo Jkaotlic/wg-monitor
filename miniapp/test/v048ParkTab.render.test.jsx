@@ -54,7 +54,7 @@ function cleanup(root) {
 }
 
 // Админские массовые кнопки и Парк -- чего в «Моих роутерах» больше нет.
-const PARK_BUTTONS = ['Добавить роутер', 'Свои VPN-серверы', 'Проверить все', 'Аудит всех', 'Открыть в браузере']
+const PARK_BUTTONS = ['Добавить роутер', 'Свои VPN-серверы', 'Осмотреть все', 'Сверить версии у всех', 'Открыть в браузере']
 
 beforeEach(() => {
   setWide(false)
@@ -95,7 +95,7 @@ describe('v0.48: вкладка «Парк» на телефоне', () => {
   it('с главного экрана («Мои роутеры» без роутера) Парк достижим админу', async () => {
     mocks.session = { ok: true, is_admin: true, via: 'telegram' }
     const root = await mountAt('/miniapp/')
-    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Мои роутеры')
+    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Все роутеры')
     const park = button(root.querySelector('.tabbar'), 'Парк')
     expect(park).toBeTruthy()
     await act(async () => park.click())
@@ -142,7 +142,7 @@ describe('v0.48: ссылка на Парк', () => {
     mocks.session = { ok: true, is_admin: false, via: 'telegram' }
     const root = await mountAt('/miniapp/?tab=park')
     expect(root.querySelector('.stub-park')).toBe(null)
-    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Мои роутеры')
+    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Все роутеры')
     cleanup(root)
   })
 })

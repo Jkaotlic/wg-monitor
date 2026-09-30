@@ -33,7 +33,7 @@ export function routerContext(routers, routerID) {
 export function returnLabel(returnTo) {
   const to = normalizeReturn(returnTo)
   if (to === 'park') return 'Парк'
-  if (to === 'fleet') return 'Мои роутеры'
+  if (to === 'fleet') return 'Все роутеры'
   if (to === 'manage') return 'Управление'
   if (to === 'selfhosted') return 'Свои серверы'
   if (to === 'awg3panel') return 'Панель'
@@ -156,6 +156,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             backLabel={returnLabel(returnTo)}
             openSheet={openSheet}
             onClose={() => dispatch({ type: 'overlay', overlay: returnTo ?? 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
+            onOpenRouterTunnels={(id) => dispatch({ type: 'router', id, tab: 'tunnels' })}
             onEdit={(id) => dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: id, returnTo: 'awg3panel', returnParams: params } })}
           />
         )

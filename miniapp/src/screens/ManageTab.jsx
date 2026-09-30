@@ -16,7 +16,7 @@ import { AdminRepairSections, AdminSettingsSections, AdminDangerZone } from './R
 // последней. Админские куски -- слотами в родственные группы. Не-админу
 // слоты не передаются вовсе (null), а не пустыми компонентами: группа по
 // ним решает, есть ли что показывать, и пустой заголовок не рисует.
-export function ManageTab({ routerID, routerName = '', isAdmin = false, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
+export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, focusNonce = 0, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
   const { wide } = useContext(AppContext)
   const repairSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} /> : null
   const settingsSlot = isAdmin ? (
@@ -42,12 +42,15 @@ export function ManageTab({ routerID, routerName = '', isAdmin = false, asleep, 
     <div class="screen manage-tab">
       {/* На широком экране имя роутера уже стоит в шапке основной области. */}
       {!wide && <h1 class="screen-title">{routerName || 'Роутер'}</h1>}
-      <p class="router-lastseen">Панель, версии, проверки, обслуживание и доступы этого роутера.</p>
+      <p class="router-lastseen">Панель, версии, обслуживание и доступы этого роутера.</p>
       <SettingsSections
         routerID={routerID}
         routerName={routerName}
         asleep={asleep}
         openSheet={openSheet}
+        isAdmin={isAdmin}
+        focusGroup={focusGroup}
+        focusNonce={focusNonce}
         repairSlot={repairSlot}
         settingsSlot={settingsSlot}
         dangerSlot={dangerSlot}

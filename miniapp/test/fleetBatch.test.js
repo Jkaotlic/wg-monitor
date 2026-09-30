@@ -39,8 +39,8 @@ describe('кого опрашивать', () => {
   it('действия -- осмотр и аудит из белого списка', () => {
     expect(BATCH.doctor.action).toBe('router_doctor')
     expect(BATCH.audit.action).toBe('version_audit')
-    expect(BATCH.doctor.idle).toBe('Проверить все')
-    expect(BATCH.audit.idle).toBe('Аудит всех')
+    expect(BATCH.doctor.idle).toBe('Осмотреть все')
+    expect(BATCH.audit.idle).toBe('Сверить версии у всех')
   })
 })
 
@@ -353,7 +353,7 @@ describe('итог словами', () => {
         { id: 4, nickname: 'dacha', outcome: 'problems', problems: ['Прошивка роутера — доступна 4.3.0'] },
       ],
     })
-    expect(s.headline).toBe('Аудит: ответили 2 из 2, внимания требует 1.')
+    expect(s.headline).toBe('Сверка версий: ответили 2 из 2, внимания требует 1.')
     expect(s.lines).toEqual([
       { id: 4, text: '«dacha»: Прошивка роутера — доступна 4.3.0' },
       { id: 'skipped', text: 'Не на связи, пропущен: «car».' },

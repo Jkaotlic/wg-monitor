@@ -2,7 +2,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
 import { FleetFilterBar } from '../ui/FleetFilterBar.jsx'
-import { sortByUrgency, fleetRow, batchProgress } from '../fleet.js'
+import { sortByUrgency, fleetRow, fleetSummary, fleetSummaryLine, batchProgress } from '../fleet.js'
 import { emptyFilterText } from '../fleetFilter.js'
 import { useFleetFilter } from '../useFleetFilter.js'
 import { useFleetRecheck } from '../useFleetRecheck.js'
@@ -23,20 +23,15 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 // одном роутере: из него есть путь в Парк (нижняя панель).
 export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false }) {
   const all = sortByUrgency(routers).map(fleetRow)
-  const broken = all.filter((r) => r.pill.tone === 'danger').length
   const f = useFleetFilter(routers)
   const rows = f.view.visible.map(fleetRow)
   const { batch, recheckAll } = useFleetRecheck(routers)
 
   return (
-    <Overlay title="Мои роутеры" onBack={onClose} showBack={Boolean(onClose)}>
+    <Overlay title="Все роутеры" onBack={onClose} showBack={Boolean(onClose)}>
       <div class="screen">
-        <h1 class="screen-title">Мои роутеры</h1>
-        <p class="router-lastseen">
-          {broken === 0
-            ? `Все ${all.length} в порядке.`
-            : `Сломанное сверху: ${broken} из ${all.length} требуют внимания.`}
-        </p>
+        <h1 class="screen-title">Все роутеры</h1>
+        <p class="router-lastseen">{fleetSummaryLine(fleetSummary(routers))}</p>
 
         {all.length > 1 && (
           <FleetFilterBar

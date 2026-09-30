@@ -1,4 +1,4 @@
-import { initialNav, normalizeTab, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS } from './nav.js'
+import { initialNav, normalizeTab, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS, MANAGE_FOCUS } from './nav.js'
 
 // Адрес веб-управления -- то же, что deep-link из тревоги, плюс вкладка:
 // ?router=<id>&tab=<tab>&open=<overlay>. Лист подтверждения в адрес не
@@ -37,6 +37,7 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
   // уведомления открывает её, а не пустой экран.
   if (OVERLAY_TABS[open]) {
     state.tab = OVERLAY_TABS[open]
+    if (MANAGE_FOCUS[open]) state.manageFocus = MANAGE_FOCUS[open]
     return state
   }
   state.overlay = deepLinkOverlay(search ?? '', state)

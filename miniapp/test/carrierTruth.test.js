@@ -56,9 +56,9 @@ describe('реплей workrouter 18.09: агент назвал несущег�
     expect(s.path.latencyMs).toBe(117)
   })
 
-  it('заголовок: всё работает, резерва нет -- и называет тот же туннель, что схема', () => {
+  it('заголовок: всё работает, запасной упал -- и называет тот же туннель, что схема', () => {
     expect(s.headline.tone).toBe('warn')
-    expect(s.headline.tag).toBe('всё работает, резерва нет')
+    expect(s.headline.tag).toBe('всё работает, запасной упал')
     expect(s.headline.verdict).toContain('«vpn-hip»')
     expect(s.headline.verdict).toContain('«vpn-nl»')
     expect(s.headline.verdict).toMatch(/подхватить некому/)
@@ -110,7 +110,7 @@ describe('reserve_tunnel_ids -- omitempty', () => {
     const traffic = { ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
     const s = screen(traffic, true)
     expect(s.reserve).toBeUndefined()
-    expect(s.headline.tag).toBe('всё работает, резерва нет')
+    expect(s.headline.tag).toBe('всё работает, запасной упал')
   })
 })
 

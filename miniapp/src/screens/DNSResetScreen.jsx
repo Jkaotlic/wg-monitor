@@ -1,3 +1,4 @@
+import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { useCommand } from '../useCommand.js'
@@ -108,7 +109,8 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   return (
     <Overlay title="Сброс DNS" backLabel="Управление" onBack={onClose}>
       <div class="screen">
-        <h1 class="screen-title">{routerName || 'Роутер'}</h1>
+        <h1 class="screen-title">Сброс DNS</h1>
+        {routerName && <p class="router-lastseen">{routerName}</p>}
         {loadError && <p class="state state-error">{loadError}</p>}
         {settings && settings.role !== 'admin' && <p class="hint">{T.adminOnly}</p>}
         {settings && settings.role === 'admin' && !available && (
@@ -126,7 +128,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               </button>
               {preview.error && <p class="state state-error">{preview.error}</p>}
               {preview.result && preview.result.status !== 'ok' && (
-                <p class="state state-error">Роутер не показал предпросмотр: {preview.result.output || preview.result.status}</p>
+                <p class="state state-error">{agentReplyText(preview.result, 'Роутер не показал предпросмотр — попробуйте ещё раз через минуту.')}</p>
               )}
               {notAPreview && (
                 <p class="state state-error">

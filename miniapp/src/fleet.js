@@ -7,8 +7,10 @@
 // Список открывают, когда что-то сломалось, поэтому порядок -- по срочности,
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
 // человеку ничего не говорит, фраза говорит.
-import { humanAge, incidentWhatPlain } from './labels.js'
+import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
+import { agoText } from './when.js'
 import { isStale, reachStatus } from './staleness.js'
+import { localSheet } from './sheet.js'
 
 // Порядок -- по срочности, а не по id.
 const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
@@ -42,7 +44,7 @@ export function fleetRow(router) {
   } else if (status === 'alert') {
     pill = { tone: 'danger', text: 'тревога' }
   } else if (status === 'offline') {
-    pill = { tone: 'danger', text: `нет ответа ${humanAge(age)}` }
+    pill = { tone: 'danger', text: `молчит ${humanAge(age)}` }
   } else if (status === 'sleeping') {
     pill = { tone: 'warn', text: `спит ${humanAge(age)}` }
   } else {
@@ -60,7 +62,7 @@ export function fleetRow(router) {
   } else if (never) {
     sub = 'агент установлен, но отчётов от него не было'
   } else {
-    sub = `отчёт ${humanAge(age)} назад`
+    sub = `отчёт ${agoText(age)}`
   }
 
   return { id: router?.id, nickname: router?.nickname ?? '', pill, sub, panelURL: router?.panel_url ?? '' }
@@ -96,4 +98,49 @@ export function fleetSummary(routers = []) {
     if (b !== 'ok') out.broken.push(fleetRow(r))
   }
   return out
+}
+
+// Один словарь состояний парка (v0.50, спека п. 2.3): «в порядке»,
+// «тревога», «молчит» -- в плитках сводки, в строке «Мои роутеры», на
+// карточках Парка. Число с согласованием: «1 молчит», «2 молчат».
+export function stateCountLabel(kind, n) {
+  if (kind === 'ok') return 'в порядке'
+  if (kind === 'attention') return pluralRu(n, 'тревога', 'тревоги', 'тревог')
+  return pluralRu(n, 'молчит', 'молчат', 'молчат')
+}
+
+// Строка сводки -- одна на «Мои роутеры» и сводку широкого экрана.
+export function fleetSummaryLine(s) {
+  const total = s?.total ?? 0
+  if (!total) return 'Роутеров пока нет.'
+  if (!s.attention && !s.silent) return total === 1 ? 'Роутер в порядке.' : `Все ${total} в порядке.`
+  const parts = []
+  if (s.attention) parts.push(`${s.attention} ${stateCountLabel('attention', s.attention)}`)
+  if (s.silent) parts.push(`${s.silent} ${stateCountLabel('silent', s.silent)}`)
+  if (s.ok) parts.push(`${s.ok} ${stateCountLabel('ok', s.ok)}`)
+  return `${total} ${pluralRu(total, 'роутер', 'роутера', 'роутеров')}: ${parts.join(', ')}.`
+}
+
+// Лист быстрого выбора роутера из шапки (спека п. 2.6): по срочности, с той
+// же пилюлей, что в списке; поиск -- только когда роутеров больше шести.
+export function routerSwitchChoices(routers = [], currentID = null) {
+  const choices = sortByUrgency(routers).map((r) => {
+    const row = fleetRow(r)
+    return { value: r.id, label: row.nickname, pill: row.pill, current: r.id === currentID }
+  })
+  return { choices, search: routers.length > 6 }
+}
+
+export function routerSwitchSheet(routers, currentID, onPick) {
+  const { choices, search } = routerSwitchChoices(routers, currentID)
+  return localSheet({
+    title: 'Какой роутер открыть',
+    body: 'Откроется на той же вкладке.',
+    choices,
+    search,
+    perform: (_typed, _values, id) => {
+      onPick(id)
+      return null
+    },
+  })
 }

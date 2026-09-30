@@ -86,7 +86,7 @@ describe('«Пакеты по расписанию», CSS', () => {
   })
 
   it('кнопки переносятся, журнал не раздвигает страницу вбок', () => {
-    expect(rule(outside, '\n.packages-actions')).toMatch(/flex-wrap:\s*wrap/)
+    expect(rule(outside, '\n.action-row')).toMatch(/display:\s*grid/)
     expect(rule(outside, '\n.packages-log')).toMatch(/overflow-wrap:\s*anywhere/)
   })
 

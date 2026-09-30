@@ -51,7 +51,7 @@ export function unknownLine(reason, checkedAgo) {
     case 'no_snapshot':
       return 'Роутер ещё не рассказал про версии.'
     case 'agent_too_old':
-      return 'Агент на роутере старый и про модуль ядра не сообщает.'
+      return 'Версию модуля ядра роутер не сообщил.'
     default:
       return ''
   }
