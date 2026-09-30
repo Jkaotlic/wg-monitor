@@ -553,6 +553,18 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     cleanup(root)
   })
 
+  it('владелец (sendConf есть) выпускает с панели -- «Прислать .conf» не показывается', async () => {
+    mocks.role = 'owner'
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    const { root } = await mount()
+    await tab(root, 'Панели')
+    await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
+    await flush()
+    expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
+    expect(button(root, 'Прислать .conf в личку')).toBeUndefined()
+    cleanup(root)
+  })
+
   it('недоступная панель -- словами, без интерфейсов', async () => {
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: true, ifaces: [] }]
     const { root } = await mount()
