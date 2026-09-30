@@ -55,6 +55,7 @@ type View struct {
 	Lock         Lock
 	PausedUntil  time.Time
 	Readonly     bool
+	Issuers      []Issuer
 }
 
 func viewOf(inst Instance) View {
@@ -63,6 +64,7 @@ func viewOf(inst Instance) View {
 		PasswordSet: inst.Password != "", CertSet: inst.CertPEM != "" && inst.KeyPEM != "",
 		CertSubject: inst.CertSubject, CertNotAfter: inst.CertNotAfter,
 		Lock: inst.Lock, PausedUntil: inst.PausedUntil, Readonly: inst.Readonly,
+		Issuers: append([]Issuer(nil), inst.Issuers...),
 	}
 }
 
@@ -827,4 +829,131 @@ func TunnelName(instanceID, iface string) string {
 		out = out[:32]
 	}
 	return out
+}
+
+func (s *Service) editIssuers(id string, fn func([]Issuer) []Issuer) (View, error) {
+	id = normID(id)
+	unlock := s.lockInstance(id)
+	defer unlock()
+	var out View
+	err := s.update(func(st *Store) error {
+		for i := range st.Instances {
+			if st.Instances[i].ID == id {
+				st.Instances[i].Issuers = fn(st.Instances[i].Issuers)
+				out = viewOf(st.Instances[i])
+				return nil
+			}
+		}
+		return ErrInstanceNotFound
+	})
+	return out, err
+}
+
+func (s *Service) AddIssuer(id string, tg, by int64) (View, error) {
+	if tg <= 0 {
+		return View{}, &FieldError{Field: "telegram_user_id", Reason: "Нужен положительный числовой Telegram ID"}
+	}
+	v, err := s.editIssuers(id, func(list []Issuer) []Issuer {
+		for _, is := range list {
+			if is.TelegramUserID == tg {
+				return list
+			}
+		}
+		return append(list, Issuer{TelegramUserID: tg, GrantedBy: by, GrantedAt: s.opts.Now().UTC()})
+	})
+	if err == nil {
+		s.opts.Logger.Info("awg3-панель: выдан допуск к выпуску", "panel", normID(id), "tg", tg, "by", by)
+	}
+	return v, err
+}
+
+func (s *Service) RemoveIssuer(id string, tg int64) (View, error) {
+	v, err := s.editIssuers(id, func(list []Issuer) []Issuer {
+		out := list[:0:0]
+		for _, is := range list {
+			if is.TelegramUserID != tg {
+				out = append(out, is)
+			}
+		}
+		return out
+	})
+	if err == nil {
+		s.opts.Logger.Info("awg3-панель: допуск к выпуску снят", "panel", normID(id), "tg", tg)
+	}
+	return v, err
+}
+
+func (s *Service) IsIssuer(id string, tg int64) (bool, error) {
+	inst, err := s.find(normID(id))
+	if errors.Is(err, ErrInstanceNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, is := range inst.Issuers {
+		if is.TelegramUserID == tg {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type IssuablePanel struct {
+	ID          string
+	Label       string
+	Ifaces      []Iface
+	Unavailable bool
+}
+
+func (s *Service) IssuablePanels(ctx context.Context, tg int64, all bool) ([]IssuablePanel, error) {
+	s.storeMu.Lock()
+	st, err := LoadStore(s.path)
+	s.storeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	out := []IssuablePanel{}
+	for _, inst := range st.Instances {
+		if !inst.Enabled || inst.Readonly {
+			continue
+		}
+		granted := all
+		for _, is := range inst.Issuers {
+			granted = granted || is.TelegramUserID == tg
+		}
+		if !granted {
+			continue
+		}
+		p := IssuablePanel{ID: inst.ID, Label: inst.Label}
+		if list, err := s.ifacesFor(ctx, inst.ID); err != nil {
+			p.Unavailable = true
+		} else {
+			p.Ifaces = list
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// ifacesFor -- интерфейсы из кэша, иначе один GET /api/ifaces под замком панели.
+func (s *Service) ifacesFor(ctx context.Context, id string) ([]Iface, error) {
+	if list, ok := s.cachedIfacesFor(id); ok {
+		return list, nil
+	}
+	unlock := s.lockInstance(id)
+	defer unlock()
+	if list, ok := s.cachedIfacesFor(id); ok {
+		return list, nil
+	}
+	_, c, err := s.ready(id)
+	if err != nil {
+		return nil, err
+	}
+	list, err := c.Ifaces(ctx)
+	if err != nil {
+		return nil, s.trip(id, err)
+	}
+	s.putIfaces(id, list)
+	return list, nil
 }

@@ -736,3 +736,77 @@ func TestServerCertUntrustedLocksWithDistinctMessage(t *testing.T) {
 		t.Fatalf("замок: %+v", views[0])
 	}
 }
+
+func TestIssuersAddRemoveAndSurviveReload(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	v, err := e.s.AddIssuer("main", 555, 999)
+	if err != nil || len(v.Issuers) != 1 || v.Issuers[0].TelegramUserID != 555 || v.Issuers[0].GrantedBy != 999 {
+		t.Fatalf("%+v %v", v.Issuers, err)
+	}
+	if v, err = e.s.AddIssuer("main", 555, 999); err != nil || len(v.Issuers) != 1 {
+		t.Fatalf("повтор: %+v %v", v.Issuers, err)
+	}
+	s2 := NewService(e.path, e.opts)
+	if ok, err := s2.IsIssuer("main", 555); !ok || err != nil {
+		t.Fatalf("после перечитывания: %v %v", ok, err)
+	}
+	if v, err = s2.RemoveIssuer("main", 555); err != nil || len(v.Issuers) != 0 {
+		t.Fatalf("удаление: %+v %v", v.Issuers, err)
+	}
+	if _, err := e.s.AddIssuer("main", 0, 999); err == nil {
+		t.Fatal("ноль принят")
+	}
+	if e.p.TotalHits() != 0 {
+		t.Fatalf("допуск ходил в панель: %d", e.p.TotalHits())
+	}
+}
+
+func TestDeletePanelDropsIssuers(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	if _, err := e.s.AddIssuer("main", 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.s.Delete("main"); err != nil {
+		t.Fatal(err)
+	}
+	e.create(t, "main")
+	if ok, _ := e.s.IsIssuer("main", 555); ok {
+		t.Fatal("допуск пережил удаление панели")
+	}
+}
+
+func TestIssuablePanelsOnlyGranted(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	e.create(t, "other")
+	if _, err := e.s.AddIssuer("main", 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.s.IssuablePanels(context.Background(), 555, false)
+	if err != nil || len(got) != 1 || got[0].ID != "main" || len(got[0].Ifaces) == 0 || got[0].Unavailable {
+		t.Fatalf("%+v %v", got, err)
+	}
+	all, err := e.s.IssuablePanels(context.Background(), 999, true)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("админ: %+v %v", all, err)
+	}
+	if none, _ := e.s.IssuablePanels(context.Background(), 777, false); len(none) != 0 {
+		t.Fatalf("чужой: %+v", none)
+	}
+}
+
+func TestIssuablePanelsSkipsBrokenPanel(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	if _, err := e.s.AddIssuer("main", 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	e.s.forget("main") // кэш интерфейсов пуст -- панель спросят заново
+	e.p.SetOverride(respond429)
+	got, err := e.s.IssuablePanels(context.Background(), 555, false)
+	if err != nil || len(got) != 1 || !got[0].Unavailable || len(got[0].Ifaces) != 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
