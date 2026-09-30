@@ -155,7 +155,8 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			miniappVPNIssueSelfHosted(d, w, r, telegramUserID, routerID, req)
 			return
 		}
-		// awg3-панель (v0.49) -- тоже общий сервер парка: только админ.
+		// awg3-панель (v0.49) -- общий сервер парка: право решает
+		// miniappCanIssueAwg3 (админ, либо владелец/оператор с допуском к панели, v0.51).
 		if provider == "awg3panel" {
 			miniappVPNIssueAwg3(d, w, r, telegramUserID, routerID, req)
 			return

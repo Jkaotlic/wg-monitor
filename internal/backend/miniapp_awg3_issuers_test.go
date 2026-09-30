@@ -41,6 +41,7 @@ func TestAwg3IssuerMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			callsBefore := len(env.awg3.routerCalls)
 			list := env.do(t, tc.who, http.MethodGet, "/v1/miniapp/routers/{id}/vpn/awg3", "")
 			listed := list.Code == http.StatusOK && strings.Contains(list.Body.String(), `"id":"main"`)
 			issue := env.do(t, tc.who, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`)
@@ -50,6 +51,9 @@ func TestAwg3IssuerMatrix(t *testing.T) {
 			}
 			if !tc.allowed && issue.Code != http.StatusNotFound {
 				t.Fatalf("отказ не 404: %d", issue.Code)
+			}
+			if !tc.allowed && len(env.awg3.routerCalls) != callsBefore {
+				t.Fatalf("отказанному ушёл запрос в панель: %v", env.awg3.routerCalls)
 			}
 		})
 	}
@@ -110,5 +114,43 @@ func TestAwg3DeviceStillAdminOnlyForIssuer(t *testing.T) {
 	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/awg3panels/main/device", `{"iface":"awg1","name":"phone"}`)
 	if rec.Code != http.StatusNotFound || len(env.awg3.devices) != 0 {
 		t.Fatalf("устройство допущенному: %d", rec.Code)
+	}
+}
+
+const issueMainBody = `{"provider":"awg3panel","instance_id":"main","iface":"awg1"}`
+
+// Допуск к панели other не открывает main.
+func TestAwg3GrantToOtherPanelDoesNotOpenMain(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.awg3.issuable = append(issuableMain(), awg3panel.IssuablePanel{ID: "other", Label: "Other", Ifaces: []awg3panel.Iface{{ID: "awg1", Title: "X", Interface: "awg1"}}})
+	env.awg3.routerConf = awg3panel.RouterConfig{Conf: []byte("[Interface]\nPrivateKey = X\n"), PeerID: "p1"}
+	_, _ = env.awg3.AddIssuer("other", cabOperator, cabAdmin)
+	calls := len(env.awg3.routerCalls)
+	if rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", issueMainBody); rec.Code != http.StatusNotFound {
+		t.Fatalf("выпуск main: %d %s", rec.Code, rec.Body.String())
+	}
+	list := env.do(t, cabOperator, http.MethodGet, "/v1/miniapp/routers/{id}/vpn/awg3", "")
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), `"id":"main"`) || !strings.Contains(list.Body.String(), `"id":"other"`) {
+		t.Fatalf("список: %d %s", list.Code, list.Body.String())
+	}
+	if len(env.awg3.routerCalls) != calls {
+		t.Fatalf("запрос в панель: %v", env.awg3.routerCalls)
+	}
+}
+
+// Снятие допуска закрывает выпуск сразу.
+func TestAwg3RevokedIssuerLosesAccess(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.awg3.issuable = issuableMain()
+	env.awg3.routerConf = awg3panel.RouterConfig{Conf: []byte("[Interface]\nPrivateKey = X\n"), PeerID: "p1"}
+	_, _ = env.awg3.AddIssuer("main", cabOperator, cabAdmin)
+	if rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", issueMainBody); rec.Code != http.StatusAccepted {
+		t.Fatalf("до снятия: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := env.awg3.RemoveIssuer("main", cabOperator); err != nil {
+		t.Fatal(err)
+	}
+	if rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", issueMainBody); rec.Code != http.StatusNotFound {
+		t.Fatalf("после снятия: %d %s", rec.Code, rec.Body.String())
 	}
 }

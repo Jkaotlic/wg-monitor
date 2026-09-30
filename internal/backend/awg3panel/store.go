@@ -31,10 +31,6 @@ const (
 	LockServerCert Lock = "server_cert_rejected"
 )
 
-// Instance -- одна панель. Password, CertPEM, KeyPEM -- секреты: из пакета
-// наружу уходит только View, печать структуры -- «[скрыто]». Состояние
-// предохранителя (Lock, PausedUntil) и Readonly живут на диске: перезапуск
-// бэкенда не должен дарить панели ещё одну неудачу.
 // Issuer -- человек, которому админ разрешил выпускать конфиги с этой панели
 // на свои роутеры (v0.51). Секретом не является, но уходит наружу только
 // админу -- в View.
@@ -44,6 +40,10 @@ type Issuer struct {
 	GrantedAt      time.Time `json:"at"`
 }
 
+// Instance -- одна панель. Password, CertPEM, KeyPEM -- секреты: из пакета
+// наружу уходит только View, печать структуры -- «[скрыто]». Состояние
+// предохранителя (Lock, PausedUntil) и Readonly живут на диске: перезапуск
+// бэкенда не должен дарить панели ещё одну неудачу.
 type Instance struct {
 	ID           string    `json:"id"`
 	Label        string    `json:"label"`
