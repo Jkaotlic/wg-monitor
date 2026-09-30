@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -422,5 +423,18 @@ func TestDNSReset_PreviewTrimsLikeRealReset(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Fatalf("предпросмотр ничего не выполняет: %q", f.calls)
+	}
+}
+
+func TestDNSReset_ReadErrorDoesNotLeakConfig(t *testing.T) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("authentication wpa-psk ns3 SECRET-PSK\n" + strings.Repeat("z\n", 300)), errors.New("exit status 1")
+	}
+	status, out := dnsReset(context.Background(), exec, DNSResetOpts{DryRun: true})
+	if status != "err" || strings.Contains(out, "SECRET") {
+		t.Fatalf("%s %q", status, out)
+	}
+	if !strings.Contains(out, "read running-config failed: exit status 1") {
+		t.Fatalf("нет текста ошибки чтения: %q", out)
 	}
 }

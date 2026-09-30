@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   issueReply: null,
   result: null,
   sendReply: null,
+  awg3: [],
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -61,6 +62,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
       log('issue', id, provider, option, instance)
       if (mocks.issueReply === 'hang') return new Promise(() => {})
       return reply(mocks.issueReply, { cmd_id: 'c1', tunnel_name: 'amnezia_de' })
+    },
+    fetchAwg3Issuable: (id) => {
+      log('awg3list', id)
+      return Promise.resolve({ panels: structuredClone(mocks.awg3) })
+    },
+    issueAwg3ToRouter: (id, panel, iface) => {
+      log('awg3issue', id, panel, iface)
+      return Promise.resolve({ cmd_id: 'c1', tunnel_name: 'a3-main_awg1' })
     },
     fetchCommandResult: () => Promise.resolve(mocks.result ?? { status: 'ok', output: '' }),
     sendVPNConf: (id, body) => {
@@ -181,6 +190,7 @@ beforeEach(() => {
   mocks.issueReply = null
   mocks.result = null
   mocks.sendReply = null
+  mocks.awg3 = []
 })
 
 describe('кабинет роутера: вкладки и ключи', () => {
@@ -519,3 +529,46 @@ describe('кабинет роутера: права, загрузка, пере�
   })
 })
 
+describe('кабинет роутера: вкладка «Панели» (v0.51)', () => {
+  it('вкладки «Панели» нет, когда сервер не дал панелей', async () => {
+    const { root } = await mount()
+    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).not.toContain('Панели')
+    cleanup(root)
+  })
+
+  it('допущенный видит панель и выпускает через issueAwg3ToRouter, без «Прислать .conf»', async () => {
+    mocks.role = 'operator'
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    const { root } = await mount()
+    await tab(root, 'Панели')
+    await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
+    await flush()
+    expect(button(root, 'Прислать .conf в личку')).toBeUndefined()
+    await act(async () => button(root, 'Выпустить и положить на роутер').click())
+    await flush()
+    await flush()
+    expect(calls('awg3issue')).toEqual([['awg3issue', 7, 'main', 'awg1']])
+    expect(calls('issue')).toEqual([])
+    cleanup(root)
+  })
+
+  it('владелец (sendConf есть) выпускает с панели -- «Прислать .conf» не показывается', async () => {
+    mocks.role = 'owner'
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    const { root } = await mount()
+    await tab(root, 'Панели')
+    await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
+    await flush()
+    expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
+    expect(button(root, 'Прислать .conf в личку')).toBeUndefined()
+    cleanup(root)
+  })
+
+  it('недоступная панель -- словами, без интерфейсов', async () => {
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: true, ifaces: [] }]
+    const { root } = await mount()
+    await tab(root, 'Панели')
+    expect(root.textContent).toContain('Панель сейчас не отвечает')
+    cleanup(root)
+  })
+})

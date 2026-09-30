@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 	"golang.org/x/sync/errgroup"
 )
+
+// FirmwareServerSilent -- начало ошибки, когда KeenOS ответил без блока
+// local: сервер обновлений Keenetic не ответил. Мини-апп ищет эту строку.
+const FirmwareServerSilent = "firmware server did not answer"
 
 // GetFirmwareStatus runs `ndmc -c "components list"` and parses the output
 // into a wire.FirmwareStatus. The command returns two YAML-ish blocks:
@@ -18,21 +24,147 @@ import (
 func GetFirmwareStatus(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus, error) {
 	out, err := exec(ctx, "ndmc", "-c", "components list")
 	if err != nil {
+		if ex := keenetic.Excerpt(string(out), 3); ex != "" {
+			return wire.FirmwareStatus{}, fmt.Errorf("ndmc components list: %w: %s", err, ex)
+		}
 		return wire.FirmwareStatus{}, fmt.Errorf("ndmc components list: %w", err)
 	}
-	return parseComponentsList(string(out))
+	fs, perr := parseComponentsList(string(out))
+	if perr != nil {
+		ex := keenetic.Excerpt(string(out), 3)
+		if strings.Contains(string(out), "firmware:") && !strings.Contains(string(out), "local:") {
+			return fs, fmt.Errorf("%s: %s", FirmwareServerSilent, ex)
+		}
+		return fs, fmt.Errorf("%w: %s", perr, ex)
+	}
+	return fs, nil
 }
 
-// InstallFirmware kicks the KeeneticOS firmware install via
-// `ndmc -c "components commit"`. After the call returns successfully the
-// router will reboot within seconds — the agent will lose connection long
-// before any follow-up work can complete; the caller should not expect
-// further status updates from this command.
-func InstallFirmware(ctx context.Context, exec ExecFunc) error {
-	if _, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
-		return fmt.Errorf("ndmc components commit: %w", err)
+const (
+	FirmwareStartedMsg     = "firmware download started; router will reboot when done"
+	FirmwareUnconfirmedMsg = "firmware install kicked; not confirmed by router log"
+	FirmwareInterrupted    = "firmware update interrupted"
+)
+
+// firmwareWatchCfg -- сколько раз и как часто смотреть журнал после commit.
+// По умолчанию 10 раз по 2 с = 20 с; тесты подменяют sleep.
+type firmwareWatchCfg struct {
+	total int
+	sleep func(ctx context.Context) error
+}
+
+var firmwareWatch = firmwareWatchCfg{
+	total: 10,
+	sleep: func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil
+		}
+	},
+}
+
+// Терминальный провал -- только строка Components:: с этими метками. Строка
+// Core::Ndss сама по себе (например, «cannot connect») провалом не считается:
+// она лишь объясняет провал Components::.
+var firmwareFailMarks = []string{"update interrupted", "request failed"}
+
+// InstallFirmware запускает установку прошивки и сверяется с журналом.
+// `components commit` лишь ставит фоновую задачу и сразу отвечает кодом 0
+// (прод 30.09, workrouter: «ok» за 18 мс, а в журнале -- update interrupted),
+// поэтому судим по новым строкам Components:: и Core::Ndss в `show log`.
+// Окно наблюдения отрабатывается целиком: провал возвращается, как только
+// замечен, иначе -- «начато», если была строка «update task started».
+func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
+	before := map[string]bool{}
+	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
+	for _, l := range beforeLines {
+		before[l] = true
 	}
-	return nil
+	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
+		if ex := keenetic.ErrExcerpt(string(out)); ex != "" {
+			return "", fmt.Errorf("ndmc components commit: %w: %s", err, ex)
+		}
+		return "", fmt.Errorf("ndmc components commit: %w", err)
+	}
+	if beforeErr != nil {
+		// Без снимка «до» старые строки не отличить от новых.
+		return FirmwareUnconfirmedMsg, nil
+	}
+	started := false
+	for i := 0; i < firmwareWatch.total; i++ {
+		if err := firmwareWatch.sleep(ctx); err != nil {
+			break
+		}
+		lines, err := firmwareLogLines(ctx, exec)
+		if err != nil {
+			continue // неудачный взгляд = «новых строк нет»
+		}
+		var fresh []string
+		for _, l := range lines {
+			if !before[l] {
+				fresh = append(fresh, l)
+			}
+		}
+		failed := false
+		for _, l := range fresh {
+			started = started || strings.Contains(l, "update task started")
+			if isComponentsFailure(l) {
+				failed = true
+			}
+		}
+		if failed {
+			var msgs []string
+			for _, l := range fresh {
+				if isComponentsFailure(l) || strings.Contains(l, "Core::Ndss") {
+					msgs = append(msgs, logMessage(l))
+				}
+			}
+			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(msgs, " | "))
+		}
+	}
+	if started {
+		return FirmwareStartedMsg, nil
+	}
+	return FirmwareUnconfirmedMsg, nil
+}
+
+func isComponentsFailure(l string) bool {
+	if !strings.Contains(l, "Components::") {
+		return false
+	}
+	for _, m := range firmwareFailMarks {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// firmwareLogLines -- строки журнала про компоненты и Ndss, в порядке журнала
+// (от него зависит понятный текст ошибки).
+func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
+	out, err := exec(ctx, "ndmc", "-c", "show log 40")
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for _, raw := range strings.Split(string(out), "\n") {
+		l := strings.TrimSpace(strings.ReplaceAll(raw, "\x1b[K", ""))
+		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") {
+			lines = append(lines, l)
+		}
+	}
+	return lines, nil
+}
+
+// logMessage -- «E [Sep 30 11:31:54] ndm: Core::Ndss: …» → «Core::Ndss: …».
+func logMessage(l string) string {
+	if i := strings.Index(l, "] "); i >= 0 {
+		l = l[i+2:]
+	}
+	return strings.TrimPrefix(l, "ndm: ")
 }
 
 // parseComponentsList is the format parser, separated for table-driven tests.

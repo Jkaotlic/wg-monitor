@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { issueVPNConfig, fetchCommandResult, sendVPNConf } from '../api.js'
+import { issueVPNConfig, issueAwg3ToRouter, fetchCommandResult, sendVPNConf } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { agentReplyText } from '../errorText.js'
 import {
@@ -46,7 +46,10 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
     setSendNotice('')
     const args = issueArgs(pending)
     try {
-      const { cmd_id: id, tunnel_name: name } = await issueVPNConfig(routerID, args.provider, args.option, args.instanceID)
+      const { cmd_id: id, tunnel_name: name } =
+        pending.provider === 'awg3panel'
+          ? await issueAwg3ToRouter(routerID, args.instanceID, args.option)
+          : await issueVPNConfig(routerID, args.provider, args.option, args.instanceID)
       const until = Date.now() + (asleep ? 6 * 60_000 : 90_000)
       while (alive.current && Date.now() < until) {
         const res = await fetchCommandResult(routerID, id, 10)
@@ -95,7 +98,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
     )
   }
 
-  const own = pending.provider === 'selfhosted'
+  const own = pending.provider === 'selfhosted' || pending.provider === 'awg3panel'
 
   return (
     <Section title="Что произойдёт">
@@ -122,7 +125,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
           {phase !== 'done' ? 'Выпустить и положить на роутер' : failed ? 'Попробовать ещё раз' : 'Выпустить ещё раз'}
         </button>
       )}
-      {perms.sendConf && phase !== 'running' && (
+      {perms.sendConf && pending.provider !== 'awg3panel' && phase !== 'running' && (
         <button type="button" class="btn btn-ghost btn-wide cabinet-send" onClick={sendConf}>
           Прислать .conf в личку
         </button>

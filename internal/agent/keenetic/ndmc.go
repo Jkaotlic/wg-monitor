@@ -34,6 +34,9 @@ func (n NDMC) bin() string {
 func (n NDMC) Show(ctx context.Context, subcmd string) (string, error) {
 	out, err := n.Runner.Run(ctx, n.bin(), "-c", "show "+subcmd)
 	if err != nil {
+		if ex := ErrExcerpt(out); ex != "" {
+			return "", fmt.Errorf("ndmc show %s: %w: %s", subcmd, err, ex)
+		}
 		return "", fmt.Errorf("ndmc show %s: %w", subcmd, err)
 	}
 	return out, nil

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deviceReply: null,
   routerReply: null,
   waitReply: { status: 'ok' },
+  issuerErr: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -47,6 +48,15 @@ vi.mock('../src/api.js', async (importOriginal) => {
     issueAwg3Device: (id, iface, name) => {
       log('device', id, iface, name)
       return reply(mocks.deviceReply, { name, address: '10.66.0.9/32', qr_png_base64: 'iVBORw0KGgo=', dm: 'sent' })
+    },
+    addAwg3Issuer: (id, tg) => {
+      log('issuer-add', id, tg)
+      if (mocks.issuerErr) return Promise.reject(mocks.issuerErr)
+      return Promise.resolve({ panel: { ...mocks.page.panel, issuers: [{ telegram_user_id: tg, granted_at: '2026-09-30T10:00:00Z' }] } })
+    },
+    removeAwg3Issuer: (id, tg) => {
+      log('issuer-del', id, tg)
+      return Promise.resolve({ panel: { ...mocks.page.panel, issuers: [] } })
     },
     issueAwg3ToRouter: (routerID, id, iface) => {
       log('router', routerID, id, iface)
@@ -147,6 +157,7 @@ beforeEach(() => {
   mocks.deleteReply = null
   mocks.page = structuredClone(PAGE)
   mocks.peersErr = null
+  mocks.issuerErr = null
   mocks.deviceReply = null
   mocks.routerReply = null
   mocks.waitReply = { status: 'ok' }
@@ -556,5 +567,66 @@ describe('экран панели', () => {
     expect(root.querySelector('img.awg3-qr')).toBeTruthy()
     expect(root.querySelector('.awg3-banner')).toBeTruthy()
     render(null, host)
+  })
+})
+
+describe('экран панели: допуск к выпуску (v0.51)', () => {
+  it('ID «0» отвергается без вызова API; 555 добавляется, ✖ убирает', async () => {
+    const { root } = await mountPanel()
+    const input = root.querySelector('#awg3-issuer-id')
+    const type = async (v) => {
+      await act(async () => {
+        input.value = v
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    const submitForm = async () => {
+      await act(async () => root.querySelector('.access-add-row').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+      await flush()
+    }
+    await type('0')
+    await submitForm()
+    expect(root.textContent).toContain('Введите положительный числовой ID')
+    expect(calls('issuer-add')).toEqual([])
+    await type('555')
+    await submitForm()
+    expect(calls('issuer-add')).toEqual([['issuer-add', 'main', 555]])
+    expect(root.querySelector('.access-id').textContent).toBe('555')
+    await act(async () => root.querySelector('[aria-label="Убрать 555"]').click())
+    await flush()
+    expect(calls('issuer-del')).toEqual([['issuer-del', 'main', 555]])
+    expect(root.querySelector('.access-id')).toBeNull()
+  })
+
+  async function addIssuer(root, v) {
+    const input = root.querySelector('#awg3-issuer-id')
+    await act(async () => {
+      input.value = v
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => root.querySelector('.access-add-row').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await flush()
+  }
+
+  it('16 цифр отвергаются без вызова API', async () => {
+    const { root } = await mountPanel()
+    await addIssuer(root, '1234567890123456')
+    expect(root.textContent).toContain('Введите положительный числовой ID')
+    expect(calls('issuer-add')).toEqual([])
+  })
+
+  it('отказ сервера показывается его русской фразой', async () => {
+    const { root } = await mountPanel()
+    mocks.issuerErr = new ApiError(404, 'awg3_not_found', 'x', 'Панель не найдена')
+    await addIssuer(root, '555')
+    expect(root.textContent).toContain('Панель не найдена')
+    expect(root.textContent).not.toContain('Не получилось сохранить')
+  })
+
+  it('без фразы сервера -- общий текст', async () => {
+    const { root } = await mountPanel()
+    mocks.issuerErr = new Error('boom')
+    await addIssuer(root, '555')
+    expect(root.textContent).toContain('Не получилось сохранить')
   })
 })

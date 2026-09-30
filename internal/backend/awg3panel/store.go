@@ -31,6 +31,15 @@ const (
 	LockServerCert Lock = "server_cert_rejected"
 )
 
+// Issuer -- человек, которому админ разрешил выпускать конфиги с этой панели
+// на свои роутеры (v0.51). Секретом не является, но уходит наружу только
+// админу -- в View.
+type Issuer struct {
+	TelegramUserID int64     `json:"tg"`
+	GrantedBy      int64     `json:"by"`
+	GrantedAt      time.Time `json:"at"`
+}
+
 // Instance -- одна панель. Password, CertPEM, KeyPEM -- секреты: из пакета
 // наружу уходит только View, печать структуры -- «[скрыто]». Состояние
 // предохранителя (Lock, PausedUntil) и Readonly живут на диске: перезапуск
@@ -49,6 +58,7 @@ type Instance struct {
 	Lock         Lock      `json:"lock,omitempty"`
 	PausedUntil  time.Time `json:"paused_until,omitzero"`
 	Readonly     bool      `json:"readonly,omitempty"`
+	Issuers      []Issuer  `json:"issuers,omitempty"`
 }
 
 func (Instance) String() string       { return hiddenValue }

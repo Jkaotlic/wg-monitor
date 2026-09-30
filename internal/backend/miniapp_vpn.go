@@ -155,7 +155,8 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			miniappVPNIssueSelfHosted(d, w, r, telegramUserID, routerID, req)
 			return
 		}
-		// awg3-панель (v0.49) -- тоже общий сервер парка: только админ.
+		// awg3-панель (v0.49) -- общий сервер парка: право решает
+		// miniappCanIssueAwg3 (админ, либо владелец/оператор с допуском к панели, v0.51).
 		if provider == "awg3panel" {
 			miniappVPNIssueAwg3(d, w, r, telegramUserID, routerID, req)
 			return
@@ -269,17 +270,21 @@ func miniappVPNIssueSelfHosted(d Deps, w http.ResponseWriter, r *http.Request, t
 
 // miniappVPNIssueAwg3 -- выпуск с awg3-панели на роутер (спека v0.49, решение
 // 7): пир «wgmon-<ник>» уже есть -- его конфиг заново, нет -- новый пир.
-// Только админ. Происхождение туннеля не пишется -- как у своего сервера.
+// Админ или допущенный к панели владелец/оператор роутера (v0.51). Происхождение туннеля не пишется -- как у своего сервера.
 func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser, routerID int64, req miniappVPNIssueReq) {
-	if !miniappIsAdmin(tgUser, d.TelegramAdminUserID) {
-		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
-		return
-	}
 	if d.Awg3Panels == nil {
+		if !miniappIsAdmin(tgUser, d.TelegramAdminUserID) {
+			writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
+			return
+		}
 		writeMiniappCabinetError(w, http.StatusServiceUnavailable, "awg3_not_configured")
 		return
 	}
 	instID := strings.ToLower(strings.TrimSpace(req.InstanceID))
+	if !miniappCanIssueAwg3(d, tgUser, routerID, instID) {
+		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
+		return
+	}
 	if instID == "" {
 		writeMiniappCabinetError(w, http.StatusBadRequest, "missing_instance")
 		return
@@ -311,7 +316,7 @@ func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser,
 	}
 	miniappCabinetLogger(d).Info("miniapp vpn config issued",
 		"nickname", u.Nickname, "user_id", u.ID, "provider", "awg3panel", "panel", instID, "iface", iface,
-		"peer_id", rc.PeerID, "reused", rc.Reused, "cmd_id", cmdID)
+		"peer_id", rc.PeerID, "reused", rc.Reused, "by_tg", tgUser, "cmd_id", cmdID)
 	writeMiniappCabinetJSON(w, http.StatusAccepted, miniappVPNIssueResp{CmdID: cmdID, TunnelName: tunnelName})
 }
 

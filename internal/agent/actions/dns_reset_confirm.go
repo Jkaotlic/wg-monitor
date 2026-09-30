@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 )
 
 // dnsLineKept -- оставляем ли строку конфига нетронутой. Прежде всего это свой
@@ -122,7 +124,11 @@ func confirmDNSReferenceApplied(ctx context.Context, exec ExecFunc, b *strings.B
 	b.WriteString("\nподтверждение по факту:\n")
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
-		fmt.Fprintf(b, "  ✗ конфиг не перечитан: %v — применение НЕ подтверждено\n", err)
+		if ex := keenetic.ErrExcerpt(string(rc)); ex != "" {
+			fmt.Fprintf(b, "  ✗ конфиг не перечитан: %v: %s — применение НЕ подтверждено\n", err, ex)
+		} else {
+			fmt.Fprintf(b, "  ✗ конфиг не перечитан: %v — применение НЕ подтверждено\n", err)
+		}
 		return 1
 	}
 	present := make(map[string]bool)

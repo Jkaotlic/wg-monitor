@@ -59,6 +59,7 @@ var miniappCabinetTexts = map[string]string{
 	"invalid_field":             "Поле заполнено неверно",
 	"missing_iface":             "Не выбран интерфейс панели",
 	"awg3_not_configured":       "Панели awg3 на этом сервере не настроены",
+	"bad_issuer_id":             "Нужен положительный числовой Telegram ID",
 	"awg3_not_found":            "Панель не найдена — обновите экран",
 	"awg3_exists":               "Панель с таким коротким именем уже есть",
 	"awg3_disabled":             "Панель выключена — включите её в настройках панели",

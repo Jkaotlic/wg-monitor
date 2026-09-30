@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted } from '../api.js'
+import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted, fetchAwg3Issuable } from '../api.js'
 import { cabinetTabs, pickTab, cabinetPerms, secretRows, VPN_PROVIDER, CABINET_TEXTS } from '../cabinetKeys.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { SegmentTabs } from '../ui/SegmentTabs.jsx'
 import { CabinetSecrets } from './CabinetSecrets.jsx'
 import { CabinetOptions } from './CabinetOptions.jsx'
+import { CabinetAwg3 } from './CabinetAwg3.jsx'
 import { CabinetSelfhosted } from './CabinetSelfhosted.jsx'
 import { CabinetIssue } from './CabinetIssue.jsx'
 
@@ -21,6 +22,8 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [role, setRole] = useState('')
   const [instances, setInstances] = useState(null)
   const [instancesError, setInstancesError] = useState('')
+  // Панели awg3, с которых можно выпустить на этот роутер (null -- грузятся).
+  const [awg3Panels, setAwg3Panels] = useState(null)
   const [tab, setTab] = useState('amnezia')
   const [pending, setPending] = useState(null)
   const [notice, setNotice] = useState('')
@@ -59,6 +62,15 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         // Кабинеты не настроены -- состояние сервера, и он сам его называет.
         setLoadError(err?.code === 'cabinets_not_configured' && err.serverMessage ? err.serverMessage : CABINET_TEXTS.loadError)
       })
+    // Ошибка списка = «панелей нет»: у кого нет допуска, тот вкладку и не
+    // должен видеть.
+    fetchAwg3Issuable(routerID)
+      .then((resp) => {
+        if (alive.current) setAwg3Panels(resp?.panels ?? [])
+      })
+      .catch(() => {
+        if (alive.current) setAwg3Panels([])
+      })
     fetchVPNAccounts(routerID)
       .then((resp) => {
         if (!alive.current) return
@@ -75,6 +87,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     setCabinets(null)
     setAccounts(null)
     setInstances(null)
+    setAwg3Panels(null)
     setPending(null)
     setNotice('')
     setRole('')
@@ -116,7 +129,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     load()
   }
 
-  const tabs = cabinetTabs(cabinets)
+  const tabs = cabinetTabs(cabinets, awg3Panels)
   const current = pickTab(tabs, tab)
   const perms = cabinetPerms(role)
   const title = routerName ? `${CABINET_TEXTS.title} «${routerName}»` : CABINET_TEXTS.title
@@ -144,7 +157,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         />
       )
     }
-    const rows = current === 'selfhosted' ? [] : secretRows(cabinets, current)
+    const rows = current === 'selfhosted' || current === 'awg3' ? [] : secretRows(cabinets, current)
     return (
       <>
         <SegmentTabs
@@ -161,7 +174,9 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
             {notice}
           </p>
         )}
-        {current === 'selfhosted' ? (
+        {current === 'awg3' ? (
+          <CabinetAwg3 panels={awg3Panels} onPick={setPending} />
+        ) : current === 'selfhosted' ? (
           <CabinetSelfhosted instances={instances} error={instancesError} onPick={setPending} />
         ) : (
           <>

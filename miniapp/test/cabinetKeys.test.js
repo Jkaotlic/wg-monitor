@@ -255,3 +255,17 @@ describe('тексты не отправляют в бота', () => {
     expect(all).not.toMatch(/боту|в боте/i)
   })
 })
+
+describe('панели awg3 (v0.51)', () => {
+  it('вкладка «Панели» -- только когда сервер дал хоть одну панель', () => {
+    expect(cabinetTabs({}, []).map((t) => t.id)).toEqual(['amnezia', 'hidemy'])
+    expect(cabinetTabs({}, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'awg3'])
+    expect(cabinetTabs({ selfhosted: { available: true } }, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'selfhosted', 'awg3'])
+  })
+
+  it('выпуск с панели: аргументы и объяснение', () => {
+    const pending = { provider: 'awg3panel', title: 'Панель «Main»', instanceID: 'main', option: { id: 'awg1', label: 'Нидерланды', note: '' } }
+    expect(issueArgs(pending)).toEqual({ provider: 'awg3panel', option: 'awg1', instanceID: 'main' })
+    expect(issueExplain(pending)).toContain('Панель выдаст конфиг этого роутера')
+  })
+})

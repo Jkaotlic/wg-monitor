@@ -124,3 +124,14 @@ func TestValidateInstance(t *testing.T) {
 		t.Fatal("правило id")
 	}
 }
+
+func TestLoadStoreWithoutIssuers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), DefaultStoreName)
+	if err := os.WriteFile(path, []byte(`{"version":1,"instances":[{"id":"main","label":"M","enabled":true}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadStore(path)
+	if err != nil || len(st.Instances) != 1 || st.Instances[0].Issuers != nil {
+		t.Fatalf("%+v %v", st, err)
+	}
+}

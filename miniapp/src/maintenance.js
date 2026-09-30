@@ -22,6 +22,12 @@ export const MAINT_TEXTS = {
   hrneoMissing: 'HydraRoute Neo на роутере не установлен.',
   rebootBanner: 'Сменился модуль ядра AmneziaWG — VPN-туннели поднимутся после перезагрузки роутера.',
   rebootForbidden: 'Перезагрузка с роутера запрещена в настройках агента.',
+  firmwareNoServer: 'Роутер не смог связаться с сервером обновлений Keenetic — прошивка не поставлена. Проверьте, что у роутера есть интернет не через VPN, и попробуйте ещё раз.',
+  firmwareInterrupted: 'Роутер прервал обновление прошивки — она не поставлена.',
+  firmwareStarted: 'Роутер скачивает прошивку и перезагрузится сам, когда она встанет.',
+  firmwareUnconfirmed: 'Команда на установку отдана, но роутер её не подтвердил. Проверьте версию прошивки через несколько минут.',
+  firmwareStatusNoServer: 'Роутер не получил ответ от сервера обновлений Keenetic — доступную версию сейчас не узнать.',
+  firmwareStatusFailed: 'Роутер не ответил на вопрос о прошивке — попробуйте ещё раз.',
   firmwareForbidden: 'Установка прошивки запрещена в настройках агента.',
   busy: 'На роутере уже идёт обновление пакетов — дождитесь, пока оно закончится.',
   noSpace: 'Не хватит места для пакетов Entware — освободите место на накопителе роутера и повторите.',
@@ -296,6 +302,15 @@ export function refusalFromResult(result) {
   return null
 }
 
+// firmwareStatusErrorText -- ответ агента на firmware_status словами.
+// Маркеры -- internal/agent/actions/maintenance.go (FirmwareServerSilent).
+export function firmwareStatusErrorText(result) {
+  if (!result || result.status === 'ok') return ''
+  const out = String(result.output ?? '')
+  if (out.startsWith('firmware server did not answer') || /Core::Ndss|cannot connect to the server/.test(out)) return MAINT_TEXTS.firmwareStatusNoServer
+  return MAINT_TEXTS.firmwareStatusFailed
+}
+
 const MAINT_ACTIONS = new Set(['awgm_update', 'hrneo_update', 'opkg_upgrade', 'opkg_feed_disable', 'service_restart', 'firmware_install'])
 
 // maintenanceOutcomeLabel -- итог на листе для действий обслуживания; для
@@ -325,7 +340,14 @@ export function maintenanceOutcomeLabel(action, result, args = {}) {
       // "ndmc components commit: exit status 1").
       const refusal = refusalFromResult(result)
       if (refusal) return refusal.text
-      return result?.status === 'ok' ? 'Роутер ставит прошивку и перезагрузится.' : 'Не удалось поставить прошивку.'
+      const out = String(result?.output ?? '')
+      if (result?.status !== 'ok') {
+        if (out.startsWith('firmware update interrupted')) {
+          return /cannot connect|request failed/i.test(out) ? MAINT_TEXTS.firmwareNoServer : MAINT_TEXTS.firmwareInterrupted
+        }
+        return 'Не удалось поставить прошивку.'
+      }
+      return out.startsWith('firmware download started') ? MAINT_TEXTS.firmwareStarted : MAINT_TEXTS.firmwareUnconfirmed
     }
     default:
       return ''

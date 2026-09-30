@@ -9,7 +9,7 @@ export const CABINET_KINDS = ['amnezia', 'hidemy']
 // сломало бы уже открытые у людей приложения.
 export const VPN_PROVIDER = { amnezia: 'amnezia', hidemy: 'hidemyname', selfhosted: 'selfhosted' }
 
-export function cabinetTabs(cabinets) {
+export function cabinetTabs(cabinets, awg3Panels = []) {
   const tabs = [
     { id: 'amnezia', title: 'Amnezia' },
     { id: 'hidemy', title: 'HideMy' },
@@ -17,6 +17,8 @@ export function cabinetTabs(cabinets) {
   // Свой сервер -- только админу, и решает это сервер: available приходит
   // true только ему. Любое другое значение -- вкладки нет.
   if (cabinets?.selfhosted?.available === true) tabs.push({ id: 'selfhosted', title: 'Свой сервер' })
+  // Панели -- тем, кому сервер их отдал (админ или допущенный, v0.51).
+  if ((awg3Panels ?? []).length > 0) tabs.push({ id: 'awg3', title: 'Панели' })
   return tabs
 }
 
@@ -175,6 +177,9 @@ export function revokeErrorText(err) {
 const ISSUE_BASE = 'через приложение он не проходит. На роутере появится новый VPN-туннель; прежние остаются на месте.'
 
 export function issueExplain(pending) {
+  if (pending?.provider === 'awg3panel') {
+    return `Панель выдаст конфиг этого роутера (один на роутер: повторный выпуск отдаёт тот же) и сервер сразу положит его на роутер — ${ISSUE_BASE}`
+  }
   const base =
     pending?.provider === 'selfhosted'
       ? `Сервер создаст на «${pending.option.label}» нового клиента и сразу отдаст конфиг роутеру — ${ISSUE_BASE}`
@@ -185,6 +190,9 @@ export function issueExplain(pending) {
 // Свой сервер выбирается целиком -- «варианта» внутри него нет, поэтому и
 // option, и instance -- id сервера (сверка С7/С8 с частью 1).
 export function issueArgs(pending) {
+  if (pending?.provider === 'awg3panel') {
+    return { provider: 'awg3panel', option: String(pending.option.id), instanceID: String(pending.instanceID) }
+  }
   const own = pending?.provider === 'selfhosted'
   return {
     provider: pending?.provider ?? '',
