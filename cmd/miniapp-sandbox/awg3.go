@@ -94,7 +94,11 @@ func newSandboxAwg3(dir, p12Out string) (*sandboxAwg3, error) {
 		p         *awg3paneltest.Panel
 		mut       func(*awg3panel.Instance)
 	}{
-		{"main", "Main (Амстердам)", mainPanel, nil},
+		// Допуск v0.51: оператор песочницы (tg-user по умолчанию 4242) выпускает
+		// с main на свои роутеры -- вкладка «Панели» у не-админа.
+		{"main", "Main (Амстердам)", mainPanel, func(i *awg3panel.Instance) {
+			i.Issuers = []awg3panel.Issuer{{TelegramUserID: 4242, GrantedAt: time.Now().UTC()}}
+		}},
 		// nl2 засевается readonly в хранилище сразу: настоящий сервис узнаёт
 		// readonly только по первому 405 от панели, а у поддельной readonly-
 		// панели маршрутов мутации нет вовсе -- взять 405 неоткуда. Экран
