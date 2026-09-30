@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -29,6 +30,10 @@ type Awg3Panels interface {
 	Peers(ctx context.Context, id, iface string) (awg3panel.Page, error)
 	IssueDevice(ctx context.Context, id, iface, name string) (awg3panel.Issued, error)
 	ConfigForRouter(ctx context.Context, id, iface, nickname string) (awg3panel.RouterConfig, error)
+	AddIssuer(id string, tg, by int64) (awg3panel.View, error)
+	RemoveIssuer(id string, tg int64) (awg3panel.View, error)
+	IsIssuer(id string, tg int64) (bool, error)
+	IssuablePanels(ctx context.Context, tg int64, all bool) ([]awg3panel.IssuablePanel, error)
 }
 
 var _ Awg3Panels = (*awg3panel.Service)(nil)
@@ -37,18 +42,24 @@ var _ Awg3Panels = (*awg3panel.Service)(nil)
 const miniappAwg3MaxBody = 128 << 10
 
 type miniappAwg3Panel struct {
-	ID           string `json:"id"`
-	Label        string `json:"label"`
-	BaseURL      string `json:"base_url"`
-	User         string `json:"user"`
-	Enabled      bool   `json:"enabled"`
-	PasswordSet  bool   `json:"password_set"`
-	CertSet      bool   `json:"cert_set"`
-	CertSubject  string `json:"cert_subject"`
-	CertNotAfter string `json:"cert_not_after,omitempty"`
-	State        string `json:"state"`
-	PausedUntil  string `json:"paused_until,omitempty"`
-	Readonly     bool   `json:"readonly"`
+	ID           string              `json:"id"`
+	Label        string              `json:"label"`
+	BaseURL      string              `json:"base_url"`
+	User         string              `json:"user"`
+	Enabled      bool                `json:"enabled"`
+	PasswordSet  bool                `json:"password_set"`
+	CertSet      bool                `json:"cert_set"`
+	CertSubject  string              `json:"cert_subject"`
+	CertNotAfter string              `json:"cert_not_after,omitempty"`
+	State        string              `json:"state"`
+	PausedUntil  string              `json:"paused_until,omitempty"`
+	Readonly     bool                `json:"readonly"`
+	Issuers      []miniappAwg3Issuer `json:"issuers"`
+}
+
+type miniappAwg3Issuer struct {
+	TelegramUserID int64  `json:"telegram_user_id"`
+	GrantedAt      string `json:"granted_at,omitempty"`
 }
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -60,6 +71,14 @@ func miniappAwg3View(v awg3panel.View, now time.Time) miniappAwg3Panel {
 	}
 	if !v.CertNotAfter.IsZero() {
 		out.CertNotAfter = rfc3339(v.CertNotAfter)
+	}
+	out.Issuers = make([]miniappAwg3Issuer, 0, len(v.Issuers))
+	for _, is := range v.Issuers {
+		row := miniappAwg3Issuer{TelegramUserID: is.TelegramUserID}
+		if !is.GrantedAt.IsZero() {
+			row.GrantedAt = rfc3339(is.GrantedAt)
+		}
+		out.Issuers = append(out.Issuers, row)
 	}
 	switch {
 	case !v.Enabled:
@@ -585,4 +604,123 @@ func miniappAwg3SendDevice(d Deps, r *http.Request, tgUser int64, panelID string
 		return "sent_no_qr"
 	}
 	return "sent"
+}
+
+// miniappCanIssueAwg3 -- единственная проверка выпуска с панели на роутер:
+// ею пользуются и выпуск, и список вариантов (v0.51). Админ -- всегда;
+// остальные -- роль на роутере И допуск к панели.
+func miniappCanIssueAwg3(d Deps, tg, routerID int64, panel string) bool {
+	if !miniappRouterAllowed(d, tg, routerID) {
+		return false
+	}
+	if miniappIsAdmin(tg, d.TelegramAdminUserID) {
+		return true
+	}
+	if d.Awg3Panels == nil {
+		return false
+	}
+	ok, err := d.Awg3Panels.IsIssuer(panel, tg)
+	return err == nil && ok
+}
+
+type miniappAwg3IssuableIface struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type miniappAwg3Issuable struct {
+	ID          string                     `json:"id"`
+	Label       string                     `json:"label"`
+	Unavailable bool                       `json:"unavailable"`
+	Ifaces      []miniappAwg3IssuableIface `json:"ifaces"`
+}
+
+// miniappAwg3IssuableHandler -- панели, с которых нажавший может выпустить
+// конфиг на ЭТОТ роутер. Отбор -- той же miniappCanIssueAwg3, что у выпуска.
+func miniappAwg3IssuableHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tg, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok || !miniappRouterAllowed(d, tg, routerID) {
+			writeMiniappCabinetError(w, http.StatusNotFound, "not_found")
+			return
+		}
+		resp := struct {
+			Panels []miniappAwg3Issuable `json:"panels"`
+		}{Panels: []miniappAwg3Issuable{}}
+		if d.Awg3Panels == nil {
+			writeMiniappCabinetJSON(w, http.StatusOK, resp)
+			return
+		}
+		list, err := d.Awg3Panels.IssuablePanels(r.Context(), tg, miniappIsAdmin(tg, d.TelegramAdminUserID))
+		if err != nil {
+			writeMiniappAwg3Error(d, w, "панели для выпуска", err)
+			return
+		}
+		for _, p := range list {
+			if !miniappCanIssueAwg3(d, tg, routerID, p.ID) {
+				continue
+			}
+			row := miniappAwg3Issuable{ID: p.ID, Label: p.Label, Unavailable: p.Unavailable, Ifaces: []miniappAwg3IssuableIface{}}
+			for _, i := range p.Ifaces {
+				row.Ifaces = append(row.Ifaces, miniappAwg3IssuableIface{ID: i.ID, Title: i.Title})
+			}
+			resp.Panels = append(resp.Panels, row)
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeMiniappCabinetJSON(w, http.StatusOK, resp)
+	}
+}
+
+func miniappAwg3AddIssuerHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !miniappAwg3Gate(d, w, r) {
+			return
+		}
+		id, ok := miniappAwg3PathID(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			TelegramUserID int64 `json:"telegram_user_id"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || body.TelegramUserID <= 0 {
+			writeMiniappCabinetError(w, http.StatusBadRequest, "bad_issuer_id")
+			return
+		}
+		admin, _ := miniappUserFromContext(r.Context())
+		v, err := d.Awg3Panels.AddIssuer(id, body.TelegramUserID, admin)
+		if err != nil {
+			writeMiniappAwg3Error(d, w, "допуск", err)
+			return
+		}
+		writeMiniappCabinetJSON(w, http.StatusOK, struct {
+			Panel miniappAwg3Panel `json:"panel"`
+		}{miniappAwg3View(v, time.Now())})
+	}
+}
+
+func miniappAwg3RemoveIssuerHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !miniappAwg3Gate(d, w, r) {
+			return
+		}
+		id, ok := miniappAwg3PathID(w, r)
+		if !ok {
+			return
+		}
+		tg, err := strconv.ParseInt(r.PathValue("tgid"), 10, 64)
+		if err != nil || tg <= 0 {
+			writeMiniappCabinetError(w, http.StatusBadRequest, "bad_issuer_id")
+			return
+		}
+		v, err := d.Awg3Panels.RemoveIssuer(id, tg)
+		if err != nil {
+			writeMiniappAwg3Error(d, w, "допуск", err)
+			return
+		}
+		writeMiniappCabinetJSON(w, http.StatusOK, struct {
+			Panel miniappAwg3Panel `json:"panel"`
+		}{miniappAwg3View(v, time.Now())})
+	}
 }

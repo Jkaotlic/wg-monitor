@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,24 +20,27 @@ import (
 )
 
 type fakeAwg3 struct {
-	mu          sync.Mutex
-	views       []awg3panel.View
-	created     []awg3panel.Input
-	updated     []awg3panel.Input
-	deleted     []string
-	check       awg3panel.CheckResult
-	updateCheck *awg3panel.CheckResult
-	createErr   error
-	updateErr   error
-	page        awg3panel.Page
-	pageErr     error
-	pageCalls   []string
-	issued      awg3panel.Issued
-	issueErr    error
-	devices     []string
-	routerConf  awg3panel.RouterConfig
-	routerErr   error
-	routerCalls []string
+	mu            sync.Mutex
+	views         []awg3panel.View
+	created       []awg3panel.Input
+	updated       []awg3panel.Input
+	deleted       []string
+	check         awg3panel.CheckResult
+	updateCheck   *awg3panel.CheckResult
+	createErr     error
+	updateErr     error
+	page          awg3panel.Page
+	pageErr       error
+	pageCalls     []string
+	issued        awg3panel.Issued
+	issueErr      error
+	devices       []string
+	routerConf    awg3panel.RouterConfig
+	routerErr     error
+	routerCalls   []string
+	issuers       map[string][]int64
+	issuable      []awg3panel.IssuablePanel
+	issuableCalls []string
 }
 
 var _ Awg3Panels = (*fakeAwg3)(nil)
@@ -766,4 +770,74 @@ func TestMiniappAwg3RoutersTrimsNickname(t *testing.T) {
 	if len(resp.Peers) != 1 || resp.Peers[0].Router == nil || resp.Peers[0].Router.ID != spacedID || resp.Peers[0].Router.Nickname != "router-spacey" {
 		t.Fatalf("ярлык не сматчился при пробелах в нике роутера: %+v", resp.Peers)
 	}
+}
+
+func (f *fakeAwg3) AddIssuer(id string, tg, by int64) (awg3panel.View, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if tg <= 0 {
+		return awg3panel.View{}, &awg3panel.FieldError{Field: "telegram_user_id", Reason: "Нужен положительный числовой Telegram ID"}
+	}
+	if f.issuers == nil {
+		f.issuers = map[string][]int64{}
+	}
+	for _, x := range f.issuers[id] {
+		if x == tg {
+			return f.viewLocked(id), nil
+		}
+	}
+	f.issuers[id] = append(f.issuers[id], tg)
+	return f.viewLocked(id), nil
+}
+
+func (f *fakeAwg3) RemoveIssuer(id string, tg int64) (awg3panel.View, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []int64{}
+	for _, x := range f.issuers[id] {
+		if x != tg {
+			out = append(out, x)
+		}
+	}
+	if f.issuers == nil {
+		f.issuers = map[string][]int64{}
+	}
+	f.issuers[id] = out
+	return f.viewLocked(id), nil
+}
+
+func (f *fakeAwg3) IsIssuer(id string, tg int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.issuers[id] {
+		if x == tg {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeAwg3) IssuablePanels(_ context.Context, tg int64, all bool) ([]awg3panel.IssuablePanel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.issuableCalls = append(f.issuableCalls, fmt.Sprintf("%d|%v", tg, all))
+	out := []awg3panel.IssuablePanel{}
+	for _, p := range f.issuable {
+		ok := all
+		for _, x := range f.issuers[p.ID] {
+			ok = ok || x == tg
+		}
+		if ok {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeAwg3) viewLocked(id string) awg3panel.View {
+	v := awg3panel.View{ID: id, Label: "Main", BaseURL: "https://198.51.100.7:9443", User: "admin", Enabled: true, PasswordSet: true, CertSet: true}
+	for _, x := range f.issuers[id] {
+		v.Issuers = append(v.Issuers, awg3panel.Issuer{TelegramUserID: x, GrantedBy: cabAdmin})
+	}
+	return v
 }
