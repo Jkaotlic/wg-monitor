@@ -54,7 +54,9 @@ function withoutFocus(state) {
 }
 
 function withFocus(state, focus) {
-  return focus ? { ...state, manageFocus: focus } : state
+  // manageFocusSeq растёт при каждой постановке и переживает снятие фокуса:
+  // повторный переход в ту же группу -- новое значение, экран раскрывает её снова.
+  return focus ? { ...state, manageFocus: focus, manageFocusSeq: (state.manageFocusSeq ?? 0) + 1 } : state
 }
 
 // Старый возврат слоёв парка «в Обслуживание» ведёт теперь к списку роутеров:

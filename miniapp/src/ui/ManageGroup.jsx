@@ -6,10 +6,10 @@ import { Fold } from './Fold.jsx'
 // Пустая группа -- ни одного видимого раздела по правам роли -- не рисуется
 // вовсе: заголовок «Починить» без единой кнопки под ним выглядел бы как
 // поломка.
-export function ManageGroup({ id, title, note, open, onToggle, children }) {
+export function ManageGroup({ id, title, note, noteTone, open, onToggle, children }) {
   if (toChildArray(children).length === 0) return null
   return (
-    <Fold id={id} class="manage-group" title={title} note={note} open={open} onToggle={onToggle} titleTag="h2" titleClass="manage-group-title">
+    <Fold id={id} class="manage-group" title={title} note={note} noteTone={noteTone} open={open} onToggle={onToggle} titleTag="h2" titleClass="manage-group-title">
       {children}
     </Fold>
   )

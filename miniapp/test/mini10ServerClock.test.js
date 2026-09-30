@@ -28,7 +28,7 @@ describe('MINI-10', () => {
     const rows = checkRows({ checks: CHECKS, tunnels: [], router: { status: 'online' }, nowMs: phoneNow })
     const v = rows.find((r) => r.key === 'dns').value
     expect(v).not.toContain('назад')
-    expect(v).toMatch(/^измерено (сегодня|вчера|\d{1,2} [а-я]{3}( \d{4})?), \d\d:\d\d$/)
+    expect(v).toMatch(/^измерено \d{1,2} [а-я]{3}( \d{4})?, \d\d:\d\d$/)
   })
 })
 
@@ -36,7 +36,7 @@ describe('MINI-10: «последний раз смотрели» в настр�
   it('время словами, а не возраст по часам телефона', async () => {
     const { checkedAtText, unknownLine } = await import('../src/versions.js')
     const text = checkedAtText('2026-09-27T09:05:00Z')
-    expect(text).toMatch(/^(сегодня|вчера|\d{1,2} [а-я]{3}( \d{4})?), \d\d:\d\d$/)
+    expect(text).toMatch(/^27 сен( \d{4})?, \d\d:\d\d$/)
     expect(checkedAtText(undefined)).toBe('')
     expect(unknownLine('upstream_unavailable', text)).toContain(`последний раз смотрели ${text}`)
   })

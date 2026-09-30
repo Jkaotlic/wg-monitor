@@ -45,10 +45,12 @@ export function trafficSummary(output) {
 // «Обмен за сутки» (v0.50, спека п. 3.6): до ответа роутера -- одна
 // плитка-приглашение, а не «неизвестно / неизвестно»; после -- два числа без
 // служебного «точек в ряду».
-export function trafficView(summary, { busy = false } = {}) {
+export function trafficView(summary, { busy = false, error = '' } = {}) {
   if (summary?.known) {
     return { invite: false, rx: summary.rx, tx: summary.tx, note: summary.empty ? 'за сутки ничего' : 'роутер посчитал сам', button: busy ? 'Считаем…' : 'Пересчитать' }
   }
+  // Ошибка -- внутри плитки, с одной кнопкой «Повторить» на одно действие.
+  if (error && !busy) return { invite: true, error: true, text: error, button: 'Повторить' }
   return {
     invite: true,
     text: busy ? 'Роутер считает, сколько прошло через VPN-туннель за сутки…' : 'Сколько прошло через VPN-туннель за сутки, роутер посчитает по запросу.',

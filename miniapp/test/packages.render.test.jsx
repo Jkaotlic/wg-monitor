@@ -185,14 +185,15 @@ describe('проводка экрана', () => {
 })
 
 describe('v0.50: ряд действий и 24 ч (спека п. 3.3)', () => {
-  it('время -- текстом ЧЧ:ММ, без AM/PM; кнопки -- общий ряд; лаймов на экране нет', async () => {
+  it('время -- текстом ЧЧ:ММ, без AM/PM; кнопки -- общий ряд; одна лаймовая -- «Включить» в первой карточке', async () => {
     const root = await mount()
     const input = root.querySelector('#packages-time-opkg')
     expect(input.type).toBe('text')
     expect(input.getAttribute('inputmode')).toBe('numeric')
     expect(input.value).toBe('04:30')
     expect(card(root, 'opkg').querySelector('.packages-actions').className).toContain('action-row')
-    expect(root.querySelectorAll('.btn-primary')).toHaveLength(0)
+    expect(root.querySelectorAll('.btn-primary')).toHaveLength(1)
+    expect(card(root, 'opkg').querySelector('.btn-primary')).toBeTruthy()
     cleanup(root)
   })
 })

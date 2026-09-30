@@ -16,7 +16,7 @@ import { AdminRepairSections, AdminSettingsSections, AdminDangerZone } from './R
 // последней. Админские куски -- слотами в родственные группы. Не-админу
 // слоты не передаются вовсе (null), а не пустыми компонентами: группа по
 // ним решает, есть ли что показывать, и пустой заголовок не рисует.
-export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
+export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, focusNonce = 0, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
   const { wide } = useContext(AppContext)
   const repairSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} /> : null
   const settingsSlot = isAdmin ? (
@@ -50,6 +50,7 @@ export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGro
         openSheet={openSheet}
         isAdmin={isAdmin}
         focusGroup={focusGroup}
+        focusNonce={focusNonce}
         repairSlot={repairSlot}
         settingsSlot={settingsSlot}
         dangerSlot={dangerSlot}

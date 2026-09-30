@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouterSettings, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
@@ -27,7 +27,7 @@ import { ManageGroup } from '../ui/ManageGroup.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { HooksRow } from './SignalSections.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
-import { manageAnchors, manageSummaries, versionsKnown } from '../manage.js'
+import { manageAnchors, manageSummaries, manageTones, versionsKnown } from '../manage.js'
 
 // Настройки роутера и обслуживание -- то, за чем оператор раньше шёл в бота.
 //
@@ -43,7 +43,7 @@ import { manageAnchors, manageSummaries, versionsKnown } from '../manage.js'
 // Проверить · Починить · Настройки и доступ. Админские разделы вкладка
 // вставляет слотами (repairSlot, settingsSlot, dangerSlot) -- так они стоят
 // рядом с родственными, а не отдельным хвостом после справки.
-export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
+export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, focusNonce = 0, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState(null)
@@ -195,12 +195,24 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
     if (!focusGroup) return
     setGroup(focusGroup, true)
     scrollToAnchor(`mg-${focusGroup}`)
-  }, [focusGroup])
+  }, [focusGroup, focusNonce])
 
   const known = versionsKnown(versions)
   const canRepair = Boolean((maintain && openSheet) || repairSlot)
   const anchors = manageAnchors({ canRepair, isAdmin })
   const notes = manageSummaries({ settings, versions, showReboot, agentReady, isAdmin })
+  const tones = manageTones({ versions, showReboot, agentReady: settings ? agentReady : true })
+  // Группа с заботой раскрывается сама -- один раз, когда забота появилась;
+  // закрытую человеком обратно не открываем.
+  const autoOpened = useRef(new Set())
+  useEffect(() => {
+    for (const [group, tone] of Object.entries(tones)) {
+      if (tone && !autoOpened.current.has(group)) {
+        autoOpened.current.add(group)
+        setGroup(group, true)
+      }
+    }
+  }, [tones.versions, tones.repair, tones.settings])
   const runAudit = () => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })
   const auditBlock = (
     <>
@@ -292,7 +304,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
         </Section>
       </ManageGroup>
 
-      <ManageGroup id="mg-versions" title="Версии" note={notes.versions} open={openGroups.has('versions')} onToggle={(o) => setGroup('versions', o)}>
+      <ManageGroup id="mg-versions" title="Версии" note={notes.versions} noteTone={tones.versions} open={openGroups.has('versions')} onToggle={(o) => setGroup('versions', o)}>
         {known || newsRows.length > 0 ? (
           <>
             <Section title="Обновления">
@@ -414,7 +426,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
         </Section>
       </ManageGroup>
 
-      <ManageGroup id="mg-repair" title="Починить" note={notes.repair} open={openGroups.has('repair')} onToggle={(o) => setGroup('repair', o)}>
+      <ManageGroup id="mg-repair" title="Починить" note={notes.repair} noteTone={tones.repair} open={openGroups.has('repair')} onToggle={(o) => setGroup('repair', o)}>
         {maintain && openSheet && (
           <Section title="Обслуживание">
             {showReboot && (

@@ -277,27 +277,24 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       )}
 
       {view.active && (() => {
-        const tv = trafficView(trafficOut, { busy: traffic.busy })
+        const failText = traffic.error || (traffic.result && traffic.result.status !== 'ok' ? 'Роутер не отдал обмен за сутки — попробуйте ещё раз.' : '')
+        const tv = trafficView(trafficOut, { busy: traffic.busy, error: failText })
         const again = () => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)
         return (
           <Section title="Обмен за сутки">
             <div class={tv.invite ? 'card traffic-invite' : 'card'}>
               {tv.invite ? (
-                <p class="traffic-detail">{tv.text}</p>
+                <p class={tv.error ? 'state state-error traffic-detail' : 'traffic-detail'}>{tv.text}</p>
               ) : (
                 <div class="stat-grid" style="padding:14px">
                   <Stat label="принято" value={tv.rx} note={tv.note} />
                   <Stat label="отдано" value={tv.tx} />
                 </div>
               )}
-              {traffic.result && traffic.result.status !== 'ok' && (
-                <p class="card-foot card-foot-bad">Роутер не отдал обмен за сутки — попробуйте ещё раз.</p>
-              )}
               <button type="button" class="btn btn-ghost btn-wide" disabled={traffic.busy} onClick={again}>
                 {tv.button}
               </button>
             </div>
-            <ErrorLine text={traffic.error} busy={traffic.busy} onRetry={again} />
           </Section>
         )
       })()}

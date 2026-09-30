@@ -29,5 +29,7 @@ export function ageByServerClock(ts, { clockOffsetMs = null, nowMs = Date.now() 
 }
 
 export function clockTime(ts) {
-  return whenText(ts)
+  // Только дата: «сегодня/вчера» считались бы по часам телефона, которым
+  // здесь как раз не верим (MINI-10).
+  return whenText(ts, { absolute: true })
 }

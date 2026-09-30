@@ -230,7 +230,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
 
       <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
       <WANSection routerID={routerID} />
-      <CheckToolsSections routerID={routerID} asleep={asleep} openSheet={openSheet} />
+      <CheckToolsSections routerID={routerID} asleep={asleep} openSheet={openSheet} tunnels={data.tunnels} onChanged={load} />
 
       <Section title="Отчёт роутера о себе">
         <button

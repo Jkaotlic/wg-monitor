@@ -22,15 +22,15 @@ function parts(date, timeZone) {
 
 const sameDay = (a, b) => a.y === b.y && a.m === b.m && a.d === b.d
 
-export function whenText(iso, { now = Date.now(), timeZone } = {}) {
+export function whenText(iso, { now = Date.now(), timeZone, absolute = false } = {}) {
   if (!iso) return ''
   const t = new Date(iso)
   if (Number.isNaN(t.getTime())) return ''
   const at = parts(t, timeZone)
   const today = parts(new Date(now), timeZone)
   const time = `${at.hh}:${at.mi}`
-  if (sameDay(at, today)) return `сегодня, ${time}`
-  if (sameDay(at, parts(new Date(now - 86_400_000), timeZone))) return `вчера, ${time}`
+  if (!absolute && sameDay(at, today)) return `сегодня, ${time}`
+  if (!absolute && sameDay(at, parts(new Date(now - 86_400_000), timeZone))) return `вчера, ${time}`
   const year = at.y === today.y ? '' : ` ${at.y}`
   return `${at.d} ${MONTHS[at.m - 1]}${year}, ${time}`
 }

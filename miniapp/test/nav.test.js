@@ -394,14 +394,14 @@ describe('вкладка «Управление»', () => {
 
   it('слой settings или admin открывает вкладку, а не крышку', () => {
     for (const [o, focus] of [['settings', 'router'], ['admin', 'repair']]) {
-      expect(navReducer(base, { type: 'overlay', overlay: o })).toEqual({ ...base, tab: 'manage', manageFocus: focus })
+      expect(navReducer(base, { type: 'overlay', overlay: o })).toEqual({ ...base, tab: 'manage', manageFocus: focus, manageFocusSeq: 1 })
     }
     expect(navReducer(base, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage' })
   })
 
   it('экраны глубже «Управления» закрываются во вкладку', () => {
     const s = { ...base, tab: 'router', overlay: 'agentcfg' }
-    expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage', manageFocus: 'settings' })
+    expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage', manageFocus: 'settings', manageFocusSeq: 1 })
   })
 
   // v0.50 (F4): «назад» и Esc из слоёв «Управления» -- в его группу, а не в
@@ -410,7 +410,7 @@ describe('вкладка «Управление»', () => {
     const cases = [['packages', 'repair'], ['dnsreset', 'repair'], ['agentcfg', 'settings'], ['agentconn', 'settings']]
     for (const [overlay, focus] of cases) {
       const s = { routerID: 3, tab: 'manage', overlay, sheet: null }
-      expect(navReducer(s, { type: 'back' })).toEqual({ routerID: 3, tab: 'manage', overlay: null, sheet: null, manageFocus: focus })
+      expect(navReducer(s, { type: 'back' })).toEqual({ routerID: 3, tab: 'manage', overlay: null, sheet: null, manageFocus: focus, manageFocusSeq: 1 })
       expect(escapeAction(s, { wide: true })).toEqual({ type: 'back' })
     }
     const viaLayer = { routerID: 3, tab: 'manage', overlay: 'packages', overlayParams: { returnTo: 'manage' }, sheet: null }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { fetchRouterSettings } from '../api.js'
 import { useCommand } from '../useCommand.js'
 import { doctorRows, pingRows } from '../settings.js'
 import { confirmSheet } from '../sheet.js'
@@ -14,34 +14,27 @@ import { AwgmLogsSection } from './SignalSections.jsx'
 // «Проверки», где роутер и спрашивают. Права прежние: переключатель
 // проверки связи -- листом (решает сервер), журнал -- владельцу и админу с
 // агентом v0.47+ (оператору сервер откажет сам).
-export function CheckToolsSections({ routerID, asleep, openSheet }) {
+export function CheckToolsSections({ routerID, asleep, openSheet, tunnels = [], onChanged }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
-  const [tunnels, setTunnels] = useState([])
   const [showRaw, setShowRaw] = useState(false)
   const doctor = useCommand(routerID)
   const hrneo = useCommand(routerID)
   const pingNow = useCommand(routerID)
 
   function load() {
-    return Promise.all([fetchRouterSettings(routerID), fetchRouterChecks(routerID)])
-      .then(([s, c]) => {
-        setSettings(s)
-        setTunnels(c.tunnels ?? [])
-      })
-      .catch(() => {})
+    return fetchRouterSettings(routerID).then(setSettings).catch(() => {})
   }
 
   useEffect(() => {
     setSettings(null)
-    setTunnels([])
     load()
   }, [routerID])
 
   const doctorOut = doctor.result?.status === 'ok' ? doctorRows(doctor.result.output) : []
   const hrneoOut = hrneo.result?.status === 'ok' ? doctorRows(hrneo.result.output) : []
   const pings = pingRows(tunnels)
-  const runPing = () => pingNow.run('pingcheck_now', {}, deadline).then((res) => { if (res?.status === 'ok') load() })
+  const runPing = () => pingNow.run('pingcheck_now', {}, deadline).then((res) => { if (res?.status === 'ok') onChanged?.() })
 
   const askPingToggle = (row) => {
     openSheet(
@@ -56,7 +49,7 @@ export function CheckToolsSections({ routerID, asleep, openSheet }) {
         buttonLabel: row.enabled ? 'Выключить' : 'Включить',
         danger: Boolean(row.enabled),
         asleep,
-        onDone: load,
+        onDone: onChanged,
       }),
     )
   }

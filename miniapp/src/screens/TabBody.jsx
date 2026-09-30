@@ -74,6 +74,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           routerName={current?.nickname}
           isAdmin={isAdmin}
           focusGroup={nav.manageFocus ?? null}
+          focusNonce={nav.manageFocusSeq ?? 0}
           asleep={asleep}
           openSheet={openSheet}
           openLayer={(overlay, extra = {}) => dispatch({ type: 'overlay', overlay, params: { ...extra, returnTo: 'manage' } })}

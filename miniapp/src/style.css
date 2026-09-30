@@ -4963,25 +4963,24 @@ body {
   top: var(--app-header-h);
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2);
-  overflow-x: auto;
   margin: 0 calc(var(--sp-4) * -1) var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   background: var(--page);
   border-bottom: 1px solid var(--border);
-  scrollbar-width: none;
 }
 
 .manage-anchor {
   flex: none;
   min-height: 40px;
-  padding: 0 var(--sp-3);
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--ink);
   font-family: inherit;
-  font-size: var(--fs-sm);
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -5009,4 +5008,18 @@ body {
 .hero .panel-line {
   min-height: 0;
   padding: 0;
+}
+
+.fold-note-warn {
+  color: var(--warn);
+}
+
+.fold-note-danger {
+  color: var(--danger);
+}
+
+.traffic-invite .state {
+  margin: 0;
+  padding: 0;
+  text-align: left;
 }

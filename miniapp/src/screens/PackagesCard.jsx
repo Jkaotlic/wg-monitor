@@ -86,7 +86,7 @@ export function PackagesCard({ kind, routerID, asleep }) {
           )}
 
           <div class="packages-actions action-row">
-            <button type="button" class="btn btn-ghost btn-row" disabled={cmd.busy || !timeOK} onClick={() => run('install')}>
+            <button type="button" class={kind === 'opkg' ? 'btn btn-primary btn-row' : 'btn btn-ghost btn-row'} disabled={cmd.busy || !timeOK} onClick={() => run('install')}>
               {status?.installed ? 'Изменить время' : 'Включить'}
             </button>
             {job.canRun && (

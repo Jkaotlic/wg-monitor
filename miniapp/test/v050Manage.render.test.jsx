@@ -63,7 +63,7 @@ describe('«Управление» без простыни (спека п. 3.1)'
   it('админ: «Роутер» раскрыт, остальные свёрнуты, чипы все, «Проверить» ушла', async () => {
     const root = await manage(true)
     expect(opened(root)).toEqual({ 'mg-router': true, 'mg-versions': false, 'mg-repair': false, 'mg-settings': false })
-    expect(chips(root)).toEqual(['Роутер', 'Версии', 'Починить', 'Настройки', 'Доступ'])
+    expect(chips(root)).toEqual(['Роутер', 'Версии', 'Починить', 'Настройки'])
     expect(root.textContent).not.toContain('Проверка связи')
     expect(root.textContent).not.toContain('Осмотр роутера')
     expect(root.querySelector('#mg-versions .fold-note').textContent).toBe('версии ещё не получены')
@@ -77,7 +77,7 @@ describe('«Управление» без простыни (спека п. 3.1)'
     await act(async () => button(root.querySelector('.manage-anchors'), 'Починить').click())
     await flush()
     expect(root.querySelector('#mg-repair').open).toBe(true)
-    await act(async () => button(root.querySelector('.manage-anchors'), 'Доступ').click())
+    await act(async () => button(root.querySelector('.manage-anchors'), 'Настройки').click())
     await flush()
     expect(root.querySelector('#mg-settings').open).toBe(true)
     cleanup(root)
@@ -97,6 +97,22 @@ describe('«Управление» без простыни (спека п. 3.1)'
     const root = await manage(false)
     expect(chips(root)).toEqual(['Роутер', 'Версии', 'Настройки'])
     expect(root.querySelector('#mg-repair')).toBe(null)
+    cleanup(root)
+  })
+
+  it('забота раскрывает группу и красит итог: прошивка -- «Версии», перезагрузка -- «Починить»', async () => {
+    mocks.versions = { installed: { awgmgr: '2.19.9' }, rows: [{ component: 'firmware', available: '5.03', installed: '5.02' }], reboot_hint: true }
+    const root = await manage(true)
+    expect(opened(root)).toMatchObject({ 'mg-versions': true, 'mg-repair': true, 'mg-settings': false })
+    expect(root.querySelector('#mg-versions .fold-note').className).toContain('fold-note-danger')
+    expect(root.querySelector('#mg-repair .fold-note').className).toContain('fold-note-warn')
+    cleanup(root)
+  })
+
+  it('без забот группы остаются свёрнутыми', async () => {
+    mocks.versions = { installed: { awgmgr: '2.19.9' }, rows: [] }
+    const root = await manage(true)
+    expect(opened(root)).toEqual({ 'mg-router': true, 'mg-versions': false, 'mg-repair': false, 'mg-settings': false })
     cleanup(root)
   })
 
