@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   deviceReply: null,
   routerReply: null,
   waitReply: { status: 'ok' },
+  issuerErr: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -50,6 +51,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     addAwg3Issuer: (id, tg) => {
       log('issuer-add', id, tg)
+      if (mocks.issuerErr) return Promise.reject(mocks.issuerErr)
       return Promise.resolve({ panel: { ...mocks.page.panel, issuers: [{ telegram_user_id: tg, granted_at: '2026-09-30T10:00:00Z' }] } })
     },
     removeAwg3Issuer: (id, tg) => {
@@ -155,6 +157,7 @@ beforeEach(() => {
   mocks.deleteReply = null
   mocks.page = structuredClone(PAGE)
   mocks.peersErr = null
+  mocks.issuerErr = null
   mocks.deviceReply = null
   mocks.routerReply = null
   mocks.waitReply = { status: 'ok' }
@@ -593,5 +596,37 @@ describe('экран панели: допуск к выпуску (v0.51)', () =
     await flush()
     expect(calls('issuer-del')).toEqual([['issuer-del', 'main', 555]])
     expect(root.querySelector('.access-id')).toBeNull()
+  })
+
+  async function addIssuer(root, v) {
+    const input = root.querySelector('#awg3-issuer-id')
+    await act(async () => {
+      input.value = v
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => root.querySelector('.access-add-row').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await flush()
+  }
+
+  it('16 цифр отвергаются без вызова API', async () => {
+    const { root } = await mountPanel()
+    await addIssuer(root, '1234567890123456')
+    expect(root.textContent).toContain('Введите положительный числовой ID')
+    expect(calls('issuer-add')).toEqual([])
+  })
+
+  it('отказ сервера показывается его русской фразой', async () => {
+    const { root } = await mountPanel()
+    mocks.issuerErr = new ApiError(404, 'awg3_not_found', 'x', 'Панель не найдена')
+    await addIssuer(root, '555')
+    expect(root.textContent).toContain('Панель не найдена')
+    expect(root.textContent).not.toContain('Не получилось сохранить')
+  })
+
+  it('без фразы сервера -- общий текст', async () => {
+    const { root } = await mountPanel()
+    mocks.issuerErr = new Error('boom')
+    await addIssuer(root, '555')
+    expect(root.textContent).toContain('Не получилось сохранить')
   })
 })

@@ -18,14 +18,14 @@ export function Awg3Issuers({ panel, onChanged }) {
         setNewID('')
         onChanged?.(resp?.panel)
       })
-      .catch(() => setError('Не получилось сохранить — попробуйте ещё раз.'))
+      .catch((err) => setError(String(err?.serverMessage ?? '').trim() || 'Не получилось сохранить — попробуйте ещё раз.'))
       .finally(() => setBusy(false))
   }
 
   function add(e) {
     e.preventDefault()
     const t = newID.trim()
-    if (!/^[1-9][0-9]{0,15}$/.test(t)) {
+    if (!/^[1-9][0-9]{0,14}$/.test(t)) {
       setError('Введите положительный числовой ID')
       return
     }
