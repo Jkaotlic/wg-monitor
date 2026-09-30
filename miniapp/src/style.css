@@ -4964,7 +4964,7 @@ body {
   z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-2);
+  gap: 6px;
   margin: 0 calc(var(--sp-4) * -1) var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
   background: var(--page);
@@ -4974,7 +4974,7 @@ body {
 .manage-anchor {
   flex: none;
   min-height: 40px;
-  padding: 0 10px;
+  padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface);

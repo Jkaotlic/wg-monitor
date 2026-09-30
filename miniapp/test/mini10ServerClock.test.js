@@ -37,6 +37,8 @@ describe('MINI-10: «последний раз смотрели» в настр�
     const { checkedAtText, unknownLine } = await import('../src/versions.js')
     const text = checkedAtText('2026-09-27T09:05:00Z')
     expect(text).toMatch(/^27 сен( \d{4})?, \d\d:\d\d$/)
+    // Сегодняшняя метка -- тоже датой: «сегодня» считалось бы по часам телефона.
+    expect(checkedAtText(new Date().toISOString())).toMatch(/^\d{1,2} [а-я]{3}( \d{4})?, \d\d:\d\d$/)
     expect(checkedAtText(undefined)).toBe('')
     expect(unknownLine('upstream_unavailable', text)).toContain(`последний раз смотрели ${text}`)
   })
