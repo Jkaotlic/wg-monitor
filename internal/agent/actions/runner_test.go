@@ -1138,18 +1138,31 @@ func TestRunner_FirmwareInstall_Disabled(t *testing.T) {
 }
 
 func TestRunner_FirmwareInstall_Allowed(t *testing.T) {
-	var seen [][]string
-	r := &Runner{AllowFirmwareInstall: true, Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		seen = append(seen, append([]string{name}, args...))
-		return []byte("ok"), nil
-	}}
+	noWait(t)
+	exec, calls := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
+	r := &Runner{AllowFirmwareInstall: true, Exec: exec}
 	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
-	if res.Status != "ok" {
+	if res.Status != "ok" || res.Output != FirmwareUnconfirmedMsg {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
-	want := []string{"ndmc", "-c", "components commit"}
-	if len(seen) != 1 || !equalStrSlice(seen[0], want) {
-		t.Errorf("exec=%v, want %v", seen, want)
+	commits := 0
+	for _, c := range *calls {
+		if c == "-c components commit" {
+			commits++
+		}
+	}
+	if commits != 1 {
+		t.Errorf("calls=%v", *calls)
+	}
+}
+
+func TestRunner_FirmwareInstall_NdssFailureIsErr(t *testing.T) {
+	noWait(t)
+	exec, _ := fakeFirmwareExec(logBefore, logBefore+"W [Sep 30 11:31:54] ndm: Components::Manager: update interrupted.\n")
+	r := &Runner{AllowFirmwareInstall: true, Exec: exec}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
+	if res.Status != "err" || !strings.HasPrefix(res.Output, FirmwareInterrupted) {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
 }
 

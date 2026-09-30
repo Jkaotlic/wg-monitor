@@ -740,10 +740,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		if err := InstallFirmware(ctx, r.Exec); err != nil {
+		msg, err := InstallFirmware(ctx, r.Exec)
+		if err != nil {
 			return "err", err.Error(), payload
 		}
-		return "ok", "firmware install kicked; router will reboot", payload
+		return "ok", msg, payload
 
 	case "version_audit":
 		if r.AwgClient == nil {

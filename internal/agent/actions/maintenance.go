@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
@@ -39,16 +40,106 @@ func GetFirmwareStatus(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus,
 	return fs, nil
 }
 
-// InstallFirmware kicks the KeeneticOS firmware install via
-// `ndmc -c "components commit"`. After the call returns successfully the
-// router will reboot within seconds — the agent will lose connection long
-// before any follow-up work can complete; the caller should not expect
-// further status updates from this command.
-func InstallFirmware(ctx context.Context, exec ExecFunc) error {
-	if _, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
-		return fmt.Errorf("ndmc components commit: %w", err)
+const (
+	FirmwareStartedMsg     = "firmware download started; router will reboot when done"
+	FirmwareUnconfirmedMsg = "firmware install kicked; not confirmed by router log"
+	FirmwareInterrupted    = "firmware update interrupted"
+)
+
+// firmwareWatchCfg -- сколько раз и как часто смотреть журнал после commit.
+// По умолчанию 10 раз по 2 с = 20 с; тесты подменяют sleep.
+type firmwareWatchCfg struct {
+	total int
+	sleep func(ctx context.Context) error
+}
+
+var firmwareWatch = firmwareWatchCfg{
+	total: 10,
+	sleep: func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil
+		}
+	},
+}
+
+var firmwareFailMarks = []string{"update interrupted", "request failed", "cannot connect"}
+
+// InstallFirmware запускает установку прошивки и сверяется с журналом.
+// `components commit` лишь ставит фоновую задачу и сразу отвечает кодом 0
+// (прод 30.09, workrouter: «ok» за 18 мс, а в журнале -- update interrupted),
+// поэтому судим по новым строкам Components:: и Core::Ndss в `show log`.
+func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
+	before := map[string]bool{}
+	for _, l := range firmwareLogLines(ctx, exec) {
+		before[l] = true
 	}
-	return nil
+	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
+		if ex := keenetic.ErrExcerpt(string(out)); ex != "" {
+			return "", fmt.Errorf("ndmc components commit: %w: %s", err, ex)
+		}
+		return "", fmt.Errorf("ndmc components commit: %w", err)
+	}
+	started := false
+	for i := 0; i < firmwareWatch.total; i++ {
+		if err := firmwareWatch.sleep(ctx); err != nil {
+			break
+		}
+		var fresh []string
+		for _, l := range firmwareLogLines(ctx, exec) {
+			if !before[l] {
+				fresh = append(fresh, l)
+			}
+		}
+		var failed []string
+		for _, l := range fresh {
+			started = started || strings.Contains(l, "update task started")
+			for _, m := range firmwareFailMarks {
+				if strings.Contains(l, m) {
+					failed = append(failed, logMessage(l))
+					break
+				}
+			}
+		}
+		if len(failed) > 0 {
+			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(failed, " | "))
+		}
+		if started && i >= 2 {
+			// Три взгляда подряд без провала после старта: загрузка идёт.
+			return FirmwareStartedMsg, nil
+		}
+	}
+	if started {
+		return FirmwareStartedMsg, nil
+	}
+	return FirmwareUnconfirmedMsg, nil
+}
+
+// firmwareLogLines -- строки журнала про компоненты и Ndss, в порядке журнала
+// (от него зависит понятный текст ошибки).
+func firmwareLogLines(ctx context.Context, exec ExecFunc) []string {
+	out, err := exec(ctx, "ndmc", "-c", "show log 40")
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, raw := range strings.Split(string(out), "\n") {
+		l := strings.TrimSpace(strings.ReplaceAll(raw, "\x1b[K", ""))
+		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// logMessage -- «E [Sep 30 11:31:54] ndm: Core::Ndss: …» → «Core::Ndss: …».
+func logMessage(l string) string {
+	if i := strings.Index(l, "] "); i >= 0 {
+		l = l[i+2:]
+	}
+	return strings.TrimPrefix(l, "ndm: ")
 }
 
 // parseComponentsList is the format parser, separated for table-driven tests.

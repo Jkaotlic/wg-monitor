@@ -136,20 +136,23 @@ type execErr struct{ msg string }
 func (e *execErr) Error() string { return e.msg }
 
 func TestInstallFirmware_ExecCommand(t *testing.T) {
-	var got [][]string
-	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		got = append(got, append([]string{name}, args...))
-		return []byte("ok"), nil
-	}
-	if err := InstallFirmware(context.Background(), exec); err != nil {
+	noWait(t)
+	exec, calls := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
+	if _, err := InstallFirmware(context.Background(), exec); err != nil {
 		t.Fatalf("InstallFirmware: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 exec, got %d", len(got))
+	commits, firstLog, commitAt := 0, -1, -1
+	for i, c := range *calls {
+		if c == "-c components commit" {
+			commits++
+			commitAt = i
+		}
+		if c == "-c show log 40" && firstLog < 0 {
+			firstLog = i
+		}
 	}
-	want := []string{"ndmc", "-c", "components commit"}
-	if !slicesEq(got[0], want) {
-		t.Errorf("exec=%v, want %v", got[0], want)
+	if commits != 1 || firstLog < 0 || commitAt < firstLog {
+		t.Fatalf("calls=%v", *calls)
 	}
 }
 
@@ -157,7 +160,8 @@ func TestInstallFirmware_ExecError(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, &execErr{msg: "no such command"}
 	}
-	if err := InstallFirmware(context.Background(), exec); err == nil {
+	noWait(t)
+	if _, err := InstallFirmware(context.Background(), exec); err == nil {
 		t.Error("expected error from exec failure")
 	}
 }
@@ -637,6 +641,99 @@ func TestGetFirmwareStatus_ExecErrorCarriesExcerpt(t *testing.T) {
 	}
 	_, err := GetFirmwareStatus(context.Background(), exec)
 	if err == nil || !strings.Contains(err.Error(), "cannot connect to the server") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func fakeFirmwareExec(before string, after ...string) (ExecFunc, *[]string) {
+	var calls []string
+	n := 0
+	committed := false
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmd := strings.Join(args, " ")
+		calls = append(calls, cmd)
+		switch cmd {
+		case "-c components commit":
+			committed = true
+			return nil, nil
+		case "-c show log 40":
+			if !committed {
+				return []byte(before), nil
+			}
+			if n < len(after) {
+				n++
+			}
+			return []byte(after[n-1]), nil
+		}
+		return nil, fmt.Errorf("unexpected %q", cmd)
+	}, &calls
+}
+
+const logBefore = "I [Sep 30 11:30:37] ndm: Core::System::StartupConfig: configuration saved.\n"
+
+func noWait(t *testing.T) {
+	old := firmwareWatch
+	firmwareWatch = firmwareWatchCfg{total: 3, sleep: func(context.Context) error { return nil }}
+	t.Cleanup(func() { firmwareWatch = old })
+}
+
+func TestInstallFirmware_NdssFailureIsError(t *testing.T) {
+	noWait(t)
+	after := logBefore +
+		"I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n" +
+		"E [Sep 30 11:31:54] ndm: Core::Ndss: [7758] cannot connect to the server.\n" +
+		"E [Sep 30 11:31:54] ndm: Components::UpdateTask: request failed (0).\n" +
+		"W [Sep 30 11:31:54] ndm: Components::Manager: update interrupted.\n"
+	exec, _ := fakeFirmwareExec(logBefore, after)
+	_, err := InstallFirmware(context.Background(), exec)
+	if err == nil || !strings.HasPrefix(err.Error(), FirmwareInterrupted) || !strings.Contains(err.Error(), "cannot connect to the server") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "[Sep 30") {
+		t.Fatalf("метки времени в тексте: %v", err)
+	}
+}
+
+func TestInstallFirmware_StartedWithoutFailure(t *testing.T) {
+	noWait(t)
+	after := logBefore + "I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n"
+	exec, _ := fakeFirmwareExec(logBefore, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+}
+
+func TestInstallFirmware_SilenceIsUnconfirmed(t *testing.T) {
+	noWait(t)
+	exec, _ := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
+	msg, err := InstallFirmware(context.Background(), exec)
+	if err != nil || msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+}
+
+func TestInstallFirmware_IgnoresOldLines(t *testing.T) {
+	noWait(t)
+	old := "W [Sep 29 09:00:00] ndm: Components::Manager: update interrupted.\n"
+	after := old + "I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n"
+	exec, _ := fakeFirmwareExec(old, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("старая строка засчитана: %q %v", msg, err)
+	}
+}
+
+func TestInstallFirmware_CommitErrorStillError(t *testing.T) {
+	noWait(t)
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "-c components commit" {
+			return []byte("Components::Manager: nothing to commit.\n"), errors.New("exit status 1")
+		}
+		return []byte(logBefore), nil
+	}
+	_, err := InstallFirmware(context.Background(), exec)
+	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
 		t.Fatalf("err = %v", err)
 	}
 }
