@@ -65,15 +65,21 @@ var firmwareWatch = firmwareWatchCfg{
 	},
 }
 
-var firmwareFailMarks = []string{"update interrupted", "request failed", "cannot connect"}
+// Терминальный провал -- только строка Components:: с этими метками. Строка
+// Core::Ndss сама по себе (например, «cannot connect») провалом не считается:
+// она лишь объясняет провал Components::.
+var firmwareFailMarks = []string{"update interrupted", "request failed"}
 
 // InstallFirmware запускает установку прошивки и сверяется с журналом.
 // `components commit` лишь ставит фоновую задачу и сразу отвечает кодом 0
 // (прод 30.09, workrouter: «ok» за 18 мс, а в журнале -- update interrupted),
 // поэтому судим по новым строкам Components:: и Core::Ndss в `show log`.
+// Окно наблюдения отрабатывается целиком: провал возвращается, как только
+// замечен, иначе -- «начато», если была строка «update task started».
 func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
 	before := map[string]bool{}
-	for _, l := range firmwareLogLines(ctx, exec) {
+	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
+	for _, l := range beforeLines {
 		before[l] = true
 	}
 	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
@@ -82,33 +88,40 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
 		}
 		return "", fmt.Errorf("ndmc components commit: %w", err)
 	}
+	if beforeErr != nil {
+		// Без снимка «до» старые строки не отличить от новых.
+		return FirmwareUnconfirmedMsg, nil
+	}
 	started := false
 	for i := 0; i < firmwareWatch.total; i++ {
 		if err := firmwareWatch.sleep(ctx); err != nil {
 			break
 		}
+		lines, err := firmwareLogLines(ctx, exec)
+		if err != nil {
+			continue // неудачный взгляд = «новых строк нет»
+		}
 		var fresh []string
-		for _, l := range firmwareLogLines(ctx, exec) {
+		for _, l := range lines {
 			if !before[l] {
 				fresh = append(fresh, l)
 			}
 		}
-		var failed []string
+		failed := false
 		for _, l := range fresh {
 			started = started || strings.Contains(l, "update task started")
-			for _, m := range firmwareFailMarks {
-				if strings.Contains(l, m) {
-					failed = append(failed, logMessage(l))
-					break
-				}
+			if isComponentsFailure(l) {
+				failed = true
 			}
 		}
-		if len(failed) > 0 {
-			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(failed, " | "))
-		}
-		if started && i >= 2 {
-			// Три взгляда подряд без провала после старта: загрузка идёт.
-			return FirmwareStartedMsg, nil
+		if failed {
+			var msgs []string
+			for _, l := range fresh {
+				if isComponentsFailure(l) || strings.Contains(l, "Core::Ndss") {
+					msgs = append(msgs, logMessage(l))
+				}
+			}
+			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(msgs, " | "))
 		}
 	}
 	if started {
@@ -117,12 +130,24 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
 	return FirmwareUnconfirmedMsg, nil
 }
 
+func isComponentsFailure(l string) bool {
+	if !strings.Contains(l, "Components::") {
+		return false
+	}
+	for _, m := range firmwareFailMarks {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // firmwareLogLines -- строки журнала про компоненты и Ndss, в порядке журнала
 // (от него зависит понятный текст ошибки).
-func firmwareLogLines(ctx context.Context, exec ExecFunc) []string {
+func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
 	out, err := exec(ctx, "ndmc", "-c", "show log 40")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var lines []string
 	for _, raw := range strings.Split(string(out), "\n") {
@@ -131,7 +156,7 @@ func firmwareLogLines(ctx context.Context, exec ExecFunc) []string {
 			lines = append(lines, l)
 		}
 	}
-	return lines
+	return lines, nil
 }
 
 // logMessage -- «E [Sep 30 11:31:54] ndm: Core::Ndss: …» → «Core::Ndss: …».

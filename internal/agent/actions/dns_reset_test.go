@@ -434,4 +434,7 @@ func TestDNSReset_ReadErrorDoesNotLeakConfig(t *testing.T) {
 	if status != "err" || strings.Contains(out, "SECRET") {
 		t.Fatalf("%s %q", status, out)
 	}
+	if !strings.Contains(out, "read running-config failed: exit status 1") {
+		t.Fatalf("нет текста ошибки чтения: %q", out)
+	}
 }

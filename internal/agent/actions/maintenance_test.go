@@ -137,9 +137,19 @@ func (e *execErr) Error() string { return e.msg }
 
 func TestInstallFirmware_ExecCommand(t *testing.T) {
 	noWait(t)
-	exec, calls := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
+	inner, calls := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
+	var commitArgv []string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "-c components commit" {
+			commitArgv = append([]string{name}, args...)
+		}
+		return inner(ctx, name, args...)
+	}
 	if _, err := InstallFirmware(context.Background(), exec); err != nil {
 		t.Fatalf("InstallFirmware: %v", err)
+	}
+	if !slicesEq(commitArgv, []string{"ndmc", "-c", "components commit"}) {
+		t.Fatalf("commitArgv=%v", commitArgv)
 	}
 	commits, firstLog, commitAt := 0, -1, -1
 	for i, c := range *calls {
@@ -735,5 +745,40 @@ func TestInstallFirmware_CommitErrorStillError(t *testing.T) {
 	_, err := InstallFirmware(context.Background(), exec)
 	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestInstallFirmware_NdssAloneIsNotFailure(t *testing.T) {
+	noWait(t)
+	after := logBefore +
+		"I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n" +
+		"E [Sep 30 11:31:54] ndm: Core::Ndss: [7758] cannot connect to the server.\n"
+	exec, _ := fakeFirmwareExec(logBefore, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+}
+
+func TestInstallFirmware_PreReadFailureIsUnconfirmed(t *testing.T) {
+	noWait(t)
+	old := "W [Sep 29 09:00:00] ndm: Components::Manager: update interrupted.\n"
+	committed := false
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch strings.Join(args, " ") {
+		case "-c components commit":
+			committed = true
+			return nil, nil
+		case "-c show log 40":
+			if !committed {
+				return nil, errors.New("exit status 1")
+			}
+			return []byte(old), nil
+		}
+		return nil, fmt.Errorf("unexpected %v", args)
+	}
+	msg, err := InstallFirmware(context.Background(), exec)
+	if err != nil || msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("%q %v", msg, err)
 	}
 }
