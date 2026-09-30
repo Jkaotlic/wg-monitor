@@ -21,6 +21,7 @@ import {
   opkgUpgradeOutcome,
   refusalFromResult,
   rebootBannerVisible,
+  firmwareStatusErrorText,
 } from '../maintenance.js'
 import { Section } from '../ui/Section.jsx'
 import { ManageGroup } from '../ui/ManageGroup.jsx'
@@ -396,9 +397,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
             {firmware.busy ? 'Спрашиваем роутер…' : 'Проверить прошивку'}
           </button>
           <ErrorLine text={firmware.error} busy={firmware.busy} onRetry={() => firmware.run('firmware_status', {}, deadline)} />
-          {firmware.result && firmware.result.status !== 'ok' && (
-            <p class="state state-error">Роутер не ответил на вопрос о прошивке — попробуйте ещё раз.</p>
-          )}
+          {firmware.result && firmware.result.status !== 'ok' && <p class="state state-error">{firmwareStatusErrorText(firmware.result)}</p>}
           {fw?.known && (
             <div class="card card-rows settings-card">
               {fw.rows.map((r) => (

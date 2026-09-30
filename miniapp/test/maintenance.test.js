@@ -20,6 +20,7 @@ import {
   opkgUpgradeOutcome,
   serviceRestartText,
   refusalFromResult,
+  firmwareStatusErrorText,
   maintenanceOutcomeLabel,
   commandErrorText,
   asleepNote,
@@ -212,7 +213,7 @@ describe('итоги', () => {
   // вывода (например "ndmc components commit: exit status 1").
   it('прошивка: отказ по настройкам, успех и прочая ошибка -- без сырого вывода агента', () => {
     expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware install started' })).toBe(
-      'Роутер ставит прошивку и перезагрузится.',
+      MAINT_TEXTS.firmwareUnconfirmed,
     )
     expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'ndmc components commit: exit status 1' })).toBe(
       'Не удалось поставить прошивку.',
@@ -220,6 +221,32 @@ describe('итоги', () => {
     expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware install disabled in agent config' })).toBe(
       MAINT_TEXTS.firmwareForbidden,
     )
+  })
+
+  it('прошивка v0.51: провал Ndss, старт загрузки, неподтверждённый запуск, старый агент', () => {
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware update interrupted: Core::Ndss: [7758] cannot connect to the server. | Components::Manager: update interrupted.' })).toBe(
+      MAINT_TEXTS.firmwareNoServer,
+    )
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware update interrupted: Components::Manager: update interrupted.' })).toBe(
+      MAINT_TEXTS.firmwareInterrupted,
+    )
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware download started; router will reboot when done' })).toBe(
+      MAINT_TEXTS.firmwareStarted,
+    )
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware install kicked; not confirmed by router log' })).toBe(
+      MAINT_TEXTS.firmwareUnconfirmed,
+    )
+    // Агент v0.50 и старше: его «ok» ничего не доказывает -- не обещаем перезагрузку.
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware install kicked; router will reboot' })).toBe(
+      MAINT_TEXTS.firmwareUnconfirmed,
+    )
+  })
+
+  it('firmware_status: молчание сервера обновлений -- своей фразой, прочее -- общей', () => {
+    expect(firmwareStatusErrorText({ status: 'err', output: 'firmware server did not answer: firmware: | sandbox: stable' })).toBe(MAINT_TEXTS.firmwareStatusNoServer)
+    expect(firmwareStatusErrorText({ status: 'err', output: 'ndmc components list: exit status 1: Core::Ndss: cannot connect to the server.' })).toBe(MAINT_TEXTS.firmwareStatusNoServer)
+    expect(firmwareStatusErrorText({ status: 'err', output: 'could not extract local.version from `ndmc components list` output: x' })).toBe(MAINT_TEXTS.firmwareStatusFailed)
+    expect(firmwareStatusErrorText({ status: 'ok', output: '{}' })).toBe('')
   })
 
   it('maintenanceOutcomeLabel выбирает по действию и молчит о чужих', () => {
