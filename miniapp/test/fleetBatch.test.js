@@ -353,7 +353,7 @@ describe('итог словами', () => {
         { id: 4, nickname: 'dacha', outcome: 'problems', problems: ['Прошивка роутера — доступна 4.3.0'] },
       ],
     })
-    expect(s.headline).toBe('Аудит: ответили 2 из 2, внимания требует 1.')
+    expect(s.headline).toBe('Сверка версий: ответили 2 из 2, внимания требует 1.')
     expect(s.lines).toEqual([
       { id: 4, text: '«dacha»: Прошивка роутера — доступна 4.3.0' },
       { id: 'skipped', text: 'Не на связи, пропущен: «car».' },

@@ -11,7 +11,7 @@ import { reachStatus } from './staleness.js'
 export const FLEET_FILTERS = [
   { key: 'all', label: 'все' },
   { key: 'alert', label: 'тревога' },
-  { key: 'online', label: 'на связи' },
+  { key: 'online', label: 'в порядке' },
   { key: 'sleeping', label: 'спят' },
   { key: 'silent', label: 'молчат' },
 ]

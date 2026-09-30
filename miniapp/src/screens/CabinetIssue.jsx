@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { issueVPNConfig, fetchCommandResult, sendVPNConf } from '../api.js'
 import { localSheet } from '../sheet.js'
+import { agentReplyText } from '../errorText.js'
 import {
   CABINET_TEXTS,
   issueExplain,
@@ -55,7 +56,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
           setOutcome(
             res.status === 'ok'
               ? `Конфиг выпущен и импортирован как «${name}». Он появится в списке VPN-туннелей.`
-              : `Роутер не принял конфиг: ${res.output || res.status}`,
+              : agentReplyText(res, 'Роутер не принял конфиг — попробуйте ещё раз через минуту.'),
           )
           if (res.status === 'ok') onIssued?.()
           else setFailed(true)

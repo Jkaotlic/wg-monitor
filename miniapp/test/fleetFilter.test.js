@@ -18,7 +18,7 @@ const R = [
 
 describe('фильтры списка роутеров', () => {
   it('пять фильтров в порядке спеки', () => {
-    expect(FLEET_FILTERS.map((f) => f.label)).toEqual(['все', 'тревога', 'на связи', 'спят', 'молчат'])
+    expect(FLEET_FILTERS.map((f) => f.label)).toEqual(['все', 'тревога', 'в порядке', 'спят', 'молчат'])
     expect(FLEET_FILTERS.map((f) => f.key)).toEqual(['all', 'alert', 'online', 'sleeping', 'silent'])
   })
 
@@ -101,5 +101,21 @@ describe('пустой результат словами', () => {
   it('по поиску -- с запросом, по фильтру -- без', () => {
     expect(emptyFilterText({ query: ' bmw ', filter: 'all' })).toBe('Ничего не нашлось по «bmw».')
     expect(emptyFilterText({ query: '', filter: 'alert' })).toBe('Таких роутеров сейчас нет.')
+  })
+})
+
+// Чип «в порядке» и плитка «в порядке» в сводке -- один и тот же набор роутеров.
+describe('«в порядке»: чип и сводка считают одно и то же', () => {
+  it('число «в порядке» в сводке равно числу роутеров под чипом', async () => {
+    const { fleetSummary } = await import('../src/fleet.js')
+    const fleet = [
+      ...R,
+      { id: 6, nickname: 'a', status: 'online', last_seen_age_sec: 5, reach: 'online' },
+      { id: 7, nickname: 'b', status: 'alert', last_seen_age_sec: 5, reach: 'online' },
+      { id: 8, nickname: 'c', status: 'alert', last_seen_age_sec: 99999, reach: 'offline' },
+    ]
+    const chip = fleet.filter((r) => filterBucket(r) === 'online').length
+    expect(fleetSummary(fleet).ok).toBe(chip)
+    expect(chip).toBeGreaterThan(1)
   })
 })

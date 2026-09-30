@@ -5,7 +5,7 @@ import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
 import { whenText, sinceText, untilText } from '../when.js'
-import { errorText } from '../errorText.js'
+import { errorText, isRussianText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
 import { isStale } from '../staleness.js'
@@ -417,7 +417,7 @@ function ExitProbeBlock({ label, action, state }) {
       {state.busy && <p class="compare-probe-ip compare-probe-pending">Проверяю…</p>}
       {!state.busy && ip && <p class="compare-probe-ip">{ip}</p>}
       {!state.busy && !ip && note && <p class="compare-probe-ip compare-probe-unknown">{note}</p>}
-      {state.result?.output && <p class="compare-probe-detail">{state.result.output}</p>}
+      {isRussianText(state.result?.output) && <p class="compare-probe-detail">{String(state.result.output).trim()}</p>}
     </div>
   )
 }

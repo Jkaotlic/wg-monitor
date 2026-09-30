@@ -467,7 +467,7 @@ describe('«Парк»: массовые проверки', () => {
     await flush()
     await flush()
     expect(mocks.sent).toEqual([{ routerID: 15, action: 'version_audit', args: {} }])
-    expect(root.textContent).toContain('Аудит: ответили 1 из 1, внимания требует 1.')
+    expect(root.textContent).toContain('Сверка версий: ответили 1 из 1, внимания требует 1.')
     expect(root.textContent).toContain('«car»: Прошивка роутера — доступна 4.3.0')
     expect(mocks.fleetCalls).toBe(2)
     cleanup(root)
@@ -478,7 +478,7 @@ describe('«Парк»: массовые проверки', () => {
     mocks.results = {} // ответа нет -- опрос не разрешается
     const { root } = await mountPark()
     await act(async () => buttons(root, 'Осмотреть все')[0].click())
-    expect(buttons(root, 'Проверяем…')[0].disabled).toBe(true)
+    expect(buttons(root, 'Осматриваем…')[0].disabled).toBe(true)
     expect(buttons(root, 'Сверить версии у всех')[0].disabled).toBe(true)
     expect(root.textContent).toContain('Готово 0 из 1…')
     cleanup(root)

@@ -12,11 +12,23 @@ export const OFFLINE_ERROR_TEXT = 'Сервер не ответил — пров
 const SESSION_TEXT = 'Сессия истекла — откройте приложение заново.'
 
 const RUSSIAN = /[А-Яа-яЁё]/
+// Пути и протоколы -- признак технического текста, даже если в нём есть русское слово.
+const TECHNICAL = /\/api\b|\bHTTP\b|:\/\/|\bError:|\/[A-Za-z][\w-]*\/|\bfailed\b/i
+
+// Русским считается текст, где кириллицы не меньше 70% букв и нет путей и
+// протоколов: «awgmgr GET /api/x: HTTP 500 (роутер недоступен)» -- нет.
+export function isRussianText(text) {
+  const s = String(text ?? '').trim()
+  if (!s || !RUSSIAN.test(s) || TECHNICAL.test(s)) return false
+  const letters = (s.match(/\p{L}/gu) ?? []).length
+  const cyr = (s.match(/[А-Яа-яЁё]/g) ?? []).length
+  return letters > 0 && cyr / letters >= 0.7
+}
 
 export function errorText(err, codes = {}) {
   if (err == null) return ''
   // Готовая строка (таймаут useCommand, фраза экрана) -- только русская.
-  if (typeof err === 'string') return RUSSIAN.test(err) ? err : FALLBACK_ERROR_TEXT
+  if (typeof err === 'string') return isRussianText(err) ? err : FALLBACK_ERROR_TEXT
   // api.js сам кладёт человеческую фразу для исчезнувшей команды (SEC-02).
   if (err.message === COMMAND_GONE_TEXT) return COMMAND_GONE_TEXT
   const code = typeof err.code === 'string' ? err.code : ''
@@ -25,7 +37,7 @@ export function errorText(err, codes = {}) {
   if (common) return common
   if (err.status === 401) return SESSION_TEXT
   const said = String(err.serverMessage ?? '').trim()
-  if (said && RUSSIAN.test(said)) return said
+  if (said && isRussianText(said)) return said
   // Без статуса ответа не было вовсе: обрыв сети, KeenDNS не пустил.
   if (!err.status) return OFFLINE_ERROR_TEXT
   return FALLBACK_ERROR_TEXT
@@ -37,5 +49,5 @@ export function errorText(err, codes = {}) {
 // есть) дописывается после неё.
 export function agentReplyText(result, fallback) {
   const said = String(result?.output ?? '').trim()
-  return said && RUSSIAN.test(said) ? `${fallback} ${said}` : fallback
+  return isRussianText(said) ? `${fallback} ${said}` : fallback
 }

@@ -120,6 +120,9 @@ describe('исходники: ни «output || status» в разметке', ()
       const src = readFileSync(new URL(f, dir), 'utf8')
       for (const [i, line] of src.split('\n').entries()) {
         if (/\{[^}]*\.output\s*\|\|[^}]*\}/.test(line) && /state-error|<p|<span|<div/.test(line)) bad.push(`${f}:${i + 1}`)
+        // Шаблонная строка: `…${res.output || res.status}` и `…${x.status}`.
+        if (/`[^`]*\$\{[^}]*\.output\s*\|\|[^}]*\}/.test(line)) bad.push(`${f}:${i + 1}`)
+        if (/`[^`]*\$\{[^{}]*(res|result)\??\.status\}/.test(line)) bad.push(`${f}:${i + 1}`)
         if (/\{[^{}]*\.status\}/.test(line) && /result|res\./.test(line) && /<p|<span|<div/.test(line)) bad.push(`${f}:${i + 1}`)
       }
     }
