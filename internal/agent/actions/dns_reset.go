@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 )
 
 // dnsReferenceUpstreams -- набор, который ставит DNSReset. Каждая строка
@@ -91,7 +92,11 @@ func maskDoHSecretPaths(s string) string {
 func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
-		return "err", fmt.Sprintf("read running-config failed: %v\n%s", err, strings.TrimSpace(string(rc)))
+		msg := fmt.Sprintf("read running-config failed: %v", err)
+		if ex := keenetic.ErrExcerpt(string(rc)); ex != "" {
+			msg += ": " + ex
+		}
+		return "err", msg
 	}
 	existing := parseDNSProxyUpstreams(string(rc))
 	plain := parsePlainNameServers(string(rc))

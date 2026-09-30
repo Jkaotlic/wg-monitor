@@ -16,6 +16,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/actions"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 )
 
 // ndmcTimeout bounds one ndmc call: a hung ndmc must not stall the loop.
@@ -818,6 +819,9 @@ func (w *Watcher) probeCandidates(ctx context.Context) (liveRU, liveForeign, dea
 func (w *Watcher) readUpstreams(ctx context.Context) ([]string, error) {
 	out, err := w.boundedExec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
+		if ex := keenetic.ErrExcerpt(string(out)); ex != "" {
+			return nil, fmt.Errorf("show running-config: %w: %s", err, ex)
+		}
 		return nil, fmt.Errorf("show running-config: %w", err)
 	}
 	// CHK-04: пустой вывод с кодом 0 бывает у ndmc -- это «не прочитано», а

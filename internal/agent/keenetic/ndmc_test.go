@@ -3,6 +3,7 @@ package keenetic
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,21 @@ func TestNDMC_PropagatesErr(t *testing.T) {
 	_, err := n.Show(context.Background(), "running-config")
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestNDMC_ErrorCarriesShortOutput(t *testing.T) {
+	stub := &stubRunner{want: "/bin/ndmc -c show running-config", out: "\x1b[KCore::Configurator: busy.\n", err: errors.New("exit status 1")}
+	_, err := NDMC{Runner: stub}.Show(context.Background(), "running-config")
+	if err == nil || err.Error() != "ndmc show running-config: exit status 1: Core::Configurator: busy." {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNDMC_ErrorDropsLongOutput(t *testing.T) {
+	stub := &stubRunner{want: "/bin/ndmc -c show running-config", out: "authentication wpa-psk ns3 SECRET\n" + strings.Repeat("y\n", 300), err: errors.New("exit status 1")}
+	_, err := NDMC{Runner: stub}.Show(context.Background(), "running-config")
+	if err == nil || strings.Contains(err.Error(), "SECRET") || err.Error() != "ndmc show running-config: exit status 1" {
+		t.Fatalf("err = %v", err)
 	}
 }
