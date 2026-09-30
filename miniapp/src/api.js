@@ -541,3 +541,17 @@ export function confirmTunnelImport(routerID, previewID) {
     body: JSON.stringify({ token: previewID }),
   })
 }
+
+// Допуск к выпуску с awg3-панели (v0.51): какие панели этому человеку можно
+// выпустить на этот роутер (сервер отбирает сам) и управление допуском (админ).
+export function fetchAwg3Issuable(routerID) {
+  return request(`/routers/${routerID}/vpn/awg3`)
+}
+
+export function addAwg3Issuer(id, telegramUserID) {
+  return request(`/awg3panels/${encodeURIComponent(id)}/issuers`, { method: 'POST', body: JSON.stringify({ telegram_user_id: telegramUserID }) })
+}
+
+export function removeAwg3Issuer(id, telegramUserID) {
+  return request(`/awg3panels/${encodeURIComponent(id)}/issuers/${encodeURIComponent(String(telegramUserID))}`, { method: 'DELETE' })
+}

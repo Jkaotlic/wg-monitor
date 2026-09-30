@@ -48,6 +48,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
       log('device', id, iface, name)
       return reply(mocks.deviceReply, { name, address: '10.66.0.9/32', qr_png_base64: 'iVBORw0KGgo=', dm: 'sent' })
     },
+    addAwg3Issuer: (id, tg) => {
+      log('issuer-add', id, tg)
+      return Promise.resolve({ panel: { ...mocks.page.panel, issuers: [{ telegram_user_id: tg, granted_at: '2026-09-30T10:00:00Z' }] } })
+    },
+    removeAwg3Issuer: (id, tg) => {
+      log('issuer-del', id, tg)
+      return Promise.resolve({ panel: { ...mocks.page.panel, issuers: [] } })
+    },
     issueAwg3ToRouter: (routerID, id, iface) => {
       log('router', routerID, id, iface)
       return reply(mocks.routerReply, { cmd_id: 'c1', tunnel_name: `${id}_${iface}` })
@@ -556,5 +564,34 @@ describe('экран панели', () => {
     expect(root.querySelector('img.awg3-qr')).toBeTruthy()
     expect(root.querySelector('.awg3-banner')).toBeTruthy()
     render(null, host)
+  })
+})
+
+describe('экран панели: допуск к выпуску (v0.51)', () => {
+  it('ID «0» отвергается без вызова API; 555 добавляется, ✖ убирает', async () => {
+    const { root } = await mountPanel()
+    const input = root.querySelector('#awg3-issuer-id')
+    const type = async (v) => {
+      await act(async () => {
+        input.value = v
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    const submitForm = async () => {
+      await act(async () => root.querySelector('.access-add-row').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+      await flush()
+    }
+    await type('0')
+    await submitForm()
+    expect(root.textContent).toContain('Введите положительный числовой ID')
+    expect(calls('issuer-add')).toEqual([])
+    await type('555')
+    await submitForm()
+    expect(calls('issuer-add')).toEqual([['issuer-add', 'main', 555]])
+    expect(root.querySelector('.access-id').textContent).toBe('555')
+    await act(async () => root.querySelector('[aria-label="Убрать 555"]').click())
+    await flush()
+    expect(calls('issuer-del')).toEqual([['issuer-del', 'main', 555]])
+    expect(root.querySelector('.access-id')).toBeNull()
   })
 })

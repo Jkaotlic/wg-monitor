@@ -13,6 +13,7 @@ import {
   routerPickRows,
   dmText,
 } from '../awg3Panel.js'
+import { Awg3Issuers } from './Awg3Issuers.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { SegmentTabs } from '../ui/SegmentTabs.jsx'
@@ -268,6 +269,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
                 </Section>
               )
             )}
+            <Awg3Issuers panel={page.panel} onChanged={(p) => p && setPage((prev) => ({ ...prev, panel: p }))} />
             {routerOutcome && (
               <p class={`state awg3-outcome awg3-outcome-${routerOutcome.tone}`} role="status">
                 <Quoted text={routerOutcome.text} />
