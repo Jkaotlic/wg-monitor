@@ -4,7 +4,7 @@ import { SheetHost } from './Sheet.jsx'
 import { OverlayHost } from '../screens/OverlayHost.jsx'
 import { TabBody } from '../screens/TabBody.jsx'
 import { FleetHome } from '../screens/FleetHome.jsx'
-import { FLEET_OVERLAYS, PARK_TAB } from '../nav.js'
+import { FLEET_OVERLAYS, PARK_TAB, TAB_LAYERS } from '../nav.js'
 
 // Широкая раскладка: колонка роутеров слева, справа шапка с вкладками и
 // содержимое. Оверлеи открываются в основной области -- список роутеров
@@ -15,7 +15,7 @@ import { FLEET_OVERLAYS, PARK_TAB } from '../nav.js'
 export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, refreshRouters }) {
   const current = routers.find((r) => r.id === nav.routerID)
   const fleetLayer = Boolean(isAdmin && FLEET_OVERLAYS.includes(nav.overlay))
-  const overlayOpen = Boolean(nav.overlay && nav.overlay !== 'fleet' && (current || fleetLayer))
+  const overlayOpen = Boolean(nav.overlay && nav.overlay !== 'fleet' && !TAB_LAYERS[nav.overlay] && (current || fleetLayer))
   const narrow = overlayOpen || nav.tab !== 'router'
   // «Парк» (v0.48) -- вкладка, а не раздел под сводкой: открывается и с
   // выбранным роутером (тогда над ним шапка роутера с вкладкой «Парк»), и

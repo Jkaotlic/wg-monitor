@@ -89,8 +89,8 @@ describe('кабинет роутера -- слой навигации', () => {
     const actions = []
     let root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'tunnels' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin={false} />)
     expect(mocks.props.tunnels.cabinetOpen).toBe(false)
-    mocks.props.tunnels.onOpenCabinet()
-    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'cabinet' })
+    mocks.props.tunnels.openLayer('cabinet', { tab: 'hidemy' })
+    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'cabinet', params: { tab: 'hidemy' } })
     cleanup(root)
 
     root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'tunnels', overlay: 'cabinet' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)

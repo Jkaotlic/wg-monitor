@@ -58,6 +58,8 @@ vi.mock('../src/commandWait.js', async (importOriginal) => {
 })
 
 const { TunnelsTab } = await import('../src/screens/TunnelsTab.jsx')
+const { navReducer, tabOwnsLayer } = await import('../src/nav.js')
+const { useReducer } = await import('preact/hooks')
 const { TunnelScreen } = await import('../src/screens/TunnelScreen.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { ApiError } = await import('../src/api.js')
@@ -93,13 +95,28 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 const byText = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 const routeStatusCalls = () => mocks.calls.filter((c) => c.action === 'route_status').length
 
+// v0.52: экран VPN-туннеля -- слой навигации. Хозяин слоя -- настоящий
+// редьюсер nav.js, поэтому открытие строкой и «назад» проходят весь путь.
+function Host(props) {
+  const [nav, dispatch] = useReducer(navReducer, { routerID: 7, tab: 'tunnels', overlay: null, sheet: null })
+  return (
+    <TunnelsTab
+      {...props}
+      layer={tabOwnsLayer(nav) ? nav.overlay : null}
+      layerParams={nav.overlayParams ?? {}}
+      openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+      closeLayer={() => dispatch({ type: 'back' })}
+    />
+  )
+}
+
 async function mount(props = {}) {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const seen = { sheets: [], rebind: [] }
   await act(async () =>
     render(
-      <TunnelsTab
+      <Host
         routerID={7}
         openSheet={(s) => seen.sheets.push(s)}
         onOpenRoutes={() => {}}

@@ -4,7 +4,7 @@ import { DiagTab } from './DiagTab.jsx'
 import { EventsTab } from './EventsTab.jsx'
 import { ManageTab } from './ManageTab.jsx'
 import { ParkTab } from './ParkTab.jsx'
-import { PARK_TAB } from '../nav.js'
+import { PARK_TAB, tabOwnsLayer } from '../nav.js'
 import { routerContext } from './OverlayHost.jsx'
 
 export function TabBody({ nav, dispatch, routers, isAdmin }) {
@@ -29,9 +29,10 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   const { current, asleep } = routerContext(routers, nav.routerID)
   const openSheet = (sheet) => dispatch({ type: 'sheet', sheet })
   // Переход к переносу с экрана VPN-туннеля: «Маршруты» сами откроют выбор
-  // цели. Id VPN-туннеля живёт в параметрах слоя, в адрес пишется только
-  // open=routes.
-  const openRebind = (tunnelID) => dispatch({ type: 'overlay', overlay: 'routes', params: { rebindFrom: tunnelID } })
+  // цели и вернут на экран VPN-туннеля. Id живёт в параметрах слоя, в адрес
+  // пишется только open=routes.
+  const openRebind = (tunnelID) =>
+    dispatch({ type: 'overlay', overlay: 'routes', params: { rebindFrom: tunnelID, returnTo: 'tunnel', returnParams: { tunnelID } } })
   // key -- номер роутера: переход A→B пересоздаёт вкладку, и ни состояние,
   // ни поздний ответ по A не переезжают на экран B (MINI-04).
   const key = nav.routerID
@@ -53,9 +54,13 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           key={key}
           routerID={nav.routerID}
           asleep={asleep}
+          isAdmin={isAdmin}
+          layer={tabOwnsLayer(nav) ? nav.overlay : null}
+          layerParams={nav.overlayParams ?? {}}
+          openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+          closeLayer={() => dispatch({ type: 'back' })}
           onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
           onOpenRebind={openRebind}
-          onOpenCabinet={() => dispatch({ type: 'overlay', overlay: 'cabinet' })}
           cabinetOpen={nav.overlay === 'cabinet'}
           routesOpen={nav.overlay === 'routes'}
           openSheet={openSheet}

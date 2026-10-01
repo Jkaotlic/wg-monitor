@@ -48,16 +48,10 @@ const CHAIN_TITLE = {
 // onOpenRebind(tunnelID) -- «Маршруты» с выбором цели переноса для этого
 // VPN-туннеля. routesOpen -- слой «Маршрутов» открыт поверх вкладки: после его
 // закрытия снимок перечитывается, правила могли уехать.
-export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, onOpenCabinet, cabinetOpen = false, routesOpen = false }) {
-  const [replacing, setReplacing] = useState(null)
-  // Экран VPN-туннеля -- локальный слой, как мастер замены: в адрес не пишется.
-  const [inspecting, setInspecting] = useState(null)
+export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, isAdmin = false, layer = null, layerParams = {}, openLayer, closeLayer, cabinetOpen = false, routesOpen = false }) {
   // Роль решает, рисовать ли удаление и загрузку конфига; не узнали -- кнопок
   // нет, граница всё равно на сервере.
   const [role, setRole] = useState('')
-  // Загрузка .conf -- тоже локальный слой: содержимое конфига не должно
-  // оказаться в навигации даже случайно.
-  const [importing, setImporting] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
   // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
@@ -72,8 +66,6 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
 
   useEffect(() => {
     setSnapshot(null)
-    setInspecting(null)
-    setImporting(false)
     setRole('')
     run('route_status', {}, deadline)
     let alive = true
@@ -351,86 +343,53 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 key={t.id}
                 title={t.name}
                 sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
-                onClick={() => setInspecting(t.id)}
+                onClick={() => openLayer?.('tunnel', { tunnelID: t.id })}
               />
             ))}
           </ul>
         </Section>
       )}
 
-      {/* Внизу акцентный переход один -- «Новый VPN-туннель из кабинета»
-          (спека C4): ради него сюда чаще всего и приходят. Маршруты, загрузка
-          .conf и замена конфига -- обычные строки списка: четыре одинаково
-          ярких карточки подряд спорили друг с другом. */}
-      {snapshot && onOpenCabinet && (
-        <div style="margin-top:24px">
-          <NavCard
-            title="Новый VPN-туннель из кабинета"
-            note="Amnezia · HideMy"
-            onClick={onOpenCabinet}
-          />
-        </div>
-      )}
-
-      {(view.active || (snapshot && mayManageTunnels(role))) && (
+      {view.active && (
         <ul class="card list-reset tunnels-more" style="margin-top:12px">
-          {view.active && (
-            <ListRow title="Маршруты" sub={`${view.active.rules} назн.`} onClick={onOpenRoutes} />
-          )}
-          {snapshot && mayManageTunnels(role) && (
-            <ListRow title={IMPORT_TEXTS.title} sub={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
-          )}
-          {/* Замена конфига предлагается для работающего VPN-туннеля: смысл
-              операции -- заменить то, чем сейчас ходит трафик, не потеряв
-              прежний туннель. */}
-          {view.active && view.policyName && (
-            <ListRow title="Заменить конфиг VPN-туннеля" sub={view.active.title} onClick={() => setReplacing(view.active)} />
-          )}
+          <ListRow title="Маршруты: куда идёт трафик" sub={`${view.active.rules} назн.`} onClick={onOpenRoutes} />
         </ul>
       )}
 
-      {replacing && (
-        <ReplaceScreen
-          routerID={routerID}
-          tunnel={replacing}
-          policyName={view.policyName}
-          onClose={() => setReplacing(null)}
-          onDone={() => run('route_status', {}, deadline)}
-          onOpenCabinet={
-            onOpenCabinet
-              ? () => {
-                  setReplacing(null)
-                  onOpenCabinet()
-                }
-              : undefined
-          }
-          onOpenTunnel={(tunnelID) => {
-            setReplacing(null)
-            if (tunnelID) setInspecting(tunnelID)
-          }}
-        />
-      )}
-
-      {inspecting && (
+      {layer === 'tunnel' && (
         <TunnelScreen
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
-          tunnelID={inspecting}
+          tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}
-          onClose={() => setInspecting(null)}
+          onClose={closeLayer}
           onChanged={() => run('route_status', {}, deadline)}
           onOpenRebind={onOpenRebind}
+          canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
+          onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}
         />
       )}
 
-      {importing && (
+      {layer === 'replace' && layerParams.tunnel && (
+        <ReplaceScreen
+          routerID={routerID}
+          tunnel={layerParams.tunnel}
+          policyName={layerParams.policyName}
+          onClose={closeLayer}
+          onDone={() => run('route_status', {}, deadline)}
+          onOpenCabinet={() => openLayer('cabinet', {})}
+          onOpenTunnel={(tunnelID) => (tunnelID ? openLayer('tunnel', { tunnelID }) : closeLayer())}
+        />
+      )}
+
+      {layer === 'confimport' && (
         <ConfImportScreen
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
-          onClose={() => setImporting(false)}
+          onClose={closeLayer}
           onImported={() => run('route_status', {}, deadline)}
         />
       )}

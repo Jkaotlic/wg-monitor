@@ -41,9 +41,11 @@ describe('VPN-туннели → перенос в «Маршрутах»', () =
     const root = await draw(<TabBody nav={base} dispatch={(a) => sent.push(a)} routers={ROUTERS} isAdmin={false} />)
     expect(mocks.props.tunnels.routesOpen).toBe(false)
     mocks.props.tunnels.onOpenRebind('nwg1')
-    expect(sent).toEqual([{ type: 'overlay', overlay: 'routes', params: { rebindFrom: 'nwg1' } }])
+    // v0.52: «Маршруты» вернут на экран VPN-туннеля, откуда пришли.
+    const params = { rebindFrom: 'nwg1', returnTo: 'tunnel', returnParams: { tunnelID: 'nwg1' } }
+    expect(sent).toEqual([{ type: 'overlay', overlay: 'routes', params }])
     const next = navReducer(base, sent[0])
-    expect(next).toEqual({ ...base, overlay: 'routes', overlayParams: { rebindFrom: 'nwg1' } })
+    expect(next).toEqual({ ...base, overlay: 'routes', overlayParams: params })
     expect(urlFromNav(next)).toBe('?router=7&tab=tunnels&open=routes')
     await act(async () => render(<TabBody nav={next} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />, root))
     expect(mocks.props.tunnels.routesOpen).toBe(true)
