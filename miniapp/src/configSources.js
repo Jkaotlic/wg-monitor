@@ -6,16 +6,25 @@
 export const CONFIG_SOURCES_TITLE = 'Откуда взять конфиг'
 
 const AWG3_LABEL = 'Панель VPN-сервера'
+const CONF_LABEL = 'Загрузить .conf'
 
-export function configSourceChoices({ isAdmin = false, canImport = false, awg3 = { status: 'loading', panels: [] } } = {}) {
+const LOADING = { tone: 'muted', text: 'загружается' }
+const RETRY = { tone: 'warn', text: 'не загрузилось — повторить' }
+
+// roleStatus -- прочиталась ли роль (loading | ok | error): без неё нельзя
+// сказать, есть ли право на .conf, и пункт не пропадает молча (финал п. 4).
+export function configSourceChoices({ isAdmin = false, canImport = false, roleStatus = 'ok', awg3 = { status: 'loading', panels: [] } } = {}) {
   const out = [
     { value: 'amnezia', label: 'Amnezia' },
     { value: 'hidemy', label: 'HideMy' },
   ]
   if (isAdmin) out.push({ value: 'selfhosted', label: 'Свой сервер' })
   if (awg3?.status === 'ok' && (awg3.panels ?? []).length > 0) out.push({ value: 'awg3', label: AWG3_LABEL })
-  else if (awg3?.status === 'error') out.push({ value: 'awg3-retry', label: AWG3_LABEL, pill: { tone: 'warn', text: 'не загрузилось — повторить' } })
-  if (canImport) out.push({ value: 'conf', label: 'Загрузить .conf' })
+  else if (awg3?.status === 'error') out.push({ value: 'awg3-retry', label: AWG3_LABEL, pill: RETRY })
+  else if (awg3?.status === 'loading') out.push({ value: 'awg3-loading', label: AWG3_LABEL, disabled: true, pill: LOADING })
+  if (roleStatus === 'error') out.push({ value: 'conf-retry', label: CONF_LABEL, pill: RETRY })
+  else if (roleStatus === 'loading') out.push({ value: 'conf-loading', label: CONF_LABEL, disabled: true, pill: LOADING })
+  else if (canImport) out.push({ value: 'conf', label: CONF_LABEL })
   return out
 }
 

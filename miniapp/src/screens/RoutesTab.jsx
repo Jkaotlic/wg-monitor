@@ -529,9 +529,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         </details>
       )}
 
-      {snapshot && (
-        <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
-      )}
+      {/* Блок HydraRoute Neo -- не от снимка маршрутов: он берёт состояние из
+          своей инвентаризации, а «Перезапустить» без снимка -- единственный
+          способ достучаться до Neo, когда route_status не отвечает. */}
+      <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
 
       {groups.length > 0 && (
         <Section title="Названные сайты и адреса">

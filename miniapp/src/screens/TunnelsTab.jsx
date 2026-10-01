@@ -1,5 +1,5 @@
 import { agentReplyText } from '../errorText.js'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable } from '../api.js'
 import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
@@ -51,7 +51,10 @@ const CHAIN_TITLE = {
 export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, isAdmin = false, layer = null, layerParams = {}, openLayer, closeLayer, cabinetOpen = false, routesOpen = false }) {
   // Роль решает, рисовать ли удаление и загрузку конфига; не узнали -- кнопок
   // нет, граница всё равно на сервере.
+  // roleStatus: loading | ok | error -- сбой чтения роли не должен молча
+  // убирать «Загрузить .conf» из листа (финальное ревью v0.52, п. 4).
   const [role, setRole] = useState('')
+  const [roleStatus, setRoleStatus] = useState('loading')
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
   // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
@@ -76,26 +79,42 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     loadAwg3()
   }, [routerID])
 
+  const loadRole = () =>
+    fetchRouterSettings(routerID)
+      .then((st) => ({ status: 'ok', role: st?.role ?? '' }))
+      .catch(() => ({ status: 'error', role: '' }))
+      .then((next) => {
+        setRole(next.role)
+        setRoleStatus(next.status)
+        return next
+      })
+
   // Лист закрывается после onDone, поэтому повторное открытие -- следующим
-  // тиком, с уже перечитанным списком панелей. Загрузка .conf -- всем, кто
-  // управляет туннелями (админ, владелец, оператор: решение 01.10).
-  const askSource = (panels) =>
+  // тиком, с уже перечитанным. Загрузка .conf -- всем, кто управляет
+  // туннелями (админ, владелец, оператор: решение 01.10). Последнее известное
+  // читается через ref: onDone приходит из замыкания старого рендера.
+  const latest = useRef({})
+  latest.current = { awg3, role, roleStatus }
+  const askSource = (over = {}) => {
+    const cur = { ...latest.current, ...over }
     openSheet(
       localSheet({
         title: CONFIG_SOURCES_TITLE,
         body: 'Конфиг встанет на роутер новым VPN-туннелем рядом с остальными.',
-        choices: configSourceChoices({ isAdmin, canImport: cabinetPerms(role).manage, awg3: panels }),
+        choices: configSourceChoices({ isAdmin, canImport: cabinetPerms(cur.role).manage, roleStatus: cur.roleStatus, awg3: cur.awg3 }),
         perform: (_typed, _values, value) => {
-          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, next }))
+          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, over: { awg3: next } }))
+          if (value === 'conf-retry') return loadRole().then((next) => ({ retried: true, over: { role: next.role, roleStatus: next.status } }))
           const target = configSourceTarget(value)
           if (target) openLayer?.(target.overlay, target.params)
           return null
         },
         onDone: (resp) => {
-          if (resp?.retried) setTimeout(() => askSource(resp.next), 0)
+          if (resp?.retried) setTimeout(() => askSource(resp.over), 0)
         },
       }),
     )
+  }
 
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
   useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
@@ -104,13 +123,18 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   useEffect(() => {
     setSnapshot(null)
     setRole('')
+    setRoleStatus('loading')
     run('route_status', {}, deadline)
     let alive = true
     fetchRouterSettings(routerID)
-      .then((s) => {
-        if (alive) setRole(s?.role ?? '')
+      .then((st) => {
+        if (!alive) return
+        setRole(st?.role ?? '')
+        setRoleStatus('ok')
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive) setRoleStatus('error')
+      })
     return () => {
       alive = false
     }
@@ -150,6 +174,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // кнопка осталась способом пересчитать принудительно.
   const traffic = useCommand(routerID)
   const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
+
+  const replaceFromHero = Boolean(openLayer && view.active && view.policyName && !list.some((t) => t.id === view.active.id))
 
   const activeTunnelID = view.active?.id
   useEffect(() => {
@@ -244,7 +270,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           снимка экран загрузки .conf не сверяет имя с уже занятыми
           (tunnelNameProblem пропускает проверку) -- дубль отклонит сервер. */}
       {openLayer && openSheet && (
-        <button type="button" class="btn btn-primary btn-wide new-tunnel" onClick={() => askSource(awg3)}>
+        <button type="button" class="btn btn-primary btn-wide new-tunnel" onClick={() => askSource()}>
           Новый VPN-туннель
         </button>
       )}
@@ -300,6 +326,13 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               />
               <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
             </div>
+            {/* Несущий VPN-туннель не managed-типа не попадает в «Все VPN-туннели»,
+                а значит и на свой экран: замена конфига -- здесь (финал п. 1). */}
+            {replaceFromHero && (
+              <button type="button" class="btn btn-ghost btn-wide" style="margin-bottom:16px" onClick={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}>
+                Заменить конфиг
+              </button>
+            )}
           </Hero>
         </Section>
       )}
@@ -396,11 +429,11 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {view.active && (
-        <ul class="card list-reset tunnels-more" style="margin-top:12px">
-          <ListRow title="Маршруты: куда идёт трафик" sub={`${view.active.rules} назн.`} onClick={onOpenRoutes} />
-        </ul>
-      )}
+      {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
+          единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
+      <ul class="card list-reset tunnels-more" style="margin-top:12px">
+        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? `${view.active.rules} назн.` : undefined} onClick={onOpenRoutes} />
+      </ul>
 
       {layer === 'tunnel' && (
         <TunnelScreen
@@ -413,6 +446,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           onClose={closeLayer}
           onChanged={() => run('route_status', {}, deadline)}
           onOpenRebind={onOpenRebind}
+          onRestart={() => run('route_status', {}, deadline)}
           canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
           onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName, returnTo: 'tunnel', returnParams: { tunnelID: layerParams.tunnelID } })}
         />
