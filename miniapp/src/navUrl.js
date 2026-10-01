@@ -6,11 +6,11 @@ import { initialNav, normalizeTab, diagViewFor, deepLinkOverlay, TABS, PARK_TAB,
 // перезагрузить?» -- и тем более не должно выглядеть так, будто спрашивает.
 // isAdmin -- слои парка с адресом (свои серверы) открываются только админу:
 // остальным сервер ответит 404, и адрес ведёт на обычный экран.
-export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
+export function navFromURL(search, routerIDs = [], { isAdmin = false, routers = null, lastID = null } = {}) {
   const params = new URLSearchParams(search ?? '')
   const raw = params.get('router')
   const id = raw ? Number(raw) : NaN
-  const state = initialNav({ routerIDs, deepLinkID: Number.isFinite(id) ? id : null })
+  const state = initialNav({ routerIDs, deepLinkID: Number.isFinite(id) ? id : null, isAdmin, routers, lastID })
   const rawTab = params.get('tab')
   const tab = normalizeTab(rawTab)
   const open = params.get('open')
@@ -27,7 +27,7 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
       if (diagViewFor(rawTab)) state.diagView = 'history'
     }
     state.overlay = open
-    state.overlayParams = { returnTo: park ? PARK_TAB : state.routerID != null ? 'fleet' : null }
+    state.overlayParams = { returnTo: park || state.tab === PARK_TAB ? PARK_TAB : state.routerID != null ? 'fleet' : null }
     return state
   }
   if (park) {

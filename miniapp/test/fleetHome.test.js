@@ -5,7 +5,7 @@ import { navReducer, backButtonVisible, escapeAction, initialNav } from '../src/
 // Список роутеров без выбранного роутера -- главный экран, а не крышка: «назад»
 // (кнопка Telegram, свайп, Esc) закрывал его в пустоту.
 describe('список роутеров -- главный экран, пока роутер не выбран', () => {
-  const home = initialNav({ routerIDs: [1, 2, 3] })
+  const home = initialNav({ routerIDs: [1, 2, 3, 4, 5, 6] })
   it('открыт сразу', () => {
     expect(home.routerID).toBe(null)
     expect(home.overlay).toBe('fleet')

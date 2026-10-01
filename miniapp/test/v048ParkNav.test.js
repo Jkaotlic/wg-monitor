@@ -49,7 +49,7 @@ describe('адрес Парка', () => {
     expect(navFromURL('?router=2&tab=park', [1, 2], { isAdmin: true })).toMatchObject({ routerID: 2, tab: 'park', overlay: null })
   })
   it('не-админу ?tab=park не значит ничего', () => {
-    expect(navFromURL('?tab=park', [1, 2], { isAdmin: false })).toMatchObject({ tab: 'router', overlay: 'fleet' })
+    expect(navFromURL('?tab=park', [1, 2, 3, 4, 5, 6], { isAdmin: false })).toMatchObject({ tab: 'router', overlay: 'fleet' })
     expect(navFromURL('?router=2&tab=park', [1, 2], { isAdmin: false })).toMatchObject({ routerID: 2, tab: 'router' })
   })
   it('обратно в адрес', () => {

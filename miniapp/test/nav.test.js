@@ -12,8 +12,8 @@ describe('initialNav', () => {
     expect(initialNav({ routerIDs: [42], deepLinkID: null }).routerID).toBe(42)
   })
 
-  it('при нескольких роутерах и без deep-link открывает список', () => {
-    const s = initialNav({ routerIDs: [1, 2], deepLinkID: null })
+  it('при шести и более роутерах и без deep-link открывает список', () => {
+    const s = initialNav({ routerIDs: [1, 2, 3, 4, 5, 6], deepLinkID: null })
     expect(s.routerID).toBe(null)
     expect(s.overlay).toBe('fleet')
   })

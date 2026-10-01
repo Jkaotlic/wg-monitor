@@ -6,6 +6,8 @@
 // «Проверки», «Настройки» (+ «Парк» админу). «Что было» стало видом
 // «Проверок»: ключ events остаётся псевдонимом -- ссылки из отправленных
 // тревог живут месяцами.
+import { STRIP_MAX, landingRouterID } from './routerPick.js'
+
 export const TABS = ['router', 'tunnels', 'diag', 'manage']
 
 // «Парк» (v0.48) -- вкладка админа, первая в панели: весь парк, от
@@ -186,7 +188,7 @@ export function barLabel(tab) {
   return tabLabel(tab)
 }
 
-export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
+export function initialNav({ routerIDs = [], deepLinkID = null, isAdmin = false, routers = null, lastID = null } = {}) {
   const state = { routerID: null, tab: 'router', overlay: null, sheet: null }
   // Deep-link с тревоги ведёт на конкретный роутер, но не обходит доступ:
   // сервер отдаст 404, а клиент не должен делать вид, что чужой роутер открыт.
@@ -194,12 +196,24 @@ export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
     state.routerID = deepLinkID
     return state
   }
+  // Пустой доступ -- отдельный экран, а не список из нуля строк.
+  if (routerIDs.length === 0) return state
   if (routerIDs.length === 1) {
     state.routerID = routerIDs[0]
     return state
   }
-  // Пустой доступ -- отдельный экран, а не список из нуля строк.
-  if (routerIDs.length > 1) state.overlay = 'fleet'
+  // Главный экран (спека §3): админ -- Парк; 2–5 -- роутер в беде, иначе
+  // последний открытый; 6+ -- список. Ссылка на роутер, доступа к которому
+  // нет, не подменяется молча другим роутером -- список честнее.
+  if (isAdmin) {
+    state.tab = PARK_TAB
+    return state
+  }
+  if (deepLinkID == null && routerIDs.length <= STRIP_MAX) {
+    state.routerID = landingRouterID({ routerIDs, routers, lastID })
+    return state
+  }
+  state.overlay = 'fleet'
   return state
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks'
 import { navFromURL, urlFromNav } from './navUrl.js'
 import { navPinned } from './nav.js'
+import { loadLastRouter } from './routerPick.js'
 
 // Навигация веб-управления живёт в адресе: «назад» браузера, обновление
 // страницы и закладки. В Telegram (enabled=false) адрес не трогаем вовсе.
@@ -8,10 +9,14 @@ import { navPinned } from './nav.js'
 // Первая синхронизация -- replaceState: открытие страницы не должно
 // оставлять в истории лишнюю запись, по которой «назад» ведёт на то же самое.
 // Она же переводит /dashboard/login в /dashboard/ после входа.
-export function useNavURL({ enabled, nav, dispatch, routerIDs = [], isAdmin = false, basePath = '/dashboard/' }) {
+export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = null, isAdmin = false, basePath = '/dashboard/' }) {
   const synced = useRef(false)
   const idsRef = useRef(routerIDs)
   idsRef.current = routerIDs
+  // N1: «назад» на голый адрес выбирает главный экран так же, как старт, --
+  // по роутеру в беде, а не по первому в списке.
+  const routersRef = useRef(routers)
+  routersRef.current = routers
   const adminRef = useRef(isAdmin)
   adminRef.current = isAdmin
   const navRef = useRef(nav)
@@ -44,7 +49,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], isAdmin = fa
         window.history.pushState(null, '', basePath + urlFromNav(navRef.current))
         return
       }
-      const state = navFromURL(window.location.search, idsRef.current, { isAdmin: adminRef.current })
+      const state = navFromURL(window.location.search, idsRef.current, { isAdmin: adminRef.current, routers: routersRef.current, lastID: loadLastRouter() })
       const next = basePath + urlFromNav(state)
       if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, '', next)
       dispatch({ type: 'init', state, source: 'popstate' })

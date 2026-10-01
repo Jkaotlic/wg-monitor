@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { navFromURL, urlFromNav } from '../src/navUrl.js'
 import { TABS, OPEN_OVERLAYS } from '../src/nav.js'
 
-const IDS = [3, 7, 12]
+const IDS = [3, 7, 12, 14, 15, 16]
 const pick = (s) => ({ routerID: s.routerID, tab: s.tab, overlay: s.overlay, sheet: s.sheet ?? null })
 
 describe('urlFromNav', () => {
@@ -109,11 +109,11 @@ describe('кабинет и свои серверы в адресе', () => {
     expect(pick(s)).toEqual({ routerID: 7, tab: 'tunnels', overlay: 'cabinet', sheet: null })
   })
 
-  it('свои серверы без роутера -- ?open=selfhosted, возврат к сводке', () => {
+  it('свои серверы без роутера -- ?open=selfhosted, возврат в Парк', () => {
     expect(urlFromNav({ routerID: null, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: null }, sheet: null })).toBe('?open=selfhosted')
     const s = navFromURL('?open=selfhosted', IDS, ADMIN)
-    expect(pick(s)).toEqual({ routerID: null, tab: 'router', overlay: 'selfhosted', sheet: null })
-    expect(s.overlayParams).toEqual({ returnTo: null })
+    expect(pick(s)).toEqual({ routerID: null, tab: 'park', overlay: 'selfhosted', sheet: null })
+    expect(s.overlayParams).toEqual({ returnTo: 'park' })
   })
 
   it('свои серверы с роутером -- возврат к списку роутеров (там Парк)', () => {
@@ -127,7 +127,7 @@ describe('кабинет и свои серверы в адресе', () => {
     const inst = { routerID: null, tab: 'router', overlay: 'selfhostedinst', overlayParams: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: null } }, sheet: null }
     expect(urlFromNav(inst)).toBe('?open=selfhosted')
     expect(urlFromNav({ ...inst, routerID: 7 })).toBe('?router=7&open=selfhosted')
-    expect(navFromURL('?open=selfhostedinst', IDS, ADMIN).overlay).toBe('fleet')
+    expect(navFromURL('?open=selfhostedinst', IDS, ADMIN).overlay).toBe(null)
   })
 
   it('один роутер: ?open=selfhosted открывает список поверх него', () => {
@@ -138,7 +138,8 @@ describe('кабинет и свои серверы в адресе', () => {
 
   it('круг для своих серверов', () => {
     for (const s of [
-      { routerID: null, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: null }, sheet: null },
+      // Админ без роутера живёт на вкладке Парка (v0.52): слой возвращает туда.
+      { routerID: null, tab: 'park', overlay: 'selfhosted', overlayParams: { returnTo: 'park' }, sheet: null },
       { routerID: 7, tab: 'diag', overlay: 'selfhosted', overlayParams: { returnTo: 'admin' }, sheet: null },
     ]) {
       expect(urlFromNav(navFromURL(urlFromNav(s), IDS, ADMIN))).toBe(urlFromNav(s))
