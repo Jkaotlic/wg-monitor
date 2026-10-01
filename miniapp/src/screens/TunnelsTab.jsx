@@ -43,6 +43,8 @@ const CHAIN_TITLE = {
   checkUnknown: 'Проверка неизвестна',
 }
 
+const SOURCES_WAIT_MS = 8000
+
 // Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
 // его адрес переживает обновление страницы, и «назад» Telegram закрывает его.
 // onOpenRebind(tunnelID) -- «Маршруты» с выбором цели переноса для этого
@@ -66,28 +68,43 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // «Новый VPN-туннель» (v0.52): лист «Откуда взять конфиг». Панели VPN-сервера
   // грузятся заранее; сбой списка -- пункт с повтором, а не тишина.
   const [awg3, setAwg3] = useState({ status: 'loading', panels: [] })
-  const loadAwg3 = () =>
-    fetchAwg3Issuable(routerID)
+  // Ответ чтения, пришедший после смены роутера, ничего не пишет: иначе роль
+  // и панели прежнего роутера переехали бы на новый (финальное ревью, п. 6).
+  const routerRef = useRef(routerID)
+  routerRef.current = routerID
+  const loads = useRef({ awg3: null, role: null })
+  const loadAwg3 = () => {
+    const rid = routerID
+    const p = fetchAwg3Issuable(rid)
       .then((r) => ({ status: 'ok', panels: r?.panels ?? [] }))
       .catch(() => ({ status: 'error', panels: [] }))
       .then((next) => {
-        setAwg3(next)
+        if (routerRef.current === rid) setAwg3(next)
         return next
       })
+    loads.current.awg3 = p
+    return p
+  }
   useEffect(() => {
     setAwg3({ status: 'loading', panels: [] })
     loadAwg3()
   }, [routerID])
 
-  const loadRole = () =>
-    fetchRouterSettings(routerID)
+  const loadRole = () => {
+    const rid = routerID
+    const p = fetchRouterSettings(rid)
       .then((st) => ({ status: 'ok', role: st?.role ?? '' }))
       .catch(() => ({ status: 'error', role: '' }))
       .then((next) => {
-        setRole(next.role)
-        setRoleStatus(next.status)
+        if (routerRef.current === rid) {
+          setRole(next.role)
+          setRoleStatus(next.status)
+        }
         return next
       })
+    loads.current.role = p
+    return p
+  }
 
   // Лист закрывается после onDone, поэтому повторное открытие -- следующим
   // тиком, с уже перечитанным. Загрузка .conf -- всем, кто управляет
@@ -97,23 +114,53 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   latest.current = { awg3, role, roleStatus }
   const askSource = (over = {}) => {
     const cur = { ...latest.current, ...over }
+    const rid = routerID
     openSheet(
       localSheet({
         title: CONFIG_SOURCES_TITLE,
         body: 'Конфиг встанет на роутер новым VPN-туннелем рядом с остальными.',
         choices: configSourceChoices({ isAdmin, canImport: cabinetPerms(cur.role).manage, roleStatus: cur.roleStatus, awg3: cur.awg3 }),
         perform: (_typed, _values, value) => {
-          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, over: { awg3: next } }))
-          if (value === 'conf-retry') return loadRole().then((next) => ({ retried: true, over: { role: next.role, roleStatus: next.status } }))
+          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, rid, over: { awg3: next } }))
+          if (value === 'conf-retry') return loadRole().then((next) => ({ retried: true, rid, over: { role: next.role, roleStatus: next.status } }))
           const target = configSourceTarget(value)
           if (target) openLayer?.(target.overlay, target.params)
           return null
         },
         onDone: (resp) => {
-          if (resp?.retried) setTimeout(() => askSource(resp.over), 0)
+          if (resp?.retried && routerRef.current === resp.rid) setTimeout(() => askSource(resp.over), 0)
         },
       }),
     )
+  }
+
+  // Лист считает варианты при открытии и сам уже не обновится, поэтому кнопка
+  // дожидается чтения панелей и роли (занятая, пока ждёт) и открывает лист с
+  // итоговыми вариантами. Зависшее чтение -- через SOURCES_WAIT_MS как сбой:
+  // пункт с повтором, а не вечная «загрузка» (финальное ревью, п. 5).
+  const [opening, setOpening] = useState(false)
+  const openSources = async () => {
+    if (opening) return
+    const cur = latest.current
+    if (cur.awg3.status !== 'loading' && cur.roleStatus !== 'loading') return askSource()
+    const rid = routerID
+    setOpening(true)
+    let timer
+    const gave = await Promise.race([
+      Promise.all([loads.current.awg3, loads.current.role]),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), SOURCES_WAIT_MS)
+      }),
+    ])
+    clearTimeout(timer)
+    setOpening(false)
+    if (routerRef.current !== rid) return
+    const now = latest.current
+    if (gave) return askSource({ awg3: gave[0], role: gave[1].role, roleStatus: gave[1].status })
+    askSource({
+      awg3: now.awg3.status === 'loading' ? { status: 'error', panels: [] } : now.awg3,
+      roleStatus: now.roleStatus === 'loading' ? 'error' : now.roleStatus,
+    })
   }
 
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
@@ -125,19 +172,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     setRole('')
     setRoleStatus('loading')
     run('route_status', {}, deadline)
-    let alive = true
-    fetchRouterSettings(routerID)
-      .then((st) => {
-        if (!alive) return
-        setRole(st?.role ?? '')
-        setRoleStatus('ok')
-      })
-      .catch(() => {
-        if (alive) setRoleStatus('error')
-      })
-    return () => {
-      alive = false
-    }
+    loadRole()
   }, [routerID])
 
   useEffect(() => {
@@ -175,7 +210,13 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const traffic = useCommand(routerID)
   const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
 
-  const replaceFromHero = Boolean(openLayer && view.active && view.policyName && !list.some((t) => t.id === view.active.id))
+  // Заменить можно только то, что сервер найдёт: старт замены сверяет
+  // old_tunnel_id с событиями tunnel_<id> этого роутера
+  // (miniappResolveTunnelArgs), а агент пишет их лишь для типов awg/wg
+  // (checks/tunnels.go). Доказательство -- то же событие в checks.tunnels:
+  // нет его -- кнопка вела бы в гарантированный отказ unknown_tunnel.
+  const resolvable = Boolean(view.active && (checks?.tunnels ?? []).some((c) => c.tunnel_id === view.active.id))
+  const replaceFromHero = Boolean(openLayer && resolvable && view.policyName && !list.some((t) => t.id === view.active.id))
 
   const activeTunnelID = view.active?.id
   useEffect(() => {
@@ -270,8 +311,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           снимка экран загрузки .conf не сверяет имя с уже занятыми
           (tunnelNameProblem пропускает проверку) -- дубль отклонит сервер. */}
       {openLayer && openSheet && (
-        <button type="button" class="btn btn-primary btn-wide new-tunnel" onClick={() => askSource()}>
-          Новый VPN-туннель
+        <button type="button" class="btn btn-primary btn-wide new-tunnel" disabled={opening} onClick={openSources}>
+          {opening ? 'Читаю…' : 'Новый VPN-туннель'}
         </button>
       )}
 
@@ -329,7 +370,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
             {/* Несущий VPN-туннель не managed-типа не попадает в «Все VPN-туннели»,
                 а значит и на свой экран: замена конфига -- здесь (финал п. 1). */}
             {replaceFromHero && (
-              <button type="button" class="btn btn-ghost btn-wide" style="margin-bottom:16px" onClick={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}>
+              <button type="button" class="btn btn-ghost btn-wide hero-replace" onClick={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}>
                 Заменить конфиг
               </button>
             )}

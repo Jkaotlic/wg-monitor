@@ -8,9 +8,9 @@ const A = vi.hoisted(() => ({ snap: null, role: 'owner', settings: null, issuabl
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running' }] }),
-  fetchRouterSettings: () => {
+  fetchRouterSettings: (routerID) => {
     A.settingsCalls++
-    return A.settings ? A.settings() : Promise.resolve({ role: A.role })
+    return A.settings ? A.settings(routerID) : Promise.resolve({ role: A.role })
   },
   fetchAwg3Issuable: () => A.issuable(),
   fetchRouterFacts: () => Promise.resolve(null),
@@ -51,6 +51,14 @@ beforeEach(() => {
 })
 
 describe('п. 1: «Заменить конфиг» у активного VPN-туннеля не managed-типа', () => {
+  // Кнопка есть только там, где сервер найдёт туннель: событие tunnel_<id> в
+  // checks.tunnels (его же читает miniappResolveTunnelArgs).
+  it('нет события проверки у активного -- кнопки нет (иначе гарантированный unknown_tunnel)', async () => {
+    setSnap({ tunnels: [{ ...MANAGED, id: 'Wireguard0', type: 'system' }], policies: [{ ...POLICY, active_tunnel_id: 'Wireguard0' }] })
+    const root = await mount()
+    expect(btn(root, 'Заменить конфиг')).toBeFalsy()
+    cleanup(root)
+  })
   it('вход в герое активного, открывает слой replace', async () => {
     setSnap({ tunnels: [{ ...MANAGED, type: 'system' }], policies: [POLICY] })
     const calls = []
@@ -112,25 +120,84 @@ describe('п. 4: «Загрузить .conf» и роль', () => {
     expect(sheets[1].choices.map((c) => c.value)).not.toContain('conf-retry')
     cleanup(root)
   })
-  it('роль ещё грузится -- пункт есть, но не нажимается', async () => {
+  it('роль зависла -- кнопка занята, через ожидание лист открывается с повтором', async () => {
     A.settings = () => new Promise(() => {})
     const sheets = []
     const root = await mount({ openSheet: (s) => sheets.push(s) })
-    await act(async () => root.querySelector('.btn-primary').click())
-    const item = sheets[0].choices.find((c) => c.value === 'conf-loading')
-    expect(item).toMatchObject({ disabled: true, pill: { text: 'загружается' } })
+    vi.useFakeTimers()
+    try {
+      const lime = root.querySelector('.btn-primary')
+      await act(async () => lime.click())
+      expect(sheets.length).toBe(0)
+      expect(lime.disabled).toBe(true)
+      await act(async () => { await vi.advanceTimersByTimeAsync(8100) })
+      expect(sheets.length).toBe(1)
+      expect(sheets[0].choices.find((c) => c.value === 'conf-retry')).toBeTruthy()
+      expect(root.querySelector('.btn-primary').disabled).toBe(false)
+      cleanup(root)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('роль грузится -- кнопка ждёт ответ и открывает лист с итоговыми вариантами', async () => {
+    let release
+    A.settings = () => new Promise((r) => { release = () => r({ role: 'owner' }) })
+    const sheets = []
+    const root = await mount({ openSheet: (s) => sheets.push(s) })
+    const lime = root.querySelector('.btn-primary')
+    await act(async () => lime.click())
+    expect(sheets.length).toBe(0)
+    expect(lime.disabled).toBe(true)
+    await act(async () => { release(); await new Promise((r) => setTimeout(r, 0)) })
+    expect(sheets.length).toBe(1)
+    expect(sheets[0].choices.map((c) => c.value)).toContain('conf')
     cleanup(root)
   })
 })
 
 describe('п. 5: панель VPN-сервера, пока список грузится', () => {
-  it('пункт виден и не нажимается', async () => {
-    A.issuable = () => new Promise(() => {})
+  it('кнопка ждёт список и открывает лист уже с пунктом панели', async () => {
+    let release
+    A.issuable = () => new Promise((r) => { release = () => r({ panels: [{ id: 'main', label: 'Main', ifaces: [] }] }) })
     const sheets = []
     const root = await mount({ openSheet: (s) => sheets.push(s) })
     await act(async () => root.querySelector('.btn-primary').click())
-    const item = sheets[0].choices.find((c) => c.value === 'awg3-loading')
-    expect(item).toMatchObject({ label: 'Панель VPN-сервера', disabled: true, pill: { text: 'загружается' } })
+    expect(sheets.length).toBe(0)
+    await act(async () => { release(); await new Promise((r) => setTimeout(r, 0)) })
+    expect(sheets[0].choices.map((c) => c.value)).toContain('awg3')
+    expect(sheets[0].choices.some((c) => c.disabled)).toBe(false)
+    cleanup(root)
+  })
+})
+
+describe('п. 6: повтор чтения роли после смены роутера', () => {
+  it('поздний ответ старого роутера не записывает его роль новому', async () => {
+    let n = 0
+    let late
+    A.settings = (rid) => {
+      if (rid === 4) return n++ === 0 ? Promise.reject(new Error('502')) : new Promise((r) => { late = () => r({ role: 'owner' }) })
+      return Promise.resolve({ role: 'viewer' })
+    }
+    const sheets = []
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const el = (id) => <TunnelsTab routerID={id} asleep={false} openSheet={(s) => sheets.push(s)} layer={null} layerParams={{}} openLayer={() => {}} closeLayer={() => {}} />
+    await act(async () => render(el(4), root))
+    await flush()
+    await flush()
+    await act(async () => root.querySelector('.btn-primary').click())
+    const retry = sheets[0]
+    let pending
+    await act(async () => { pending = retry.perform('', {}, 'conf-retry') })
+    await act(async () => render(el(5), root))
+    await flush()
+    await flush()
+    await act(async () => { late(); await pending; await new Promise((r) => setTimeout(r, 0)) })
+    await act(async () => { retry.onDone(await pending); await new Promise((r) => setTimeout(r, 0)) })
+    sheets.length = 0
+    await act(async () => root.querySelector('.btn-primary').click())
+    expect(sheets.length).toBe(1)
+    expect(sheets[0].choices.map((c) => c.value)).not.toContain('conf')
     cleanup(root)
   })
 })

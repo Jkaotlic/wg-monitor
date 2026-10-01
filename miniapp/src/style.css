@@ -5459,3 +5459,8 @@ body {
 .cabinet-awg3-error .btn-wide {
   margin-top: var(--sp-3);
 }
+
+/* «Заменить конфиг» в герое активного VPN-туннеля: отступ до края карточки. */
+.hero-replace {
+  margin-bottom: var(--sp-4);
+}
