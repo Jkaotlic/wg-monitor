@@ -63,6 +63,12 @@ export const SCREENS = [
   { id: 'dnsreset', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть сброс DNS' }] },
   { id: 'packages', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть пакеты по расписанию' }] },
   // Владелец трёх роутеров: ещё один длинный роутер текущим.
+  // Полоса «Мои роутеры» в прокрученном состоянии (только телефон: на широкой
+  // раскладке полосы нет). strip-effect: после перебора чипов длинное имя
+  // снова текущее -- красный чип слева, начало имени правее него.
+  { id: 'strip-effect', roles: ['owner3'], maxWidth: 800, router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: [{ tab: 'Роутер' }, { stripScroll: 'end' }, { stripPick: 'router4car4new' }, { stripPick: 'дача-северная' }, { stripExpect: 'effect' }] },
+  // strip-user: человек сам прокрутил полосу до конца -- красный чип прилип к левому полю.
+  { id: 'strip-user', roles: ['owner3'], maxWidth: 800, router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: [{ tab: 'Роутер' }, { stripScroll: 'end' }, { stripExpect: 'pinned' }] },
   { id: 'long-router', roles: ['owner3'], router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: [{ tab: 'Роутер' }] },
   { id: 'long-tunnels', roles: ['owner3'], router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: [TUNNELS] },
   { id: 'long-manage', roles: ['owner3'], router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: MANAGE },

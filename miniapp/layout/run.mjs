@@ -179,6 +179,53 @@ async function runStep(page, step, routerName, role) {
     await page.waitForTimeout(600)
     return (await page.$$('.fleet-row')).length > 0
   }
+  if (step.stripScroll) {
+    const ok = await page.evaluate((to) => {
+      const el = document.querySelector('.router-strip')
+      if (!el) return false
+      el.scrollLeft = to === 'end' ? el.scrollWidth : Number(to)
+      return true
+    }, step.stripScroll)
+    await page.waitForTimeout(300)
+    return ok
+  }
+  if (step.stripPick) {
+    for (const c of await page.$$('.router-strip .strip-chip')) {
+      if ((await c.getAttribute('aria-label') ?? '').startsWith(step.stripPick)) {
+        // DOM-клик: чип под прилипшим красным не достать пальцем -- это не предмет проверки.
+        await c.evaluate((el) => el.click())
+        await page.waitForTimeout(900)
+        return true
+      }
+    }
+    return false
+  }
+  if (step.stripExpect) {
+    // Геометрия полосы: красный чип стоит у левого поля содержимого (sticky left:0)
+    // и, когда перемотку сделало приложение, не пересекает текущий, а начало
+    // имени текущего в кадре. Числа -- в журнал прогона.
+    const g = await page.evaluate(() => {
+      const strip = document.querySelector('.router-strip')
+      const red = strip?.querySelector('.strip-chip-alert')
+      const cur = strip?.querySelector('.strip-chip-current')
+      if (!strip || !red || !cur) return null
+      const cs = getComputedStyle(strip)
+      const sr = strip.getBoundingClientRect()
+      const rr = red.getBoundingClientRect()
+      const cr = cur.getBoundingClientRect()
+      return {
+        contentLeft: sr.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth),
+        stripRight: sr.right,
+        redLeft: rr.left, redRight: rr.right, curLeft: cr.left, curRight: cr.right,
+        same: red === cur, scrollLeft: strip.scrollLeft,
+      }
+    })
+    if (!g) return false
+    console.log(`  [полоса ${step.stripExpect} ${role} ${page.viewportSize().width}] ` + JSON.stringify(g))
+    if (Math.abs(g.redLeft - g.contentLeft) > 0.5) return false
+    if (step.stripExpect === 'effect' && !g.same) return g.redRight <= g.curLeft && g.curLeft >= g.contentLeft && g.curLeft < g.stripRight
+    return true
+  }
   if (step.sheetChoice) {
     for (const c of await page.$$('.sheet-choice')) {
       if ((await c.innerText()).trim().replace(/[‐‑]/g, '-').startsWith(step.sheetChoice)) {
@@ -322,7 +369,7 @@ async function runPass(bin, role, width, port) {
     record(boot)
     if (boot.problems.some((p) => p.check === 0)) return
 
-    for (const screen of SCREENS.filter((s) => s.roles.includes(role))) {
+    for (const screen of SCREENS.filter((s) => s.roles.includes(role) && (s.maxWidth == null || width <= s.maxWidth))) {
       await reset(page)
       events.length = 0
       const entry = { role, width, screen: screen.id, router: null, problems: [] }

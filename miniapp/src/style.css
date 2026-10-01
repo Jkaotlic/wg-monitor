@@ -5347,7 +5347,7 @@ body {
    край. Фон непрозрачный (смесь поверх --surface), иначе соседи просвечивали. */
 .strip-chip-alert:first-child {
   position: sticky;
-  left: var(--sp-4);
+  left: 0;
   z-index: 1;
 }
 

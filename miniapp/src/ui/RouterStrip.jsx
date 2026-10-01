@@ -22,11 +22,21 @@ export function RouterStrip({ chips = [], onPick }) {
     if (!el || !chip) return
     // Только сама полоса: scrollIntoView двигал бы и страницу.
     const pad = 16
+    const gap = 8
     const left = chip.offsetLeft - el.offsetLeft
+    // Прилипший красный чип занимает начало кадра: текущий должен начинаться
+    // правее него, а не под ним -- в обеих ветках, и левой, и правой.
     const lead = el.querySelector('.strip-chip-alert:first-child')
-    const inset = lead && lead !== chip ? lead.offsetWidth + 8 : 0
-    if (left - pad - inset < el.scrollLeft) el.scrollLeft = Math.max(0, left - pad - inset)
-    else if (left + chip.offsetWidth + pad > el.scrollLeft + el.clientWidth) el.scrollLeft = left + chip.offsetWidth + pad - el.clientWidth
+    const inset = lead && lead !== chip ? lead.offsetWidth + gap : 0
+    // hi -- самая правая прокрутка, при которой начало текущего ещё не под
+    // красным; lo -- самая левая, при которой он виден до правого края.
+    const hi = left - pad - inset
+    const lo = left + chip.offsetWidth + pad - el.clientWidth
+    let next = el.scrollLeft
+    if (next > hi) next = hi
+    else if (next < lo) next = Math.min(lo, hi)
+    // Оба условия вместе не выполнить (длинное имя) -- побеждает начало имени.
+    el.scrollLeft = Math.max(0, next)
   }, [currentID, order])
   return (
     <nav ref={strip} class="router-strip" aria-label="Мои роутеры">
