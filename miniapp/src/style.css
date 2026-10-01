@@ -1099,12 +1099,11 @@ body {
   right: 0;
   bottom: 0;
   z-index: 10;
-  display: grid;
-  /* Столбцов столько, сколько вкладок: до пяти (v0.52). Столбцы поровну, но
-     не уже своей подписи: на 360 px пятая часть -- 72 px, а «VPN‑туннели»
-     в 12 px шире; ей достаётся своё за счёт коротких «Парк» и «Роутер». */
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(max-content, 1fr);
+  display: flex;
+  /* Вкладок до пяти (v0.52). Свободное место делится между вкладками поровну
+     ПОВЕРХ ширины подписи, а не столбцами поровну: при равных столбцах на
+     360 px «VPN‑туннели» (12 px) занимала свой столбец целиком и почти
+     касалась «Проверок», а вокруг «Парка» оставалась пустота. */
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -1117,6 +1116,7 @@ body {
   gap: 2px;
   min-height: 56px;
   /* Подпись в одну строку и без боковых полей: панель стоит ровно. */
+  flex: 1 1 auto;
   min-width: 0;
   padding: var(--sp-2) 0;
   border: none;
@@ -1196,7 +1196,7 @@ body {
 
 /* Пояснение сразу под заголовком раздела («Кто может выпускать конфиги») --
    тихая подпись вплотную к заголовку, а не яркая строка через пустоту. */
-.section-head + .admin-note {
+:is(.section-head, .section-title) + .admin-note {
   margin: 0 0 var(--sp-3);
   color: var(--dim);
 }
@@ -5170,7 +5170,13 @@ body {
   top: var(--app-header-h);
   z-index: 5;
   display: flex;
-  flex-wrap: wrap;
+  /* Одна строка, лишнее едет вбок (v0.52): перенос на вторую строку у админа
+     (четыре чипа на 360 px) делал липкую полосу выше, чем отступ прокрутки, и
+     заголовок группы прятался под ней. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   gap: 6px;
   margin: 0 calc(var(--sp-4) * -1) var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
@@ -5178,10 +5184,14 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.manage-anchors::-webkit-scrollbar {
+  display: none;
+}
+
 .manage-anchor {
   flex: none;
   min-height: 40px;
-  padding: 0 8px;
+  padding: 0 var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface);
