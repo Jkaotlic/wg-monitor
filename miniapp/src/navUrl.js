@@ -48,6 +48,10 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false, routers = 
     return state
   }
   state.overlay = deepLinkOverlay(search ?? '', state)
+  // «Маршруты» -- слой вкладки «VPN-туннели» (подпись «назад» -- она): ссылка
+  // без вкладки, а равно и со «Роутером», встаёт на неё, иначе «назад» вёл бы
+  // на другую вкладку, чем обещает подпись.
+  if (state.overlay === 'routes') state.tab = 'tunnels'
   return state
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
+import { cabinetPerms } from '../cabinetKeys.js'
 import { accountSummary, optionRows } from '../cabinet.js'
 import { replaceView, startErrorText, stepValue, replaceLeftover } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -24,8 +25,9 @@ const POLL_MS = 3000
 // роутере (null -- к списку): разбираться с ним человек будет там.
 // replaceCanRevoke -- кто может отозвать старый конфиг в мастере замены:
 // админ, владелец и оператор (решение оператора 01.10).
+// Правило роли -- одно, в cabinetPerms (cabinetKeys.js).
 export function replaceCanRevoke(role) {
-  return role === 'admin' || role === 'owner' || role === 'operator'
+  return cabinetPerms(role).revoke
 }
 
 export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {

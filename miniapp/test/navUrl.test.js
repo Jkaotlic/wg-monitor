@@ -57,7 +57,9 @@ describe('круговое свойство', () => {
     const states = [{ routerID: null, tab: 'router', overlay: 'fleet', sheet: null }]
     for (const routerID of IDS) {
       for (const tab of TABS) {
-        for (const overlay of [null, ...OPEN_OVERLAYS]) states.push({ routerID, tab, overlay, sheet: null })
+        // «Маршруты» живут на вкладке «VPN-туннели»: с другой вкладкой такого
+        // состояния нет, ссылка без tab встаёт на неё (финальное ревью v0.52, п. 8).
+        for (const overlay of [null, ...OPEN_OVERLAYS]) if (overlay !== 'routes' || tab === 'tunnels') states.push({ routerID, tab, overlay, sheet: null })
       }
     }
     for (const s of states) {

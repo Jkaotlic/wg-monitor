@@ -69,7 +69,10 @@ const OLD_LINKS = [
   ['?router=7&tab=manage', { tab: 'manage' }],
   ['?router=7&open=settings', { tab: 'manage', manageFocus: 'agent' }],
   ['?router=7&open=admin', { tab: 'manage', manageFocus: 'service' }],
-  ['?router=7&open=routes', { overlay: 'routes' }],
+  // «Маршруты» по ссылке без tab: подпись «назад» -- «VPN-туннели», и вернуть
+  // должно туда же, а не на «Роутер» (финальное ревью v0.52, п. 8).
+  ['?router=7&open=routes', { tab: 'tunnels', overlay: 'routes' }],
+  ['?router=7&tab=router&open=routes', { tab: 'tunnels', overlay: 'routes' }],
   ['?router=7&tab=tunnels&open=cabinet', { tab: 'tunnels', overlay: 'cabinet' }],
   ['?router=7&open=agentcfg', { overlay: 'agentcfg' }],
   ['?router=7&open=agentconn', { overlay: 'agentconn' }],
@@ -80,6 +83,18 @@ const OLD_LINKS = [
 describe('v0.52: старые ссылки из тревог', () => {
   it.each(OLD_LINKS)('%s', (search, want) => {
     expect(at(search)).toMatchObject({ routerID: 7, ...want })
+  })
+  it('2–5 роутеров, красный роутер в другом месте: ссылка на конкретный роутер всё равно выигрывает', () => {
+    const routers = [
+      { id: 7, nickname: 'Дача', status: 'online', reach: 'online', last_seen_age_sec: 30 },
+      { id: 9, nickname: 'Офис', status: 'offline', reach: 'offline', last_seen_age_sec: 4000 },
+    ]
+    expect(at('?router=7&open=routes', { routers })).toMatchObject({ routerID: 7, tab: 'tunnels', overlay: 'routes' })
+    expect(at('?router=7', { routers })).toMatchObject({ routerID: 7, tab: 'router', overlay: null })
+  })
+  it('роутер, к которому нет доступа (не админ): список, а не чужой роутер и не слой', () => {
+    const s = at('?router=99&open=routes', { isAdmin: false })
+    expect(s).toMatchObject({ routerID: null, overlay: 'fleet' })
   })
   it('админские ссылки Парка', () => {
     expect(at('?tab=park', { isAdmin: true })).toMatchObject({ routerID: null, tab: 'park', overlay: null })

@@ -2,7 +2,7 @@ import { useEffect, useReducer, useState } from 'preact/hooks'
 import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { setUnauthorizedHandler } from './api.js'
-import { initialNav, navReducer, backButtonVisible, escapeAction } from './nav.js'
+import { initialNav, navReducer, backButtonVisible, escapeAction, navPinned } from './nav.js'
 import { navFromURL } from './navUrl.js'
 import { useNavURL } from './useNavURL.js'
 import { appMode } from './mode.js'
@@ -76,12 +76,16 @@ export function App() {
     return () => clearInterval(timer)
   }, [boot.status])
 
+  // Закрепление слоя (мастер во время отправки) меняет только overlayParams:
+  // без него в зависимостях кнопка Telegram и Esc остались бы с прежним решением.
+  const pinned = navPinned(nav)
+
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
   useEffect(() => {
     setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
-  }, [nav.overlay, nav.sheet, wide])
+  }, [nav.overlay, nav.sheet, wide, pinned])
 
   useEffect(() => {
     const onKey = (e) => {
@@ -91,7 +95,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [nav.overlay, nav.sheet, wide])
+  }, [nav.overlay, nav.sheet, wide, pinned])
 
   let body
   if (boot.status === 'loading') {

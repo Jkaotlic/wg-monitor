@@ -5343,6 +5343,14 @@ body {
   color: var(--ink);
 }
 
+/* Первый тревожный чип прилипает слева: при прокрутке красное не уезжает за
+   край. Фон непрозрачный (смесь поверх --surface), иначе соседи просвечивали. */
+.strip-chip-alert:first-child {
+  position: sticky;
+  left: var(--sp-4);
+  z-index: 1;
+}
+
 /* Текущий и с тревогой: цвет остаётся тревожным, «текущий» -- сплошной контур. */
 .strip-chip-current.strip-chip-alert {
   border-color: var(--bad);
