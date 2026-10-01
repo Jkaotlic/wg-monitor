@@ -33,9 +33,10 @@ const miniappSendQRCaption = "\nВ QR приватный ключ — не пе�
 
 func miniappSendConfHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Самый широкий гейт маршрута -- админ или владелец -- до тела; свой
-		// сервер дополнительно сужается до админа ниже.
-		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		// Гейт маршрута -- любой с доступом к роутеру (v0.52: и оператор --
+		// файл уходит лично нажавшему), до тела; свой сервер сужается до
+		// админа ниже.
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
 			return
 		}

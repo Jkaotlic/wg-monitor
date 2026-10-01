@@ -508,9 +508,9 @@ func TestMiniappCabinetTextsAreRussian(t *testing.T) {
 func TestMiniappCabinetRevoke(t *testing.T) {
 	env := newCabinetEnv(t)
 	const path = "/v1/miniapp/routers/{id}/cabinets/amnezia/revoke"
-	rec := env.do(t, cabOperator, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
-		t.Fatalf("оператору отзыв закрыт: %d %s", rec.Code, rec.Body.String())
+	rec := env.do(t, cabStranger, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" || len(env.keys.revoked) != 0 {
+		t.Fatalf("чужому отзыв закрыт: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"de","confirm":"другой"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || len(env.keys.revoked) != 0 {
@@ -523,6 +523,19 @@ func TestMiniappCabinetRevoke(t *testing.T) {
 	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"DE","confirm":" Router-Owned "}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"country":"de"`) || len(env.keys.revoked) != 1 || env.keys.revoked[0] != "de" {
 		t.Fatalf("отзыв: %d %s %v", rec.Code, rec.Body.String(), env.keys.revoked)
+	}
+	// v0.52 (спека §7): оператор отзывает, как владелец -- отзыв обратим перевыпуском.
+	rec = env.do(t, cabOperator, http.MethodPost, path, `{"country":"nl","confirm":"router-owned"}`)
+	if rec.Code != http.StatusOK || len(env.keys.revoked) != 2 || env.keys.revoked[1] != "nl" {
+		t.Fatalf("оператор: %d %s %v", rec.Code, rec.Body.String(), env.keys.revoked)
+	}
+	// Роль снята -- запрет на входе, до тела.
+	if err := env.d.RouterOperators().Remove(env.ownedID, cabOperator); err != nil {
+		t.Fatal(err)
+	}
+	rec = env.do(t, cabOperator, http.MethodPost, path, `{"country":"fi","confirm":"router-owned"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" || len(env.keys.revoked) != 2 {
+		t.Fatalf("бывший оператор: %d %s", rec.Code, rec.Body.String())
 	}
 	env.keys.revokeErr = ErrCabinetSecretNotFound
 	rec = env.do(t, cabAdmin, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)

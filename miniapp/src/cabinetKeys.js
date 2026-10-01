@@ -30,12 +30,13 @@ export function pickTab(tabs, want) {
 const FULL = new Set(['admin', 'owner'])
 const MANAGE = new Set(['admin', 'owner', 'operator'])
 
-// Права по спеке (решение 1): смотреть, добавить, выбрать активный -- все
-// трое; удалить, отозвать, прислать .conf -- админ и владелец. Граница
+// Права (v0.52, спека §7): смотреть, добавить, выбрать активный, отозвать
+// страну, прислать .conf -- все трое; удалить ключ -- админ и владелец.
+// admin -- какие тексты ошибок панели показывать (задача 16). Граница
 // доступа -- сервер; здесь только то, какие кнопки рисовать.
 export function cabinetPerms(role) {
-  const full = FULL.has(role)
-  return { manage: MANAGE.has(role), remove: full, revoke: full, sendConf: full }
+  const any = MANAGE.has(role)
+  return { manage: any, remove: FULL.has(role), revoke: any, sendConf: any, admin: role === 'admin' }
 }
 
 const KIND = {

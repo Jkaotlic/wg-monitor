@@ -250,13 +250,13 @@ describe('кабинет роутера: вкладки и ключи', () => {
     cleanup(root)
   })
 
-  it('оператор: добавить и сделать активным -- да; удалить, отозвать -- нет', async () => {
+  it('оператор: добавить, сделать активным, отозвать -- да; удалить ключ -- нет (v0.52, §7)', async () => {
     mocks.role = 'operator'
     const { root } = await mount()
     expect(button(root, 'Добавить ключ')).toBeTruthy()
     expect(buttons(root, 'Сделать активным')).toHaveLength(1)
     expect(buttons(root, 'Удалить')).toHaveLength(0)
-    expect(buttons(root, 'Отозвать')).toHaveLength(0)
+    expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })
 
@@ -376,9 +376,11 @@ describe('кабинет роутера: страны и отзыв', () => {
     expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBe(null)
     cleanup(root)
 
+    // Оператор отзывает, как владелец: у выпущенной страны стрелки нет, рядом «Отозвать».
     mocks.role = 'operator'
     root = (await mount()).root
-    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBeTruthy()
+    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBe(null)
+    expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })
 
@@ -433,19 +435,19 @@ describe('кабинет роутера: выпуск', () => {
     cleanup(root)
   })
 
-  it('slot_busy у оператора -- кто может, без кнопки', async () => {
+  it('slot_busy у оператора -- как у владельца: отозвать можно (v0.52, §7)', async () => {
     mocks.role = 'operator'
     mocks.issueReply = new ApiError(409, 'slot_busy', 'x')
     const { root } = await mount()
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
     await flush()
-    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.')
-    expect(button(root, 'Выбрать, что отозвать')).toBeFalsy()
+    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.')
+    expect(button(root, 'Выбрать, что отозвать')).toBeTruthy()
     cleanup(root)
   })
 
-  it('.conf в личку: лист с приватным ключом; успех -- итог; оператору кнопки нет', async () => {
+  it('.conf в личку: лист с приватным ключом; успех -- итог; оператору кнопка есть (v0.52, §7)', async () => {
     const { root, sheets } = await mount()
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Прислать .conf в личку').click())
@@ -462,7 +464,7 @@ describe('кабинет роутера: выпуск', () => {
     mocks.role = 'operator'
     const again = await mount()
     await pickOption(again.root, 'Германия')
-    expect(button(again.root, 'Прислать .conf в личку')).toBeFalsy()
+    expect(button(again.root, 'Прислать .conf в личку')).toBeTruthy()
     cleanup(again.root)
   })
 

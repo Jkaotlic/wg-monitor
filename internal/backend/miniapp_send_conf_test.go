@@ -13,19 +13,18 @@ const sendConfPath = "/v1/miniapp/routers/{id}/vpn/send-conf"
 
 func TestMiniappSendConfGoesToPresserDM(t *testing.T) {
 	env := newCabinetEnv(t)
-	for _, who := range []int64{cabStranger, cabOperator} {
-		rec := env.do(t, who, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
-		if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
-			t.Fatalf("от %d: %d %s", who, rec.Code, rec.Body.String())
-		}
+	rec := env.do(t, cabStranger, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Fatalf("чужому: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, who := range []int64{cabOwner, cabAdmin} {
+	// v0.52 (спека §7): оператору тоже -- файл уходит лично нажавшему.
+	for _, who := range []int64{cabOperator, cabOwner, cabAdmin} {
 		rec := env.do(t, who, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
 		if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"sent_to":"dm"`) {
 			t.Fatalf("от %d: %d %s", who, rec.Code, rec.Body.String())
 		}
 	}
-	if len(env.docs.sent) != 2 || env.docs.sent[0].chatID != cabOwner || env.docs.sent[1].chatID != cabAdmin {
+	if len(env.docs.sent) != 3 || env.docs.sent[0].chatID != cabOperator || env.docs.sent[1].chatID != cabOwner || env.docs.sent[2].chatID != cabAdmin {
 		t.Fatalf("документ не в личку нажавшему: %+v", env.docs.sent)
 	}
 	doc := env.docs.sent[0]
@@ -34,6 +33,11 @@ func TestMiniappSendConfGoesToPresserDM(t *testing.T) {
 	}
 	if len(env.sink.enqueued) != 0 {
 		t.Fatal("файл в личку ничего не ставит в очередь роутера")
+	}
+	// Свой сервер -- по-прежнему только админу.
+	rec = env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"selfhosted","instance_id":"home"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("свой сервер оператору: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

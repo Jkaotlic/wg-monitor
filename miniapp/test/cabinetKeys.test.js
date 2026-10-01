@@ -53,18 +53,18 @@ describe('вкладки кабинета', () => {
   })
 })
 
-describe('права (спека, решение 1)', () => {
+describe('права (спека §7, v0.52)', () => {
   it('админ и владелец -- всё', () => {
     for (const role of ['admin', 'owner']) {
-      expect(cabinetPerms(role)).toEqual({ manage: true, remove: true, revoke: true, sendConf: true })
+      expect(cabinetPerms(role)).toEqual({ manage: true, remove: true, revoke: true, sendConf: true, admin: role === 'admin' })
     }
   })
-  it('оператор -- смотреть, добавить, выбрать активный', () => {
-    expect(cabinetPerms('operator')).toEqual({ manage: true, remove: false, revoke: false, sendConf: false })
+  it('оператор -- всё, кроме удаления ключа и админского', () => {
+    expect(cabinetPerms('operator')).toEqual({ manage: true, remove: false, revoke: true, sendConf: true, admin: false })
   })
   it('неизвестная роль и пусто -- ничего', () => {
-    for (const role of ['', undefined, 'guest']) {
-      expect(cabinetPerms(role)).toEqual({ manage: false, remove: false, revoke: false, sendConf: false })
+    for (const role of ['', 'stranger', undefined, 'guest']) {
+      expect(cabinetPerms(role)).toEqual({ manage: false, remove: false, revoke: false, sendConf: false, admin: false })
     }
   })
 })
