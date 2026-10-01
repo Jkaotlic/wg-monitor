@@ -163,12 +163,12 @@ beforeEach(() => {
   mocks.waitReply = { status: 'ok' }
 })
 
-describe('«Свои VPN-серверы»: группа «Панели awg3»', () => {
+describe('«Серверы»: группа «Панели VPN-серверов»', () => {
   it('строки панелей с состоянием, открытие и «Добавить панель»', async () => {
     const opened = []
     let added = 0
     const root = await mountNode(<SelfhostedScreen onClose={() => {}} onOpenInstance={() => {}} onOpenAwg3={(id) => opened.push(id)} onAddAwg3={() => added++} />)
-    expect(root.textContent).toContain('Панели awg3')
+    expect(root.textContent).toContain('Панели VPN-серверов')
     const rows = [...root.querySelectorAll('.awg3-list .list-row-btn')]
     expect(rows.map((r) => r.textContent)).toEqual([expect.stringContaining('panel.example.com'), expect.stringContaining('неверный пароль')])
     await click(rows[0])
@@ -177,9 +177,21 @@ describe('«Свои VPN-серверы»: группа «Панели awg3»', 
     expect(added).toBe(1)
   })
 
+  it('part: vps -- только серверы, awg3 -- только панели', async () => {
+    let root = await mountNode(<SelfhostedScreen part="vps" onClose={() => {}} onOpenInstance={() => {}} onOpenAwg3={() => {}} onAddAwg3={() => {}} />)
+    expect(root.querySelector('.overlay-title').textContent).toBe('Свои VPS')
+    expect(button(root, 'Добавить сервер')).toBeTruthy()
+    expect(root.querySelector('.awg3-list')).toBeFalsy()
+    expect(calls('list').length).toBe(0)
+    root = await mountNode(<SelfhostedScreen part="awg3" onClose={() => {}} onOpenInstance={() => {}} onOpenAwg3={() => {}} onAddAwg3={() => {}} />)
+    expect(root.querySelectorAll('.overlay-title')[root.querySelectorAll('.overlay-title').length - 1].textContent).toBe('Панели VPN-серверов')
+    expect(button(root, 'Добавить сервер')).toBeFalsy()
+    expect(root.querySelector('.awg3-list')).toBeTruthy()
+  })
+
   it('без onOpenAwg3 группы нет и панели не спрашиваются', async () => {
     const root = await mountNode(<SelfhostedScreen onClose={() => {}} onOpenInstance={() => {}} />)
-    expect(root.textContent).not.toContain('Панели awg3')
+    expect(root.textContent).not.toContain('Панели VPN-серверов')
     expect(calls('list').length).toBe(0)
   })
 

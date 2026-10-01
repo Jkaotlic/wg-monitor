@@ -4,6 +4,7 @@ import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { Fold } from '../ui/Fold.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
+import { ListRow } from '../ui/ListRow.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import {
   fetchFleet,
@@ -519,19 +520,14 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 </button>
               </div>
             )}
-            {mode === 'web' && (
-              <a class="park-rescue" href="/dashboard/rescue/">
-                Аварийная страница
-              </a>
-            )}
           </div>
 
-          {/* Входы наверх (v0.50, спека п. 2.1): свои серверы и новый роутер --
+          {/* Входы наверх (v0.50, спека п. 2.1): новый роутер (с v0.52 свои серверы
+              -- в разделе «Серверы») --
               под сводкой, а не в хвосте экрана. Нейтральные плитки: лайм
               остаётся у «Обновить всех отставших». */}
           {openLayer && (
             <div class="park-entries">
-              <NavCard quiet title="Свои VPN-серверы" onClick={() => openLayer('selfhosted')} />
               <NavCard quiet title="Добавить роутер" onClick={() => openLayer('provision')} />
             </div>
           )}
@@ -546,7 +542,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
               )}
               {routers.length > 1 && (
                 <button type="button" class="btn btn-ghost" disabled={recheck.batch?.running} onClick={recheck.recheckAll}>
-                  {recheck.batch?.running ? 'Опрашиваем…' : 'Опросить все'}
+                  {recheck.batch?.running ? 'Проверяем…' : 'Проверить заново все'}
                 </button>
               )}
               {['doctor', 'audit'].map((kind) => (
@@ -731,20 +727,31 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
             )}
           </Section>
 
-          {/* Вход из браузера -- реже нужное, в конце. В браузере он бессмыслен. */}
-          {mode !== 'web' && (
-            <Section>
-              <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
-                {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}
-              </button>
-              {linkLines.map((line) => (
-                <p class="hint" key={line}>
-                  {line}
-                </p>
-              ))}
-              {linkError && <p class="state state-error">{linkError}</p>}
-            </Section>
-          )}
+          {/* «Серверы» (v0.52, спека §2): свои VPS, панели VPN-серверов, вход
+              из браузера, аварийная страница. Входа в свои серверы из
+              кабинетов роутера нет -- там только выпуск. */}
+          <Section title="Серверы">
+            <ul class="card list-reset">
+              {openLayer && <ListRow title="Свои VPS" sub="список и экран сервера" onClick={() => openLayer('selfhosted', { part: 'vps' })} />}
+              {openLayer && <ListRow title="Панели VPN-серверов" sub="панель, настройки, кто может выпускать конфиги" onClick={() => openLayer('selfhosted', { part: 'awg3' })} />}
+              {mode !== 'web' && <ListRow title={linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'} sub="ссылка на 12 часов" onClick={linkBusy ? undefined : openInBrowser} />}
+              {mode === 'web' && (
+                <li class="list-row-item">
+                  <a class="row list-row list-row-btn" href="/dashboard/rescue/">
+                    <span class="list-row-main">
+                      <span class="row-title">Аварийная страница</span>
+                    </span>
+                  </a>
+                </li>
+              )}
+            </ul>
+            {linkLines.map((line) => (
+              <p class="hint" key={line}>
+                {line}
+              </p>
+            ))}
+            {linkError && <p class="state state-error">{linkError}</p>}
+          </Section>
         </>
       )}
     </div>

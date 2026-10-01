@@ -10,12 +10,15 @@ import { Section } from '../ui/Section.jsx'
 // слой всего парка, в адрес пишется (?open=selfhosted). Ниже -- awg3-панели
 // отдельной группой (v0.49); группа есть, только когда экран умеет их
 // открывать (onOpenAwg3), и только тогда панели спрашиваются.
-export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInstance, onOpenAwg3, onAddAwg3 }) {
+export function SelfhostedScreen({ part = 'all', backLabel = 'Назад', onClose, onOpenInstance, onOpenAwg3, onAddAwg3 }) {
   const [rows, setRows] = useState(null)
   const [error, setError] = useState('')
   const [panels, setPanels] = useState(null)
   const [panelsError, setPanelsError] = useState('')
   const alive = useRef(true)
+  const showVps = part !== 'awg3'
+  const showPanels = Boolean(onOpenAwg3) && part !== 'vps'
+  const title = part === 'vps' ? 'Свои VPS' : part === 'awg3' ? AWG3_TEXTS.group : SELFHOSTED_TEXTS.title
   useEffect(() => {
     alive.current = true
     fetchSelfhosted()
@@ -25,7 +28,7 @@ export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInst
       .catch(() => {
         if (alive.current) setError(SELFHOSTED_TEXTS.loadError)
       })
-    if (onOpenAwg3) {
+    if (showPanels) {
       fetchAwg3Panels()
         .then((resp) => {
           if (alive.current) setPanels(panelRows(resp?.panels))
@@ -40,11 +43,11 @@ export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInst
   }, [])
 
   return (
-    <Overlay title={SELFHOSTED_TEXTS.title} backLabel={backLabel} onBack={onClose}>
+    <Overlay title={title} backLabel={backLabel} onBack={onClose}>
       <div class="screen selfhosted">
-        <h1 class="screen-title">{SELFHOSTED_TEXTS.title}</h1>
-        <p class="hint">{SELFHOSTED_TEXTS.intro}</p>
-        {error ? (
+        <h1 class="screen-title">{title}</h1>
+        {showVps && <p class="hint">{SELFHOSTED_TEXTS.intro}</p>}
+        {showVps && (error ? (
           <p class="state state-error">{error}</p>
         ) : rows == null ? (
           <p class="state">{SELFHOSTED_TEXTS.loading}</p>
@@ -56,12 +59,14 @@ export function SelfhostedScreen({ backLabel = 'Назад', onClose, onOpenInst
               <ListRow key={r.id} title={r.title} sub={r.sub} onClick={() => onOpenInstance(r.id)} />
             ))}
           </ul>
+        ))}
+        {showVps && (
+          <button type="button" class="btn btn-primary btn-wide selfhosted-add" onClick={() => onOpenInstance('')}>
+            {SELFHOSTED_TEXTS.add}
+          </button>
         )}
-        <button type="button" class="btn btn-primary btn-wide selfhosted-add" onClick={() => onOpenInstance('')}>
-          {SELFHOSTED_TEXTS.add}
-        </button>
-        {onOpenAwg3 && (
-          <Section title={AWG3_TEXTS.group}>
+        {showPanels && (
+          <Section title={part === 'awg3' ? undefined : AWG3_TEXTS.group}>
             <p class="hint">{AWG3_TEXTS.groupIntro}</p>
             {panelsError ? (
               <p class="state state-error">{panelsError}</p>

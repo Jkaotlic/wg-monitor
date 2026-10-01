@@ -8,7 +8,7 @@ import { agoText } from './when.js'
 export const PANEL_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/
 
 export const AWG3_TEXTS = {
-  group: 'Панели awg3',
+  group: 'Панели VPN-серверов',
   groupIntro: 'Панели выпуска конфигов на ваших VPS: устройства, «Конфиг на устройство» и «Выпустить на роутер».',
   empty: 'Панелей пока нет.',
   add: 'Добавить панель',

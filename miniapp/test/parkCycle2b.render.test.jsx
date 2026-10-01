@@ -107,7 +107,8 @@ export async function fill(root, selector, value) {
 }
 
 export const primary = (root) => [...root.querySelectorAll('.sheet-actions button')].pop()
-export const buttons = (root, label) => [...root.querySelectorAll('button')].filter((b) => b.textContent === label)
+export const buttons = (root, label) =>
+  [...root.querySelectorAll('button')].filter((b) => (label === 'Открыть в браузере' ? b.classList.contains('list-row-btn') && b.textContent.includes(label) : b.textContent === label))
 export const rowOf = (root, name) => [...root.querySelectorAll('.park-row')].find((r) => r.querySelector('.data-row-main')?.textContent === name)
 export const cleanup = (root) => { render(null, root); root.remove() }
 
@@ -152,15 +153,15 @@ describe('Парк: сторож и отложенное', () => {
 })
 
 describe('Парк: ссылка на аварийную страницу вместо мостика на классическое', () => {
-  it('web: ни «Открыть в браузере», ни /dashboard/classic/, есть «Аварийная страница» в карточке бэкенда', async () => {
+  it('web: ни «Открыть в браузере», ни /dashboard/classic/, есть «Аварийная страница» в разделе «Серверы»', async () => {
     const { root } = await mountPark({ mode: 'web' })
     expect(buttons(root, 'Открыть в браузере')).toEqual([])
     expect(root.querySelector('a[href^="/dashboard/classic"]')).toBe(null)
     expect(root.textContent).not.toContain('классическом')
-    const link = root.querySelector('.park-backend a.park-rescue')
+    const link = root.querySelector('.section a[href="/dashboard/rescue/"]')
     expect(link).not.toBe(null)
-    expect(link.getAttribute('href')).toBe('/dashboard/rescue/')
     expect(link.textContent).toBe('Аварийная страница')
+    expect(root.querySelector('.park-backend a[href="/dashboard/rescue/"]')).toBe(null)
     cleanup(root)
   })
 

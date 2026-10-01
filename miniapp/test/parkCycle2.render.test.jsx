@@ -27,6 +27,7 @@ const FLEET = (backend) => ({
   notify: { unreachable: [], routers_without_recipients: [] },
 })
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+const serverRow = (root, text) => [...root.querySelectorAll('.section .list-row-btn')].find((b) => b.textContent.includes(text))
 const button = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 const cleanup = (root) => { render(null, root); root.remove() }
 
@@ -111,14 +112,14 @@ describe('Парк: добавить роутер', () => {
     cleanup(root)
   })
 
-  it('«Свои VPN-серверы» открывает список; без openLayer кнопки нет', async () => {
+  it('«Свои VPS» раздела «Серверы» открывает список; без openLayer входа нет', async () => {
     const { root, layers } = await mountPark()
-    await act(async () => button(root, 'Свои VPN-серверы').click())
-    expect(layers).toEqual([['selfhosted', undefined]])
+    await act(async () => serverRow(root, 'Свои VPS').click())
+    expect(layers).toEqual([['selfhosted', { part: 'vps' }]])
     cleanup(root)
 
     const bare = await mountPark({ withLayer: false })
-    expect(button(bare.root, 'Свои VPN-серверы')).toBeFalsy()
+    expect(serverRow(bare.root, 'Свои VPS')).toBeFalsy()
     cleanup(bare.root)
   })
 
@@ -133,7 +134,7 @@ describe('Парк: добавить роутер', () => {
     const { root } = await mountPark({ mode: 'web' })
     expect(root.querySelector('a.park-classic')).toBe(null)
     expect(root.textContent).not.toContain('классическом веб-управлении')
-    expect(button(root, 'Открыть в браузере')).toBeFalsy()
+    expect(serverRow(root, 'Открыть в браузере')).toBeFalsy()
     cleanup(root)
   })
 })

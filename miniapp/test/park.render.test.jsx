@@ -138,7 +138,8 @@ async function typeAndConfirm(sheetRoot, text) {
   await flush()
 }
 
-const buttons = (root, label) => [...root.querySelectorAll('button')].filter((b) => b.textContent === label)
+const buttons = (root, label) =>
+  [...root.querySelectorAll('button')].filter((b) => (label === 'Открыть в браузере' ? b.classList.contains('list-row-btn') && b.textContent.includes(label) : b.textContent === label))
 const rowOf = (root, name) => [...root.querySelectorAll('.park-row')].find((r) => r.querySelector('.data-row-main')?.textContent === name)
 const cleanup = (...roots) => roots.forEach((r) => { render(null, r); r.remove() })
 
@@ -384,7 +385,7 @@ describe('устаревший текст про дашборд', () => {
   })
 })
 
-// v0.48: «Опросить все» у админа -- в Парке, среди действий над всеми
+// v0.48: «Проверить заново все» у админа -- в Парке, среди действий над всеми
 // роутерами; из «Моих роутеров» он у админа ушёл (FleetOverlay).
 describe('«Парк»: опросить все', () => {
   it('есть при двух роутерах и больше, до списка роутеров', async () => {
@@ -400,7 +401,7 @@ describe('«Парк»: опросить все', () => {
     })
     await flush()
     const all = [...root.querySelectorAll('button')]
-    const poll = all.findIndex((b) => b.textContent.trim() === 'Опросить все')
+    const poll = all.findIndex((b) => b.textContent.trim() === 'Проверить заново все')
     const open = all.findIndex((b) => b.textContent.trim() === 'Открыть роутер')
     expect(poll).toBeGreaterThan(-1)
     expect(open).toBeGreaterThan(poll)

@@ -62,10 +62,10 @@ describe('Парк как пульт (спека пакет 2)', () => {
     cleanup(root)
   })
 
-  it('входы «Свои VPN-серверы» и «Добавить роутер» -- над карточками', async () => {
+  it('вход «Добавить роутер» -- над карточками; свои серверы -- в разделе «Серверы»', async () => {
     const root = await mountPark()
     const entries = root.querySelector('.park-entries')
-    expect([...entries.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Свои VPN-серверы', 'Добавить роутер'])
+    expect([...entries.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Добавить роутер'])
     const firstCard = root.querySelector('.park-row')
     expect(entries.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     cleanup(root)
@@ -119,12 +119,12 @@ describe('Парк как пульт (спека пакет 2)', () => {
     const root = await mountPark()
     const grid = root.querySelector('.park-batch')
     expect(grid.className).toContain('action-row-pair')
-    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)', 'Опросить все', 'Осмотреть все', 'Сверить версии у всех'])
+    expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)', 'Проверить заново все', 'Осмотреть все', 'Сверить версии у всех'])
     expect([...root.querySelectorAll('.btn-primary')].map((b) => b.textContent.trim())).toEqual(['Обновить всех отставших (1)'])
     cleanup(root)
   })
 
-  it('Парк с одним роутером: «Опросить все» нет, сетка на месте (Review Focus 2)', async () => {
+  it('Парк с одним роутером: «Проверить заново все» нет, сетка на месте (Review Focus 2)', async () => {
     const root = await mountPark([R({ id: 1, nickname: 'solo' })])
     const grid = root.querySelector('.park-batch')
     expect([...grid.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Осмотреть все', 'Сверить версии у всех'])

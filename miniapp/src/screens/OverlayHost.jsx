@@ -126,16 +126,17 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
       case 'selfhosted':
         return (
           <SelfhostedScreen
+            part={params.part ?? 'all'}
             backLabel={returnLabel(returnTo)}
             onClose={leave}
             onOpenInstance={(id) =>
-              dispatch({ type: 'overlay', overlay: 'selfhostedinst', params: { instanceId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
+              dispatch({ type: 'overlay', overlay: 'selfhostedinst', params: { instanceId: id, returnTo: 'selfhosted', returnParams: { returnTo, part: params.part } } })
             }
             onOpenAwg3={(id) =>
-              dispatch({ type: 'overlay', overlay: 'awg3panel', params: { panelId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
+              dispatch({ type: 'overlay', overlay: 'awg3panel', params: { panelId: id, returnTo: 'selfhosted', returnParams: { returnTo, part: params.part } } })
             }
             onAddAwg3={() =>
-              dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: '', returnTo: 'selfhosted', returnParams: { returnTo } } })
+              dispatch({ type: 'overlay', overlay: 'awg3form', params: { panelId: '', returnTo: 'selfhosted', returnParams: { returnTo, part: params.part } } })
             }
           />
         )

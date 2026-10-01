@@ -133,12 +133,12 @@ beforeEach(() => {
   mocks.checkReply = null
 })
 
-describe('«Свои VPN-серверы»: список', () => {
+describe('«Серверы»: список', () => {
   it('строки, открытие сервера, «Добавить сервер», «назад»', async () => {
     const opened = []
     let closed = 0
     const root = await mountNode(<SelfhostedScreen backLabel="Обслуживание" onClose={() => closed++} onOpenInstance={(id) => opened.push(id)} />)
-    expect(root.querySelector('.overlay-title').textContent).toBe('Свои VPN-серверы')
+    expect(root.querySelector('.overlay-title').textContent).toBe('Серверы')
     expect(root.querySelector('.overlay-back').textContent).toContain('Обслуживание')
     const rows = [...root.querySelectorAll('.selfhosted-list .list-row')]
     expect(rows.map((r) => r.querySelector('.row-title').textContent)).toEqual(['Амстердам', 'spare'])
