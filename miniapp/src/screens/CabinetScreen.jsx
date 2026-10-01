@@ -25,6 +25,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [instancesError, setInstancesError] = useState('')
   // Панели awg3, с которых можно выпустить на этот роутер (null -- грузятся).
   const [awg3Panels, setAwg3Panels] = useState(null)
+  const [awg3Failed, setAwg3Failed] = useState(false)
   const [tab, setTab] = useState(initialTab || 'amnezia')
   // Выпуск -- слой навигации (cabinetissue): «назад» Telegram закрывает его,
   // а выбранный вариант живёт в параметрах слоя (v0.52).
@@ -64,15 +65,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         // Кабинеты не настроены -- состояние сервера, и он сам его называет.
         setLoadError(err?.code === 'cabinets_not_configured' && err.serverMessage ? err.serverMessage : CABINET_TEXTS.loadError)
       })
-    // Ошибка списка = «панелей нет»: у кого нет допуска, тот вкладку и не
-    // должен видеть.
-    fetchAwg3Issuable(routerID)
-      .then((resp) => {
-        if (alive.current) setAwg3Panels(resp?.panels ?? [])
-      })
-      .catch(() => {
-        if (alive.current) setAwg3Panels([])
-      })
+    loadAwg3()
     fetchVPNAccounts(routerID)
       .then((resp) => {
         if (!alive.current) return
@@ -82,6 +75,22 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
       })
       .catch(() => {
         if (alive.current) setAccounts({})
+      })
+  }
+
+  // Ошибка списка панелей -- вкладка «Панель VPN-сервера» с «Повторить», а не
+  // тишина (хвост v0.51): иначе владелец с допуском решил бы, что панелей нет.
+  function loadAwg3() {
+    setAwg3Failed(false)
+    setAwg3Panels(null)
+    fetchAwg3Issuable(routerID)
+      .then((resp) => {
+        if (alive.current) setAwg3Panels(resp?.panels ?? [])
+      })
+      .catch(() => {
+        if (!alive.current) return
+        setAwg3Panels([])
+        setAwg3Failed(true)
       })
   }
 
@@ -136,7 +145,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     load()
   }
 
-  const tabs = cabinetTabs(cabinets, awg3Panels)
+  const tabs = cabinetTabs(cabinets, awg3Panels, { awg3Failed })
   const current = pickTab(tabs, tab)
   const perms = cabinetPerms(role)
   const title = routerName ? `${CABINET_TEXTS.title} «${routerName}»` : CABINET_TEXTS.title
@@ -147,8 +156,6 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   function body() {
-    if (loadError) return <p class="state state-error">{loadError}</p>
-    if (!cabinets) return <p class="state">{CABINET_TEXTS.loading}</p>
     if (pending) {
       return (
         <CabinetIssue
@@ -164,11 +171,12 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         />
       )
     }
-    const rows = current === 'selfhosted' || current === 'awg3' ? [] : secretRows(cabinets, current)
+    if (!cabinets && !loadError) return <p class="state">{CABINET_TEXTS.loading}</p>
+    const rows = cabinets && current !== 'selfhosted' && current !== 'awg3' ? secretRows(cabinets, current) : []
     return (
       <>
         <SegmentTabs
-          label="Кабинеты"
+          label={CABINET_TEXTS.title}
           tabs={tabs}
           value={current}
           onChange={(id) => {
@@ -182,7 +190,9 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           </p>
         )}
         {current === 'awg3' ? (
-          <CabinetAwg3 panels={awg3Panels} onPick={pick} />
+          <CabinetAwg3 panels={awg3Panels} error={awg3Failed ? CABINET_TEXTS.awg3LoadError : ''} onRetry={loadAwg3} onPick={pick} />
+        ) : loadError ? (
+          <p class="state state-error">{loadError}</p>
         ) : current === 'selfhosted' ? (
           <CabinetSelfhosted instances={instances} error={instancesError} onPick={pick} />
         ) : (

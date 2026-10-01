@@ -257,10 +257,12 @@ describe('тексты не отправляют в бота', () => {
 })
 
 describe('панели awg3 (v0.51)', () => {
-  it('вкладка «Панели» -- только когда сервер дал хоть одну панель', () => {
+  it('вкладка «Панель VPN-сервера» -- когда сервер дал хоть одну панель или список не загрузился', () => {
     expect(cabinetTabs({}, []).map((t) => t.id)).toEqual(['amnezia', 'hidemy'])
     expect(cabinetTabs({}, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'awg3'])
     expect(cabinetTabs({ selfhosted: { available: true } }, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'selfhosted', 'awg3'])
+    expect(cabinetTabs({}, [], { awg3Failed: true }).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'awg3'])
+    expect(cabinetTabs({}, [{ id: 'main' }]).find((t) => t.id === 'awg3').title).toBe('Панель VPN-сервера')
   })
 
   it('выпуск с панели: аргументы и объяснение', () => {

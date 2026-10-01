@@ -1,12 +1,13 @@
 import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable } from '../api.js'
 import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
-import { confirmSheet } from '../sheet.js'
+import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
-import { IMPORT_TEXTS } from '../confImport.js'
+import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { cabinetPerms } from '../cabinetKeys.js'
+import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -15,7 +16,6 @@ import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
-import { NavCard } from '../ui/NavCard.jsx'
 import { useOnClose } from '../useOnClose.js'
 import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
@@ -59,6 +59,43 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const [checks, setChecks] = useState(null)
 
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
+
+  // «Новый VPN-туннель» (v0.52): лист «Откуда взять конфиг». Панели VPN-сервера
+  // грузятся заранее; сбой списка -- пункт с повтором, а не тишина.
+  const [awg3, setAwg3] = useState({ status: 'loading', panels: [] })
+  const loadAwg3 = () =>
+    fetchAwg3Issuable(routerID)
+      .then((r) => ({ status: 'ok', panels: r?.panels ?? [] }))
+      .catch(() => ({ status: 'error', panels: [] }))
+      .then((next) => {
+        setAwg3(next)
+        return next
+      })
+  useEffect(() => {
+    setAwg3({ status: 'loading', panels: [] })
+    loadAwg3()
+  }, [routerID])
+
+  // Лист закрывается после onDone, поэтому повторное открытие -- следующим
+  // тиком, с уже перечитанным списком панелей. Загрузка .conf -- всем, кто
+  // управляет туннелями (админ, владелец, оператор: решение 01.10).
+  const askSource = (panels) =>
+    openSheet(
+      localSheet({
+        title: CONFIG_SOURCES_TITLE,
+        body: 'Конфиг встанет на роутер новым VPN-туннелем рядом с остальными.',
+        choices: configSourceChoices({ isAdmin, canImport: cabinetPerms(role).manage, awg3: panels }),
+        perform: (_typed, _values, value) => {
+          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, next }))
+          const target = configSourceTarget(value)
+          if (target) openLayer?.(target.overlay, target.params)
+          return null
+        },
+        onDone: (resp) => {
+          if (resp?.retried) setTimeout(() => askSource(resp.next), 0)
+        },
+      }),
+    )
 
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
   useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
@@ -202,6 +239,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           {busy ? 'Читаю…' : 'Обновить'}
         </button>
       </div>
+
+      {snapshot && openLayer && openSheet && (
+        <button type="button" class="btn btn-primary btn-wide new-tunnel" onClick={() => askSource(awg3)}>
+          Новый VPN-туннель
+        </button>
+      )}
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}

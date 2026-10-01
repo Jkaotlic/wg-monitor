@@ -9,7 +9,7 @@ export const CABINET_KINDS = ['amnezia', 'hidemy']
 // сломало бы уже открытые у людей приложения.
 export const VPN_PROVIDER = { amnezia: 'amnezia', hidemy: 'hidemyname', selfhosted: 'selfhosted' }
 
-export function cabinetTabs(cabinets, awg3Panels = []) {
+export function cabinetTabs(cabinets, awg3Panels = [], { awg3Failed = false } = {}) {
   const tabs = [
     { id: 'amnezia', title: 'Amnezia' },
     { id: 'hidemy', title: 'HideMy' },
@@ -17,8 +17,9 @@ export function cabinetTabs(cabinets, awg3Panels = []) {
   // Свой сервер -- только админу, и решает это сервер: available приходит
   // true только ему. Любое другое значение -- вкладки нет.
   if (cabinets?.selfhosted?.available === true) tabs.push({ id: 'selfhosted', title: 'Свой сервер' })
-  // Панели -- тем, кому сервер их отдал (админ или допущенный, v0.51).
-  if ((awg3Panels ?? []).length > 0) tabs.push({ id: 'awg3', title: 'Панели' })
+  // Панель VPN-сервера -- тем, кому сервер её отдал (админ или допущенный);
+  // список не загрузился -- вкладка с повтором, а не тишина (хвост v0.51).
+  if ((awg3Panels ?? []).length > 0 || awg3Failed) tabs.push({ id: 'awg3', title: 'Панель VPN-сервера' })
   return tabs
 }
 
@@ -254,4 +255,5 @@ export const CABINET_TEXTS = {
   backToList: 'Выбрать, что отозвать',
   issueRunning: 'Выпускаем конфиг, роутер его принимает…',
   roleError: 'Не удалось узнать ваши права.',
+  awg3LoadError: 'Список панелей VPN-серверов не загрузился.',
 }

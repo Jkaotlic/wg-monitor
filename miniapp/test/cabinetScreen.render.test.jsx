@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   result: null,
   sendReply: null,
   awg3: [],
+  awg3Fail: false,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -65,6 +66,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     fetchAwg3Issuable: (id) => {
       log('awg3list', id)
+      if (mocks.awg3Fail) return Promise.reject(new Error('502'))
       return Promise.resolve({ panels: structuredClone(mocks.awg3) })
     },
     issueAwg3ToRouter: (id, panel, iface) => {
@@ -211,6 +213,7 @@ beforeEach(() => {
   mocks.result = null
   mocks.sendReply = null
   mocks.awg3 = []
+  mocks.awg3Fail = false
 })
 
 describe('кабинет роутера: вкладки и ключи', () => {
@@ -551,10 +554,10 @@ describe('кабинет роутера: права, загрузка, пере�
   })
 })
 
-describe('кабинет роутера: вкладка «Панели» (v0.51)', () => {
-  it('вкладки «Панели» нет, когда сервер не дал панелей', async () => {
+describe('кабинет роутера: вкладка «Панель VPN-сервера» (v0.51, v0.52)', () => {
+  it('вкладки «Панель VPN-сервера» нет, когда сервер не дал панелей', async () => {
     const { root } = await mount()
-    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).not.toContain('Панели')
+    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).not.toContain('Панель VPN-сервера')
     cleanup(root)
   })
 
@@ -562,7 +565,7 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     mocks.role = 'operator'
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
     const { root } = await mount()
-    await tab(root, 'Панели')
+    await tab(root, 'Панель VPN-сервера')
     await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
     await flush()
     expect(button(root, 'Прислать .conf в личку')).toBeUndefined()
@@ -578,7 +581,7 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     mocks.role = 'owner'
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
     const { root } = await mount()
-    await tab(root, 'Панели')
+    await tab(root, 'Панель VPN-сервера')
     await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
     await flush()
     expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
@@ -589,8 +592,23 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
   it('недоступная панель -- словами, без интерфейсов', async () => {
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: true, ifaces: [] }]
     const { root } = await mount()
-    await tab(root, 'Панели')
+    await tab(root, 'Панель VPN-сервера')
     expect(root.textContent).toContain('Панель сейчас не отвечает')
+    cleanup(root)
+  })
+  // v0.52 (хвост v0.51): ошибка списка панелей не прячет вкладку -- внутри
+  // слово и «Повторить», а повтор перечитывает список.
+  it('ошибка списка панелей -- вкладка с «Повторить», а не тишина', async () => {
+    mocks.awg3Fail = true
+    const { root } = await mount()
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('Список панелей VPN-серверов не загрузился.')
+    mocks.awg3Fail = false
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    await act(async () => button(root, 'Повторить').click())
+    await flush()
+    expect(root.textContent).toContain('Нидерланды')
+    expect(root.textContent).not.toContain('не загрузился')
     cleanup(root)
   })
 })

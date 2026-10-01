@@ -3,8 +3,19 @@ import { ListRow } from '../ui/ListRow.jsx'
 
 // Панели, с которых можно выпустить конфиг на этот роутер. Список уже
 // отобран сервером (miniappCanIssueAwg3) -- экран его не фильтрует.
-export function CabinetAwg3({ panels, error, onPick }) {
-  if (error) return <p class="state state-error">{error}</p>
+export function CabinetAwg3({ panels, error, onRetry, onPick }) {
+  if (error) {
+    return (
+      <div class="card cabinet-awg3-error">
+        <p class="state state-error">{error}</p>
+        {onRetry && (
+          <button type="button" class="btn btn-ghost btn-wide" onClick={onRetry}>
+            Повторить
+          </button>
+        )}
+      </div>
+    )
+  }
   if (panels == null) return <p class="state">Загружаем панели…</p>
   return (
     <>
