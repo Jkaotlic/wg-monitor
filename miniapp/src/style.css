@@ -881,6 +881,12 @@ body {
   background: color-mix(in srgb, var(--warn) 12%, var(--surface));
 }
 
+/* Здесь в «ёлочках» фраза, а не имя: держать её одним блоком незачем --
+   иначе точка после неё уезжала на отдельную строку. */
+.compare-note .q {
+  display: inline;
+}
+
 /* Same wrapping deal as .tunnel-row: a human check name and its reading do not
    fit on one 380px line, and squeezing them is how "Определение адресов сайтов"
    becomes unreadable. */
@@ -4914,6 +4920,12 @@ body {
     max-width: 360px;
     margin-right: var(--sp-2);
   }
+
+  /* v0.52: в основной области поля экрана нулевые -- сегмент «Проверок»
+     встаёт по её краю. */
+  .wide-shell .checks-segment {
+    padding: 0 0 var(--sp-5);
+  }
 }
 
 @keyframes modal-in {
@@ -5390,13 +5402,14 @@ body {
   color: var(--ink);
 }
 
-.diag-group > .section:first-of-type {
+/* Раздел сразу под заголовком группы -- без своего отступа сверху. */
+.diag-group-title + .section {
   margin-top: 0;
 }
 
 /* «Новый VPN-туннель» -- главная кнопка вкладки. */
 .new-tunnel {
-  margin: 0 0 var(--sp-4);
+  margin: var(--sp-3) 0 0;
 }
 
 .cabinet-awg3-error .btn-wide {
