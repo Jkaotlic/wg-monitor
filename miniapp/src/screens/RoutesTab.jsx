@@ -57,7 +57,7 @@ function ruleTargets(rule) {
 // подтверждение в шите, и каждая обратима другой кнопкой этого же экрана.
 // rebindFrom -- VPN-туннель, с экрана которого пришли переносить правила:
 // выбор цели открывается сам, как только есть снимок.
-export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
+export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer = 'routes', layerParams = {}, openLayer, closeLayer }) {
   const { busy, result, error, run } = useCommand(routerID)
   // Роль -- для кнопок HydraRoute Neo: запуск и остановка у владельца и админа,
   // перезапуск -- тем же кругом, что в Настройках.
@@ -172,10 +172,9 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
   }
 
   // Перенос и смена главного начинаются с выбора цели. Цель выбирается
-  // отдельным слоем, а не выпадающим списком: список туннелей -- это строки
-  // с состоянием, и в 44 px выпадающего меню состояние не поместится.
-  const [picker, setPicker] = useState(null)
-  const [adding, setAdding] = useState(false)
+  // отдельным слоем навигации (routepick), а не выпадающим списком: список
+  // туннелей -- это строки с состоянием, и в 44 px выпадающего меню состояние
+  // не поместится. Добавление сайта -- слой routeadd (v0.52).
 
   const phase = snapshotState({ busy, error, result, snapshot })
 
@@ -190,10 +189,13 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
   // которую он несёт (RouteRebind, route_rebind.go). Поэтому и спрашивается
   // он на строке туннеля, а не на группе правил: группа -- это привязка,
   // а переносится VPN-туннель целиком.
-  const askRebind = (src) => {
+  const srcRow = (id) => (id === OTHER_SOURCE_ID ? other : rows.find((r) => r.id === id))
+
+  // Описание выбора цели -- из параметров слоя и снимка: в навигации живут
+  // только «что выбираем» и «от кого», функции -- здесь.
+  const rebindPicker = (src) => {
     const options = rebindTargets(rows, src.id)
-    if (options.length === 0) return
-    setPicker({
+    return {
       title: 'Куда перенести',
       subtitle:
         src.id === OTHER_SOURCE_ID
@@ -221,20 +223,19 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
             }),
         }
       }),
-    })
+    }
   }
 
   // Главным делается звено, уже стоящее в цепочке политики. Выключенный
   // туннель повысить можно, и порядок сменится, но трафик пойдёт через него
   // не раньше, чем он поднимется -- об этом экран говорит до нажатия.
-  const askPromote = (src) => {
+  const promotePicker = (src) => {
     const targets = promoteTargets(snapshot, src.id)
-    if (targets.length === 0) return
     const ruleText = (policyName) => {
       const p = policies.find((row) => row.name === policyName)
       return p ? ` (${policyRuleSummary(p)})` : ''
     }
-    setPicker({
+    return {
       title: 'Кто станет главным',
       subtitle: `Сейчас правила общего набора идут через «${src.name}»`,
       options: targets.map((t) => ({
@@ -258,8 +259,20 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
             onDone: refresh,
           }),
       })),
-    })
+    }
   }
+
+  const askRebind = (src) => {
+    if (rebindTargets(rows, src.id).length === 0) return
+    openLayer?.('routepick', { pick: 'rebind', from: src.id })
+  }
+  const askPromote = (src) => {
+    if (promoteTargets(snapshot, src.id).length === 0) return
+    openLayer?.('routepick', { pick: 'promote', from: src.id })
+  }
+
+  const pickSrc = layer === 'routepick' ? srcRow(layerParams.from) : null
+  const picker = pickSrc ? (layerParams.pick === 'promote' ? promotePicker(pickSrc) : rebindPicker(pickSrc)) : null
 
   // Менять маршруты по неполной картине нельзя. Серая неактивная кнопка тут
   // не годится: она не объясняет, почему нельзя, -- поэтому кнопок просто
@@ -404,7 +417,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
       {/* Сигнальный цвет -- одному действию на экране, и это оно: всё
           остальное здесь либо читается, либо правит уже существующее. */}
       {canMutate && (
-        <button type="button" class="btn btn-primary btn-wide" onClick={() => setAdding(true)}>
+        <button type="button" class="btn btn-primary btn-wide" onClick={() => openLayer?.('routeadd')}>
           Добавить сайт или адрес
         </button>
       )}
@@ -576,7 +589,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
       {/* Выбор цели -- свой слой поверх экрана. Подтверждение он не заменяет:
           выбранное едет в тот же шит, что и всё остальное. */}
       {picker && (
-        <Overlay title={picker.title} backLabel="Маршруты" onBack={() => setPicker(null)}>
+        <Overlay title={picker.title} backLabel="Маршруты" onBack={closeLayer}>
           <div class="screen">
             <p class="router-lastseen">
               <Quoted text={picker.subtitle} />
@@ -588,7 +601,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
                   title={o.title}
                   sub={o.sub}
                   onClick={() => {
-                    setPicker(null)
+                    closeLayer?.()
                     openSheet(o.pick())
                   }}
                 />
@@ -598,13 +611,13 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
         </Overlay>
       )}
 
-      {adding && (
+      {layer === 'routeadd' && (
         <RouteAddScreen
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
           openSheet={openSheet}
-          onClose={() => setAdding(false)}
+          onClose={closeLayer}
           onApplied={refresh}
         />
       )}

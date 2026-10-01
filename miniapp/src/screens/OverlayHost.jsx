@@ -8,13 +8,14 @@ import { BackendDeployWait } from './BackendDeployWait.jsx'
 import { AgentConnectionScreen } from './AgentConnectionScreen.jsx'
 import { PackagesScreen } from './PackagesScreen.jsx'
 import { CabinetScreen } from './CabinetScreen.jsx'
+import { RepairScreen } from './RepairScreen.jsx'
 import { SelfhostedScreen } from './SelfhostedScreen.jsx'
 import { SelfhostedInstanceScreen } from './SelfhostedInstanceScreen.jsx'
 import { Awg3PanelFormScreen } from './Awg3PanelFormScreen.jsx'
 import { Awg3PanelScreen } from './Awg3PanelScreen.jsx'
 import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
-import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams } from '../nav.js'
+import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams, navPinned } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
 import { isStale } from '../staleness.js'
 
@@ -55,6 +56,9 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   // Новый роутер появляется в списке оболочки только после переспроса: без
   // него «Открыть роутер» открыл бы пустоту.
   const reloadRouters = () => Promise.resolve(refreshRouters ? refreshRouters() : undefined)
+
+  // Слой в слое возвращает в родителя с его параметрами (v0.52).
+  const toParent = () => dispatch({ type: 'overlay', overlay: params.returnTo, params: params.returnParams ?? undefined })
 
   // Экраны роутера глубже «Управления» закрываются обратно во вкладку.
   const toManage = () => dispatch({ type: 'overlay', overlay: 'manage' })
@@ -182,17 +186,50 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   switch (nav.overlay) {
     // Кабинеты VPN роутера -- слой с адресом (?open=cabinet): обновление
     // страницы возвращает сюда же. Вкладка кабинета и выбранный вариант в
-    // адрес не пишутся.
+    // адрес не пишутся. Родитель рисует и свои слои в одной позиции дерева,
+    // чтобы его состояние (снимок, вкладка кабинета) пережило слой в слое.
     case 'cabinet':
-      return <CabinetScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={close} />
-    case 'routes':
+    case 'cabinetissue':
       return (
-        <Overlay title="Маршруты" backLabel="VPN-туннели" onBack={close}>
+        <CabinetScreen
+          routerID={nav.routerID}
+          routerName={current?.nickname}
+          asleep={asleep}
+          openSheet={openSheet}
+          onClose={close}
+          layer={nav.overlay}
+          layerParams={params}
+          initialTab={nav.overlay === 'cabinet' ? params.tab : undefined}
+          openLayer={(overlay, p) => dispatch({ type: 'overlay', overlay, params: p })}
+          closeLayer={toParent}
+          onPin={(on) => dispatch({ type: 'pin', pinned: on })}
+          pinned={navPinned(nav)}
+        />
+      )
+    case 'routes':
+    case 'routeadd':
+    case 'routepick': {
+      const routesParams = nav.overlay === 'routes' ? params : params.returnParams ?? {}
+      const fromTunnel = routesParams.returnTo === 'tunnel'
+      return (
+        <Overlay title="Маршруты" backLabel={fromTunnel ? 'VPN-туннель' : 'VPN-туннели'} onBack={nav.overlay === 'routes' ? () => dispatch({ type: 'back' }) : toParent}>
           {/* rebindFrom -- VPN-туннель, с экрана которого пришли переносить
               правила: «Маршруты» сами откроют выбор цели. */}
-          <RoutesTab routerID={nav.routerID} asleep={asleep} openSheet={openSheet} rebindFrom={params.rebindFrom ?? ''} />
+          <RoutesTab
+            routerID={nav.routerID}
+            asleep={asleep}
+            openSheet={openSheet}
+            rebindFrom={routesParams.rebindFrom ?? ''}
+            layer={nav.overlay}
+            layerParams={params}
+            openLayer={(overlay, p) => dispatch({ type: 'overlay', overlay, params: p })}
+            closeLayer={toParent}
+          />
         </Overlay>
       )
+    }
+    case 'repair':
+      return <RepairScreen routerID={nav.routerID} checkName={params.checkName ?? ''} lineName={params.lineName ?? ''} onClose={close} />
     // Настройки агента, подключение агента, сброс DNS и пакеты лежат слоем
     // глубже «Управления»: закрытие возвращает во вкладку, а не на «Сейчас».
     case 'agentcfg':

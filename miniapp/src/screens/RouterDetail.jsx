@@ -18,7 +18,7 @@ import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
-import { RepairScreen } from './RepairScreen.jsx'
+import { useOnClose } from '../useOnClose.js'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { AppContext } from '../appContext.js'
@@ -136,8 +136,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 // Повторять её объяснение слово в слово двумя блоками ниже -- это не
 // «подчеркнуть», а заставить прочитать одно и то же дважды и потерять время
 // в тот момент, когда его меньше всего.
-function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false, tunnels = [], primary = false }) {
-  const [repairOpen, setRepairOpen] = useState(false)
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false, tunnels = [], primary = false, onRepair }) {
   const [expanded, setExpanded] = useState(false)
   const [history, setHistory] = useState(null)
   const [historyTruncated, setHistoryTruncated] = useState(false)
@@ -211,7 +210,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           она контурная -- лайм на экране один. Перезапуск и «Не
           беспокоить…» -- пара ниже, одной высоты. */}
       {tunnelID && (
-        <button type="button" class={`btn ${primary ? 'btn-primary' : 'btn-ghost'} btn-wide repair-open`} onClick={() => setRepairOpen(true)}>
+        <button type="button" class={`btn ${primary ? 'btn-primary' : 'btn-ghost'} btn-wide repair-open`} onClick={() => onRepair?.({ checkName: incident.check_name, lineName: lineName || tunnelID })}>
           Починить
         </button>
       )}
@@ -239,17 +238,6 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
             </button>
           )}
         </div>
-      )}
-      {repairOpen && (
-        <RepairScreen
-          routerID={routerID}
-          checkName={incident.check_name}
-          lineName={lineName || tunnelID}
-          onClose={() => {
-            setRepairOpen(false)
-            onDone?.()
-          }}
-        />
       )}
 
       {/* Wording mirrors the backend's own confirmation lines (alertaction.go's
@@ -543,7 +531,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 }
 
 
-export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab, openLayer, repairOpen = false }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -601,6 +589,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
         setError(errorText(err))
       })
   }
+
+  // Починка -- слой навигации: после её закрытия тревоги читаются заново.
+  useOnClose(repairOpen, () => loadData())
 
   // Экран живёт сам. Раньше данные грузились ровно один раз при входе, и
   // строка «41 сек назад» через пять минут врала: человек смотрел на прошлое,
@@ -819,6 +810,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
+              onRepair={(p) => openLayer?.('repair', p)}
               openSheet={openSheet}
               tunnels={tunnels}
               primary={inc.check_name === primaryCheck}

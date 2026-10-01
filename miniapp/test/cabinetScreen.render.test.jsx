@@ -80,6 +80,8 @@ vi.mock('../src/api.js', async (importOriginal) => {
 })
 
 const { CabinetScreen } = await import('../src/screens/CabinetScreen.jsx')
+const { navReducer, navPinned } = await import('../src/nav.js')
+const { useReducer } = await import('preact/hooks')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { ApiError } = await import('../src/api.js')
 
@@ -120,6 +122,24 @@ const button = (root, text) => buttons(root, text)[0]
 const cleanup = (root) => { render(null, root); root.remove() }
 const calls = (name) => mocks.calls.filter((c) => c[0] === name)
 
+// v0.52: выпуск -- слой навигации (cabinetissue); хозяин -- настоящий редьюсер
+// nav.js, как в OverlayHost, включая закрепление на время выпуска.
+function Host(props) {
+  const [nav, dispatch] = useReducer(navReducer, { routerID: 7, tab: 'tunnels', overlay: 'cabinet', sheet: null })
+  const p = nav.overlayParams ?? {}
+  return (
+    <CabinetScreen
+      {...props}
+      layer={nav.overlay}
+      layerParams={p}
+      openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+      closeLayer={() => dispatch({ type: 'overlay', overlay: p.returnTo, params: p.returnParams ?? undefined })}
+      onPin={(on) => dispatch({ type: 'pin', pinned: on })}
+      pinned={navPinned(nav)}
+    />
+  )
+}
+
 async function mount() {
   const sheets = []
   const seen = { closed: 0, issued: 0 }
@@ -127,7 +147,7 @@ async function mount() {
   document.body.appendChild(root)
   await act(async () => {
     render(
-      <CabinetScreen
+      <Host
         routerID={7}
         routerName="dacha-1"
         asleep={false}
@@ -196,7 +216,7 @@ beforeEach(() => {
 describe('кабинет роутера: вкладки и ключи', () => {
   it('вкладки Amnezia и HideMy; своего сервера нет, список серверов не спрашивается', async () => {
     const { root } = await mount()
-    expect(root.querySelector('.overlay-title').textContent).toBe('Кабинеты VPN «dacha-1»')
+    expect(root.querySelector('.overlay-title').textContent).toBe('Откуда взять конфиг «dacha-1»')
     const tabs = [...root.querySelectorAll('.segment-tab')]
     expect(tabs.map((t) => t.textContent)).toEqual(['Amnezia', 'HideMy'])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')

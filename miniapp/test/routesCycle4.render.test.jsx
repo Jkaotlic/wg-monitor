@@ -31,6 +31,8 @@ vi.mock('../src/api.js', async (importOriginal) => ({
 }))
 
 const { RoutesTab } = await import('../src/screens/RoutesTab.jsx')
+const { navReducer } = await import('../src/nav.js')
+const { useReducer } = await import('preact/hooks')
 const { HRNEO_TEXTS } = await import('../src/hrneoBlock.js')
 
 const SNAP = {
@@ -53,11 +55,27 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 const buttonsIn = (el) => [...(el?.querySelectorAll('button') ?? [])]
 const byText = (el, text) => buttonsIn(el).find((b) => b.textContent.trim() === text)
 
+// v0.52: выбор цели и «Добавить сайт» -- слои навигации; хозяин -- настоящий
+// редьюсер nav.js, как в OverlayHost.
+function Host(props) {
+  const [nav, dispatch] = useReducer(navReducer, { routerID: 7, tab: 'tunnels', overlay: 'routes', sheet: null })
+  const p = nav.overlayParams ?? {}
+  return (
+    <RoutesTab
+      {...props}
+      layer={nav.overlay}
+      layerParams={p}
+      openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+      closeLayer={() => dispatch({ type: 'overlay', overlay: p.returnTo, params: p.returnParams ?? undefined })}
+    />
+  )
+}
+
 async function mount(props = {}) {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const seen = { sheets: [] }
-  await act(async () => render(<RoutesTab routerID={7} openSheet={(s) => seen.sheets.push(s)} {...props} />, root))
+  await act(async () => render(<Host routerID={7} openSheet={(s) => seen.sheets.push(s)} {...props} />, root))
   await flush()
   await flush()
   return { root, seen }

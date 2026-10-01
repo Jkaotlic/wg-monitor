@@ -15,7 +15,7 @@ import { CabinetIssue } from './CabinetIssue.jsx'
 // конфиг сервер кладёт в команду агенту сам.
 //
 // Кнопки рисуются по роли из настроек роутера; граница доступа -- сервер.
-export function CabinetScreen({ routerID, routerName = '', asleep = false, openSheet, onClose, onIssued }) {
+export function CabinetScreen({ routerID, routerName = '', asleep = false, openSheet, onClose, onIssued, layer = 'cabinet', layerParams = {}, initialTab = 'amnezia', openLayer, closeLayer, onPin, pinned = false }) {
   const [cabinets, setCabinets] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [accounts, setAccounts] = useState(null)
@@ -24,13 +24,14 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [instancesError, setInstancesError] = useState('')
   // Панели awg3, с которых можно выпустить на этот роутер (null -- грузятся).
   const [awg3Panels, setAwg3Panels] = useState(null)
-  const [tab, setTab] = useState('amnezia')
-  const [pending, setPending] = useState(null)
+  const [tab, setTab] = useState(initialTab || 'amnezia')
+  // Выпуск -- слой навигации (cabinetissue): «назад» Telegram закрывает его,
+  // а выбранный вариант живёт в параметрах слоя (v0.52).
+  const pending = layer === 'cabinetissue' ? layerParams.pending ?? null : null
+  const pick = (p) => openLayer?.('cabinetissue', { pending: p })
   const [notice, setNotice] = useState('')
   // Права не прочитались: без роли экран молча стал бы «только чтение».
   const [roleError, setRoleError] = useState(false)
-  // Выпуск идёт: «назад» гаснет, чтобы не бросить его на полпути.
-  const [issuing, setIssuing] = useState(false)
 
   const alive = useRef(true)
   useEffect(
@@ -88,10 +89,8 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     setAccounts(null)
     setInstances(null)
     setAwg3Panels(null)
-    setPending(null)
     setNotice('')
     setRole('')
-    setIssuing(false)
     loadRole()
     load()
   }, [routerID])
@@ -109,9 +108,10 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
 
   // Уход с экрана выпуска: подписка могла измениться (занятые места,
   // выпущенные страны) -- кабинет перечитывается.
+  // Закрепление снимает сам CabinetIssue (onBusy(false)), поэтому здесь его не
+  // трогаем: иначе своя «назад» отпускала бы слой посреди выпуска.
   function leaveIssue() {
-    setPending(null)
-    setIssuing(false)
+    closeLayer?.()
     setAccounts(null)
     load()
   }
@@ -152,7 +152,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           perms={perms}
           openSheet={openSheet}
           onIssued={issued}
-          onBusy={setIssuing}
+          onBusy={(busy) => onPin?.(busy)}
           onBackToList={leaveIssue}
         />
       )
@@ -175,9 +175,9 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           </p>
         )}
         {current === 'awg3' ? (
-          <CabinetAwg3 panels={awg3Panels} onPick={setPending} />
+          <CabinetAwg3 panels={awg3Panels} onPick={pick} />
         ) : current === 'selfhosted' ? (
-          <CabinetSelfhosted instances={instances} error={instancesError} onPick={setPending} />
+          <CabinetSelfhosted instances={instances} error={instancesError} onPick={pick} />
         ) : (
           <>
             <CabinetSecrets key={current} routerID={routerID} kind={current} rows={rows} perms={perms} openSheet={openSheet} onChanged={changed} />
@@ -189,7 +189,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
                 account={accountFor(current)}
                 perms={perms}
                 openSheet={openSheet}
-                onPick={setPending}
+                onPick={pick}
                 onChanged={changed}
               />
             )}
@@ -200,7 +200,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   return (
-    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={issuing ? undefined : pending ? leaveIssue : onClose}>
+    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={pinned ? undefined : pending ? leaveIssue : onClose}>
       <div class="screen cabinet">
         {roleError && (
           <div class="card cabinet-role-error">

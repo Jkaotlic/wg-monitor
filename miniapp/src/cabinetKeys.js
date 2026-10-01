@@ -244,7 +244,7 @@ export function sendConfErrorText(err) {
 }
 
 export const CABINET_TEXTS = {
-  title: 'Кабинеты VPN',
+  title: 'Откуда взять конфиг',
   loading: 'Читаем кабинеты…',
   loadError: 'Не удалось прочитать кабинеты. Откройте экран заново.',
   accountLoading: 'Спрашиваем кабинет…',

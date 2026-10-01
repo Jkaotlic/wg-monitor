@@ -46,6 +46,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           reserveOnlyAlert={current?.reserve_only_alert}
           openSheet={openSheet}
           onTab={(tab) => dispatch({ type: 'tab', tab })}
+          openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+          repairOpen={nav.overlay === 'repair'}
         />
       )
     case 'tunnels':

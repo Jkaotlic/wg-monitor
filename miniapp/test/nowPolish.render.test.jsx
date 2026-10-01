@@ -37,7 +37,7 @@ const { AppContext } = await import('../src/appContext.js')
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
-async function mount(tweak) {
+async function mount(tweak, extraProps = {}) {
   mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
   if (tweak) tweak(mocks.router)
   const events = structuredClone(SNAP.events)
@@ -52,7 +52,7 @@ async function mount(tweak) {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <RouterDetail id={56} openSheet={(s) => sheets.push(s)} onTab={() => {}} />
+        <RouterDetail id={56} openSheet={(s) => sheets.push(s)} onTab={() => {}} {...extraProps} />
       </AppContext.Provider>,
       root,
     ),
@@ -112,6 +112,19 @@ describe('карточка тревоги', () => {
     expect(repair.classList.contains('btn-primary')).toBe(true)
     expect(restart.classList.contains('btn-primary')).toBe(false)
     expect(restart.classList.contains('btn-ghost')).toBe(true)
+    cleanup(root)
+  })
+
+  it('v0.52: «Починить» открывает слой починки через навигацию, а не локальный экран', async () => {
+    const calls = []
+    const { root } = await mount(null, { openLayer: (o, p) => calls.push([o, p]) })
+    const card = root.querySelector('.incident-card')
+    await act(async () => buttons(card, 'Починить')[0].click())
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('repair')
+    expect(calls[0][1].checkName).toBe('tunnel_awg10')
+    expect(calls[0][1].lineName).toBeTruthy()
+    expect(root.querySelector('.repair-title')).toBe(null)
     cleanup(root)
   })
 
