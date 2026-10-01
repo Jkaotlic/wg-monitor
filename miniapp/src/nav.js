@@ -2,10 +2,11 @@
 // компонентам. Причина: слоёв стало четыре (таб, оверлей, шит и выбранный
 // роутер), а кнопка "назад" у Telegram одна, и решать, что она закрывает,
 // должно одно место.
-// «Управление» (v0.41) -- пятая вкладка вместо шестерёнки в шапке и строки
-// «Администрирование» внизу «Сейчас»: настройки роутера и его обслуживание
-// стали функцией для всех, а не спрятанным входом.
-export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
+// v0.52: вкладки названы задачей человека -- «Роутер», «VPN-туннели»,
+// «Проверки», «Настройки» (+ «Парк» админу). «Что было» стало видом
+// «Проверок»: ключ events остаётся псевдонимом -- ссылки из отправленных
+// тревог живут месяцами.
+export const TABS = ['router', 'tunnels', 'diag', 'manage']
 
 // «Парк» (v0.48) -- вкладка админа, первая в панели: весь парк, от
 // выбранного роутера не зависит и открывается без него. Раньше он жил хвостом
@@ -14,24 +15,32 @@ export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
 // Парк показывался под списком; редьюсер вкладку не прячет.
 export const PARK_TAB = 'park'
 
-// barTabs -- что в нижней панели. Админу с роутером -- Парк и пять вкладок
-// роутера. Без роутера (главный экран -- список) вкладкам роутера показывать
-// нечего: панель -- Парк и сам список ('fleet' -- не вкладка, а слой; его
-// открывает оболочка). Остальным -- прежние пять, как было.
+// barTabs -- что в нижней панели. Админу с роутером -- Парк и вкладки
+// роутера; без роутера -- только Парк (выбор роутера -- имя в шапке).
+// Нижней «Роутеры» больше нет: у выбора роутера один вход (v0.52).
 export function barTabs({ isAdmin = false, routerID = null } = {}) {
   if (!isAdmin) return TABS
-  return routerID != null ? [PARK_TAB, ...TABS] : [PARK_TAB, 'fleet']
+  return routerID != null ? [PARK_TAB, ...TABS] : [PARK_TAB]
 }
 
-// Таб "Маршруты" стал табом "Туннели": маршруты уехали внутрь туннеля, потому
-// что оператор сначала спрашивает "какой VPN-туннель поднят", и только потом --
-// "что через него идёт". Прежнее имя остаётся псевдонимом не из вежливости:
-// deep-link из уже отправленных тревог живёт в переписке Telegram месяцами,
-// и открыть по нему не тот экран молча было бы хуже, чем не открыть вовсе.
-const TAB_ALIASES = { routes: 'tunnels' }
+const TAB_ALIASES = { routes: 'tunnels', events: 'diag' }
 
 export function normalizeTab(tab) {
   return TAB_ALIASES[tab] ?? tab
+}
+
+// Вид «Проверок» по сырому ключу вкладки: прежняя вкладка events -- «Что было».
+export function diagViewFor(rawTab) {
+  return rawTab === 'events' ? 'history' : null
+}
+
+// Вид -- как фокус: ключ есть только со значением «Что было», чтобы прежние
+// снимки навигации не меняли форму.
+function withDiagView(state, view) {
+  if (view === 'history') return { ...state, diagView: 'history' }
+  if (!('diagView' in state)) return state
+  const { diagView: _drop, ...rest } = state
+  return rest
 }
 
 // Слои, ставшие вкладкой. Настройки (?open=settings) и «Обслуживание и
@@ -40,10 +49,9 @@ export function normalizeTab(tab) {
 // 'manage' -- возврат слоя («Ход работы» перенаправления) во вкладку.
 export const OVERLAY_TABS = { settings: 'manage', admin: 'manage', manage: 'manage' }
 
-// Группа «Управления», которую раскрыть, когда туда ведёт старая ссылка
-// (?open=settings / ?open=admin) или возврат из слоя глубже вкладки (v0.50):
-// группы свёрнуты, и без этого человек приходил бы в стену заголовков.
-export const MANAGE_FOCUS = { settings: 'router', admin: 'repair', packages: 'repair', dnsreset: 'repair', agentcfg: 'settings', agentconn: 'settings' }
+// Раздел «Настроек», который раскрыть по старой ссылке или при возврате из
+// слоя (v0.52: Обслуживание · Люди и уведомления · Роутер и агент · Опасное).
+export const MANAGE_FOCUS = { settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', agentcfg: 'agent', agentconn: 'agent' }
 
 // Фокус -- как параметры слоя: ключ есть только когда он задан, чтобы
 // прежние снимки навигации не меняли форму.
@@ -127,20 +135,13 @@ function withoutSheetBusy(state) {
   return rest
 }
 
-// Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
-// приложение приходят deep-link'и из тревог, отправленных месяцы назад;
-// подпись -- слова для человека. Менять их вместе значило бы ломать ссылки
-// ради текста.
-//
-// Слова выбраны по вопросу, на который отвечает вкладка: «что сейчас», «через
-// что ходит трафик», «что проверено», «что было». Прежние «Роутер», «Туннели»,
-// «Диагностика» называли устройство и инструмент, а не ответ.
+// Подписи отделены от ключей намеренно: ключ -- адрес deep-link из тревог,
+// подпись -- слова для человека (v0.52: по задаче, а не по инструменту).
 const TAB_LABELS = {
-  router: 'Сейчас',
+  router: 'Роутер',
   tunnels: 'VPN-туннели',
   diag: 'Проверки',
-  events: 'Что было',
-  manage: 'Управление',
+  manage: 'Настройки',
   park: 'Парк',
 }
 
@@ -148,12 +149,10 @@ export function tabLabel(tab) {
   return TAB_LABELS[tab] ?? tab
 }
 
-// Подпись в нижней панели. Шесть вкладок на 360 px: «VPN-туннели» там --
-// «Туннели», заголовок экрана и шапка широкого экрана остаются полными.
-const BAR_LABELS = { tunnels: 'Туннели', fleet: 'Роутеры' }
-
+// Подпись в нижней панели -- та же: вкладок не больше пяти, «VPN-туннель»
+// пишется полностью (словарь).
 export function barLabel(tab) {
-  return BAR_LABELS[tab] ?? tabLabel(tab)
+  return tabLabel(tab)
 }
 
 export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
@@ -194,10 +193,11 @@ export function navReducer(state, action) {
     case 'tab': {
       const tab = normalizeTab(action.tab)
       if (!(TABS.includes(tab) || tab === PARK_TAB) || navPinned(state)) return state
+      const view = diagViewFor(action.tab)
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
-      if (action.closeOverlay) return withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null })
-      return withoutFocus({ ...state, tab })
+      if (action.closeOverlay) return withDiagView(withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null }), view)
+      return withDiagView(withoutFocus({ ...state, tab }), view)
     }
     case 'router': {
       if (navPinned(state)) return state
@@ -206,7 +206,9 @@ export function navReducer(state, action) {
       const wanted = action.tab ? normalizeTab(action.tab) : null
       const kept = action.keepTab && TABS.includes(state.tab) ? state.tab : null
       const tab = wanted && TABS.includes(wanted) ? wanted : kept ?? 'router'
-      return withoutFocus({ ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null })
+      // Смена роутера из шапки держит и вкладку, и её вид («Что было»).
+      const view = tab !== 'diag' ? null : wanted ? diagViewFor(action.tab) : state.diagView ?? null
+      return withDiagView(withoutFocus({ ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null }), view)
     }
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
@@ -223,6 +225,13 @@ export function navReducer(state, action) {
       if (!overlay && state.routerID != null && state.tab === 'manage') return withFocus(next, MANAGE_FOCUS[state.overlay] ?? null)
       return overlay && action.params ? { ...next, overlayParams: action.params } : next
     }
+    // Сегмент «Сейчас | Что было» на «Проверках».
+    case 'diagView':
+      return state.tab === 'diag' ? withDiagView(state, action.view) : state
+    // Переход в раздел «Настроек» (плашка «Есть обновления» на «Роутере»).
+    case 'manage':
+      if (state.routerID == null || navPinned(state)) return state
+      return withFocus({ ...withoutParams(withoutFocus(state)), tab: 'manage', overlay: null, sheet: null }, action.section ?? null)
     case 'sheet': {
       // sheetSeq -- номер экземпляра листа, ключ его компонента. Новый лист
       // поверх открытого (без закрытия) обязан смонтироваться заново:

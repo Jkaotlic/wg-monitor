@@ -39,7 +39,8 @@ describe('navFromURL', () => {
   })
 
   it('единственный роутер открывается и без router=', () => {
-    expect(pick(navFromURL('?tab=events', [5]))).toEqual({ routerID: 5, tab: 'events', overlay: null, sheet: null })
+    expect(pick(navFromURL('?tab=events', [5]))).toEqual({ routerID: 5, tab: 'diag', overlay: null, sheet: null })
+    expect(navFromURL('?tab=events', [5]).diagView).toBe('history')
   })
 
   it('мусор в router= -- как без него', () => {

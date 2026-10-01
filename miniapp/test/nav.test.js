@@ -41,7 +41,7 @@ describe('navReducer', () => {
   const base = initialNav({ routerIDs: [1], deepLinkID: null })
 
   it('смена роутера возвращает на таб роутера и закрывает оверлей', () => {
-    const s = navReducer({ ...base, tab: 'events', overlay: 'fleet' }, { type: 'router', id: 5 })
+    const s = navReducer({ ...base, tab: 'diag', overlay: 'fleet' }, { type: 'router', id: 5 })
     expect(s).toMatchObject({ routerID: 5, tab: 'router', overlay: null })
   })
 
@@ -63,7 +63,7 @@ describe('navReducer', () => {
 
   it('смена таба не трогает выбранный роутер', () => {
     const s = navReducer({ ...base, routerID: 3 }, { type: 'tab', tab: 'events' })
-    expect(s).toMatchObject({ routerID: 3, tab: 'events' })
+    expect(s).toMatchObject({ routerID: 3, tab: 'diag', diagView: 'history' })
   })
 
   it('шит обновляется на месте -- ход выполнения виден в том же слое', () => {
@@ -110,7 +110,7 @@ describe('backButtonVisible', () => {
 // потом -- "что через неё идёт".
 describe('переименование таба маршрутов в туннели', () => {
   it('в списке табов есть tunnels и нет routes', () => {
-    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events', 'manage'])
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'manage'])
   })
 
   it('переключение на tunnels работает', () => {
@@ -137,12 +137,11 @@ describe('переименование таба маршрутов в тунне
 // открыть вовсе. Меняются только подписи -- слова для человека.
 describe('подписи вкладок', () => {
   it('человеческие, а ключи прежние', () => {
-    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events', 'manage'])
-    expect(tabLabel('router')).toBe('Сейчас')
-    expect(tabLabel('manage')).toBe('Управление')
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'manage'])
+    expect(tabLabel('router')).toBe('Роутер')
+    expect(tabLabel('manage')).toBe('Настройки')
     expect(tabLabel('tunnels')).toBe('VPN-туннели')
     expect(tabLabel('diag')).toBe('Проверки')
-    expect(tabLabel('events')).toBe('Что было')
   })
 
   it('незнакомый ключ не ломает вёрстку', () => {
@@ -393,7 +392,7 @@ describe('вкладка «Управление»', () => {
   const base = { routerID: 3, tab: 'router', overlay: null, sheet: null }
 
   it('слой settings или admin открывает вкладку, а не крышку', () => {
-    for (const [o, focus] of [['settings', 'router'], ['admin', 'repair']]) {
+    for (const [o, focus] of [['settings', 'agent'], ['admin', 'service']]) {
       expect(navReducer(base, { type: 'overlay', overlay: o })).toEqual({ ...base, tab: 'manage', manageFocus: focus, manageFocusSeq: 1 })
     }
     expect(navReducer(base, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage' })
@@ -401,20 +400,20 @@ describe('вкладка «Управление»', () => {
 
   it('экраны глубже «Управления» закрываются во вкладку', () => {
     const s = { ...base, tab: 'router', overlay: 'agentcfg' }
-    expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage', manageFocus: 'settings', manageFocusSeq: 1 })
+    expect(navReducer(s, { type: 'overlay', overlay: 'manage' })).toEqual({ ...base, tab: 'manage', manageFocus: 'agent', manageFocusSeq: 1 })
   })
 
   // v0.50 (F4): «назад» и Esc из слоёв «Управления» -- в его группу, а не в
   // стену свёрнутых; на широкой раскладке то же самое.
   it('«назад» из пакетов, сброса DNS и настроек агента раскрывает свою группу', () => {
-    const cases = [['packages', 'repair'], ['dnsreset', 'repair'], ['agentcfg', 'settings'], ['agentconn', 'settings']]
+    const cases = [['packages', 'service'], ['dnsreset', 'service'], ['agentcfg', 'agent'], ['agentconn', 'agent']]
     for (const [overlay, focus] of cases) {
       const s = { routerID: 3, tab: 'manage', overlay, sheet: null }
       expect(navReducer(s, { type: 'back' })).toEqual({ routerID: 3, tab: 'manage', overlay: null, sheet: null, manageFocus: focus, manageFocusSeq: 1 })
       expect(escapeAction(s, { wide: true })).toEqual({ type: 'back' })
     }
     const viaLayer = { routerID: 3, tab: 'manage', overlay: 'packages', overlayParams: { returnTo: 'manage' }, sheet: null }
-    expect(navReducer(viaLayer, { type: 'back' })).toMatchObject({ tab: 'manage', overlay: null, manageFocus: 'repair' })
+    expect(navReducer(viaLayer, { type: 'back' })).toMatchObject({ tab: 'manage', overlay: null, manageFocus: 'service' })
   })
 })
 

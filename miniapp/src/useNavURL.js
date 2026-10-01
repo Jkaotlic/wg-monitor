@@ -29,7 +29,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], isAdmin = fa
       else window.history.replaceState(null, '', next)
     }
     synced.current = true
-  }, [enabled, nav.routerID, nav.tab, nav.overlay])
+  }, [enabled, nav.routerID, nav.tab, nav.overlay, nav.diagView])
 
   useEffect(() => {
     if (!enabled) return undefined

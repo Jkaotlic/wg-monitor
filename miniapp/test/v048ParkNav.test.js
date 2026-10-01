@@ -10,8 +10,8 @@ describe('barTabs', () => {
   it('админу с роутером -- Парк первым, потом вкладки роутера', () => {
     expect(barTabs({ isAdmin: true, routerID: 1 })).toEqual([PARK_TAB, ...TABS])
   })
-  it('админу без роутера -- Парк и список роутеров', () => {
-    expect(barTabs({ isAdmin: true, routerID: null })).toEqual([PARK_TAB, 'fleet'])
+  it('админу без роутера -- только Парк', () => {
+    expect(barTabs({ isAdmin: true, routerID: null })).toEqual([PARK_TAB])
   })
   it('не-админу -- прежние пять', () => {
     expect(barTabs({ isAdmin: false, routerID: 1 })).toEqual(TABS)
@@ -20,12 +20,11 @@ describe('barTabs', () => {
 })
 
 describe('подписи', () => {
-  it('в панели «Туннели», в заголовке и шапке -- «VPN-туннели»', () => {
-    expect(barLabel('tunnels')).toBe('Туннели')
+  it('в панели, в заголовке и шапке -- «VPN-туннели»', () => {
+    expect(barLabel('tunnels')).toBe('VPN-туннели')
     expect(tabLabel('tunnels')).toBe('VPN-туннели')
     expect(tabLabel(PARK_TAB)).toBe('Парк')
     expect(barLabel(PARK_TAB)).toBe('Парк')
-    expect(barLabel('fleet')).toBe('Роутеры')
   })
   it('«назад» слоя парка, открытого из Парка, -- «Парк»', () => {
     expect(returnLabel('park')).toBe('Парк')
