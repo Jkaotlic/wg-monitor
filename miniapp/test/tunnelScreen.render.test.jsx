@@ -194,7 +194,7 @@ describe('экран VPN-туннеля', () => {
     const { root } = await mount()
     await openTunnel(root, 'spare')
     expect(byText(root, 'Удалить VPN-туннель')).toBeFalsy()
-    expect(root.textContent).toContain('Удалять VPN-туннели и загружать конфиги могут владелец роутера и администратор.')
+    expect(root.textContent).toContain('Удалять VPN-туннели могут владелец роутера и администратор.')
     render(null, root)
   })
 

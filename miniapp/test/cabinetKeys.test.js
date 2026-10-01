@@ -140,7 +140,7 @@ describe('ключи и коды', () => {
 
   it('ошибки: фраза сервера, затем своя по коду, затем общая', () => {
     expect(cabinetErrorText('amnezia', new ApiError(422, 'cabinet_rejected', 'x', 'Подписка истекла'))).toBe('Подписка истекла')
-    expect(cabinetErrorText('amnezia', new ApiError(400, 'invalid_key', 'x'))).toBe('Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется из кабинета целиком.')
+    expect(cabinetErrorText('amnezia', new ApiError(400, 'invalid_key', 'x'))).toBe('Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется целиком.')
     expect(cabinetErrorText('amnezia', new ApiError(422, 'cabinet_rejected', 'x'))).toBe('Кабинет Amnezia Premium не принял ключ. Проверьте, что он скопирован целиком и подписка активна.')
     expect(cabinetErrorText('hidemy', new ApiError(422, 'cabinet_rejected', 'x'))).toBe('HideMy.name не принял код. Проверьте, что он скопирован целиком и подписка не закончилась.')
     expect(cabinetErrorText('hidemy', new ApiError(400, 'invalid_code', 'x'))).toBe('Это не похоже на код доступа HideMy.name.')
@@ -155,7 +155,7 @@ describe('ключи и коды', () => {
     expect(activeDoneText('amnezia', { title: 'основной' })).toBe('Активный ключ — «основной».')
     expect(deleteSecretSheetText('amnezia', { title: 'основной', active: true })).toEqual({
       title: 'Удалить ключ «основной»?',
-      body: 'Это активный ключ: пока не выберете другой, выпускать VPN-туннели из кабинета не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.',
+      body: 'Это активный ключ: пока не выберете другой, выпускать новые VPN-туннели не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.',
     })
     expect(deleteSecretSheetText('hidemy', { title: 'дача', active: false })).toEqual({
       title: 'Удалить код «дача»?',

@@ -1,6 +1,7 @@
 import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
+import { placeText } from '../places.js'
 import { useCommand } from '../useCommand.js'
 // Помощник копирования части 2 (тот же, что у экрана токена).
 import { copyText } from '../clipboard.js'
@@ -132,8 +133,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               )}
               {notAPreview && (
                 <p class="state state-error">
-                  Роутер ответил не предпросмотром — возможно, настройки DNS уже изменены. Сбрасывать не нужно: откройте
-                  «Проверки» и посмотрите раздел «Раздельный DNS».
+                  {`Роутер ответил не предпросмотром — возможно, настройки DNS уже изменены. Сбрасывать не нужно: откройте ${placeText('dnsSplit')}.`}
                 </p>
               )}
               {parsed && (

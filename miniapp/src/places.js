@@ -13,6 +13,9 @@ export const PLACES = {
   inspect: { tab: 'diag', section: 'inspect', item: 'Осмотреть роутер', owner: 'screens/CheckToolsSections.jsx' },
   browser: { tab: 'park', sectionTitle: 'Серверы', item: 'Открыть в браузере', owner: 'screens/ParkSection.jsx' },
   vps: { tab: 'park', sectionTitle: 'Серверы', item: 'Свои VPS', owner: 'screens/ParkSection.jsx' },
+  newTunnel: { tab: 'tunnels', item: 'Новый VPN-туннель', owner: 'screens/TunnelsTab.jsx', item2: 'Откуда взять конфиг', owner2: 'configSources.js' },
+  routes: { tab: 'tunnels', item: 'Маршруты: куда идёт трафик', owner: 'screens/TunnelsTab.jsx' },
+  dnsSplit: { tab: 'diag', sectionTitle: 'Раздельный DNS', owner: 'screens/DiagTab.jsx' },
   forgetPassword: { tab: 'park', item: 'Забыть пароль', owner: 'screens/ParkSection.jsx' },
 }
 
@@ -25,7 +28,7 @@ function sectionTitle(tab, id) {
 export function placeParts(key) {
   const p = PLACES[key]
   if (!p) return []
-  return [tabLabel(p.tab), p.section ? sectionTitle(p.tab, p.section) : p.sectionTitle ?? null, p.item ?? null].filter(Boolean)
+  return [tabLabel(p.tab), p.section ? sectionTitle(p.tab, p.section) : p.sectionTitle ?? null, p.item ?? null, p.item2 ?? null].filter(Boolean)
 }
 
 export function placeText(key) {

@@ -1,5 +1,6 @@
 import { agentReplyText } from '../errorText.js'
 import { useState } from 'preact/hooks'
+import { placeText } from '../places.js'
 import { useCommand } from '../useCommand.js'
 import { tunnelRows, rebindTargets, tunnelRuleSummary } from '../routes.js'
 import { templateGroups, templateChoice, parseManualTargets, addPlanSummary, skippedNote } from '../routeAdd.js'
@@ -264,8 +265,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
                   ))}
                   {!summary.canApply && (
                     <p class="state state-error">
-                      Применить нельзя: правило спорит с уже существующим. Уберите прежнее на
-                      экране «Маршруты» или выберите другой набор.
+                      {`Применить нельзя: правило спорит с уже существующим. Уберите прежнее в разделе ${placeText('routes')} или выберите другой набор.`}
                     </p>
                   )}
                 </>
