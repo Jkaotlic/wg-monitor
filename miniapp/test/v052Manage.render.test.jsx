@@ -3,10 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
-const mocks = vi.hoisted(() => ({ settings: null, versions: null }))
+const mocks = vi.hoisted(() => ({ settings: null, versions: null, settingsFn: null }))
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  fetchRouterSettings: () => Promise.resolve(mocks.settings),
+  fetchRouterSettings: () => (mocks.settingsFn ? mocks.settingsFn() : Promise.resolve(mocks.settings)),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [] }),
   fetchRouterVersions: () => Promise.resolve(mocks.versions),
   fetchAccess: () => Promise.resolve({ owner: null, operators: [] }),
@@ -19,13 +19,13 @@ const { AppContext } = await import('../src/appContext.js')
 const noop = () => {}
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 const button = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
-async function manage(isAdmin, focusGroup = null) {
+async function manage(isAdmin, focusGroup = null, routerName = 'home') {
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <ManageTab routerID={2} routerName="home" isAdmin={isAdmin} focusGroup={focusGroup} openSheet={noop} openLayer={noop} onOpenAgentConfig={noop} onOpenAgentConnection={noop} onOpenDNSReset={noop} onOpenPackages={noop} />
+        <ManageTab routerID={2} routerName={routerName} isAdmin={isAdmin} focusGroup={focusGroup} openSheet={noop} openLayer={noop} onOpenAgentConfig={noop} onOpenAgentConnection={noop} onOpenDNSReset={noop} onOpenPackages={noop} />
       </AppContext.Provider>,
       root,
     ),
@@ -42,6 +42,7 @@ const cleanup = (root) => {
 beforeEach(() => {
   mocks.settings = { role: 'admin', agent_version: 'v0.47.0', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
   mocks.versions = null
+  mocks.settingsFn = null
 })
 
 const groups = (root) => [...root.querySelectorAll('details.manage-group')].map((d) => d.id)
@@ -142,5 +143,47 @@ describe('v0.52: «Настройки» -- четыре раздела', () => {
     const root = await manage(true)
     expect(root.textContent).not.toContain('агент старый')
     cleanup(root)
+  })
+  it('пустые версии -- один блок с одной «Сверить версии», без «сведений нет»', async () => {
+    mocks.versions = { installed: {}, unknown: [{ reason: 'no_snapshot' }], rows: [] }
+    const root = await manage(true, 'service')
+    const service = root.querySelector('#mg-service')
+    expect(service.textContent.split('Версии ещё не получены').length - 1).toBe(1)
+    expect(service.textContent).not.toContain('сведений нет')
+    expect([...service.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Сверить версии')).toHaveLength(1)
+    cleanup(root)
+  })
+  it('владелец: без «Сброс DNS» и доступа, «Панель роутера» в «Роутер и агент»', async () => {
+    mocks.settings = { role: 'owner', agent_version: 'v0.47.0', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
+    const root = await manage(false, 'agent')
+    expect(root.textContent).not.toContain('Сброс DNS')
+    expect(root.querySelector('#mg-access')).toBe(null)
+    expect(root.querySelector('#mg-danger')).toBe(null)
+    expect(root.querySelector('#mg-agent').textContent).toContain('Панель роутера')
+    cleanup(root)
+  })
+  it('настройки не прочитались (отказ) -- «агент старый» не выдумывается, пустого раздела нет', async () => {
+    mocks.settingsFn = () => Promise.reject(new Error('boom'))
+    const admin = await manage(true)
+    expect(admin.textContent).not.toContain('агент старый')
+    expect(admin.querySelector('#mg-service')).toBeTruthy()
+    cleanup(admin)
+    // Оператору без настроек в «Роутер и агент» показывать нечего: раздела и чипа нет.
+    const operator = await manage(false)
+    expect(operator.querySelector('#mg-agent')).toBe(null)
+    expect([...operator.querySelectorAll('.manage-anchors .manage-anchor')].map((b) => b.textContent)).not.toContain('Роутер и агент')
+    cleanup(operator)
+  })
+  it('без имени роутера нет пустого блока «Перезагрузка роутера»', async () => {
+    mocks.settings = { role: 'operator', agent_version: 'v0.47.0' }
+    const root = await manage(false, 'service', '')
+    expect(root.textContent).not.toContain('Перезагрузка роутера')
+    expect(button(root, 'Перезагрузить роутер')).toBeUndefined()
+    cleanup(root)
+    // С плашкой «нужна перезагрузка» блок остаётся: у плашки есть что сказать.
+    mocks.versions = { installed: {}, rows: [], reboot_hint: 'kmod' }
+    const banner = await manage(false, 'service', '')
+    expect(banner.textContent).toContain('Перезагрузка роутера')
+    cleanup(banner)
   })
 })

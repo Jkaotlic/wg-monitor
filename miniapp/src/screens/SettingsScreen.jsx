@@ -200,7 +200,10 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
 
 
   const known = versionsKnown(versions)
-  const anchors = manageAnchors({ isAdmin })
+  // «Роутер и агент» без настроек и без админского слота пуст (раздел не
+  // рисуется) -- чип к нему тоже не нужен.
+  const agentEmpty = !settings && !agentSlot
+  const anchors = manageAnchors({ isAdmin }).filter((a) => !(a.group === 'agent' && agentEmpty))
   const notes = manageSummaries({ settings, versions, showReboot, agentReady: settings ? agentReady : true, isAdmin })
   const tones = manageTones({ versions, showReboot, agentReady: settings ? agentReady : true })
   const group = (id) => ({ id: `mg-${id}`, title: manageSection(id).title, note: notes[id], noteTone: tones[id], open: openGroups.has(id), onToggle: (o) => setGroup(id, o) })
@@ -235,7 +238,8 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
   // «Перезагрузить роутер» -- постоянная кнопка (v0.52): раньше она появлялась
   // только вместе с плашкой «нужна перезагрузка», а перезагрузить роутер
   // можно и без неё. Права -- maintain: админ, владелец, оператор.
-  const rebootBlock = maintain && openSheet && (
+  // Пустой блок не рисуем: без имени роутера (подтверждение набором) кнопки нет.
+  const rebootBlock = maintain && openSheet && (showReboot || refusals.reboot || routerName) && (
     <Section title="Перезагрузка роутера">
       {showReboot && <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>}
       {refusals.reboot ? (

@@ -240,7 +240,10 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </button>
       </div>
 
-      {snapshot && openLayer && openSheet && (
+      {/* Кнопка не ждёт снимка: «Откуда взять конфиг» от него не зависит. Без
+          снимка экран загрузки .conf не сверяет имя с уже занятыми
+          (tunnelNameProblem пропускает проверку) -- дубль отклонит сервер. */}
+      {openLayer && openSheet && (
         <button type="button" class="btn btn-primary btn-wide new-tunnel" onClick={() => askSource(awg3)}>
           Новый VPN-туннель
         </button>

@@ -105,4 +105,19 @@ describe('v0.52: «Новый VPN-туннель»', () => {
     expect(calls).toEqual([['confimport', undefined]])
     cleanup(root)
   })
+  // Кнопка не ждёт снимка маршрутов (ни загрузки, ни ошибки, ни сна роутера).
+  it('route_status не ответил -- «Новый VPN-туннель» всё равно есть и открывает лист', async () => {
+    A.role = 'owner'
+    A.issuable = () => Promise.resolve({ panels: [] })
+    const saved = CMD.value
+    CMD.value = { busy: false, result: null, error: 'Роутер не ответил', errorCode: null, run: () => Promise.resolve(null) }
+    const sheets = []
+    const root = await mount({ openSheet: (s) => sheets.push(s), layer: null, layerParams: {}, openLayer: () => {}, closeLayer: () => {} })
+    const lime = [...root.querySelectorAll('.btn-primary')]
+    expect(lime.map((b) => b.textContent.trim())).toEqual(['Новый VPN-туннель'])
+    await act(async () => lime[0].click())
+    expect(sheets[0].title).toBe('Откуда взять конфиг')
+    CMD.value = saved
+    cleanup(root)
+  })
 })

@@ -191,7 +191,7 @@ describe('блок HydraRoute Neo', () => {
     const { root, seen } = await mount()
     const b = block(root)
     expect(b.querySelector('.hrneo-status .badge').textContent).toBe('остановлен')
-    expect(buttonsIn(b.querySelector('.hrneo-actions')).map((x) => x.textContent)).toEqual(['Запустить'])
+    expect(buttonsIn(b.querySelector('.hrneo-actions')).map((x) => x.textContent)).toEqual(['Перезапустить', 'Запустить'])
     await act(async () => byText(b, 'Запустить').click())
     expect(seen.sheets.at(-1)).toMatchObject({ action: 'service_restart', args: { name: 'hrneo_start' }, danger: false })
     render(null, root)

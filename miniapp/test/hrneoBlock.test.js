@@ -64,10 +64,18 @@ describe('действия и права', () => {
     ])
     expect(hrneoActions(up, 'operator')).toEqual([{ name: 'hrneo', label: 'Перезапустить', danger: false }])
     expect(hrneoActions(up, '')).toEqual([])
-    expect(hrneoActions(down, 'admin')).toEqual([{ name: 'hrneo_start', label: 'Запустить', danger: false }])
-    expect(hrneoActions(down, 'operator')).toEqual([])
+    expect(hrneoActions(down, 'admin')).toEqual([
+      { name: 'hrneo', label: 'Перезапустить', danger: false },
+      { name: 'hrneo_start', label: 'Запустить', danger: false },
+    ])
+    expect(hrneoActions(down, 'operator')).toEqual([{ name: 'hrneo', label: 'Перезапустить', danger: false }])
+    expect(hrneoActions(down, 'owner').map((a) => a.name)).toEqual(['hrneo', 'hrneo_start'])
     expect(hrneoActions({ known: true, installed: false, running: false }, 'admin')).toEqual([])
-    expect(hrneoActions({ known: false }, 'admin')).toEqual([])
+    // Состояние неизвестно: перезапуск остаётся тем, у кого он был в «Настройках».
+    expect(hrneoActions({ known: false }, 'admin')).toEqual([{ name: 'hrneo', label: 'Перезапустить', danger: false }])
+    expect(hrneoActions({ known: false }, 'operator').map((a) => a.name)).toEqual(['hrneo'])
+    expect(hrneoActions({ known: false }, '')).toEqual([])
+    expect(hrneoActions({ known: true, installed: false }, 'operator')).toEqual([])
   })
 
   it('листы: остановка предупреждает, запуск -- нет', () => {

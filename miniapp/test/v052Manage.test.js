@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MANAGE_SECTIONS, manageSection, manageAnchors, manageTones, manageSummaries } from '../src/manage.js'
+import { MANAGE_SECTIONS, manageSection, manageAnchors, manageTones, manageSummaries, versionsKnown } from '../src/manage.js'
 import { MANAGE_FOCUS } from '../src/nav.js'
 
 const FW = { rows: [{ component: 'firmware', installed: '5.0', available: '5.1' }] }
@@ -29,5 +29,10 @@ describe('v0.52: разделы «Настроек»', () => {
     expect(manageSummaries({ settings: { role: 'operator' } }).agent).toBe('пороги тревог')
     expect(manageSummaries({ settings: { role: 'owner' } }).agent).toBe('панель роутера, пороги тревог')
     expect(manageSummaries({ isAdmin: true }).agent).toBe('панель роутера, пороги тревог, агент')
+  })
+  it('versionsKnown: известно хоть что-то -- да; пусто или «сведений нет» -- нет', () => {
+    expect(versionsKnown(null)).toBe(false)
+    expect(versionsKnown({ installed: {}, rows: [] })).toBe(false)
+    expect(versionsKnown({ installed: { awgmgr: '2.19.9' }, rows: [] })).toBe(true)
   })
 })
