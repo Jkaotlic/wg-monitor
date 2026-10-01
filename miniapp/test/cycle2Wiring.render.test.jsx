@@ -112,7 +112,7 @@ afterEach(() => {
 describe('OverlayHost: слои парка', () => {
   it('подпись возврата', () => {
     expect(returnLabel('fleet')).toBe('Мои роутеры')
-    expect(returnLabel('fleet', true)).toBe('Роутеры парка')
+    expect(returnLabel('fleet', true)).toBe('Выбрать роутер')
     // Старый возврат «в Обслуживание» ведёт к списку: Парк теперь там.
     expect(returnLabel('admin')).toBe('Мои роутеры')
     expect(returnLabel('manage')).toBe('Настройки')
@@ -126,7 +126,7 @@ describe('OverlayHost: слои парка', () => {
     const root = await mount(h.node)
     expect(root.querySelector('.stub-provision')).toBeTruthy()
     const p = mocks.props.provision
-    expect(p.backLabel).toBe('Роутеры парка')
+    expect(p.backLabel).toBe('Выбрать роутер')
     p.onStarted({ jobId: 'j1', nickname: 'dacha-1' })
     expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'fleet' }, unpin: true })
     p.onBusy(true)

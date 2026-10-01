@@ -26,7 +26,7 @@ import { TextField } from '../ui/FormField.jsx'
 // адресе, не в localStorage; стираются сразу после отправки -- до ответа --
 // и при уходе с экрана. «Сохранить и проверить» -- ровно один запрос к
 // панели (его делает сервер).
-export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои серверы', openSheet, onClose, onDeleted }) {
+export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Панели VPN-серверов', openSheet, onClose, onDeleted }) {
   // После создания экран становится правкой той же панели.
   const [savedId, setSavedId] = useState(panelId)
   const isNew = !savedId

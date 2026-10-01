@@ -204,7 +204,7 @@ describe('выпуск', () => {
     expect(issueFailure(busy, { revoke: true }, 'hidemyname')).toEqual({ text: 'Свободных мест в подписке нет.', offerRevoke: false })
     expect(issueFailure(busy, { revoke: true }, 'amnezia').offerRevoke).toBe(true)
     expect(issueFailure(busy, { revoke: false })).toEqual({
-      text: 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.',
+      text: 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера, оператор или администратор.',
       offerRevoke: false,
     })
   })

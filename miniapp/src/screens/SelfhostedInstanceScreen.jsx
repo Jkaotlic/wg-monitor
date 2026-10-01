@@ -37,7 +37,7 @@ import { TextField } from '../ui/FormField.jsx'
 // стирается сразу после отправки -- до ответа сервера -- и при уходе с экрана.
 // Сохранение пароль не проверяет (спека, решение 3): внешние баны и
 // чувствительность панели; проверка -- отдельной кнопкой.
-export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Свои серверы', openSheet, onClose }) {
+export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Свои VPS', openSheet, onClose }) {
   const isNew = !instanceId
   const [inst, setInst] = useState(null)
   const [initial, setInitial] = useState(() => (isNew ? instanceFormValues(null) : null))

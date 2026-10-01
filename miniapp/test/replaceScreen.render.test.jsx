@@ -91,7 +91,7 @@ describe('мастер замены: полная подписка', () => {
   it('без роли -- кто может, без кнопки', async () => {
     mocks.role = ''
     const { root } = await mount()
-    expect(root.textContent).toContain('может владелец роутера или администратор')
+    expect(root.textContent).toContain('может владелец роутера, оператор или администратор')
     expect(button(root, 'Открыть кабинет')).toBeFalsy()
     render(null, root)
   })

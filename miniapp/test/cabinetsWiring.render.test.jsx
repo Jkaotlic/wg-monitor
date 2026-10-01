@@ -110,7 +110,7 @@ describe('свои серверы -- слои парка', () => {
     const h = host(nav({ routerID: 1, overlay: 'selfhosted', overlayParams: { returnTo: 'fleet' } }))
     const root = await mount(h.node)
     const p = mocks.props.list
-    expect(p.backLabel).toBe('Роутеры парка')
+    expect(p.backLabel).toBe('Выбрать роутер')
     p.onOpenInstance('ams')
     expect(h.actions.pop()).toEqual({
       type: 'overlay',
@@ -121,6 +121,18 @@ describe('свои серверы -- слои парка', () => {
     expect(h.actions.pop().params.instanceId).toBe('')
     p.onClose()
     expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'fleet' })
+    cleanup(root)
+  })
+
+  it.each([['vps', 'Свои VPS'], ['awg3', 'Панели VPN-серверов'], ['all', 'Серверы']])('путь из Парка, часть %s: «назад» с экрана сервера = заголовок списка «%s»', async (part, title) => {
+    let h = host(nav({ overlay: 'selfhosted', overlayParams: { returnTo: 'park', part } }))
+    let root = await mount(h.node)
+    mocks.props.list.onOpenInstance('ams')
+    const open = h.actions.pop()
+    cleanup(root)
+    h = host(nav({ overlay: open.overlay, overlayParams: open.params }))
+    root = await mount(h.node)
+    expect(mocks.props.inst.backLabel).toBe(title)
     cleanup(root)
   })
 

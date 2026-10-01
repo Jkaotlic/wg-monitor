@@ -36,6 +36,10 @@ const FORBIDDEN = [
   [/Панели awg3/, '«Панели VPN-серверов»'],
   [/(['"`>])Управление(['"`<])/, '«Настройки»'],
   [/«Управление»/, '«Настройки»'],
+  [/Свои серверы/, '«Свои VPS» / «Серверы»'],
+  [/владелец роутера или администратор/, 'с оператором: «владелец роутера, оператор или администратор»'],
+  [/Парк → «Открыть в браузере»/, 'placeText(\'browser\')'],
+  [/вкладке «Свой сервер» его кабинета/, '«Новый VPN-туннель» → «Откуда взять конфиг»'],
 ]
 
 const ALL = files(SRC).map((p) => [p.slice(SRC.length), code(readFileSync(p, 'utf8'))])
@@ -46,6 +50,9 @@ describe('словарь v0.52: старых подписей на экране 
   })
   it('подписи возврата слоёв -- по словарю', () => {
     expect(['park', 'fleet', 'manage', 'selfhosted', 'awg3panel', null].map((to) => returnLabel(to))).toEqual(['Парк', 'Мои роутеры', 'Настройки', 'Серверы', 'Панель VPN-сервера', 'Роутеры'])
+    expect(returnLabel('fleet')).toBe('Мои роутеры')
+    expect(returnLabel('fleet', true)).toBe('Выбрать роутер')
+    expect(['vps', 'awg3', 'all'].map((p) => returnLabel('selfhosted', true, p))).toEqual(['Свои VPS', 'Панели VPN-серверов', 'Серверы'])
     expect(ACTION_LABELS.recheck).toBe('Проверить заново')
   })
 })

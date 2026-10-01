@@ -18,6 +18,7 @@ describe('places.js: все места существуют', () => {
       expect(section, `${key}: раздела ${p.section} нет на вкладке ${p.tab}`).toBeTruthy()
       expect(placeParts(key)[1]).toBe(section.title)
     }
+    if (p.sectionTitle) expect(readFileSync(SRC + p.owner, 'utf8'), `${key}: раздела «${p.sectionTitle}» нет в ${p.owner}`).toContain(`title="${p.sectionTitle}"`)
     if (p.item) expect(readFileSync(SRC + p.owner, 'utf8'), `${key}: подписи «${p.item}» нет в ${p.owner}`).toContain(p.item)
   })
 
@@ -29,7 +30,7 @@ describe('places.js: все места существуют', () => {
   })
 
   it('известные битые указатели берут место отсюда', () => {
-    for (const f of ['fleetBatch.js', 'provisionWizard.js', 'revive.js', 'agentJobs.js', 'screens/NoAccess.jsx', 'screens/AccessSection.jsx', 'screens/RouterDetail.jsx']) {
+    for (const f of ['fleetBatch.js', 'provisionWizard.js', 'revive.js', 'agentJobs.js', 'screens/NoAccess.jsx', 'screens/AccessSection.jsx', 'screens/RouterDetail.jsx', 'screens/LoginScreen.jsx', 'selfhostedForm.js']) {
       const src = readFileSync(SRC + f, 'utf8')
       expect(src, f).toContain('placeText(')
       expect(src, f).not.toMatch(/«Управление» →|вкладке «Управление»|на экране\s+«Доступ»/)
