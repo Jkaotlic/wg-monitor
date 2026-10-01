@@ -95,3 +95,24 @@ func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 		t.Fatalf("без Telegram: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Финальное ревью v0.52: бывший оператор (строка снята) -- 404 на входе, файл
+// никуда не уходит. Роль проверяется на каждом запросе, не при входе в сессию.
+func TestMiniappSendConfFormerOperatorGets404(t *testing.T) {
+	env := newCabinetEnv(t)
+	rec := env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("действующему оператору: %d %s", rec.Code, rec.Body.String())
+	}
+	sent := len(env.docs.sent)
+	if err := env.d.RouterOperators().Remove(env.ownedID, cabOperator); err != nil {
+		t.Fatal(err)
+	}
+	rec = env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Fatalf("бывший оператор: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(env.docs.sent) != sent || len(env.sink.enqueued) != 0 {
+		t.Fatalf("бывшему оператору ушёл файл или команда: %+v", env.docs.sent)
+	}
+}
