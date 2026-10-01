@@ -82,13 +82,17 @@ describe('п. 3: перезапуск здорового VPN-туннеля на
     expect(screen(root).querySelectorAll('.btn-primary').length).toBe(0)
     cleanup(root)
   })
-  it('оператор и наблюдатель без права управлять -- кнопки нет', async () => {
-    for (const role of ['operator', 'viewer']) {
-      A.role = role
-      const root = await mount({ layer: 'tunnel', layerParams: { tunnelID: 'awg10' } })
-      expect([...screen(root).querySelectorAll('button')].some((x) => x.textContent.trim() === 'Перезапустить VPN-туннель')).toBe(false)
-      cleanup(root)
-    }
+  it('оператор: перезапуск есть и открывает лист tunnel_restart; «Удалить» нет', async () => {
+    A.role = 'operator'
+    const sheets = []
+    const root = await mount({ layer: 'tunnel', layerParams: { tunnelID: 'awg10' }, openSheet: (s) => sheets.push(s) })
+    const texts = [...screen(root).querySelectorAll('button')].map((x) => x.textContent.trim())
+    expect(texts).not.toContain('Удалить VPN-туннель')
+    const b = [...screen(root).querySelectorAll('button')].find((x) => x.textContent.trim() === 'Перезапустить VPN-туннель')
+    expect(b).toBeTruthy()
+    await act(async () => b.click())
+    expect(sheets[0]).toMatchObject({ action: 'tunnel_restart', args: { tunnel_id: 'awg10' } })
+    cleanup(root)
   })
 })
 

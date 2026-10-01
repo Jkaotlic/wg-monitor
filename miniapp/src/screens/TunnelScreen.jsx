@@ -144,10 +144,12 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
   ) : null
 
   // Перезапуск здорового VPN-туннеля: дом действия -- этот экран (карточка
-  // тревоги держит его только на время инцидента). Не лаймовая: главная кнопка
+  // тревоги держит его только на время инцидента). Без ролевого условия: у
+  // прежних «Быстрых действий» его не было, и оператор не должен его терять
+  // (удаление и прочее управление -- по-прежнему mayManageTunnels). Не лаймовая: главная кнопка
   // экрана -- своя или никакая.
   const restartBtn =
-    manage && fresh ? (
+    typeof openSheet === 'function' && fresh ? (
       <button
         type="button"
         class="btn btn-ghost btn-wide tunnel-restart"
