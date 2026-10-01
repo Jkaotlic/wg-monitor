@@ -5114,6 +5114,12 @@ body {
   margin-top: var(--sp-3);
 }
 
+/* Один вход («Добавить роутер»: серверы ушли в свой раздел, v0.52) -- во всю
+   ширину, а не половинкой с переносом подписи. */
+.park-entries > :only-child {
+  grid-column: 1 / -1;
+}
+
 .nav-card-quiet {
   background: var(--surf);
   border-color: var(--line);
