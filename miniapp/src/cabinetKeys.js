@@ -1,6 +1,7 @@
 // Кабинеты роутера: вкладки, ключи Amnezia Premium и коды HideMy.name, права,
 // тексты листов и отказов. Секрет здесь не хранится: значение поля живёт в
 // Sheet.jsx, а сюда приходит снимок -- только чтобы собрать тело запроса.
+import { awg3IssueErrorText } from './awg3Panel.js'
 
 export const CABINET_KINDS = ['amnezia', 'hidemy']
 
@@ -215,6 +216,9 @@ function issueCodeSpeaksRussian(code) {
 
 // provider -- откуда выпуск: отзыв страны есть только у Amnezia.
 export function issueFailure(err, perms, provider = 'amnezia') {
+  if (provider === 'awg3panel' && typeof err?.code === 'string' && err.code.startsWith('awg3_')) {
+    return { text: awg3IssueErrorText(err, { admin: Boolean(perms?.admin) }), offerRevoke: false }
+  }
   if (err?.code === 'slot_busy') {
     if (provider !== 'amnezia') return { text: 'Свободных мест в подписке нет.', offerRevoke: false }
     const canRevoke = Boolean(perms?.revoke) && provider === 'amnezia'

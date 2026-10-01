@@ -1,9 +1,10 @@
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
+import { ISSUER_PANEL_DOWN } from '../awg3Panel.js'
 
 // Панели, с которых можно выпустить конфиг на этот роутер. Список уже
 // отобран сервером (miniappCanIssueAwg3) -- экран его не фильтрует.
-export function CabinetAwg3({ panels, error, onRetry, onPick }) {
+export function CabinetAwg3({ panels, error, onRetry, onPick, admin = false }) {
   if (error) {
     return (
       <div class="card cabinet-awg3-error">
@@ -22,7 +23,7 @@ export function CabinetAwg3({ panels, error, onRetry, onPick }) {
       {panels.map((p) => (
         <Section key={p.id} title={`Панель VPN-сервера «${p.label || p.id}»`}>
           {p.unavailable ? (
-            <p class="state">Панель сейчас не отвечает — попробуйте позже.</p>
+            <p class="state">{admin ? 'Панель сейчас не отвечает — попробуйте позже.' : ISSUER_PANEL_DOWN}</p>
           ) : p.ifaces.length === 0 ? (
             <p class="state">На панели нет интерфейсов.</p>
           ) : (

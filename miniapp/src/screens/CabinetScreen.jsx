@@ -190,7 +190,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           </p>
         )}
         {current === 'awg3' ? (
-          <CabinetAwg3 panels={awg3Panels} error={awg3Failed ? CABINET_TEXTS.awg3LoadError : ''} onRetry={loadAwg3} onPick={pick} />
+          <CabinetAwg3 panels={awg3Panels} error={awg3Failed ? CABINET_TEXTS.awg3LoadError : ''} onRetry={loadAwg3} onPick={pick} admin={perms.admin} />
         ) : loadError ? (
           <p class="state state-error">{loadError}</p>
         ) : current === 'selfhosted' ? (

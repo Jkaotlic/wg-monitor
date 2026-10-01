@@ -181,6 +181,17 @@ export function awg3ErrorText(err) {
   return 'Не получилось. Попробуйте ещё раз.'
 }
 
+// Допущенный к панели (не админ) чинить её не может: пароль, сертификат,
+// выключатель -- в настройках панели у администратора. Ему -- одна фраза
+// без подробностей (хвост v0.51); админу -- прежние тексты.
+export const ISSUER_PANEL_DOWN = 'Панель VPN-сервера сейчас недоступна, сообщите администратору.'
+const ADMIN_FIX_CODES = new Set(['awg3_bad_password', 'awg3_cert_rejected', 'awg3_server_cert_rejected', 'awg3_disabled', 'awg3_unreachable', 'awg3_bad_response', 'awg3_paused', 'awg3_not_configured'])
+
+export function awg3IssueErrorText(err, { admin = false } = {}) {
+  if (admin) return awg3ErrorText(err)
+  return ADMIN_FIX_CODES.has(err?.code) ? ISSUER_PANEL_DOWN : awg3ErrorText(err)
+}
+
 const FORM_KEYS = ['id', 'label', 'base_url', 'user', 'password', 'p12', 'p12_password']
 
 // Поле формы, которое отверг сервер (invalid_field); незнакомое -- пусто.

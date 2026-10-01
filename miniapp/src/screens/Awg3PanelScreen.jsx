@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchAwg3Peers, issueAwg3Device, issueAwg3ToRouter } from '../api.js'
+import { fetchAwg3Peers, fetchAwg3Panels, issueAwg3Device, issueAwg3ToRouter } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { waitCommand, waitDeadlineMs, commandOutcome } from '../commandWait.js'
 import { isStale } from '../staleness.js'
@@ -66,6 +66,23 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панел
   useEffect(() => {
     load('')
   }, [panelId])
+
+  // Допуск (issuers) -- из GET /awg3panels: он виден и правится, даже когда
+  // сама панель не отвечает и страница устройств не загрузилась (хвост v0.51).
+  const [listPanel, setListPanel] = useState(null)
+  useEffect(() => {
+    fetchAwg3Panels()
+      .then((resp) => {
+        if (alive.current) setListPanel((resp?.panels ?? []).find((p) => p.id === panelId) ?? null)
+      })
+      .catch(() => {})
+  }, [panelId])
+  const issuersPanel = page?.panel ?? listPanel
+  const onIssuersChanged = (p) => {
+    if (!p) return
+    setListPanel(p)
+    setPage((prev) => (prev ? { ...prev, panel: p } : prev))
+  }
 
   const iface = page?.iface ?? ''
 
@@ -269,7 +286,6 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панел
                 </Section>
               )
             )}
-            <Awg3Issuers panel={page.panel} onChanged={(p) => p && setPage((prev) => ({ ...prev, panel: p }))} />
             {routerOutcome && (
               <p class={`state awg3-outcome awg3-outcome-${routerOutcome.tone}`} role="status">
                 <Quoted text={routerOutcome.text} />
@@ -282,6 +298,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панел
             )}
           </>
         )}
+        {issuersPanel && <Awg3Issuers panel={issuersPanel} onChanged={onIssuersChanged} />}
         {/* Ревью раунд 3 (finding 4): QR -- ВНЕ ветки banner/page. После
             успешного выпуска экран сам перечитывает страницу (load(iface));
             если этот автоповтор упадёт, банер раньше подменял всю ветку

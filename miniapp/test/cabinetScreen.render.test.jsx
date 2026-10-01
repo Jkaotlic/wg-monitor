@@ -591,11 +591,18 @@ describe('кабинет роутера: вкладка «Панель VPN-се�
     cleanup(root)
   })
 
-  it('недоступная панель -- словами, без интерфейсов', async () => {
+  it('недоступная панель -- словами, без интерфейсов: админу «попробуйте позже», остальным «сообщите администратору»', async () => {
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: true, ifaces: [] }]
-    const { root } = await mount()
+    mocks.role = 'admin'
+    let { root } = await mount()
     await tab(root, 'Панель VPN-сервера')
     expect(root.textContent).toContain('Панель сейчас не отвечает')
+    cleanup(root)
+    mocks.role = 'operator'
+    ;({ root } = await mount())
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('сообщите администратору')
+    expect(root.textContent).not.toContain('Панель сейчас не отвечает')
     cleanup(root)
   })
   // v0.52 (хвост v0.51): ошибка списка панелей не прячет вкладку -- внутри
