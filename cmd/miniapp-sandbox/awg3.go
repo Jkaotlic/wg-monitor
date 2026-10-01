@@ -104,7 +104,12 @@ func newSandboxAwg3(dir, p12Out string) (*sandboxAwg3, error) {
 		// панели маршрутов мутации нет вовсе -- взять 405 неоткуда. Экран
 		// должен увидеть «только для просмотра» с первого открытия.
 		{"nl2", "nl2 (полигон)", nl2, func(i *awg3panel.Instance) { i.Readonly = true }},
-		{"old", "Старый пароль", mainPanel, func(i *awg3panel.Instance) { i.Lock = awg3panel.LockBadPassword }},
+		// Допуск к недоступной панели (v0.52, хвост v0.51): допущенный видит
+		// «сообщите администратору», админ -- блок допуска при баннере.
+		{"old", "Старый пароль", mainPanel, func(i *awg3panel.Instance) {
+			i.Lock = awg3panel.LockBadPassword
+			i.Issuers = []awg3panel.Issuer{{TelegramUserID: 4242, GrantedAt: time.Now().UTC()}}
+		}},
 		{"ban", "Бан 15 минут", nl2, func(i *awg3panel.Instance) { i.PausedUntil = time.Now().Add(12 * time.Minute) }},
 	} {
 		in, err := inst(seed.id, seed.label, seed.p)

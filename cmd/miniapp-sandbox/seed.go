@@ -40,6 +40,10 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 		// мертво. Экран обязан сказать «всё работает, резерва нет», а не
 		// красить ветку по мёртвому запасному.
 		{"sandbox-work", "static", "v0.41.0", 30 * time.Second, "owner"},
+		// Длинные имена (v0.52) -- полоса «Мои роутеры» владельца трёх роутеров:
+		// чип не должен раздвигать страницу на 360 px.
+		{"router4car4new", "static", "v0.47.0", 50 * time.Second, "owner"},
+		{"дача-северная", "static", "v0.47.0", 70 * time.Second, "owner"},
 	}
 
 	for i, s := range specs {

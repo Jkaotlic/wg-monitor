@@ -30,6 +30,9 @@ func TestSandboxAwg3Seeds(t *testing.T) {
 	if byID["old"].Lock != awg3panel.LockBadPassword || !byID["ban"].PausedUntil.After(time.Now()) {
 		t.Fatalf("состояния: %+v %+v", byID["old"], byID["ban"])
 	}
+	if len(byID["old"].Issuers) != 1 || byID["old"].Issuers[0].TelegramUserID != 4242 {
+		t.Fatalf("допуск к недоступной панели: %+v", byID["old"].Issuers)
+	}
 	// Решение оператора: nl2 засевается readonly в хранилище -- экран должен
 	// увидеть «только для просмотра» с первого открытия, не дожидаясь 405 от
 	// настоящей панели (у поддельной панели readonly и так нет маршрутов
