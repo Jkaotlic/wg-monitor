@@ -11,6 +11,7 @@ const JOB = { jobId: 'job-9', title: 'Переустановка агента н
 vi.mock('../src/screens/RouterAdminSections.jsx', () => ({
   AdminRepairSections: () => null,
   AdminSettingsSections: () => null,
+  AdminAccessSection: () => null,
   AdminDangerZone: ({ openLayer, routerName }) => (
     <button type="button" class="stub-admin" data-name={routerName} onClick={() => openLayer('job', JOB)}>
       открыть

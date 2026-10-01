@@ -14,23 +14,22 @@ import {
   jobStartErrorText,
 } from '../agentJobs.js'
 
-// Роутерные разделы бывшего «Обслуживания и доступов» (v0.41). С v0.47 они
-// не хвост вкладки «Управление», а три куска, которые вкладка вставляет в
-// родственные группы (SettingsSections, слоты):
-//   AdminRepairSections   -- «Починить»: пакеты по расписанию, сброс DNS;
-//   AdminSettingsSections -- «Настройки и доступ»: агент, подключение, доступ;
-//   AdminDangerZone       -- свёрнутое «Опасное» перед справкой.
+// Админские куски вкладки «Настройки» (v0.52): вкладка вставляет их слотами в
+// родственные разделы (SettingsSections):
+//   AdminRepairSections   -- «Обслуживание»: пакеты по расписанию, сброс DNS;
+//   AdminSettingsSections -- «Роутер и агент»: настройки и подключение агента;
+//   AdminAccessSection    -- «Люди и уведомления»: доступ;
+//   AdminDangerZone       -- «Опасное»: перенаправление агента.
 // Гейты ролей прежние: всё, кроме того, что сервер отдаёт всем, -- только
 // админу.
 //
 // Парк (обновление агентов, раскатка бэкенда, добавление роутера, массовые
-// действия) здесь не живёт: он про весь флот и стоит на «Моих роутерах»
-// (телефон) и на сводке (веб). openLayer открывает «Ход работы» с возвратом
-// во вкладку.
+// действия) здесь не живёт: он про весь флот. openLayer открывает «Ход
+// работы» с возвратом во вкладку.
 //
-// «Опасное» свёрнуто (спека, п. 8): перенаправление уводит роутер с этого
-// сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт на
-// «Ход работы» через openLayer (возврат -- сюда же).
+// «Опасное» -- свёрнутый раздел вкладки: перенаправление уводит роутер с
+// этого сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт
+// на «Ход работы» через openLayer (возврат -- сюда же).
 export function AdminRepairSections({ isAdmin = false, onOpenDNSReset, onOpenPackages }) {
   return (
     <>
@@ -93,14 +92,17 @@ export function AdminSettingsSections({ routerID, isAdmin = false, openSheet, on
           </p>
         </Section>
       )}
-
-      {/* Доступ -- только админ: сервер проверяет роль сам (miniappRequireAdmin). */}
-      {isAdmin && (
-        <div id="mg-access" class="manage-anchor-target">
-          <AccessSection routerID={routerID} openSheet={openSheet} />
-        </div>
-      )}
     </>
+  )
+}
+
+// «Доступ» -- раздел «Люди и уведомления» (v0.52), только админ: сервер
+// проверяет роль сам (miniappRequireAdmin).
+export function AdminAccessSection({ routerID, openSheet }) {
+  return (
+    <div id="mg-access" class="manage-anchor-target">
+      <AccessSection routerID={routerID} openSheet={openSheet} />
+    </div>
   )
 }
 
@@ -151,8 +153,7 @@ export function AdminDangerZone({ routerID, routerName = '', isAdmin = false, op
   return (
     <>
       {isAdmin && routerName && (
-        <details class="danger-zone">
-          <summary>Опасное</summary>
+        <>
           <Section title="Перенаправить агента">
             <p class="hint">Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.</p>
             {panelKnown === false ? (
@@ -170,7 +171,7 @@ export function AdminDangerZone({ routerID, routerName = '', isAdmin = false, op
               </button>
             )}
           </Section>
-        </details>
+        </>
       )}
     </>
   )

@@ -1,48 +1,29 @@
 import { useContext } from 'preact/hooks'
 import { AppContext } from '../appContext.js'
 import { SettingsSections } from './SettingsScreen.jsx'
-import { AdminRepairSections, AdminSettingsSections, AdminDangerZone } from './RouterAdminSections.jsx'
+import { AdminRepairSections, AdminSettingsSections, AdminAccessSection, AdminDangerZone } from './RouterAdminSections.jsx'
 
-// Вкладка «Управление» (v0.41). Раньше то же самое пряталось за шестерёнкой
-// в шапке («Настройки») и за строкой «Администрирование» внизу «Сейчас»
-// («Обслуживание и доступы»): оператор просил функциональную кнопку внизу
-// для всех. Парка здесь нет: он про весь флот и живёт на «Моих роутерах».
-//
-// v0.47: оператор счёл порядок нелогичным -- два бывших экрана стояли друг
-// под другом, и родственное оказывалось в разных концах (пакеты Entware и
-// «Пакеты по расписанию», опрос и «Настройки агента», справка посередине).
-// Теперь группы по тому, зачем пришли: Роутер · Версии · Проверить ·
-// Починить · Настройки и доступ, затем свёрнутое «Опасное», справка
-// последней. Админские куски -- слотами в родственные группы. Не-админу
-// слоты не передаются вовсе (null), а не пустыми компонентами: группа по
-// ним решает, есть ли что показывать, и пустой заголовок не рисует.
+// Вкладка «Настройки» (v0.52): четыре раздела по задаче человека --
+// Обслуживание · Люди и уведомления · Роутер и агент · Опасное (последнее --
+// админу), справка внизу. Админские куски вставляются слотами в родственные
+// разделы. Не-админу слоты не передаются вовсе (null), а не пустыми
+// компонентами: раздел по ним решает, есть ли что показывать, и пустой
+// заголовок не рисует. Парка здесь нет: он про весь флот.
 export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, focusNonce = 0, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
   const { wide } = useContext(AppContext)
-  const repairSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} /> : null
-  const settingsSlot = isAdmin ? (
-    <AdminSettingsSections
-      routerID={routerID}
-      isAdmin
-      openSheet={openSheet}
-      onOpenAgentConfig={onOpenAgentConfig}
-      onOpenAgentConnection={onOpenAgentConnection}
-    />
+  const serviceSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} /> : null
+  const peopleSlot = isAdmin ? <AdminAccessSection routerID={routerID} openSheet={openSheet} /> : null
+  const agentSlot = isAdmin ? (
+    <AdminSettingsSections routerID={routerID} isAdmin openSheet={openSheet} onOpenAgentConfig={onOpenAgentConfig} onOpenAgentConnection={onOpenAgentConnection} />
   ) : null
-  const dangerSlot = isAdmin ? (
-    <AdminDangerZone
-      routerID={routerID}
-      routerName={routerName}
-      isAdmin
-      openSheet={openSheet}
-      openLayer={openLayer}
-      onOpenAgentConnection={onOpenAgentConnection}
-    />
+  const dangerSlot = isAdmin && routerName ? (
+    <AdminDangerZone routerID={routerID} routerName={routerName} isAdmin openSheet={openSheet} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />
   ) : null
   return (
     <div class="screen manage-tab">
       {/* На широком экране имя роутера уже стоит в шапке основной области. */}
       {!wide && <h1 class="screen-title">{routerName || 'Роутер'}</h1>}
-      <p class="router-lastseen">Панель, версии, обслуживание и доступы этого роутера.</p>
+      <p class="router-lastseen">Обслуживание, люди и уведомления, панель и агент этого роутера.</p>
       <SettingsSections
         routerID={routerID}
         routerName={routerName}
@@ -51,8 +32,9 @@ export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGro
         isAdmin={isAdmin}
         focusGroup={focusGroup}
         focusNonce={focusNonce}
-        repairSlot={repairSlot}
-        settingsSlot={settingsSlot}
+        serviceSlot={serviceSlot}
+        peopleSlot={peopleSlot}
+        agentSlot={agentSlot}
         dangerSlot={dangerSlot}
       />
     </div>

@@ -42,7 +42,8 @@ describe('«Панель роутера»', () => {
     mocks.settings = { role: 'owner', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
     mocks.opened = []
     const root = await mount()
-    expect(sections(root)[0]).toBe(panelSection(root))
+    // Первая секция раздела «Роутер и агент» (v0.52).
+    expect(sections(root.querySelector('#mg-agent'))[0]).toBe(panelSection(root))
     const btn = panelSection(root).querySelector('.panel-open')
     expect(btn.textContent).toContain('awg.example.com')
     await act(async () => btn.click())

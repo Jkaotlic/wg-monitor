@@ -312,12 +312,11 @@ async function mountAdmin(openLayer, onOpenAgentConnection) {
 
 describe('Управление: перенаправить агента', () => {
 
-  it('свёрнуто под «Опасное»; адрес без https не пускает; запуск открывает «Ход работы»', async () => {
+  it('адрес без https не пускает; запуск открывает «Ход работы» (v0.52: раздел «Опасное» сворачивает вкладка)', async () => {
     const opened = []
     const { root, sheets } = await mountAdmin((overlay, params) => opened.push([overlay, params]))
-    const zone = root.querySelector('details.danger-zone')
-    expect(zone.open).toBe(false)
-    expect(zone.querySelector('summary').textContent).toBe('Опасное')
+    const zone = root
+    expect(root.querySelector('details.danger-zone')).toBe(null)
     expect(zone.textContent).toContain('Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.')
     await act(async () => buttons(zone, 'Перенаправить агента')[0].click())
     const s = await mountSheet(sheets[0])
@@ -369,7 +368,7 @@ describe('без адреса панели awg-manager', () => {
     mocks.conn = { awgm_url: '' }
     let openedConn = 0
     const { root } = await mountAdmin(() => {}, () => openedConn++)
-    const zone = root.querySelector('details.danger-zone')
+    const zone = root
     expect(buttons(zone, 'Перенаправить агента')).toHaveLength(0)
     expect(zone.textContent).toContain('Сначала задайте адрес панели в «Подключении агента».')
     await act(async () => buttons(zone, 'Подключение агента')[0].click())
