@@ -27,6 +27,7 @@ const { FALLBACK_ERROR_TEXT } = await import('../src/errorText.js')
 const { TunnelsTab } = await import('../src/screens/TunnelsTab.jsx')
 const { AccessSection } = await import('../src/screens/AccessSection.jsx')
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
+const { ExitCompareSection } = await import('../src/screens/ExitCompare.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
@@ -128,7 +129,6 @@ const order = (root) => [...root.querySelector('.screen').children].map((el) => 
   if (el.querySelector?.('.incident-card')) return 'alerts'
   if (el.classList.contains('stat-grid')) return 'stats'
   if (el.classList.contains('maint-notice')) return 'maint'
-  if (el.querySelector?.('.compare-run')) return 'compare'
   return el.className || el.tagName
 })
 const limes = (root) => [...root.querySelectorAll('.btn-primary')]
@@ -165,7 +165,7 @@ describe('«Сейчас» при тревоге (спека п. 1.1–1.3)', ()
   })
 
   it('«Сравнить адреса выхода» -- контурная', async () => {
-    const { root } = await mountNow()
+    const root = await mount(<ExitCompareSection routerID={56} traffic={null} asleep={false} />)
     expect(root.querySelector('.compare-run').className).toContain('btn-ghost')
     cleanup(root)
   })

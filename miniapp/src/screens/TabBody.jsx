@@ -6,6 +6,7 @@ import { ManageTab } from './ManageTab.jsx'
 import { ParkTab } from './ParkTab.jsx'
 import { PARK_TAB, tabOwnsLayer, layerFamily } from '../nav.js'
 import { routerContext } from './OverlayHost.jsx'
+import { routerPickMode, otherAlertRouter } from '../routerPick.js'
 
 export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // «Парк» (v0.48) от роутера не зависит: открывается и без него. Слои парка
@@ -37,7 +38,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // ни поздний ответ по A не переезжают на экран B (MINI-04).
   const key = nav.routerID
   switch (nav.tab === PARK_TAB ? 'router' : nav.tab) {
-    case 'router':
+    case 'router': {
+      const strip = routerPickMode({ count: routers.length, isAdmin: Boolean(isAdmin) }) === 'strip'
       return (
         <RouterDetail
           key={key}
@@ -48,8 +50,12 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           onTab={(tab) => dispatch({ type: 'tab', tab })}
           openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
           repairOpen={nav.overlay === 'repair'}
+          otherAlert={strip ? otherAlertRouter(routers, nav.routerID) : null}
+          onOpenRouter={(id) => dispatch({ type: 'router', id })}
+          onOpenService={() => dispatch({ type: 'manage', section: 'service' })}
         />
       )
+    }
     case 'tunnels':
       return (
         <TunnelsTab

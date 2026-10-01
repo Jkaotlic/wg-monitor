@@ -32,6 +32,7 @@ vi.mock('../src/useCommand.js', () => ({
 }))
 
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
+const { ExitCompareSection } = await import('../src/screens/ExitCompare.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
@@ -76,23 +77,23 @@ describe('«Сейчас» без повторов', () => {
     cleanup(root)
   })
 
-  it('проваленные проверки -- отдельным списком над спойлером, в спойлере только исправные', async () => {
+  it('проваленные проверки -- списком, спойлера нет (v0.52)', async () => {
     const { root } = await mount()
     const failing = root.querySelector('.checks-failing')
     expect(failing.textContent).toContain('Определение адресов')
-    const spoiler = root.querySelector('details.checks-spoiler')
-    expect(spoiler.open).toBe(false)
-    expect(spoiler.querySelectorAll('.checks-status-bad, .checks-status-danger')).toHaveLength(0)
-    expect(failing.compareDocumentPosition(spoiler) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // Над спойлером -- только красное и жёлтое; серое «не следит» -- внутри.
+    expect(root.querySelector('details.checks-spoiler')).toBe(null)
+    // Только красное и жёлтое; серое «не следит» на «Роутере» не рисуется.
     expect(failing.querySelectorAll('.checks-status-muted')).toHaveLength(0)
-    expect(spoiler.querySelectorAll('.checks-status-muted')).toHaveLength(1)
+    expect(root.querySelectorAll('.checks-status-muted')).toHaveLength(0)
     cleanup(root)
   })
 
   it('пояснения к «Проверить сейчас» спрятаны под «Как это работает»', async () => {
-    const { root } = await mount()
-    const section = [...root.querySelectorAll('section')].find((s) => s.querySelector('.section-title')?.textContent === 'Проверить сейчас')
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => render(<ExitCompareSection routerID={56} traffic={null} asleep={false} />, root))
+    await flush()
+    const section = root.querySelector('.exit-compare')
     const how = section.querySelector('details.compare-how')
     expect(how.querySelector('summary').textContent).toBe('Как это работает')
     expect(how.textContent).toContain('Запускает оба зонда сразу')

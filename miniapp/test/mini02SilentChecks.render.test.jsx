@@ -73,9 +73,9 @@ describe('MINI-02: проверки молчащего роутера', () => {
     root.remove()
   })
 
-  it('живой роутер -- прежнее «работает»', async () => {
+  it('живой роутер -- исправные проверки на «Роутере» не рисуются (их дом -- «Проверки»)', async () => {
     const root = await mount({ id: 33, nickname: 'zhivaya-dacha', kind: 'static', status: 'online', stale: false, last_seen_age_sec: 30 })
-    expect(rowText(root, 'Отчёты от роутера')).toContain('работает')
+    expect(rowText(root, 'Отчёты от роутера')).toBe('')
     render(null, root)
     root.remove()
   })

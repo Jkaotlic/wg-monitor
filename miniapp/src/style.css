@@ -5023,3 +5023,16 @@ body {
   padding: 0;
   text-align: left;
 }
+
+/* v0.52: «На другом роутере тревога» -- строка над шапкой «Роутера». */
+.other-alert {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}

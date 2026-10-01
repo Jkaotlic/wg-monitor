@@ -16,13 +16,13 @@ vi.mock('../src/useCommand.js', () => ({
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
-async function mount(onTab) {
+async function mount(onTab, onOpenService) {
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <RouterDetail id={7} openSheet={() => {}} onTab={onTab} />
+        <RouterDetail id={7} openSheet={() => {}} onTab={onTab} onOpenService={onOpenService} />
       </AppContext.Provider>,
       root,
     ),
@@ -32,15 +32,16 @@ async function mount(onTab) {
 }
 
 describe('подсветка обслуживания на «Сейчас»', () => {
-  it('перезагрузка видна и ведёт в «Управление»', async () => {
+  it('перезагрузка видна и ведёт в «Настройки» → «Обслуживание»', async () => {
     mocks.versions = { rows: [], unknown: [], reboot_hint: 'kmod', agent: { installed: 'v0.41.0', available: 'v0.43.0' } }
-    const onTab = vi.fn()
-    const root = await mount(onTab)
+    const onOpenService = vi.fn()
+    const root = await mount(() => {}, onOpenService)
     const card = root.querySelector('.maint-notice')
     expect(card.textContent).toContain('Нужна перезагрузка роутера')
     expect(card.textContent).toContain('Агент wg-monitor: v0.43.0 (сейчас v0.41.0)')
     await act(async () => card.click())
-    expect(onTab).toHaveBeenCalledWith('manage')
+    expect(card.textContent).toContain('Открыть «Настройки» → «Обслуживание»')
+    expect(onOpenService).toHaveBeenCalledTimes(1)
     render(null, root)
     root.remove()
   })
