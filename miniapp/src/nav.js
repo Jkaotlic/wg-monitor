@@ -98,6 +98,30 @@ export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy', 'selfhosted'
 // выбранного роутера (?open=selfhosted).
 export const URL_FLEET_OVERLAYS = ['selfhosted']
 
+// v0.52: бывшие локальные слои (useState внутри вкладок) -- оверлеи. «Назад»
+// Telegram закрывает любой из них, а в адрес пишется только место-родитель:
+// у каждого состояние, не переживающее перезагрузку (шаг мастера, выбранный
+// файл, ход починки, карточка из снимка роутера).
+//
+// Слой вкладки: рисует сама вкладка -- ему нужен её снимок; открытие ставит
+// вкладку, уход с вкладки слой закрывает.
+export const TAB_LAYERS = { tunnel: 'tunnels', replace: 'tunnels', confimport: 'tunnels' }
+// Слой в слое: рисует слой-родитель (снимок «Маршрутов», данные кабинета);
+// «назад» возвращает в родителя с его параметрами.
+export const CHILD_LAYERS = { routeadd: 'routes', routepick: 'routes', cabinetissue: 'cabinet' }
+// Слой роутера без адреса: починка идёт заданием, экран лишь смотрит.
+export const ROUTER_LAYERS = ['repair']
+export const LOCAL_LAYERS = [...Object.keys(TAB_LAYERS), ...Object.keys(CHILD_LAYERS), ...ROUTER_LAYERS]
+
+// Слои, которые закрепляются на время отправки: мастер «Добавить роутер» и
+// выпуск конфига (уход посреди выпуска -- второй выпуск и занятое место).
+export const PINNABLE_OVERLAYS = ['provision', 'cabinetissue']
+
+export function tabOwnsLayer(state) {
+  const tab = TAB_LAYERS[state?.overlay]
+  return tab != null && tab === state.tab
+}
+
 // Слои, которые «назад» и Esc не закрывают: во время раскатки бэкенда уходить
 // некуда -- приложение без сервера не работает, а экран сам перезагрузит
 // страницу или предложит «Вернуться» после таймаута.
@@ -118,7 +142,7 @@ export function navPinned(state) {
 // роутера и слоям парка это не мешает: в отличие от navPinned, признак
 // касается только ухода «назад».
 export function fleetIsHome(state) {
-  return state?.overlay === 'fleet' && state?.routerID == null
+  return state?.overlay === 'fleet' && state?.routerID == null && state?.tab !== PARK_TAB
 }
 
 // Параметры принадлежат слою: вместе с ним они уходят целиком (ключа нет),
@@ -197,6 +221,9 @@ export function navReducer(state, action) {
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
       if (action.closeOverlay) return withDiagView(withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null }), view)
+      // Слой вкладки принадлежит ей: уход на другую вкладку его закрывает.
+      const layerTab = TAB_LAYERS[state.overlay]
+      if (layerTab && layerTab !== tab) return withDiagView(withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null }), view)
       return withDiagView(withoutFocus({ ...state, tab }), view)
     }
     case 'router': {
@@ -220,6 +247,17 @@ export function navReducer(state, action) {
           { ...withoutParams(withoutFocus(state)), tab: OVERLAY_TABS[overlay], overlay: null, sheet: null },
           MANAGE_FOCUS[overlay] ?? MANAGE_FOCUS[state.overlay] ?? null,
         )
+      }
+      if (TAB_LAYERS[overlay] || ROUTER_LAYERS.includes(overlay)) {
+        if (state.routerID == null) return state
+        const tab = TAB_LAYERS[overlay] ?? state.tab
+        const next = { ...withoutParams(withoutFocus(state)), tab, overlay, sheet: null }
+        return action.params ? { ...next, overlayParams: action.params } : next
+      }
+      const parent = CHILD_LAYERS[overlay]
+      if (parent) {
+        if (state.overlay !== parent) return state
+        return { ...withoutParams(state), overlay, overlayParams: { ...(action.params ?? {}), returnTo: parent, returnParams: state.overlayParams ?? null } }
       }
       const next = { ...withoutParams(state), overlay }
       if (!overlay && state.routerID != null && state.tab === 'manage') return withFocus(next, MANAGE_FOCUS[state.overlay] ?? null)
@@ -251,7 +289,7 @@ export function navReducer(state, action) {
     // Закрепить мастер на время отправки. Флаг живёт в параметрах слоя и
     // уходит вместе с ним; паролей там по-прежнему нет.
     case 'pin': {
-      if (state.overlay !== 'provision') return state
+      if (!PINNABLE_OVERLAYS.includes(state.overlay)) return state
       const { pinned: _drop, ...params } = state.overlayParams ?? {}
       return { ...state, overlayParams: action.pinned ? { ...params, pinned: true } : params }
     }
@@ -264,6 +302,12 @@ export function navReducer(state, action) {
       // возвращает на список, и списку нужен его собственный returnTo.
       const params = state.overlayParams
       const target = normalizeReturn(params?.returnTo ?? null)
+      // Возврат на слой вкладки (из «Маршрутов» -- на экран VPN-туннеля):
+      // слой рисует его вкладка, поэтому вкладка встаёт вместе с ним.
+      if (TAB_LAYERS[target]) {
+        const back = { ...withoutParams(state), tab: TAB_LAYERS[target], overlay: target }
+        return params?.returnParams ? { ...back, overlayParams: params.returnParams } : back
+      }
       if (target === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null }
       // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
       // есть вкладка -- иначе «назад» оставил бы пустую основную область.
