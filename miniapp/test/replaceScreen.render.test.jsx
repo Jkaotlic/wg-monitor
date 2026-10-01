@@ -79,8 +79,17 @@ describe('мастер замены: полная подписка', () => {
     render(null, root)
   })
 
-  it('оператору -- кто может, без кнопки', async () => {
+  it('оператору -- «Открыть кабинет», как владельцу (решение оператора 01.10)', async () => {
     mocks.role = 'operator'
+    const { root, seen } = await mount()
+    expect(root.textContent).not.toContain('может владелец')
+    await act(async () => button(root, 'Открыть кабинет').click())
+    expect(seen.cabinet).toBe(1)
+    render(null, root)
+  })
+
+  it('без роли -- кто может, без кнопки', async () => {
+    mocks.role = ''
     const { root } = await mount()
     expect(root.textContent).toContain('может владелец роутера или администратор')
     expect(button(root, 'Открыть кабинет')).toBeFalsy()

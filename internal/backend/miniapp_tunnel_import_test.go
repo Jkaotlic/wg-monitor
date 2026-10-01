@@ -147,13 +147,14 @@ func confirmImport(t *testing.T, env *cabinetEnv, tgUser int64, token string) *h
 	return env.do(t, tgUser, http.MethodPost, "/v1/miniapp/routers/{id}/tunnels/import/confirm", `{"token":`+strconv.Quote(token)+`}`)
 }
 
-// Решение 1: импорт -- админ и владелец; оператору и постороннему 404, и
-// роутеру ничего не уходит.
+// Решение 1 (с 01.10 и оператору: «оператору всё, кроме админского»):
+// импорт -- админ, владелец и оператор; постороннему 404, и роутеру
+// ничего не уходит.
 func TestMiniappTunnelImportGateByRole(t *testing.T) {
 	for _, tc := range []struct {
 		user    int64
 		allowed bool
-	}{{cabOwner, true}, {cabAdmin, true}, {cabOperator, false}, {777, false}} {
+	}{{cabOwner, true}, {cabAdmin, true}, {cabOperator, true}, {777, false}} {
 		env, sink := newTunnelEnv(t, analyzeAnswer("ok", `{"supported":true,"version":"2.0","errors":[],"warnings":[]}`))
 		rec := postImport(t, env, tc.user, importBody("vpn-new", importConfFixture))
 		if !tc.allowed {

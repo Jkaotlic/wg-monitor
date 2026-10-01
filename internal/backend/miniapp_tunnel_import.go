@@ -388,9 +388,11 @@ func decodeMiniappImportBody(w http.ResponseWriter, r *http.Request, dst *miniap
 	return true
 }
 
+// Загрузка .conf -- админ, владелец и оператор роутера (решение оператора
+// 01.10: оператору всё, кроме админского); чужому 404 до чтения тела.
 func miniappTunnelImportHandler(d Deps, previews *miniappImportPreviews, questions *miniappAgentQuestions) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
 			return
 		}
@@ -462,7 +464,7 @@ func miniappTunnelImportHandler(d Deps, previews *miniappImportPreviews, questio
 
 func miniappTunnelImportPreviewHandler(d Deps, previews *miniappImportPreviews, questions *miniappAgentQuestions) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
 			return
 		}
@@ -484,7 +486,7 @@ func miniappTunnelImportPreviewHandler(d Deps, previews *miniappImportPreviews, 
 
 func miniappTunnelImportConfirmHandler(d Deps, previews *miniappImportPreviews, questions *miniappAgentQuestions) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
 			return
 		}

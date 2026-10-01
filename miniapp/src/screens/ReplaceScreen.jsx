@@ -22,6 +22,12 @@ const POLL_MS = 3000
 // выпущенную страну, когда в подписке нет мест.
 // onOpenTunnel(tunnelID|null) -- к экрану VPN-туннеля, который мастер оставил на
 // роутере (null -- к списку): разбираться с ним человек будет там.
+// replaceCanRevoke -- кто может отозвать старый конфиг в мастере замены:
+// админ, владелец и оператор (решение оператора 01.10).
+export function replaceCanRevoke(role) {
+  return role === 'admin' || role === 'owner' || role === 'operator'
+}
+
 export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
@@ -44,7 +50,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
     setCanRevoke(false)
     fetchRouterSettings(routerID)
       .then((st) => {
-        if (alive) setCanRevoke(st?.role === 'admin' || st?.role === 'owner')
+        if (alive) setCanRevoke(replaceCanRevoke(st?.role))
       })
       .catch(() => {})
     const timer = setInterval(poll, POLL_MS)
