@@ -19,11 +19,12 @@
 import { pluralRu } from './labels.js'
 import { agoText } from './when.js'
 import { isAway } from './agentUpdate.js'
+import { placeText } from './places.js'
 
 export const REVIVE_NOT_CONFIGURED = 'Оживление агента не настроено на сервере.'
 // v0.45 (решение оператора 18.09): пароль root ещё и сохраняется
 // зашифрованным для авто-оживления -- лист говорит об этом прямо.
-export const REVIVE_SECRET_NOTE = 'Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке «Забыть пароль» в Парке.'
+export const REVIVE_SECRET_NOTE = `Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке ${placeText('forgetPassword')}.`
 export const REVIVE_DEFAULT_DAYS = '30'
 export const REVIVE_EXPIRY_OPTIONS = [
   { value: '7', label: '7 дней' },

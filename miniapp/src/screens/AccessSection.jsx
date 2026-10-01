@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchAccess, addOperator, removeOperator, unbindOwner, setOwner } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { errorText } from '../errorText.js'
+import { placeText } from '../places.js'
 
 // Admin-only "Доступ" block on RouterDetail. Backend enforces admin
 // independently (see miniappRequireAdmin) -- this component is only ever
@@ -115,7 +116,7 @@ export function AccessSection({ routerID, openSheet }) {
       <h2 class="section-title">Доступ</h2>
       <p class="admin-note">
         Кто видит этот роутер в приложении и получает уведомления о нём. Уведомления приходят
-        каждому в личку; выключить их каждый может себе сам: «Настройки» → «Люди и уведомления».
+        каждому в личку; выключить их каждый может себе сам: {placeText('notifyMe')}.
       </p>
 
       <div class="access-group">

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { placeText } from '../src/places.js'
 import {
   BATCH,
   batchTargets,
@@ -335,7 +336,7 @@ describe('итог словами', () => {
       { id: 8, text: '«lake»: не ответил' },
       { id: 6, text: '«shed»: команда не выполнилась' },
       { id: 'skipped', text: 'Не на связи, пропущены: «car», «bronya».' },
-      { id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Управление» → «Осмотр роутера».' },
+      { id: 'doctor-note', text: `Что именно не так — на экране роутера: ${placeText('inspect')}.` },
     ])
     expect(new Set(s.lines.map((l) => l.id)).size).toBe(s.lines.length)
   })

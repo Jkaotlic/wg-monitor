@@ -5,6 +5,7 @@
 // Группа Telegram и тема не спрашиваются (группы уходят, решение оператора
 // 14.09): уведомления идут в личку, владельца назначают потом в «Доступ».
 import { NICKNAME_RE, NICKNAME_RULE, normalizeAgentVersion, validHttpURL } from './formRules.js'
+import { placeText } from './places.js'
 
 export const PROVISION_PATHS = [
   {
@@ -34,7 +35,7 @@ export const AWGM_AUTH_OPTIONS = [
 // v0.45: пароль root сохраняется для авто-оживления, когда установка дошла
 // до записи настроек (там же, где появляется роутер), -- если на сервере
 // есть ключ оживления.
-export const PROVISION_SECRET_NOTE = 'Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — «Забыть пароль» в Парке.'
+export const PROVISION_SECRET_NOTE = `Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — ${placeText('forgetPassword')}.`
 
 export const STEP_TITLES = {
   path: 'Как добавить',
@@ -48,7 +49,7 @@ export const WIZARD_SECRET_KEYS = ['rootPassword', 'awgmPassword', 'awgmAPIKey']
 export const TOKEN_TEXTS = {
   once: 'Токен показывается один раз: закроете экран — увидеть его снова будет нельзя.',
   commandHint: 'Выполните на роутере — в SSH или в терминале панели awg-manager:',
-  after: 'Владельца роутеру назначают потом — во вкладке «Управление» → «Доступ».',
+  after: `Владельца роутеру назначает администратор потом: ${placeText('access')}.`,
 }
 
 const INSTALL_STEPS = ['path', 'router', 'access', 'confirm']

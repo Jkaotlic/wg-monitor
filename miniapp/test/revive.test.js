@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { placeText } from '../src/places.js'
 import {
   REVIVE_NOT_CONFIGURED,
   REVIVE_SECRET_NOTE,
@@ -169,7 +170,7 @@ describe('оживление: лист', () => {
     expect(t.body).not.toContain('адрес панели')
     expect(t.body).toContain('Нужен пароль root роутера')
     expect(reviveSheetText(off({ nickname: 'bronya', panel_address_known: false })).body).toContain('Адрес панели у роутера не записан')
-    expect(REVIVE_SECRET_NOTE).toBe('Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке «Забыть пароль» в Парке.')
+    expect(REVIVE_SECRET_NOTE).toBe(`Пароли хранятся на сервере зашифрованными. Копия для этого оживления стирается после него, сохранённый пароль root для авто-оживления — по кнопке ${placeText('forgetPassword')}.`)
   })
 
   it('отказы -- фразы экрана; сырой код и английский текст не показываются', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ApiError } from '../src/api.js'
+import { placeText } from '../src/places.js'
 import { jobTitle } from '../src/jobSteps.js'
 import {
   JOB_SECRET_NOTE,
@@ -39,7 +40,7 @@ describe('переустановка агента сейчас', () => {
     expect(t.body).toContain('Нужен пароль root')
     // Перенаправление пароль не сохраняет, переустановка -- сохраняет (v0.45).
     expect(JOB_SECRET_NOTE).toBe('Пароли уходят на сервер один раз и не сохраняются.')
-    expect(REINSTALL_SECRET_NOTE).toBe('Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — «Забыть пароль» в Парке.')
+    expect(REINSTALL_SECRET_NOTE).toBe(`Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — ${placeText('forgetPassword')}.`)
   })
 
   it('поля: пароли -- паролями, версия с подсказкой', () => {

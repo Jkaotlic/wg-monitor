@@ -34,6 +34,7 @@ import {
   pingLabel,
   statusLabel,
 } from '../labels.js'
+import { placeText } from '../places.js'
 
 // TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
 // button text itself comes from ACTION_LABELS so this card and any other
@@ -535,7 +536,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
           {l}
         </span>
       ))}
-      <span class="maint-notice-go">Открыть «Настройки» → «Обслуживание»</span>
+      <span class="maint-notice-go">Открыть {placeText('service')}</span>
     </button>
   )
 

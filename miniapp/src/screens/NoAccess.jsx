@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks'
 import { fetchRouters } from '../api.js'
 import { CopyButton } from '../ui/CopyButton.jsx'
+import { placeText } from '../places.js'
 
 // Первый вход человека, которому ещё не выдали доступ. Пустой доступ -- это
 // состояние системы, а не ошибка приложения, и говорить о нём надо прямо,
@@ -54,8 +55,8 @@ export function NoAccess({ telegramUserID = 0, onRetry }) {
             </p>
           )}
           <p class="card-foot">
-            По этому номеру он добавит вас владельцем или оператором роутера на экране
-            «Доступ». <b>Пароль от роутера приложение не спрашивает никогда.</b>
+            Попросите администратора добавить вас по этому номеру владельцем или оператором роутера: {placeText('access')}.{' '}
+            <b>Пароль от роутера приложение не спрашивает никогда.</b>
           </p>
         </div>
       </section>
