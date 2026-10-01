@@ -4,29 +4,18 @@ import { SheetHost } from './Sheet.jsx'
 import { OverlayHost } from '../screens/OverlayHost.jsx'
 import { TabBody } from '../screens/TabBody.jsx'
 import { FleetHome } from '../screens/FleetHome.jsx'
-import { FLEET_OVERLAYS, PARK_TAB, TAB_LAYERS } from '../nav.js'
+import { FLEET_OVERLAYS, PARK_TAB, TAB_LAYERS, barTabs } from '../nav.js'
 
-// Широкая раскладка: колонка роутеров слева, справа шапка с вкладками и
-// содержимое. Оверлеи открываются в основной области -- список роутеров
-// остаётся на виду. «Мои роутеры» (fleet) здесь не нужен: колонка и есть список.
-//
-// Слои парка (мастер, ход работы, ожидание раскатки) не требуют выбранного
-// роутера: без него они занимают место сводки.
+// Широкая раскладка (v0.52): колонка -- вкладки и роутеры, справа шапка роутера
+// и содержимое. Оверлеи -- в основной области; слой вкладки рисует вкладка.
 export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, refreshRouters }) {
   const current = routers.find((r) => r.id === nav.routerID)
   const fleetLayer = Boolean(isAdmin && FLEET_OVERLAYS.includes(nav.overlay))
   const overlayOpen = Boolean(nav.overlay && nav.overlay !== 'fleet' && !TAB_LAYERS[nav.overlay] && (current || fleetLayer))
-  const narrow = overlayOpen || nav.tab !== 'router'
-  // «Парк» (v0.48) -- вкладка, а не раздел под сводкой: открывается и с
-  // выбранным роутером (тогда над ним шапка роутера с вкладкой «Парк»), и
-  // без него -- в основной области вместо сводки.
   const parkTab = Boolean(isAdmin) && nav.tab === PARK_TAB
-
-  function openPark() {
-    dispatch({ type: 'tab', tab: PARK_TAB, closeOverlay: true })
-  }
-
+  const narrow = overlayOpen || nav.tab !== 'router'
   const host = <OverlayHost nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} refreshRouters={refreshRouters} />
+  const body = <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
 
   return (
     <div class="wide-shell">
@@ -35,38 +24,25 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
         routers={routers}
         currentID={nav.routerID}
         isAdmin={isAdmin}
-        parkActive={Boolean(isAdmin) && ((parkTab && !overlayOpen) || (!current && fleetLayer))}
-        onPick={(id) => dispatch({ type: 'router', id })}
-        onPark={openPark}
+        // Без выбранного роутера вкладкам роутера показывать нечего: у не-админа
+        // (6+ роутеров) в основной области сводка, у админа -- один Парк.
+        tabs={nav.routerID == null && !isAdmin ? [] : barTabs({ isAdmin: Boolean(isAdmin), routerID: nav.routerID })}
+        // Слой парка без роутера -- место Парка, даже если ключ вкладки другой.
+        tab={!current && fleetLayer ? PARK_TAB : nav.tab}
+        onTab={(tab) => dispatch({ type: 'tab', tab, closeOverlay: true })}
+        onPick={(id) => dispatch({ type: 'router', id, keepTab: true })}
         onLogout={onLogout}
         shortcut={!nav.sheet}
       />
       <main class="main">
-        {current ? (
-          <>
-            <WideHeader
-              router={current}
-              tab={nav.tab}
-              isAdmin={isAdmin}
-              onTab={(tab) => dispatch({ type: 'tab', tab, closeOverlay: true })}
-            />
-            <div class={`main-content${narrow ? ' main-content-narrow' : ''}`}>
-              {overlayOpen ? host : <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />}
-            </div>
-          </>
-        ) : fleetLayer ? (
-          <div class="main-content main-content-narrow">{host}</div>
-        ) : parkTab ? (
-          <div class="main-content main-content-narrow">
-            <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
-          </div>
+        {current && !parkTab && <WideHeader router={current} />}
+        {overlayOpen ? (
+          <div class={`main-content${narrow ? ' main-content-narrow' : ''}`}>{host}</div>
+        ) : current || parkTab ? (
+          <div class={`main-content${narrow ? ' main-content-narrow' : ''}`}>{body}</div>
         ) : (
           <div class="main-content main-content-narrow">
-            <FleetHome
-              routers={routers}
-              isAdmin={isAdmin}
-              onPick={(id) => dispatch({ type: 'router', id })}
-            />
+            <FleetHome routers={routers} isAdmin={isAdmin} onPick={(id) => dispatch({ type: 'router', id })} />
           </div>
         )}
       </main>

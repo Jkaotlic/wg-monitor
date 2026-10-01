@@ -91,27 +91,25 @@ describe('v0.48: ссылка на Парк', () => {
 })
 
 describe('v0.48: «Парк» на широком экране', () => {
-  it('админу -- первой вкладкой в шапке роутера; экран Парка в основной области', async () => {
+  it('админу -- первой вкладкой в колонке; экран Парка в основной области', async () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: true, via: 'web' }
     const root = await mountAt('/dashboard/?router=2')
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).toEqual(['Парк', 'Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
-    await act(async () => button(root.querySelector('.main-tabs'), 'Парк').click())
+    expect([...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())).toEqual(['Парк', 'Роутер', 'VPN-туннели', 'Проверки', 'Настройки'])
+    await act(async () => button(root.querySelector('.side-tabs'), 'Парк').click())
     await flush()
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
     expect(window.location.search).toBe('?router=2&tab=park')
     cleanup(root)
   })
 
-  it('«Парк» в боковой колонке открывает вкладку Парка, сводка -- без Парка', async () => {
+  it('«Парк» в колонке подсвечивается; пункта «Парк» в подвале нет', async () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: true, via: 'web' }
     const root = await mountAt('/dashboard/')
-    expect(root.querySelector('.fleet-home .stub-park')).toBe(null)
-    await act(async () => button(root.querySelector('aside.side'), 'Парк').click())
-    await flush()
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
-    expect(button(root.querySelector('aside.side'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(button(root.querySelector('.side-tabs'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(root.querySelector('.side-foot').textContent).not.toContain('Парк')
     expect(window.location.search).toBe('?tab=park')
     cleanup(root)
   })
@@ -120,7 +118,7 @@ describe('v0.48: «Парк» на широком экране', () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: false, via: 'web' }
     const root = await mountAt('/dashboard/?router=2')
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).not.toContain('Парк')
+    expect([...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())).not.toContain('Парк')
     cleanup(root)
   })
 })

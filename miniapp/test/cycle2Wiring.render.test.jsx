@@ -270,7 +270,8 @@ describe('раскладки', () => {
 
   it('заглушка «Пакеты» не-админу не подсвечивает Парк', async () => {
     const root = await mount(<WideLayout mode="web" nav={nav({ routerID: 1, overlay: 'packages' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
-    expect(root.querySelector('.side-link-active')).toBe(null)
+    // Вкладки колонки подсвечены (v0.52), но Парка у не-админа нет вовсе.
+    expect([...root.querySelectorAll('.side-link-active')].map((b) => b.textContent.trim())).not.toContain('Парк')
     cleanup(root)
   })
 
