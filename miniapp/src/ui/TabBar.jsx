@@ -1,18 +1,9 @@
 import { barLabel } from '../nav.js'
 import { GearIcon } from './GearIcon.jsx'
 
-// Нижняя навигация. Четыре таба -- четыре вопроса оператора: что с роутером,
-// куда идёт трафик, что показывает диагностика, что происходило раньше; пятый
-// -- «Управление»: настройки, обслуживание и доступы этого роутера. Админу
-// первым -- «Парк» (v0.48): весь парк целиком; без роутера рядом с ним --
-// «Роутеры», сам список.
-const FLEET_ICON = (
-  <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
-    <rect x="3" y="4" width="16" height="5.5" rx="1.6" />
-    <rect x="3" y="12.5" width="16" height="5.5" rx="1.6" />
-  </svg>
-)
-
+// Нижняя навигация (v0.52): четыре вкладки по задаче человека -- «Роутер»,
+// «VPN-туннели», «Проверки», «Настройки»; админу первой добавляется «Парк».
+// Списка роутеров в панели нет: выбор роутера -- в шапке или полосе.
 const ICONS = {
   park: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -22,7 +13,6 @@ const ICONS = {
       <rect x="12.5" y="12" width="7" height="7" rx="1.6" />
     </svg>
   ),
-  fleet: FLEET_ICON,
   router: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
       <rect x="2.5" y="7" width="17" height="9" rx="2.5" />
@@ -42,20 +32,14 @@ const ICONS = {
       <path d="M 2.5 11 h 4 l 2.5 -6 l 3.5 12 l 2.5 -6 h 4.5" />
     </svg>
   ),
-  events: (
-    <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M 11 3.5 a 5.5 5.5 0 0 1 5.5 5.5 v 4 l 1.5 3 h -14 l 1.5 -3 v -4 A 5.5 5.5 0 0 1 11 3.5 z" />
-      <path d="M 9 18.5 a 2 2 0 0 0 4 0" />
-    </svg>
-  ),
   manage: <GearIcon size={22} />,
 }
 
 
 
-export function TabBar({ tab, onTab, tabs, over = false }) {
+export function TabBar({ tab, onTab, tabs }) {
   return (
-    <nav class={over ? 'tabbar tabbar-over' : 'tabbar'}>
+    <nav class="tabbar">
       {tabs.map((key) => (
         <button
           key={key}

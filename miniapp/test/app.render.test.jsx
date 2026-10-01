@@ -185,9 +185,9 @@ describe('оболочка: веб-управление', () => {
 
   it('«назад» браузера возвращает прежнюю вкладку', async () => {
     const root = await mountAt('/dashboard/?router=2')
-    await act(async () => button(root, 'Что было').click())
+    await act(async () => button(root, 'Проверки').click())
     await flush()
-    expect(window.location.search).toBe('?router=2&tab=events')
+    expect(window.location.search).toBe('?router=2&tab=diag')
     window.history.replaceState(null, '', '/dashboard/?router=2')
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     await flush()
@@ -258,7 +258,7 @@ describe('оболочка: Telegram', () => {
   it('нет «Выйти», адрес не меняется', async () => {
     const root = await mountAt('/miniapp/?router=2')
     expect(button(root, 'Выйти')).toBeUndefined()
-    await act(async () => button(root, 'Что было').click())
+    await act(async () => button(root, 'Проверки').click())
     await flush()
     expect(window.location.pathname + window.location.search).toBe('/miniapp/?router=2')
     cleanup(root)
@@ -283,14 +283,14 @@ describe('оболочка: Telegram', () => {
 
   // Старые уведомления в личке несут open=settings: настройки теперь --
   // вкладка «Управление» внизу, шестерёнки в шапке нет.
-  it('старая ссылка open=settings открывает вкладку «Управление»', async () => {
+  it('старая ссылка open=settings открывает вкладку «Настройки»', async () => {
     const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
     expect(root.querySelector('.app-body .stub-settings')).toBeTruthy()
     // В Telegram сессия не админская (tgSession.is_admin=false): с v0.47
     // вкладка не передаёт админские слоты вовсе. Прежняя заглушка
     // RouterAdminSections рисовалась без учёта роли и утверждала обратное.
     expect(root.querySelector('.app-body .stub-admin')).toBe(null)
-    expect(root.querySelector('.tabbar-item-active').textContent).toBe('Управление')
+    expect(root.querySelector('.tabbar-item-active').textContent).toBe('Настройки')
     expect(root.querySelector('.app-header-gear')).toBe(null)
     cleanup(root)
   })

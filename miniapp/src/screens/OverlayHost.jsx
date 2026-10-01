@@ -15,7 +15,7 @@ import { Awg3PanelFormScreen } from './Awg3PanelFormScreen.jsx'
 import { Awg3PanelScreen } from './Awg3PanelScreen.jsx'
 import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
-import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams, navPinned } from '../nav.js'
+import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams, navPinned, fleetIsHome } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
 import { isStale } from '../staleness.js'
 
@@ -70,10 +70,10 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
       <FleetOverlay
         routers={routers}
         currentID={nav.routerID}
-        onPick={(id) => dispatch({ type: 'router', id })}
+        onPick={(id) => dispatch({ type: 'router', id, keepTab: true })}
         // Без выбранного роутера список -- главный экран: уходить с него
         // некуда (fleetIsHome в nav.js), кнопки «Назад» нет.
-        onClose={nav.routerID != null ? close : undefined}
+        onClose={fleetIsHome(nav) ? undefined : close}
         shortcut={!nav.sheet}
         isAdmin={isAdmin}
       />
