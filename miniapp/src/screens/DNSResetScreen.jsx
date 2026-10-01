@@ -107,7 +107,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   return (
-    <Overlay title="Сброс DNS" backLabel="Управление" onBack={onClose}>
+    <Overlay title="Сброс DNS" backLabel="Настройки" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">Сброс DNS</h1>
         {routerName && <p class="router-lastseen">{routerName}</p>}

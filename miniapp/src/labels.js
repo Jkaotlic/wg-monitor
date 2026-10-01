@@ -313,7 +313,7 @@ export const ACTION_LABELS = {
   silence4h: '4 часа',
   silence24h: 'Сутки',
   silenceGroup: 'Не беспокоить',
-  recheck: 'Повторить проверку',
+  recheck: 'Проверить заново',
   restartTunnel: 'Перезапустить VPN-туннель',
 }
 

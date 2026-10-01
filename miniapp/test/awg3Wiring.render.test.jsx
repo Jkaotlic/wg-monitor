@@ -59,7 +59,7 @@ describe('OverlayHost: awg3-панели', () => {
     const { root, actions } = await host(nav({ overlay: 'awg3panel', overlayParams: params }))
     expect(root.textContent).toContain('панель main')
     expect(mocks.props.panel.routers).toBe(ROUTERS)
-    expect(mocks.props.panel.backLabel).toBe('Свои серверы')
+    expect(mocks.props.panel.backLabel).toBe('Серверы')
     mocks.props.panel.onEdit('main')
     mocks.props.panel.onClose()
     expect(actions).toEqual([
@@ -71,7 +71,7 @@ describe('OverlayHost: awg3-панели', () => {
   it('форма с экрана панели: «назад» -- на экран, удаление -- на список', async () => {
     const panelParams = { panelId: 'main', returnTo: 'selfhosted', returnParams: { returnTo: 'park' } }
     const { actions } = await host(nav({ overlay: 'awg3form', overlayParams: { panelId: 'main', returnTo: 'awg3panel', returnParams: panelParams } }))
-    expect(mocks.props.form.backLabel).toBe('Панель')
+    expect(mocks.props.form.backLabel).toBe('Панель VPN-сервера')
     mocks.props.form.onClose()
     mocks.props.form.onDeleted()
     expect(actions).toEqual([

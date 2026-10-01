@@ -198,7 +198,7 @@ describe('«Серверы»: группа «Панели VPN-серверов»
   it('отказ списка панелей не ломает свои серверы', async () => {
     mocks.panelsErr = new ApiError(503, 'awg3_not_configured', 'x', 'Панели awg3 на этом сервере не настроены')
     const root = await mountNode(<SelfhostedScreen onClose={() => {}} onOpenInstance={() => {}} onOpenAwg3={() => {}} onAddAwg3={() => {}} />)
-    expect(root.textContent).toContain('Панели awg3 на этом сервере не настроены.')
+    expect(root.textContent).toContain('Панели VPN-серверов на этом сервере не настроены.')
     expect(button(root, 'Добавить сервер')).toBeTruthy()
     expect(button(root, 'Добавить панель')).toBeFalsy()
   })

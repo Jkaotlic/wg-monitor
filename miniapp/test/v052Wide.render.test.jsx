@@ -36,6 +36,11 @@ const cleanup = (root) => {
 }
 
 beforeEach(() => {
+  try {
+    localStorage.removeItem('wgm.lastRouterID')
+  } catch {
+    // хранилища нет -- нечего чистить
+  }
   window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} })
 })
 const sideTabs = (root) => [...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())

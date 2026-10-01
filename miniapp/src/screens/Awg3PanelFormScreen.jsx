@@ -182,7 +182,7 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Свои сер
     )
   }
 
-  const title = isNew ? AWG3_TEXTS.newTitle : panel ? `Панель «${panel.label || panel.id}»` : 'Панель'
+  const title = isNew ? AWG3_TEXTS.newTitle : panel ? `Панель VPN-сервера «${panel.label || panel.id}»` : 'Панель VPN-сервера'
   const fe = (key) => (fieldError?.key === key ? fieldError.text : '')
 
   return (

@@ -1,7 +1,7 @@
 // Выбор роутера (v0.52, спека §4). Число роутеров считается по доступным
 // этому человеку -- тот же список GET /routers, что у прав (сервер уже отобрал
 // по miniappRouterAllowed). Админу полосы нет никогда: у него Парк.
-import { fleetRow, sortByUrgency } from './fleet.js'
+import { fleetRow, redAlert, sortByUrgency } from './fleet.js'
 import { reachStatus } from './staleness.js'
 
 export const STRIP_MAX = 5
@@ -12,17 +12,13 @@ export function routerPickMode({ count = 0, isAdmin = false } = {}) {
   return count <= STRIP_MAX ? 'strip' : 'list'
 }
 
-// Тревога, ради которой стоит переключиться: красная (не только запасной
-// VPN-туннель) и не молчащая -- у молчащего роутера чинить нечем.
-function redAlert(router) {
-  return reachStatus(router) === 'alert' && !router?.reserve_only_alert
-}
-
 // Слова состояния -- словарь Парка: «в порядке», «тревога», «молчит».
 function stateWord(router) {
   const s = reachStatus(router)
   if (router?.last_seen_age_sec == null || s === 'offline' || s === 'sleeping') return 'молчит'
-  return s === 'alert' ? 'тревога' : 'в порядке'
+  // Тревога только по запасному звену -- то же слово, что у пилюли списка.
+  if (s === 'alert') return router?.reserve_only_alert ? fleetRow(router).pill.text : 'тревога'
+  return 'в порядке'
 }
 
 const byName = (a, b) => (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru')

@@ -11,7 +11,7 @@ import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
 import { agoText } from './when.js'
 import { agentUpdateState, isAway } from './agentUpdate.js'
 import { isStale, reachStatus } from './staleness.js'
-import { fleetRow } from './fleet.js'
+import { fleetRow, redAlert } from './fleet.js'
 
 export const EMPTY_PARK = 'В парке нет ни одного роутера.'
 
@@ -30,8 +30,8 @@ export function backendRow(fleet) {
 // пока нет связи, чинить её нечем.
 export function parkRank(router) {
   if (router?.last_seen_age_sec == null) return 1
+  if (redAlert(router)) return 0
   const s = reachStatus(router)
-  if (s === 'alert') return 0
   if (s === 'offline' || s === 'sleeping') return 1
   if (router?.agent_behind) return 2
   return 3
@@ -43,8 +43,11 @@ export function fleetRouterRows(fleet, listRouters = []) {
   const list = fleet?.routers ?? []
   const backendVersion = fleet?.backend?.version ?? ''
   const byID = new Map((listRouters ?? []).map((x) => [x.id, x]))
+  // Признак «тревога только по запасному звену» -- у строки /routers: в порядке
+  // карточек его тоже учитываем, иначе Парк и полоса разойдутся.
+  const withReserve = (r) => ({ ...r, reserve_only_alert: byID.get(r?.id)?.reserve_only_alert ?? r?.reserve_only_alert })
   return [...list]
-    .sort((a, b) => parkRank(a) - parkRank(b) || (a?.nickname ?? '').localeCompare(b?.nickname ?? '', 'ru'))
+    .sort((a, b) => parkRank(withReserve(a)) - parkRank(withReserve(b)) || (a?.nickname ?? '').localeCompare(b?.nickname ?? '', 'ru'))
     .map((router) => ({
       id: router?.id,
       name: router?.nickname ?? '',

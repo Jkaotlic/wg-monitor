@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { STRIP_MAX, routerPickMode, landingRouterID, stripChips, otherAlertRouter, loadLastRouter, saveLastRouter, LAST_ROUTER_KEY } from '../src/routerPick.js'
 import { initialNav } from '../src/nav.js'
+import { fleetRow, redAlert } from '../src/fleet.js'
+import { parkRank } from '../src/fleetAdmin.js'
 
 const R = (id, nickname, extra = {}) => ({ id, nickname, status: 'online', reach: 'online', last_seen_age_sec: 30, ...extra })
 const ALERT = { status: 'alert', reach: 'online' }
@@ -31,6 +33,22 @@ describe('чипы полосы', () => {
     const chips = stripChips([R(1, 'a'), R(2, 'b', { ...ALERT, reserve_only_alert: true })], 1)
     expect(chips.map((c) => c.id)).toEqual([1, 2])
     expect(chips[1].tone).toBe('warn')
+  })
+})
+
+describe('единый предикат красной тревоги и слово состояния', () => {
+  it('redAlert: тревога не по запасному и не молчащая', () => {
+    expect(redAlert(R(1, 'a', ALERT))).toBe(true)
+    expect(redAlert(R(1, 'a', { ...ALERT, reserve_only_alert: true }))).toBe(false)
+    expect(redAlert(R(1, 'a', { status: 'alert', reach: 'offline', last_seen_age_sec: 7200 }))).toBe(false)
+    expect(redAlert(R(1, 'a'))).toBe(false)
+  })
+  it('запасной: слово чипа -- то же, что у пилюли списка', () => {
+    const r = R(2, 'b', { ...ALERT, reserve_only_alert: true })
+    expect(stripChips([R(1, 'a'), r], 1)[1].state).toBe(fleetRow(r).pill.text)
+  })
+  it('Парк: карточка с тревогой только по запасному -- не первая', () => {
+    expect(parkRank(R(2, 'b', { ...ALERT, reserve_only_alert: true }))).toBeGreaterThan(parkRank(R(1, 'a', ALERT)))
   })
 })
 

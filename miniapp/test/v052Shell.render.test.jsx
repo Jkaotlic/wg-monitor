@@ -37,11 +37,30 @@ const cleanup = (root) => {
 const barLabels = (root) => [...root.querySelectorAll('.tabbar .tabbar-item')].map((b) => b.textContent.trim())
 
 beforeEach(() => {
+  try {
+    localStorage.removeItem('wgm.lastRouterID')
+  } catch {
+    // хранилища нет -- нечего чистить
+  }
   delete window.matchMedia
   mocks.session = { ok: true, is_admin: false, via: 'telegram' }
 })
 
 describe('v0.52: оболочка телефона', () => {
+  it('адрес с чужим или удалённым роутером: админ -- на Парк (намеренно), не-админ -- к списку', async () => {
+    mocks.session = { ok: true, is_admin: true, via: 'telegram' }
+    mocks.routers = { routers: [R(2, 'Дача'), R(3, 'Офис')] }
+    let root = await mountAt('/miniapp/?router=99')
+    expect(root.querySelector('.stub-park')).toBeTruthy()
+    expect(root.textContent).not.toContain('router 99')
+    cleanup(root)
+    mocks.session = { ok: true, is_admin: false, via: 'telegram' }
+    root = await mountAt('/miniapp/?router=99')
+    expect(root.querySelector('.stub-park')).toBe(null)
+    expect(root.textContent).not.toContain('router 99')
+    cleanup(root)
+  })
+
   it('не-админ: 4 вкладки, подписи полностью, ни «Все роутеры», ни «Роутеры»', async () => {
     mocks.routers = { routers: [R(2, 'Дача')] }
     const root = await mountAt('/miniapp/')

@@ -26,7 +26,7 @@ import { Quoted } from '../ui/Q.jsx'
 // «Повторить» и после выпуска; сервер склеивает запросы и держит ответ 30 с.
 // QR -- только в состоянии экрана (data:-адрес): не в навигации, не в
 // хранилище браузера, уходит вместе с экраном.
-export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои серверы', openSheet, onClose, onEdit, onOpenRouterTunnels }) {
+export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панели VPN-серверов', openSheet, onClose, onEdit, onOpenRouterTunnels }) {
   const [page, setPage] = useState(null)
   const [banner, setBanner] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -181,7 +181,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Свои �
     load(iface)
   }
 
-  const title = page?.panel ? `Панель «${page.panel.label || page.panel.id}»` : 'Панель'
+  const title = page?.panel ? `Панель VPN-сервера «${page.panel.label || page.panel.id}»` : 'Панель VPN-сервера'
   const rows = peerRows(page?.peers)
   const tabs = (page?.ifaces ?? []).map((i) => ({ id: i.id, title: i.title || i.id }))
   const pick = routerPickRows(routers, page?.peers)

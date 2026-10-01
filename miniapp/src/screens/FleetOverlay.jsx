@@ -20,7 +20,7 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 // Парк -- своя вкладка админа (v0.48), а не хвост под списком: здесь только
 // список. «Проверить заново все» у админа тоже переехал в Парк; владелец нескольких
 // роутеров видит его здесь, как и раньше. Список открывается админу и при
-// одном роутере: из него есть путь в Парк (нижняя панель).
+// одном роутере: из него есть путь во вкладку «Парк» (нижняя панель).
 export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false }) {
   const all = sortByUrgency(routers).map(fleetRow)
   const f = useFleetFilter(routers)

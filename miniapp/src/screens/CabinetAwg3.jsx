@@ -20,7 +20,7 @@ export function CabinetAwg3({ panels, error, onRetry, onPick }) {
   return (
     <>
       {panels.map((p) => (
-        <Section key={p.id} title={`Панель «${p.label || p.id}»`}>
+        <Section key={p.id} title={`Панель VPN-сервера «${p.label || p.id}»`}>
           {p.unavailable ? (
             <p class="state">Панель сейчас не отвечает — попробуйте позже.</p>
           ) : p.ifaces.length === 0 ? (
@@ -32,7 +32,7 @@ export function CabinetAwg3({ panels, error, onRetry, onPick }) {
                   key={i.id}
                   title={i.title || i.id}
                   sub={i.id}
-                  onClick={() => onPick({ provider: 'awg3panel', title: `Панель «${p.label || p.id}»`, instanceID: p.id, option: { id: i.id, label: i.title || i.id, note: '' } })}
+                  onClick={() => onPick({ provider: 'awg3panel', title: `Панель VPN-сервера «${p.label || p.id}»`, instanceID: p.id, option: { id: i.id, label: i.title || i.id, note: '' } })}
                 />
               ))}
             </ul>

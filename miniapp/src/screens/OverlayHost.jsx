@@ -27,17 +27,17 @@ export function routerContext(routers, routerID) {
   return { current, asleep }
 }
 
-// Подпись «назад» у слоя парка -- куда он вернёт: к списку роутеров (там
-// Парк), во вкладку «Управление», на список своих серверов или к сводке
-// роутеров (широкий экран без роутера). Старый возврат 'admin' ведёт к
-// списку: «Обслуживания» как слоя больше нет.
-export function returnLabel(returnTo) {
+// Подпись «назад» у слоя парка -- куда он вернёт: к списку роутеров (у
+// админа «Роутеры парка», у остальных «Мои роутеры»), в «Парк», во вкладку
+// «Настройки», в раздел «Серверы» или на экран панели. Старый возврат 'admin'
+// ведёт к списку: «Обслуживания» как слоя больше нет.
+export function returnLabel(returnTo, isAdmin = false) {
   const to = normalizeReturn(returnTo)
   if (to === 'park') return 'Парк'
-  if (to === 'fleet') return 'Все роутеры'
-  if (to === 'manage') return 'Управление'
-  if (to === 'selfhosted') return 'Свои серверы'
-  if (to === 'awg3panel') return 'Панель'
+  if (to === 'fleet') return isAdmin ? 'Роутеры парка' : 'Мои роутеры'
+  if (to === 'manage') return 'Настройки'
+  if (to === 'selfhosted') return 'Серверы'
+  if (to === 'awg3panel') return 'Панель VPN-сервера'
   return 'Роутеры'
 }
 
@@ -96,7 +96,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
       case 'provision':
         return (
           <ProvisionWizard
-            backLabel={returnLabel(returnTo)}
+            backLabel={returnLabel(returnTo, isAdmin)}
             onClose={leave}
             onRegistered={() => {
               reloadRouters()
@@ -112,7 +112,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           <JobProgress
             jobId={params.jobId}
             title={params.title ?? ''}
-            backLabel={returnLabel(returnTo)}
+            backLabel={returnLabel(returnTo, isAdmin)}
             onClose={leave}
             onDone={() => {
               reloadRouters()
@@ -127,7 +127,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
         return (
           <SelfhostedScreen
             part={params.part ?? 'all'}
-            backLabel={returnLabel(returnTo)}
+            backLabel={returnLabel(returnTo, isAdmin)}
             onClose={leave}
             onOpenInstance={(id) =>
               dispatch({ type: 'overlay', overlay: 'selfhostedinst', params: { instanceId: id, returnTo: 'selfhosted', returnParams: { returnTo, part: params.part } } })
@@ -158,7 +158,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             key={params.panelId ?? ''}
             panelId={params.panelId ?? ''}
             routers={routers}
-            backLabel={returnLabel(returnTo)}
+            backLabel={returnLabel(returnTo, isAdmin)}
             openSheet={openSheet}
             onClose={() => dispatch({ type: 'overlay', overlay: returnTo ?? 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
             onOpenRouterTunnels={(id) => dispatch({ type: 'router', id, tab: 'tunnels' })}
@@ -172,7 +172,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           <Awg3PanelFormScreen
             key={params.panelId ?? ''}
             panelId={params.panelId ?? ''}
-            backLabel={returnLabel(returnTo)}
+            backLabel={returnLabel(returnTo, isAdmin)}
             openSheet={openSheet}
             onClose={() => dispatch({ type: 'overlay', overlay: returnTo ?? 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
             onDeleted={() => dispatch({ type: 'overlay', overlay: 'selfhosted', params: awg3ListParams(params) })}
