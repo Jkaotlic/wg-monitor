@@ -501,12 +501,14 @@ body {
 }
 
 .incident-history-toggle {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-1);
 }
 
 /* Тихая ссылка: справка, а не действие («История за 24ч»). */
 .link-quiet {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
   padding: var(--sp-1) 0;
   border: none;
   background: transparent;
@@ -536,13 +538,37 @@ body {
 
 /* «Как это работает» под кнопкой «Сравнить адреса выхода». */
 .compare-how {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-1);
 }
 
+/* Строка-раскрывашка: цель касания 40 px, стрелка своя (как у спойлеров). */
 .compare-how > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
   color: var(--muted);
   font-size: var(--fs-sm);
+  list-style: none;
   cursor: pointer;
+}
+
+.compare-how > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compare-how > summary::before {
+  content: '▸';
+  transition: transform var(--transition-fast);
+}
+
+.compare-how[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.compare-how > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .compare-how > .traffic-detail {
@@ -896,6 +922,9 @@ body {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /* Цель касания 40 px; отступ заголовка раздела уходит в саму строку. */
+  min-height: 40px;
+  margin-bottom: 0;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -963,7 +992,8 @@ body {
 }
 
 .btn-icon {
-  min-width: 32px;
+  /* Квадратная цель касания: «✖» не уже своей высоты. */
+  min-width: 44px;
   padding-left: var(--sp-2);
   padding-right: var(--sp-2);
 }
@@ -1064,10 +1094,9 @@ body {
   bottom: 0;
   z-index: 10;
   display: grid;
-  /* Столбцов столько, сколько вкладок: с v0.41 их пять, у админа с v0.48
-     шесть. Столбцы поровну, но не уже своей подписи: на 360 px шестая
-     часть -- 60 px, а «Управление» -- 64; ей достаётся своё за счёт
-     коротких «Парк» и «Сейчас». */
+  /* Столбцов столько, сколько вкладок: до пяти (v0.52). Столбцы поровну, но
+     не уже своей подписи: на 360 px пятая часть -- 72 px, а «VPN‑туннели»
+     в 12 px шире; ей достаётся своё за счёт коротких «Парк» и «Роутер». */
   grid-auto-flow: column;
   grid-auto-columns: minmax(max-content, 1fr);
   background: var(--surface);
@@ -1081,16 +1110,14 @@ body {
   align-items: center;
   gap: 2px;
   min-height: 56px;
-  /* Шесть вкладок у админа (v0.48) на 360 px -- по 60 px на вкладку:
-     подпись в одну строку и без боковых полей, иначе «Что было» ломалась
-     на две строки и панель вставала неровно. */
+  /* Подпись в одну строку и без боковых полей: панель стоит ровно. */
   min-width: 0;
   padding: var(--sp-2) 0;
   border: none;
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 0.6875rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
@@ -1098,17 +1125,6 @@ body {
 
 .tabbar-item-active {
   color: var(--accent);
-}
-
-/* Панель над главным экраном-списком (админ, v0.48): крышка списка лежит
-   поверх всего, панель -- поверх крышки, и список не прячет под ней свой
-   хвост. */
-.tabbar-over {
-  z-index: 21;
-}
-
-.tabbar-over ~ .overlay .overlay-body {
-  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 .overlay {
@@ -2724,10 +2740,134 @@ body {
 /* Схема пути трафика. Занимает всю ширину карточки-героя: это главный
    объясняющий элемент экрана, а не иллюстрация при тексте. */
 .traffic-path {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin-top: var(--sp-3);
+}
+
+/* Узлы схемы: «Ваши устройства» и «Роутер». */
+.tp-node {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surf2);
+}
+
+.tp-devices {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+
+.tp-devices svg {
+  flex: none;
+}
+
+.tp-router {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.tp-router-up { border-color: color-mix(in srgb, var(--sig) 30%, transparent); }
+.tp-router-down { border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+
+.tp-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.tp-dot-stale { background: var(--dim); }
+
+.tp-stem {
+  width: 1.5px;
+  height: 20px;
+  background: var(--border-strong);
+}
+
+.tp-fork {
   display: block;
   width: 100%;
-  margin-top: var(--sp-2);
+  height: 46px;
 }
+
+.tp-line {
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.tp-line-up { stroke: var(--sig); }
+.tp-line-down { stroke: var(--bad); stroke-dasharray: 5 5; }
+.tp-line-unknown { stroke: var(--border-strong); }
+
+/* Две ветки -- карточки равной ширины; строки (ярлык, имя, пояснение) стоят
+   на общих линиях, даже когда ярлык одной ветки переносится на вторую строку. */
+.tp-branches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  gap: 0 var(--sp-2);
+  width: 100%;
+}
+
+.tp-branch {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: var(--sp-1);
+  align-items: start;
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surf);
+}
+
+.tp-kicker {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.tp-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.tp-note {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  color: var(--dim);
+}
+
+.tp-branch-up {
+  border-color: color-mix(in srgb, var(--sig) 30%, transparent);
+  background: color-mix(in srgb, var(--sig) 6%, transparent);
+}
+.tp-branch-up .tp-kicker { color: var(--sig); }
+
+.tp-branch-down {
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+  background: color-mix(in srgb, var(--bad) 7%, transparent);
+}
+.tp-branch-down .tp-kicker,
+.tp-branch-down .tp-note { color: var(--bad); }
+
+.tp-branch-direct .tp-kicker { color: var(--ok); }
+.tp-branch-stale .tp-kicker { color: var(--dim); }
 
 /* Точка состояния в строке -- та же роль, что у метки: короткий ответ
    «хорошо/внимание» рядом с текстом, который его объясняет. */
@@ -3617,7 +3757,7 @@ body {
 
 .filter-chip {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-1);
   min-height: 40px;
   padding: var(--sp-1) var(--sp-3);
@@ -4118,11 +4258,24 @@ body {
     font-family: var(--font-mono);
   }
 
+  /* Список роутеров прокручивается ВНУТРИ колонки: бренд, вкладки и поиск
+     остаются на месте, «Выйти» -- внизу. На совсем низком окне список держит
+     три строки, а прокручивается уже вся колонка. */
   .side-list {
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 216px;
     display: flex;
     flex-direction: column;
     gap: 2px;
+    margin-right: calc(var(--sp-2) * -1);
+    padding-right: var(--sp-2);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  .side-list > .side-row {
+    flex: none;
   }
 
   .side-row,
@@ -4200,13 +4353,32 @@ body {
 
   .side-link {
     align-items: center;
+    min-height: 40px;
     font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--dim);
   }
 
+  .side-link svg {
+    flex: none;
+  }
+
   .side-link:hover:not(:disabled) { color: var(--ink); }
-  .side-link-active { color: var(--sig); }
+
+  /* Вкладки колонки (v0.52): те же, что в нижней панели телефона. Текущая --
+     лаймовая подпись на приподнятой плашке; текущий роутер ниже отмечен
+     иначе (полоса слева), чтобы два «выбрано» не сливались. */
+  .side-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .side-link-active,
+  .side-link-active:hover:not(:disabled) {
+    background: var(--surf2);
+    color: var(--sig);
+  }
   .side-link:disabled { opacity: 0.45; cursor: default; }
 
   /* --- Основная область --- */
@@ -4597,8 +4769,11 @@ body {
     font-size: var(--fs-sm);
   }
 
+  /* В узкой колонке пилюля в 40 px с короткой подписью выходит овалом --
+     здесь чипы прямоугольные, со скруглением кнопки. */
   .side-filter .filter-chip {
-    padding: 2px var(--sp-2);
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
     font-size: var(--fs-xs);
   }
 
@@ -5004,10 +5179,14 @@ body {
   margin-top: var(--sp-3);
 }
 
-/* Строка адреса панели в «Сейчас» -- часть героя, а не цель касания. */
+/* Строка адреса панели в герое «Роутера» -- кнопка (открывает панель роутера),
+   значит цель касания 40 px. Зона нажатия растёт полями, а отрицательные
+   отступы возвращают строку на место: рисунок героя не меняется. */
 .hero .panel-line {
-  min-height: 0;
-  padding: 0;
+  min-width: 40px;
+  min-height: 40px;
+  padding: var(--sp-3) 0;
+  margin: calc(var(--sp-3) * -1) 0;
 }
 
 .fold-note-warn {
@@ -5024,29 +5203,202 @@ body {
   text-align: left;
 }
 
-/* v0.52: «На другом роутере тревога» -- строка над шапкой «Роутера». */
-.other-alert {
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  margin-bottom: 12px;
-  text-align: left;
-  font: inherit;
-  color: var(--text);
-  cursor: pointer;
-  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+/* ============================================================
+   v0.52: оболочка «вкладки по задаче человека»
+   ============================================================ */
+
+/* Шапка без выбора -- просто имя роутера (тот же вес, что у имени-кнопки). */
+.app-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--ink);
 }
 
-/* v0.52: «Проверки» -- сегмент «Сейчас | Что было» и пять разделов «Сейчас». */
-.checks-segment {
-  margin-bottom: var(--sp-3, 12px);
+/* Полоса «Мои роутеры» (2–5 роутеров): чипы «точка + имя» под шапкой на всех
+   вкладках роутера. Прокручивается сама, страница -- нет; тревожный чип
+   первый и окрашен. */
+:root {
+  --strip-h: 57px;
 }
-.diag-group {
-  margin-top: var(--sp-4, 20px);
+
+.router-strip {
+  position: sticky;
+  top: var(--app-header-h);
+  z-index: 9;
+  display: flex;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  height: var(--strip-h);
+  padding: var(--sp-2) var(--sp-4);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
 }
-.diag-group-title {
-  margin: 0 0 var(--sp-2);
-  font-size: var(--fs-md, 16px);
+
+.router-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.strip-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+  min-width: 40px;
+  min-height: 40px;
+  max-width: 70vw;
+  padding: 0 14px 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--text);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.strip-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.strip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* line-height 1 резал бы хвосты «р» и «у» вместе с overflow. */
+  line-height: var(--lh-tight);
+}
+
+/* Текущий -- как выбранный фильтр: лаймовый контур, яркое имя. */
+.strip-chip-current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--ink);
+  cursor: default;
+}
+
+.strip-chip-alert {
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  background: color-mix(in srgb, var(--bad) 12%, var(--surface));
+  color: var(--ink);
+}
+
+/* Текущий и с тревогой: цвет остаётся тревожным, «текущий» -- сплошной контур. */
+.strip-chip-current.strip-chip-alert {
+  border-color: var(--bad);
+  box-shadow: inset 0 0 0 1px var(--bad);
+}
+
+.strip-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.strip-dot-ok { background: var(--ok); }
+.strip-dot-warn { background: var(--warn); }
+.strip-dot-danger { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
+.strip-dot-muted { background: var(--dim); }
+
+/* Под полосой липкие чипы «Настроек» встают ниже неё, а не под неё. */
+.router-strip ~ .app-body .manage-anchors {
+  top: calc(var(--app-header-h) + var(--strip-h));
+}
+
+.router-strip ~ .app-body :is(.manage-group, .manage-anchor-target) {
+  scroll-margin-top: calc(var(--app-header-h) + var(--strip-h) + 64px);
+}
+
+/* «На «имя» тревога — открыть» на вкладке «Роутер»: строка-кнопка с тревожной
+   точкой слева и стрелкой перехода справа. */
+.other-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 48px;
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  background: color-mix(in srgb, var(--bad) 9%, var(--surface));
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.other-alert::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bad);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent);
+}
+
+.other-alert::after {
+  content: "›";
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-lg);
+  line-height: 1;
+  color: var(--bad);
+}
+
+.other-alert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* «Проверки»: сегмент «Сейчас | Что было» над содержимым, разделы «Сейчас». */
+.checks-segment {
+  padding: var(--sp-4) var(--sp-4) 0;
+}
+
+.diag-group {
+  margin-top: var(--sp-6);
+}
+
+.diag-group:first-of-type {
+  margin-top: var(--sp-4);
+}
+
+.diag-group-title {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.diag-group > .section:first-of-type {
+  margin-top: 0;
+}
+
+/* «Новый VPN-туннель» -- главная кнопка вкладки. */
+.new-tunnel {
+  margin: 0 0 var(--sp-4);
+}
+
+.cabinet-awg3-error .btn-wide {
+  margin-top: var(--sp-3);
 }

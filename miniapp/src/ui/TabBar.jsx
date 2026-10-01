@@ -4,7 +4,8 @@ import { GearIcon } from './GearIcon.jsx'
 // Нижняя навигация (v0.52): четыре вкладки по задаче человека -- «Роутер»,
 // «VPN-туннели», «Проверки», «Настройки»; админу первой добавляется «Парк».
 // Списка роутеров в панели нет: выбор роутера -- в шапке или полосе.
-const ICONS = {
+// Значки вкладок -- общие с колонкой широкой раскладки (Sidebar).
+export const TAB_ICONS = {
   park: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="2.5" y="3" width="7" height="7" rx="1.6" />
@@ -35,8 +36,6 @@ const ICONS = {
   manage: <GearIcon size={22} />,
 }
 
-
-
 export function TabBar({ tab, onTab, tabs }) {
   return (
     <nav class="tabbar">
@@ -48,7 +47,7 @@ export function TabBar({ tab, onTab, tabs }) {
           aria-current={key === tab ? 'page' : undefined}
           onClick={() => onTab(key)}
         >
-          {ICONS[key]}
+          {TAB_ICONS[key]}
           {barLabel(key)}
         </button>
       ))}

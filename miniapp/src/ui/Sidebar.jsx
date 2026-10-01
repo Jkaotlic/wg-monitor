@@ -4,6 +4,7 @@ import { useFleetFilter } from '../useFleetFilter.js'
 import { FleetFilterBar } from './FleetFilterBar.jsx'
 import { PanelLine } from './PanelLine.jsx'
 import { tabLabel } from '../nav.js'
+import { TAB_ICONS } from './TabBar.jsx'
 
 // Боковая колонка широкой раскладки (v0.52): бренд, вкладки, поиск и список
 // роутеров (тот же порядок и те же слова, что в «Моих роутерах»), внизу выход.
@@ -32,6 +33,7 @@ export function Sidebar({ mode, routers, currentID, isAdmin, tabs = [], tab, onT
             aria-current={key === tab ? 'page' : undefined}
             onClick={() => onTab(key)}
           >
+            {TAB_ICONS[key]}
             <span>{tabLabel(key)}</span>
           </button>
         ))}

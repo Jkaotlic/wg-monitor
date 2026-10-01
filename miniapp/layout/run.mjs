@@ -252,6 +252,35 @@ async function expandEverything(page) {
   }
 }
 
+// Снимок всего экрана -- высоким окном, а не fullPage: при fullPage Chromium на
+// время съёмки подменяет окно, медиа-правила широкой раскладки отпадают, и
+// колонка попадала в кадр посреди перехода в оформлении браузера (серые
+// кнопки, которых человек не видит); закреплённая панель вкладок вставала
+// посреди кадра, а прокрутка внутри слоя и колонки обрезалась. Высокое окно
+// даёт то, что человек увидел бы, пролистав до конца. Замеры уже сняты до
+// этого, в настоящем окне.
+async function shoot(page, file, width) {
+  const base = page.viewportSize()
+  const need = await page.evaluate(() => {
+    let h = document.scrollingElement.scrollHeight
+    for (const el of document.querySelectorAll('body *')) {
+      if (el.scrollHeight <= el.clientHeight + 1 || !el.getClientRects().length) continue
+      if (/(auto|scroll)/.test(getComputedStyle(el).overflowY)) h = Math.max(h, window.innerHeight + el.scrollHeight - el.clientHeight)
+    }
+    return h
+  })
+  const tall = need > base.height
+  if (tall) {
+    await page.setViewportSize({ width, height: Math.min(need, 8000) })
+    await page.waitForTimeout(350)
+  }
+  await page.screenshot({ path: file })
+  if (tall) {
+    await page.setViewportSize(base)
+    await page.waitForTimeout(150)
+  }
+}
+
 // ---- один проход: роль × ширина ------------------------------------------
 async function runPass(bin, role, width, port) {
   const dir = path.join(out, role, String(width))
@@ -323,7 +352,7 @@ async function runPass(bin, role, width, port) {
           const data = await page.evaluate(collectLayout, { smallOk: SMALL_OK, skip: SKIP_TARGETS })
           entry.problems.push(...findProblems(data), ...netProblems(events))
           mkdirSync(dir, { recursive: true })
-          await page.screenshot({ path: path.join(dir, `${screen.id}.png`), fullPage: true })
+          await shoot(page, path.join(dir, `${screen.id}.png`), width)
         }
       } catch (e) {
         entry.problems.push({ check: 0, what: `исключение обхода: ${e.message.split('\n')[0]}` })
