@@ -74,3 +74,22 @@ describe('v0.52: выпуск в кабинете -- слой cabinetissue', () 
     cleanup(root)
   })
 })
+
+describe('v0.52 fix 3: выход из cabinetissue перечитывает подписку', () => {
+  it('закрытие слоя выпуска (в том числе «назад» Telegram) -- fetchVPNAccounts заново', async () => {
+    const api = await import('../src/api.js')
+    const spy = vi.spyOn(api, 'fetchVPNAccounts')
+    const pending = { provider: 'amnezia', title: 'Amnezia', option: { id: 'nl', label: 'Нидерланды', note: '' } }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const draw = (layer, layerParams) => act(async () => render(<CabinetScreen routerID={4} routerName="home" openSheet={() => {}} onClose={() => {}} layer={layer} layerParams={layerParams} openLayer={() => {}} closeLayer={() => {}} onPin={() => {}} />, root))
+    await draw('cabinetissue', { pending })
+    await flush()
+    const before = spy.mock.calls.length
+    await draw('cabinet', {})
+    await flush()
+    expect(spy.mock.calls.length).toBe(before + 1)
+    cleanup(root)
+    spy.mockRestore()
+  })
+})

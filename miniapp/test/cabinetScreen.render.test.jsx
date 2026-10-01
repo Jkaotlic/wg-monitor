@@ -424,6 +424,8 @@ describe('кабинет роутера: выпуск', () => {
     expect(button(root, 'Попробовать ещё раз')).toBeTruthy()
     expect(button(root, 'Выпустить ещё раз')).toBeFalsy()
     await act(async () => button(root, 'Выбрать, что отозвать').click())
+    // Подписка перечитывается эффектом закрытия слоя выпуска: один такт.
+    await flush()
     expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })

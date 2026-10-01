@@ -61,7 +61,7 @@ describe('v0.52: слои «VPN-туннелей» -- через навигац�
     const btn = [...root.querySelectorAll('.overlay button')].find((b) => b.textContent.trim() === 'Заменить конфиг')
     await act(async () => btn.click())
     expect(calls[0][0]).toBe('replace')
-    expect(calls[0][1]).toMatchObject({ tunnel: { id: 'awg10' }, policyName: 'Policy0' })
+    expect(calls[0][1]).toMatchObject({ tunnel: { id: 'awg10' }, policyName: 'Policy0', returnTo: 'tunnel', returnParams: { tunnelID: 'awg10' } })
     cleanup(root)
   })
 
@@ -72,6 +72,23 @@ describe('v0.52: слои «VPN-туннелей» -- через навигац�
     const r2 = await mount({ layer: 'confimport', layerParams: {}, openLayer: () => {}, closeLayer: () => {} })
     expect(r2.querySelector('.overlay-title').textContent).toBe('Загрузить конфиг .conf')
     cleanup(r2)
+  })
+
+  it('fix 1: переход из родителя в дочерний слой не перечитывает снимок, закрытие родителя -- один раз', async () => {
+    const runs = []
+    CMD.value = { ...CMD.value, run: (...a) => { runs.push(a); return Promise.resolve(null) } }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const draw = (props) => act(async () => render(<TunnelsTab routerID={4} asleep={false} openSheet={() => {}} layer={null} layerParams={{}} openLayer={() => {}} closeLayer={() => {}} {...props} />, root))
+    await draw({ cabinetOpen: true })
+    await flush()
+    const before = runs.length
+    await draw({ cabinetOpen: true })
+    await draw({ cabinetOpen: true })
+    expect(runs.length).toBe(before)
+    await draw({ cabinetOpen: false })
+    expect(runs.length).toBe(before + 1)
+    cleanup(root)
   })
 
   it('строк «Загрузить конфиг .conf» и «Заменить конфиг VPN-туннеля» на вкладке больше нет', async () => {

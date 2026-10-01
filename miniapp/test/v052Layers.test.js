@@ -87,3 +87,11 @@ describe('v0.52: список роутеров, открытый с Парка',
     expect(fleetIsHome({ routerID: null, tab: 'router', overlay: 'fleet', sheet: null })).toBe(true)
   })
 })
+
+describe('v0.52 fix 2: замена конфига возвращает на экран VPN-туннеля', () => {
+  it('назад из replace -- слой tunnel с тем же tunnelID', () => {
+    const tunnel = open(base, 'tunnel', { tunnelID: 'awg10' })
+    const replace = open(tunnel, 'replace', { tunnel: { id: 'awg10' }, policyName: 'Policy0', returnTo: 'tunnel', returnParams: { tunnelID: 'awg10' } })
+    expect(navReducer(replace, { type: 'back' })).toMatchObject({ tab: 'tunnels', overlay: 'tunnel', overlayParams: { tunnelID: 'awg10' } })
+  })
+})

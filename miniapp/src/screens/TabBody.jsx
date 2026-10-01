@@ -4,7 +4,7 @@ import { DiagTab } from './DiagTab.jsx'
 import { EventsTab } from './EventsTab.jsx'
 import { ManageTab } from './ManageTab.jsx'
 import { ParkTab } from './ParkTab.jsx'
-import { PARK_TAB, tabOwnsLayer } from '../nav.js'
+import { PARK_TAB, tabOwnsLayer, layerFamily } from '../nav.js'
 import { routerContext } from './OverlayHost.jsx'
 
 export function TabBody({ nav, dispatch, routers, isAdmin }) {
@@ -63,8 +63,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           closeLayer={() => dispatch({ type: 'back' })}
           onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
           onOpenRebind={openRebind}
-          cabinetOpen={nav.overlay === 'cabinet'}
-          routesOpen={nav.overlay === 'routes'}
+          cabinetOpen={layerFamily(nav.overlay) === 'cabinet'}
+          routesOpen={layerFamily(nav.overlay) === 'routes'}
           openSheet={openSheet}
         />
       )

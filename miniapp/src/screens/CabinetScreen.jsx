@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useOnClose } from '../useOnClose.js'
 import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted, fetchAwg3Issuable } from '../api.js'
 import { cabinetTabs, pickTab, cabinetPerms, secretRows, VPN_PROVIDER, CABINET_TEXTS } from '../cabinetKeys.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -112,9 +113,15 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   // трогаем: иначе своя «назад» отпускала бы слой посреди выпуска.
   function leaveIssue() {
     closeLayer?.()
+  }
+
+  // «Назад» Telegram и кнопка слоя закрывают выпуск одинаково: перечитать
+  // подписку (занятые места) здесь, а не в leaveIssue, который «назад»
+  // Telegram обходит.
+  useOnClose(layer === 'cabinetissue', () => {
     setAccounts(null)
     load()
-  }
+  })
 
   function issued() {
     onIssued?.()

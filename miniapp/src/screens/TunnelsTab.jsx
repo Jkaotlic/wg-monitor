@@ -368,7 +368,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           onChanged={() => run('route_status', {}, deadline)}
           onOpenRebind={onOpenRebind}
           canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
-          onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}
+          onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName, returnTo: 'tunnel', returnParams: { tunnelID: layerParams.tunnelID } })}
         />
       )}
 

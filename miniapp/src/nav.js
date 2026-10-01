@@ -117,6 +117,13 @@ export const LOCAL_LAYERS = [...Object.keys(TAB_LAYERS), ...Object.keys(CHILD_LA
 // выпуск конфига (уход посреди выпуска -- второй выпуск и занятое место).
 export const PINNABLE_OVERLAYS = ['provision', 'cabinetissue']
 
+// layerFamily -- слой верхнего уровня, к которому относится оверлей: сам слой
+// или родитель слоя в слое. Вкладка, перечитывающая данные при закрытии слоя,
+// не должна считать закрытием переход из родителя в его дочерний слой.
+export function layerFamily(overlay) {
+  return CHILD_LAYERS[overlay] ?? overlay ?? null
+}
+
 export function tabOwnsLayer(state) {
   const tab = TAB_LAYERS[state?.overlay]
   return tab != null && tab === state.tab
