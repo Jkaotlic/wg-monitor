@@ -85,8 +85,11 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
         if (tr.width === 0) continue
         for (let c = el.parentElement; c && c !== document.documentElement; c = c.parentElement) {
           const ccs = getComputedStyle(c)
-          if (!clips(ccs)) continue
-          if (ccs.textOverflow !== 'ellipsis') {
+          if (ccs.overflowX === 'visible') continue
+          // Первый предок с любым не-visible overflow-x решает: прокручиваемый
+          // (auto/scroll) -- текст уехал, а не обрезан (чип полосы за краем), и
+          // выше идти нельзя -- там уже не его обрезка.
+          if (clips(ccs) && ccs.textOverflow !== 'ellipsis') {
             const cr = c.getBoundingClientRect()
             const left = cr.left + c.clientLeft
             const right = left + c.clientWidth
@@ -132,7 +135,56 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
     for (const l of lines) if (l.items.length > 1) rows.push({ sel: sel(parent), items: l.items })
   }
 
-  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows }
+  // Элементы управления в оформлении браузера (проверка 8). Что именно рисует
+  // браузер, меряется тут же: пробный элемент с all:revert -- без правил автора.
+  const CONTROLS = 'button, a.btn, input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=range]):not([type=file]), select, textarea, summary'
+  const ua = {}
+  for (const tag of ['button', 'input', 'select', 'textarea', 'a']) {
+    const probe = document.createElement(tag)
+    if (tag === 'a') probe.href = '#layout-probe'
+    probe.style.cssText = 'all: revert; position: fixed; left: -9999px; top: 0'
+    document.body.appendChild(probe)
+    const pcs = getComputedStyle(probe)
+    ua[tag] = { bg: pcs.backgroundColor, font: pcs.fontFamily, color: pcs.color }
+    probe.remove()
+  }
+  const rootCS = getComputedStyle(document.documentElement)
+  const fonts = [getComputedStyle(document.body).fontFamily, rootCS.getPropertyValue('--font-body'), rootCS.getPropertyValue('--font-mono')].map((f) => f.trim()).filter(Boolean)
+  const controls = [...document.querySelectorAll(CONTROLS)].filter(visible).map((el) => {
+    const cs = getComputedStyle(el)
+    return { tag: el.tagName.toLowerCase(), text: label(el), sel: sel(el), bg: cs.backgroundColor, border: cs.borderTopStyle, font: cs.fontFamily, color: cs.color }
+  })
+
+  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua }
+}
+
+// Проверка 8: кнопка, поле, список или раскрывашка в оформлении браузера --
+// фон «лица кнопки» (серый 239/240, либо измеренный на этой странице у пробного
+// элемента того же тега), рамка outset/inset, шрифт не из стека приложения,
+// у ссылки-кнопки -- цвет ссылки браузера. Чекбоксы и радио сюда не входят:
+// их рисует система по замыслу (accent-color), размер сторожит проверка 2.
+const UA_FACES = ['rgb(239, 239, 239)', 'rgb(240, 240, 240)', 'buttonface']
+const firstFamily = (f) => (f || '').split(',')[0].trim().replace(/^["']|["']$/g, '').toLowerCase()
+
+export function unstyledControls({ controls = [], fonts = [], ua = {} } = {}) {
+  const app = new Set(fonts.map(firstFamily).filter(Boolean))
+  const out = []
+  for (const c of controls) {
+    const why = []
+    const face = ua[c.tag]?.bg
+    if ((c.tag === 'button' && UA_FACES.includes(c.bg)) || (face && face !== 'rgba(0, 0, 0, 0)' && c.bg === face)) why.push(`фон браузера ${c.bg}`)
+    if (c.border === 'outset' || c.border === 'inset') why.push(`рамка ${c.border}`)
+    if (app.size && !app.has(firstFamily(c.font))) why.push(`шрифт не приложения: ${c.font}`)
+    if (c.tag === 'a' && ua.a?.color && c.color === ua.a.color) why.push(`цвет ссылки браузера ${c.color}`)
+    if (why.length) out.push({ ...c, why })
+  }
+  return out
+}
+
+// Пропуск optional-экрана -- только когда нет самой цели (последний шаг): отказ
+// выбора роутера или шага-подхода -- провал, а не пропуск.
+export function optionalSkip({ optional, routerOk, failedStep, steps }) {
+  return Boolean(optional) && Boolean(routerOk) && failedStep >= 0 && failedStep === steps - 1
 }
 
 export function rowMismatches(rows = []) {
@@ -150,6 +202,7 @@ export function findProblems(d) {
   for (const s of d.smallText) out.push({ check: 4, what: `текст ${s.size}px < 12: «${s.text}» (${s.sel})` })
   for (const c of d.clipped) out.push({ check: 5, what: `текст обрезан: «${c.text}» ${c.sw} > ${c.cw} (${c.sel})` })
   for (const r of rowMismatches(d.rows)) out.push({ check: 6, what: `кнопки одного ряда разной высоты: ${r.items.map((i) => `«${i.text}» ${i.h}`).join(', ')} (${r.sel})` })
+  for (const c of unstyledControls(d)) out.push({ check: 8, what: `элемент в оформлении браузера: «${c.text}» -- ${c.why.join('; ')} (${c.sel})` })
   return out
 }
 

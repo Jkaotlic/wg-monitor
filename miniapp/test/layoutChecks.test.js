@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip } from '../layout/checks.js'
+import { SCREENS, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
 
@@ -56,5 +57,62 @@ describe('скрипт раскладки: оценщики', () => {
   })
   it('исключения мелкого текста -- машинные коды', () => {
     expect(SMALL_OK).toEqual(['.data-row-code', '.tunnel-id', '.ev-code', '.raw-dump'])
+  })
+  // ---- проверка 8: элемент управления в оформлении браузера ----
+  const fonts = ['"IBM Plex Sans", system-ui, sans-serif', '"IBM Plex Mono", ui-monospace, monospace']
+  const ua = { button: { bg: 'rgb(239, 239, 239)', font: 'Arial' }, input: { bg: 'rgb(255, 255, 255)', font: 'Arial' }, a: { color: 'rgb(0, 0, 238)' } }
+  const styled = { tag: 'button', text: 'Роутер', sel: 'button.side-link', bg: 'rgba(0, 0, 0, 0)', border: 'none', font: fonts[0], color: 'rgb(238, 243, 245)' }
+  it('8: оформленная кнопка -- без находок', () => {
+    expect(unstyledControls({ controls: [styled, { ...styled, font: fonts[1] }], fonts, ua })).toEqual([])
+    expect(findProblems({ ...clean, controls: [styled], fonts, ua })).toEqual([])
+  })
+  it('8: фон кнопки браузера -- находка (серый 239/240, тёмный и измеренный на странице)', () => {
+    for (const bg of ['rgb(239, 239, 239)', 'rgb(240, 240, 240)', 'buttonface']) {
+      expect(unstyledControls({ controls: [{ ...styled, bg }], fonts, ua: {} }), bg).toHaveLength(1)
+    }
+    const dark = { button: { bg: 'rgb(107, 107, 107)', font: 'Arial' } }
+    expect(unstyledControls({ controls: [{ ...styled, bg: 'rgb(107, 107, 107)' }], fonts, ua: dark })).toHaveLength(1)
+    // тот же цвет у оформленной кнопки на странице, где браузер красит иначе, -- не находка
+    expect(unstyledControls({ controls: [{ ...styled, bg: 'rgb(107, 107, 107)' }], fonts, ua })).toEqual([])
+  })
+  it('8: рамка outset/inset и чужой шрифт -- находки, причина названа', () => {
+    const p = findProblems({ ...clean, controls: [{ ...styled, border: 'outset' }, { ...styled, tag: 'input', sel: 'input', border: 'inset' }, { ...styled, sel: 'button.strip-chip', text: 'дача-северная', font: 'Arial' }], fonts, ua })
+    expect(p.map((x) => x.check)).toEqual([8, 8, 8])
+    expect(p[0].what).toContain('рамка outset')
+    expect(p[2].what).toContain('шрифт')
+    expect(p[2].what).toContain('button.strip-chip')
+  })
+  it('8: поле ввода с фоном браузера и ссылка-кнопка цвета ссылки браузера', () => {
+    const input = { ...styled, tag: 'input', sel: 'input.field', bg: 'rgb(255, 255, 255)' }
+    const link = { ...styled, tag: 'a', sel: 'a.btn', color: 'rgb(0, 0, 238)' }
+    expect(unstyledControls({ controls: [input, link], fonts, ua })).toHaveLength(2)
+    // белая КНОПКА -- оформление, а не браузер: фон сверяется по своему тегу
+    expect(unstyledControls({ controls: [{ ...styled, bg: 'rgb(255, 255, 255)' }], fonts, ua })).toEqual([])
+  })
+  it('8: без данных о страницах (старый сбор) -- не падает', () => {
+    expect(findProblems(clean)).toEqual([])
+  })
+
+  // ---- шаг 0a: «expect» по роли ----
+  it('expect: строка -- всем ролям, объект -- по роли, роли без фразы нет', () => {
+    expect(expectPattern({ expect: 'Кто может' }, 'admin')).toBe('Кто может')
+    expect(expectPattern({ expect: { admin: 'А', issuer: 'Б' } }, 'issuer')).toBe('Б')
+    expect(() => expectPattern({ expect: { admin: 'А' } }, 'issuer')).toThrow(/issuer/)
+  })
+  it('cabinet-awg3: у каждой роли своя фраза недоступной панели', () => {
+    const step = SCREENS.find((s) => s.id === 'cabinet-awg3').steps.find((s) => s.expect)
+    expect(expectPattern(step, 'issuer')).toBe('Панель VPN-сервера сейчас недоступна, сообщите администратору')
+    expect(expectPattern(step, 'admin')).toBe('Панель сейчас не отвечает')
+    expect(new RegExp(expectPattern(step, 'admin')).test(expectPattern(step, 'issuer'))).toBe(false)
+    expect(new RegExp(expectPattern(step, 'issuer')).test('Панель сейчас не отвечает — попробуйте позже.')).toBe(false)
+  })
+
+  // ---- шаг 0c: пропуск optional -- только когда нет самой цели ----
+  it('optional: пропуск -- лишь при отказе ПОСЛЕДНЕГО шага и выбранном роутере', () => {
+    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 2, steps: 3 })).toBe(true)
+    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 1, steps: 3 })).toBe(false)
+    expect(optionalSkip({ optional: true, routerOk: false, failedStep: -1, steps: 3 })).toBe(false)
+    expect(optionalSkip({ optional: false, routerOk: true, failedStep: 2, steps: 3 })).toBe(false)
+    expect(optionalSkip({ optional: true, routerOk: true, failedStep: -1, steps: 3 })).toBe(false)
   })
 })

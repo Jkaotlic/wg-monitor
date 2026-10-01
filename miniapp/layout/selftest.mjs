@@ -1,4 +1,4 @@
-// Самопроверка скрипта раскладки: на каждую из 7 проверок -- одна НАРУШАЮЩАЯ
+// Самопроверка скрипта раскладки: на каждую из 8 проверок -- одна НАРУШАЮЩАЯ
 // страница, на которой проверка обязана сработать, и одна чистая, на которой
 // не срабатывает ничего. Так видно, что проверка вообще умеет стрелять.
 // Запуск: node miniapp/layout/selftest.mjs  (код выхода 1 при любом провале).
@@ -6,12 +6,13 @@ import { chromium } from 'playwright'
 import { collectLayout, findProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
 
-const base = '<style>body{margin:0;font:14px sans-serif} button{font:inherit;padding:0;border:0}</style>'
+const base = '<style>body{margin:0;font:14px sans-serif} button,select{font:inherit;padding:0;border:0;background:#223}</style>'
 const btn = (t, extra = '') => `<button style="min-width:48px;height:48px;${extra}">${t}</button>`
 const CLEAN = `${base}<div style="padding:8px"><button class="btn-primary" style="width:120px;height:48px">Главная</button>
   <div style="display:flex;gap:8px;margin-top:8px">${btn('Раз')}${btn('Два')}</div>
   <div style="width:200px;overflow:hidden;white-space:nowrap"><span>короткий</span></div>
-  <label style="display:inline-block;min-width:48px;min-height:48px"><input type="checkbox"> тумблер</label></div>`
+  <label style="display:inline-block;min-width:48px;min-height:48px"><input type="checkbox"> тумблер</label>
+  <div style="width:300px;overflow:hidden"><nav style="display:flex;gap:8px;overflow-x:auto;white-space:nowrap">${['router4car4new', 'дача-северная', 'sandbox-broken', 'четвёртый-роутер'].map((n) => `<button style="flex:none;height:44px;padding:0 12px"><span>${n}</span></button>`).join('')}</nav></div></div>`
 
 const FIXTURES = [
   [1, 'страница шире окна', `${base}<div style="width:900px;height:20px;background:#ccc">широкая</div>`],
@@ -26,6 +27,9 @@ const FIXTURES = [
   [6, 'ряд кнопок разной высоты (прямые соседи)', `${base}<div style="display:flex;align-items:flex-start;gap:8px"><button style="height:64px;width:90px">Высокая</button><button style="height:44px;width:90px">Низкая</button></div>`],
   [6, 'ряд через display:contents', `${base}<div style="display:flex;align-items:flex-start;gap:8px"><div style="display:contents"><button style="height:64px;width:90px">Высокая</button></div><button style="height:44px;width:90px">Низкая</button></div>`],
   [6, 'разная высота при смещённом верхе (центр)', `${base}<div style="display:flex;align-items:center;gap:8px"><button style="height:64px;width:90px">Высокая</button><a class="btn" href="#x" style="display:inline-block;height:44px;width:90px">Ссылка</a></div>`],
+  [8, 'кнопка в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><button style="min-width:120px;height:48px">голая кнопка</button>'],
+  [8, 'поле ввода в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><input style="width:200px;height:48px" value="поле">'],
+  [8, 'кнопка без фона, но со шрифтом браузера', '<style>body{margin:0;font:14px sans-serif}</style><button style="min-width:120px;height:48px;background:#223;border:0">чужой шрифт</button>'],
 ]
 
 let failed = 0

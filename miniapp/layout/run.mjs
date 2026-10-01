@@ -11,9 +11,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { collectLayout, findProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
+import { collectLayout, findProblems, netProblems, optionalSkip, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
-import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER } from './screens.js'
+import { killChild, stopChild } from './proc.mjs'
+import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, expectPattern } from './screens.js'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : null)).filter(Boolean))
@@ -24,16 +25,6 @@ mkdirSync(out, { recursive: true })
 
 // ---- песочницы: ни одна не переживает скрипт -------------------------------
 const children = new Set()
-function killChild(child) {
-  for (const fn of [() => process.kill(-child.pid, 'SIGTERM'), () => child.kill('SIGTERM')]) {
-    try {
-      fn()
-      return
-    } catch {
-      // ESRCH или pid не число -- уже мёртв; пробуем следующий способ
-    }
-  }
-}
 function killAll() {
   for (const c of children) killChild(c)
   children.clear()
@@ -159,7 +150,7 @@ async function pickRouter(page, name) {
   return (await currentRouter(page)) === name
 }
 
-async function runStep(page, step, routerName) {
+async function runStep(page, step, routerName, role) {
   if (step.tab) {
     if (await clickText(page, step.tab)) return true
     // Админ без роутера уже на Парке, панели вкладок нет (одна вкладка).
@@ -212,9 +203,14 @@ async function runStep(page, step, routerName) {
     return true
   }
   if (step.expect) {
-    const text = await page.evaluate(() => document.body.innerText.replace(/[‐‑]/g, '-'))
+    // Только верхний слой (лист, иначе верхний оверлей, иначе страница): у
+    // body.innerText есть и слой под ним -- фраза оттуда проходила бы вхолостую.
+    const text = await page.evaluate(() => {
+      const top = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay')].pop() ?? document.body
+      return top.innerText.replace(/[‐‑]/g, '-')
+    })
     // innerText отдаёт текст после text-transform (заголовки капсом): без учёта регистра.
-    return new RegExp(step.expect, 'i').test(text)
+    return new RegExp(expectPattern(step, role), 'i').test(text)
   }
   if (step.rowIn) {
     const row = await page.$(`.section:has(.section-title:text-matches("^${hy(step.rowIn)}")) .list-row-btn`)
@@ -302,16 +298,23 @@ async function runPass(bin, role, width, port) {
           opened = await pickRouter(page, want)
           if (!opened) entry.problems.push({ check: 0, what: `роутер «${want}» не выбран: на экране «${await currentRouter(page)}»` })
         }
-        for (const step of screen.steps) {
+        const routerOk = opened
+        let failedStep = -1
+        for (const [i, step] of screen.steps.entries()) {
           if (!opened) break
-          opened = await runStep(page, step, want)
-          if (!opened && !entry.problems.length) entry.problems.push({ check: 0, what: `шаг обхода не удался: ${JSON.stringify(step)}` })
+          opened = await runStep(page, step, want, role)
+          if (!opened) {
+            failedStep = i
+            if (!entry.problems.length) entry.problems.push({ check: 0, what: `шаг обхода не удался: ${JSON.stringify(step)}` })
+          }
         }
         if (want) {
           entry.router = await currentRouter(page)
           if (opened && entry.router !== want) entry.problems.push({ check: 0, what: `снят не тот роутер: нужен «${want}», на экране «${entry.router}»` })
         }
-        if (!opened && screen.optional) {
+        // Пропуск -- только «самой цели нет»; отказ выбора роутера или шага-подхода
+        // остаётся находкой и у optional-экрана.
+        if (!opened && optionalSkip({ optional: screen.optional, routerOk, failedStep, steps: screen.steps.length })) {
           entry.problems = []
           entry.skipped = true
         } else if (opened) {
@@ -329,7 +332,8 @@ async function runPass(bin, role, width, port) {
     }
   } finally {
     if (browser) await browser.close().catch(() => {})
-    killChild(child)
+    // Ждём выхода песочницы: следующий проход берёт тот же порт.
+    await stopChild(child)
     children.delete(child)
     flush()
   }
@@ -342,8 +346,6 @@ try {
     for (const width of widths) {
       if (await portBusy(port)) throw new Error(`порт ${port} занят чужим процессом -- песочницу не запускаю`)
       await runPass(bin, role, width, port)
-      // дать системе освободить порт
-      await new Promise((r) => setTimeout(r, 500))
     }
   }
 } catch (e) {

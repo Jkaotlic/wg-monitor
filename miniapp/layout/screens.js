@@ -40,7 +40,9 @@ export const SCREENS = [
   { id: 'cabinet-selfhosted', roles: ['admin'], router: 'sandbox-home', steps: [...CABINET, { segment: 'Свой сервер' }] },
   { id: 'cabinet-issue', roles: ALL, router: 'sandbox-home', steps: [...CABINET, { first: '.cabinet-option-main:not([disabled])' }] },
   // Допущенный видит и запертую панель old: «сообщите администратору» (спека §8).
-  { id: 'cabinet-awg3', roles: ['admin', 'issuer'], router: 'sandbox-work', steps: [...NEW, { sheetChoice: 'Панель VPN-сервера' }, { expect: 'сообщите администратору|не отвечает' }] },
+  // Фраза -- своя у роли и ищется в верхнем слое (run.mjs), а не по всей странице:
+  // слой под ним её не подменит. Тексты -- awg3Panel.js ISSUER_PANEL_DOWN и CabinetAwg3.jsx.
+  { id: 'cabinet-awg3', roles: ['admin', 'issuer'], router: 'sandbox-work', steps: [...NEW, { sheetChoice: 'Панель VPN-сервера' }, { expect: { issuer: 'Панель VPN-сервера сейчас недоступна, сообщите администратору', admin: 'Панель сейчас не отвечает' } }] },
   { id: 'confimport', roles: ALL, router: 'sandbox-home', steps: [...NEW, { sheetChoice: 'Загрузить .conf' }] },
   { id: 'tunnel', roles: ALL, router: 'sandbox-home', steps: [TUNNELS, { rowIn: 'Все VPN-туннели' }] },
   { id: 'tunnel-delete', roles: OWNERS, router: 'sandbox-home', steps: [TUNNELS, { tunnelWith: 'Удалить VPN-туннель' }, { click: 'Удалить VPN-туннель' }] },
@@ -82,3 +84,12 @@ export const SCREENS = [
   { id: 'awg3add', roles: ['admin'], steps: [...AWG3, { click: 'Добавить панель' }] },
   { id: 'provision', roles: ['admin'], steps: [PARK, { click: 'Добавить роутер' }] },
 ]
+
+// Что обязан показать шаг expect этой роли: строка -- всем, объект -- по роли.
+// Роль без фразы -- ошибка обхода, а не «подойдёт любая».
+export function expectPattern(step, role) {
+  if (typeof step.expect === 'string') return step.expect
+  const p = step.expect?.[role]
+  if (!p) throw new Error(`шаг expect без фразы для роли ${role}`)
+  return p
+}
