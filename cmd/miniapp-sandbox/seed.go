@@ -230,6 +230,10 @@ func seedWorkChecks(d *db.DB, uid int64, ts time.Time) error {
 			`"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`},
 		{"awg_manager", "ok", `{"version":"2.19.1","firmware":"5.02.A.8.0-3"}`},
 		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":1447,"ping_check_status":"disabled","default_route_intent":true,"is_active_default":false,"active_default_known":true}`},
+		// awg12 -- «активный» у поддельного агента песочницы (payloads.go) для
+		// любого роутера: без строки в базе бэкенд ответил бы unknown_tunnel на
+		// запрос трафика этого звена (шум приёмки раскладки, v0.52).
+		{"tunnel_awg12", "ok", `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":false,"is_active_default":false,"active_default_known":true}`},
 		{"tunnel_awg14", "ok", `{"tunnel_id":"awg14","tunnel_name":"vpn-hip","status":"running","enabled":true,"handshake_age_sec":88,"ping_check_status":"disabled","matrix_latency_ms":117,"matrix_updated_at":"2026-09-18T07:58:02Z","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"}`},
 	}
 	for shift := 0; shift < 3; shift++ {

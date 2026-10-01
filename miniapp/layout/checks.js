@@ -25,7 +25,11 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
   const label = (el) => (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ').slice(0, 60)
   const sel = (el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.') : '')
 
-  const targets = [...document.querySelectorAll('button, a[href], [role=button], [role=tab], summary, .strip-chip')]
+  // Цели касания: кнопки, ссылки, вкладки, чипы, раскрывашки, переключатели
+  // (label у чекбокса/радио, сами чекбоксы и радио, select).
+  const isToggleLabel = (el) => el.tagName === 'LABEL' && Boolean(el.querySelector('input[type=checkbox], input[type=radio]') || ['checkbox', 'radio'].includes(el.control?.type))
+  const targets = [...document.querySelectorAll('button, a[href], [role=button], [role=tab], summary, .strip-chip, label, select, input[type=checkbox], input[type=radio]')]
+    .filter((el) => (el.tagName === 'LABEL' ? isToggleLabel(el) : el.tagName === 'INPUT' ? !el.closest('label') : true))
     .filter(visible)
     .map((el) => {
       const r = el.getBoundingClientRect()
@@ -45,31 +49,85 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
     if (size < 12) smallText.push({ text: t.slice(0, 40), size, sel: sel(el) })
   }
 
-  // Обрезан -- элемент со своим текстом, чей текст шире его самого, без своей
-  // прокрутки и без многоточия по замыслу.
+  // Обрезан. Три способа, итог -- объединение без повторов:
+  //  1) элемент со своим текстом, чей текст шире его самого (без своей прокрутки
+  //     и многоточия по замыслу);
+  //  2) любой видимый элемент с overflow-x hidden/clip, у которого содержимое шире
+  //     коробки, если внутри есть текст;
+  //  3) строчный владелец текста (inline: свои ширины нулевые): прямоугольник
+  //     текста (Range) выходит за ближайшего предка с overflow hidden/clip.
   const clipped = []
+  const seenClip = new Set()
+  const pushClip = (el, sw, cw, text) => {
+    const item = { text: text || label(el), sel: sel(el), sw, cw }
+    const key = `${item.sel}|${item.text}|${sw}|${cw}`
+    if (!seenClip.has(key)) {
+      seenClip.add(key)
+      clipped.push(item)
+    }
+  }
+  const clips = (cs) => /(hidden|clip)/.test(cs.overflowX)
   for (const el of document.querySelectorAll('body *')) {
     if (!visible(el) || el.closest('pre, svg, input, textarea, select')) continue
-    const ownText = [...el.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim())
-    if (!ownText || el.scrollWidth <= el.clientWidth + 1) continue
     const cs = getComputedStyle(el)
-    if (/(auto|scroll)/.test(cs.overflowX) || cs.textOverflow === 'ellipsis') continue
-    clipped.push({ text: label(el), sel: sel(el), sw: el.scrollWidth, cw: el.clientWidth })
+    const rect = el.getBoundingClientRect()
+    const hasText = el.innerText && el.innerText.trim()
+    const ownText = [...el.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim())
+    const wide = el.scrollWidth > el.clientWidth + 1
+    if (ownText && wide && !/(auto|scroll)/.test(cs.overflowX) && cs.textOverflow !== 'ellipsis') pushClip(el, el.scrollWidth, el.clientWidth)
+    else if (hasText && wide && clips(cs) && cs.textOverflow !== 'ellipsis' && rect.width >= 8 && rect.height >= 8) pushClip(el, el.scrollWidth, el.clientWidth)
+    if (ownText && el.clientWidth === 0) {
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3 || !n.textContent.trim()) continue
+        const range = document.createRange()
+        range.selectNodeContents(n)
+        const tr = range.getBoundingClientRect()
+        if (tr.width === 0) continue
+        for (let c = el.parentElement; c && c !== document.documentElement; c = c.parentElement) {
+          const ccs = getComputedStyle(c)
+          if (!clips(ccs)) continue
+          if (ccs.textOverflow !== 'ellipsis') {
+            const cr = c.getBoundingClientRect()
+            const left = cr.left + c.clientLeft
+            const right = left + c.clientWidth
+            if (tr.right > right + 1 || tr.left < left - 1) pushClip(el, Math.round(tr.width), c.clientWidth, n.textContent.trim().replace(/\s+/g, ' ').slice(0, 60))
+          }
+          break
+        }
+      }
+    }
   }
 
-  // Ряд -- соседние видимые кнопки одного родителя на одной высоте (±2 px).
+  // Ряд -- соседние видимые кнопки (и a.btn) одного предка на одной полосе по
+  // вертикали (перекрытие, а не равный top). Предок -- ближайший без
+  // display:contents: у «Перезапустить / Не беспокоить» обёртка прозрачна для
+  // раскладки, и кнопки -- соседи по ряду родителя.
   const rows = []
-  const parents = new Set([...document.querySelectorAll('button')].filter(visible).map((b) => b.parentElement))
-  for (const parent of parents) {
-    const kids = [...parent.children].filter((c) => c.tagName === 'BUTTON' && visible(c))
+  const layoutParent = (el) => {
+    let p = el.parentElement
+    while (p && getComputedStyle(p).display === 'contents') p = p.parentElement
+    return p
+  }
+  const groups = new Map()
+  for (const b of document.querySelectorAll('button, a.btn')) {
+    if (!visible(b)) continue
+    const p = layoutParent(b)
+    if (!p) continue
+    if (!groups.has(p)) groups.set(p, [])
+    groups.get(p).push(b)
+  }
+  for (const [parent, kids] of groups) {
     if (kids.length < 2) continue
     const lines = []
     for (const k of kids) {
       const r = k.getBoundingClientRect()
-      const line = lines.find((l) => Math.abs(l.top - r.top) <= 2)
       const item = { text: label(k), h: Math.round(r.height) }
-      if (line) line.items.push(item)
-      else lines.push({ top: r.top, items: [item] })
+      const line = lines.find((l) => r.top < l.bottom - 1 && r.bottom > l.top + 1)
+      if (line) {
+        line.items.push(item)
+        line.top = Math.min(line.top, r.top)
+        line.bottom = Math.max(line.bottom, r.bottom)
+      } else lines.push({ top: r.top, bottom: r.bottom, items: [item] })
     }
     for (const l of lines) if (l.items.length > 1) rows.push({ sel: sel(parent), items: l.items })
   }
@@ -98,25 +156,29 @@ export function findProblems(d) {
 // Известные ответы фейкового агента песочницы: запись -- только с причиной,
 // почему это ожидаемо (why). Пустой список -- любой ответ ≥ 400 находка.
 export const KNOWN_NOISE = [
-  // Фейковый агент sandbox-work не знает туннелей, что рисует seed (awg12):
-  // трафик по ним честно отвечает unknown_tunnel. Экран это переживает.
-  { kind: 'http', status: 400, method: 'POST', url: /^\/v1\/miniapp\/routers\/\d+\/commands$/, why: 'tunnel_traffic: фейковый агент не знает туннель awg12 (unknown_tunnel)' },
   // Панель «Старый пароль» заперта по замыслу сида (LockBadPassword): список
   // пиров отвечает 409, экран показывает баннер.
   { kind: 'http', status: 409, method: 'GET', url: /^\/v1\/miniapp\/awg3panels\/old\/peers$/, why: 'заперта по замыслу сида (неверный пароль): 409 -- ожидаемый ответ, экран рисует баннер' },
-  // Браузер дублирует каждый http >= 400 строкой консоли без адреса; сам ответ
-  // оценивается отдельно (строки выше), поэтому дубль не считается.
-  { kind: 'console', text: /^Failed to load resource: the server responded with a status of \d{3}/, why: 'дубль http-события консолью браузера; ответ оценивается отдельно' },
+  // Панель «Бан 15 минут» на паузе по замыслу сида (PausedUntil): пиры -- 409.
+  { kind: 'http', status: 409, method: 'GET', url: /^\/v1\/miniapp\/awg3panels\/ban\/peers$/, why: 'на паузе по замыслу сида (бан 15 минут): 409 awg3_paused -- ожидаемый ответ, экран рисует баннер' },
 ]
 
 export function isKnownNoise(e) {
-  return KNOWN_NOISE.some((n) =>
-    e.kind === n.kind && (n.kind === 'console' ? n.text.test(e.text) : n.status === e.status && n.method === e.method && n.url.test(e.url)),
-  )
+  return KNOWN_NOISE.some((n) => e.kind === n.kind && n.status === e.status && n.method === e.method && n.url.test(e.url))
 }
 
+// Строка консоли «Failed to load resource ... status NNN» -- дубль http-события
+// браузером; отбрасывается, только если в тех же событиях экрана есть ответ с
+// этим кодом (сам ответ оценивается отдельно: находка остаётся находкой).
+const RESOURCE_DUP = /^Failed to load resource: the server responded with a status of (\d{3})/
+
 export function netProblems(events = []) {
+  const seen = new Set(events.filter((e) => e.kind === 'http').map((e) => String(e.status)))
   return events
+    .filter((e) => !(e.kind === 'console' && RESOURCE_DUP.test(e.text) && seen.has(e.text.match(RESOURCE_DUP)[1])))
     .filter((e) => !isKnownNoise(e))
-    .map((e) => ({ check: 7, what: e.kind === 'http' ? `ответ ${e.status}: ${e.method} ${e.url}` : `консоль: ${e.text}` }))
+    .map((e) => ({
+      check: 7,
+      what: e.kind === 'http' ? `ответ ${e.status}: ${e.method} ${e.url}${e.detail ? ` (${e.detail})` : ''}` : `консоль: ${e.text}`,
+    }))
 }

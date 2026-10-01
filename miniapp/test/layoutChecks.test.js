@@ -42,6 +42,18 @@ describe('скрипт раскладки: оценщики', () => {
     expect(netProblems([{ kind: 'http', status: 409, method: 'GET', url: '/v1/miniapp/awg3panels/old/peers' }])).toEqual([])
     expect(netProblems([{ kind: 'http', status: 409, method: 'GET', url: '/v1/miniapp/awg3panels/main/peers' }])).toHaveLength(1)
   })
+  it('7: 400 на командах роутера -- находка, исключения нет', () => {
+    const e = { kind: 'http', status: 400, method: 'POST', url: '/v1/miniapp/routers/7/commands', detail: 'tunnel_traffic awg12: unknown_tunnel' }
+    expect(isKnownNoise(e)).toBe(false)
+    expect(netProblems([e]).map((p) => p.check)).toEqual([7])
+  })
+  it('7: дубль в консоли гасится только при http с тем же кодом', () => {
+    const dup = { kind: 'console', text: 'Failed to load resource: the server responded with a status of 400 (Bad Request)' }
+    const http400 = { kind: 'http', status: 400, method: 'POST', url: '/v1/miniapp/routers/7/commands' }
+    expect(netProblems([http400, dup])).toHaveLength(1)
+    expect(netProblems([dup])).toHaveLength(1)
+    expect(netProblems([{ ...http400, status: 500 }, dup])).toHaveLength(2)
+  })
   it('исключения мелкого текста -- машинные коды', () => {
     expect(SMALL_OK).toEqual(['.data-row-code', '.tunnel-id', '.ev-code', '.raw-dump'])
   })
