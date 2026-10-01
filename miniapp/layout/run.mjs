@@ -262,8 +262,14 @@ async function expandEverything(page) {
 async function shoot(page, file, width) {
   const base = page.viewportSize()
   const need = await page.evaluate(() => {
-    let h = document.scrollingElement.scrollHeight
-    for (const el of document.querySelectorAll('body *')) {
+    // Лист или слой во весь экран (телефон) закрывают страницу: высота -- по
+    // ним, а не по странице под ними (иначе кадр тянулся на её длину пустотой).
+    const fixed = (el) => el && getComputedStyle(el).position === 'fixed'
+    const sheet = document.querySelector('.sheet')
+    const overlay = [...document.querySelectorAll('.overlay')].pop()
+    const root = sheet ? null : fixed(overlay) ? overlay : null
+    let h = root ? window.innerHeight : document.scrollingElement.scrollHeight
+    for (const el of (root ?? document.body).querySelectorAll('*')) {
       if (el.scrollHeight <= el.clientHeight + 1 || !el.getClientRects().length) continue
       if (/(auto|scroll)/.test(getComputedStyle(el).overflowY)) h = Math.max(h, window.innerHeight + el.scrollHeight - el.clientHeight)
     }

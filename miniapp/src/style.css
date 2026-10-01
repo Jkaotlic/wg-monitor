@@ -1194,6 +1194,13 @@ body {
   line-height: var(--lh-normal);
 }
 
+/* Пояснение сразу под заголовком раздела («Кто может выпускать конфиги») --
+   тихая подпись вплотную к заголовку, а не яркая строка через пустоту. */
+.section-head + .admin-note {
+  margin: 0 0 var(--sp-3);
+  color: var(--dim);
+}
+
 /* ============================================================
    Нижний шит: подтверждение, ход выполнения, результат
    ============================================================ */
@@ -2750,7 +2757,7 @@ body {
   flex-direction: column;
   align-items: center;
   width: 100%;
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-2);
 }
 
 /* Узлы схемы: «Ваши устройства» и «Роутер». */
@@ -2758,8 +2765,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  min-height: 40px;
-  padding: 0 var(--sp-4);
+  /* Схема компактна по высоте: под ней на 360 px должна оставаться видимой
+     без прокрутки кнопка «Починить» при тревоге. */
+  min-height: 34px;
+  padding: 0 var(--sp-3);
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surf2);
@@ -2775,6 +2784,7 @@ body {
 }
 
 .tp-router {
+  min-height: 36px;
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--ink);
@@ -2795,14 +2805,14 @@ body {
 
 .tp-stem {
   width: 1.5px;
-  height: 20px;
+  height: 12px;
   background: var(--border-strong);
 }
 
 .tp-fork {
   display: block;
   width: 100%;
-  height: 46px;
+  height: 36px;
 }
 
 .tp-line {
@@ -2828,10 +2838,10 @@ body {
   display: grid;
   grid-row: span 3;
   grid-template-rows: subgrid;
-  row-gap: var(--sp-1);
+  row-gap: 2px;
   align-items: start;
   min-width: 0;
-  padding: var(--sp-3);
+  padding: 10px var(--sp-3);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surf);
@@ -3824,6 +3834,16 @@ body {
   font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
+}
+
+/* Четыре вида на телефоне («Amnezia · HideMy · Свой сервер · Панель
+   VPN-сервера») в одну строку ломают подписи на три строки -- сетка 2×2. */
+@media (max-width: 479.98px) {
+  .segment-tabs:has(> .segment-tab:nth-child(4)) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-radius: 26px;
+  }
 }
 
 .segment-tab-on {
@@ -5235,7 +5255,7 @@ body {
    вкладках роутера. Прокручивается сама, страница -- нет; тревожный чип
    первый и окрашен. */
 :root {
-  --strip-h: 57px;
+  --strip-h: 53px;
 }
 
 .router-strip {
@@ -5246,7 +5266,7 @@ body {
   gap: var(--sp-2);
   box-sizing: border-box;
   height: var(--strip-h);
-  padding: var(--sp-2) var(--sp-4);
+  padding: 6px var(--sp-4);
   overflow-x: auto;
   overscroll-behavior-x: contain;
   background: var(--page);

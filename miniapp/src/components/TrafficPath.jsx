@@ -49,9 +49,9 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
 
       {/* Развилка: левая ветка рвётся пунктиром, когда VPN-туннель не отвечает.
           Концы линий -- над серединами карточек веток (четверть и три четверти). */}
-      <svg class="tp-fork" viewBox="0 0 342 46" preserveAspectRatio="none" fill="none" aria-hidden="true">
-        <path class={`tp-line tp-line-${s.tunnel}`} d="M171 0v14c0 8-7 10-14 10H95c-8 0-12 4-12 12v10" />
-        <path class={`tp-line tp-line-${s.direct}`} d="M171 0v14c0 8 7 10 14 10h62c8 0 12 4 12 12v10" />
+      <svg class="tp-fork" viewBox="0 0 342 36" preserveAspectRatio="none" fill="none" aria-hidden="true">
+        <path class={`tp-line tp-line-${s.tunnel}`} d="M171 0v8c0 8-7 10-14 10H95c-8 0-12 4-12 12v6" />
+        <path class={`tp-line tp-line-${s.direct}`} d="M171 0v8c0 8 7 10 14 10h62c8 0 12 4 12 12v6" />
       </svg>
 
       <div class="tp-branches">
