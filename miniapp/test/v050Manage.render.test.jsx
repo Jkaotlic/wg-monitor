@@ -152,9 +152,9 @@ describe('«Проверка связи» и «Осмотр» -- на вклад
   it('разделы на месте, журнал -- владельцу с агентом v0.47+', async () => {
     mocks.settings = { role: 'owner', agent_version: 'v0.47.0' }
     const root = await mount(<DiagTab routerID={2} asleep={false} openSheet={noop} />)
-    expect(root.textContent).toContain('Проверка связи')
+    expect(root.textContent).toContain('Проверка связи VPN-туннелей')
     expect(button(root, 'Проверить связь сейчас')).toBeTruthy()
-    expect(button(root, 'Осмотр роутера')).toBeTruthy()
+    expect(button(root, 'Осмотреть роутер')).toBeTruthy()
     expect(root.textContent).toContain('Журнал awg-manager')
     expect(root.querySelectorAll('.btn-primary')).toHaveLength(1)
     cleanup(root)

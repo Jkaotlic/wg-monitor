@@ -1,7 +1,6 @@
 import { RouterDetail } from './RouterDetail.jsx'
 import { TunnelsTab } from './TunnelsTab.jsx'
-import { DiagTab } from './DiagTab.jsx'
-import { EventsTab } from './EventsTab.jsx'
+import { ChecksTab } from './ChecksTab.jsx'
 import { ManageTab } from './ManageTab.jsx'
 import { ParkTab } from './ParkTab.jsx'
 import { PARK_TAB, tabOwnsLayer, layerFamily } from '../nav.js'
@@ -75,7 +74,18 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         />
       )
     case 'diag':
-      return <DiagTab key={key} routerID={nav.routerID} asleep={asleep} isAdmin={isAdmin} openSheet={openSheet} />
+      return (
+        <ChecksTab
+          key={key}
+          routerID={nav.routerID}
+          routerName={current?.nickname}
+          asleep={asleep}
+          isAdmin={isAdmin}
+          openSheet={openSheet}
+          view={nav.diagView ?? 'now'}
+          onView={(view) => dispatch({ type: 'diagView', view })}
+        />
+      )
     // Экраны глубже «Управления» (настройки и подключение агента, сброс DNS,
     // пакеты) -- слои с адресом; закрываются обратно во вкладку. «Ход
     // работы» перенаправления возвращает сюда же (returnTo 'manage').
@@ -98,6 +108,6 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
         />
       )
     default:
-      return <EventsTab key={key} routerID={nav.routerID} routerName={current?.nickname} />
+      return null
   }
 }

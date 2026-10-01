@@ -5036,3 +5036,17 @@ body {
   cursor: pointer;
   border-color: color-mix(in srgb, var(--warn) 55%, transparent);
 }
+
+/* v0.52: «Проверки» -- сегмент «Сейчас | Что было» и пять разделов «Сейчас». */
+.checks-segment {
+  margin-bottom: var(--sp-3, 12px);
+}
+.diag-group {
+  margin-top: var(--sp-4, 20px);
+}
+.diag-group-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-md, 16px);
+  font-weight: 600;
+  color: var(--text);
+}
