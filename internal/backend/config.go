@@ -39,6 +39,9 @@ type Config struct {
 	Digest            DigestConfig             `yaml:"digest"`
 	Repair            RepairConfig             `yaml:"repair"`
 	Revive            ReviveConfig             `yaml:"revive"`
+
+	// storeDefaulted -- какие пути хранилищ выведены из db_path, а не заданы.
+	storeDefaulted storeDefaulted
 }
 
 // DigestConfig controls the daily "dead-man" digest (🟢 monitor alive, N/M
@@ -74,16 +77,16 @@ type DigestConfig struct {
 }
 
 // AmneziaConfig wires the optional Amnezia Premium cabinet helper.
-// SecretsPath intentionally lives outside state.db so Telegram DB backups do
-// not carry vpn:// subscription keys.
+// SecretsPath lives outside state.db; when unset it defaults to the directory
+// of db_path (see ApplyStoreDefaults) and rides in the encrypted full backup.
 type AmneziaConfig struct {
 	BaseURL     string `yaml:"base_url"`
 	SecretsPath string `yaml:"secrets_path"`
 }
 
 // HideMyConfig wires the optional HideMy.name access-code helper.
-// SecretsPath intentionally lives outside state.db so Telegram DB backups do
-// not carry provider access codes.
+// SecretsPath lives outside state.db; when unset it defaults to the directory
+// of db_path (see ApplyStoreDefaults) and rides in the encrypted full backup.
 type HideMyConfig struct {
 	BaseURL     string `yaml:"base_url"`
 	SecretsPath string `yaml:"secrets_path"`
@@ -314,18 +317,11 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Retention.WALCheckpointEvery == 0 {
 		cfg.Retention.WALCheckpointEvery = 1 * time.Hour
 	}
-	if cfg.Amnezia.SecretsPath == "" {
-		cfg.Amnezia.SecretsPath = "/var/lib/wg-monitor/amnezia-premium.json"
-	}
-	if cfg.SelfHostedAmnezia.StorePath == "" {
-		cfg.SelfHostedAmnezia.StorePath = selfhostedamnezia.DefaultStorePath
-	}
 	if cfg.HideMy.BaseURL == "" {
 		cfg.HideMy.BaseURL = "https://hide-my-name.cloud"
 	}
-	if cfg.HideMy.SecretsPath == "" {
-		cfg.HideMy.SecretsPath = "/var/lib/wg-monitor/hidemyname.json"
-	}
+	// JSON-хранилища без явного пути -- рядом с базой, на том же томе.
+	ApplyStoreDefaults(&cfg)
 	return &cfg, nil
 }
 
