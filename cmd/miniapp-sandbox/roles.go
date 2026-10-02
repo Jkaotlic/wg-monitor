@@ -20,6 +20,9 @@ var sandboxRoles = map[string][]viewerLink{
 	"operator": {{"sandbox-home", "operator"}},
 	// Допущенный к панели: оператор своего роутера, допуск к main и old (awg3.go).
 	"issuer": {{"sandbox-work", "operator"}},
+	// Человек без доступа: парк чужой, зритель не привязан ни к одному роутеру --
+	// экран «Роутер ещё не привязан» с его Telegram ID.
+	"none": {},
 }
 
 func attachViewer(d *db.DB, ids map[string]int64, viewer int64, role string) error {

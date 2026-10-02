@@ -621,6 +621,16 @@ var (
 	dashboardLatestCached        dashboardLatestCache
 )
 
+// SetLatestVersionLookup подменяет поход за последним выпуском. Нужен
+// песочнице мини-аппа (cmd/miniapp-sandbox, флаг -latest): приёмка раскладки
+// не должна зависеть от сети и от того, какой выпуск сегодня последний.
+// Боевой бэкенд его не зовёт.
+func SetLatestVersionLookup(fn func(ctx context.Context) (string, error)) {
+	if fn != nil {
+		lookupDashboardLatestVersion = fn
+	}
+}
+
 func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
 	return cachedDashboardLatestVersion(ctx, fetchDashboardLatestVersionUncached, time.Now())
 }

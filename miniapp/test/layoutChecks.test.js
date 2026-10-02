@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
-import { SCREENS, expectPattern } from '../layout/screens.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
+import { SCREENS, ROLES, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
 
@@ -107,13 +107,13 @@ describe('скрипт раскладки: оценщики', () => {
     expect(new RegExp(expectPattern(step, 'issuer')).test('Панель сейчас не отвечает — попробуйте позже.')).toBe(false)
   })
 
-  // ---- шаг 0c: пропуск optional -- только когда нет самой цели ----
-  it('optional: пропуск -- лишь при отказе ПОСЛЕДНЕГО шага и выбранном роутере', () => {
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 2, steps: 3 })).toBe(true)
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 1, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: true, routerOk: false, failedStep: -1, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: false, routerOk: true, failedStep: 2, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: -1, steps: 3 })).toBe(false)
+  // ---- пропусков нет: ни одного optional-экрана, у каждой роли есть экраны ----
+  it('в обходе нет необязательных экранов; у каждой роли есть свой экран', () => {
+    expect(SCREENS.filter((sc) => 'optional' in sc).map((sc) => sc.id)).toEqual([])
+    for (const role of ROLES) expect(SCREENS.some((sc) => sc.roles.includes(role)), role).toBe(true)
+    for (const id of ['noaccess', 'job', 'backenddeploy', 'hrneo-start']) expect(SCREENS.some((sc) => sc.id === id), id).toBe(true)
+    // «Запустить» снимается у каждого, кто может запускать HydraRoute Neo.
+    expect(SCREENS.filter((sc) => sc.id === 'hrneo-start').flatMap((sc) => sc.roles).sort()).toEqual(['admin', 'owner1', 'owner3'])
   })
 })
 

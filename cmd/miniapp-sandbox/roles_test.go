@@ -9,7 +9,7 @@ import (
 
 func TestAttachViewerRoles(t *testing.T) {
 	const viewer, fleet int64 = 4242, 5242
-	for role, want := range map[string]int{"owner1": 1, "owner3": 3, "operator": 1, "issuer": 1} {
+	for role, want := range map[string]int{"owner1": 1, "owner3": 3, "operator": 1, "issuer": 1, "none": 0} {
 		t.Run(role, func(t *testing.T) {
 			d, err := db.Open(filepath.Join(t.TempDir(), "sandbox.db"))
 			if err != nil {

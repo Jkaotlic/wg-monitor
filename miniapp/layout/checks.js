@@ -11,7 +11,8 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
   // Что видит человек: открыт лист -- только он; открыт слой -- верхний слой
   // (и колонка широкой раскладки); иначе -- вся страница.
   const sheet = document.querySelector('.sheet')
-  const overlays = [...document.querySelectorAll('.overlay')]
+  // .deploy-wait -- закреплённое ожидание раскатки бэкенда: закрывает страницу целиком.
+  const overlays = [...document.querySelectorAll('.overlay, .deploy-wait')]
   const roots = sheet ? [sheet] : overlays.length ? [overlays[overlays.length - 1], ...document.querySelectorAll('.side')] : [document.body]
   const inScope = (el) => roots.some((r) => r.contains(el))
   const visible = (el) => {
@@ -275,12 +276,6 @@ export function unstyledControls({ controls = [], fonts = [], ua = {} } = {}) {
     if (why.length) out.push({ ...c, why })
   }
   return out
-}
-
-// Пропуск optional-экрана -- только когда нет самой цели (последний шаг): отказ
-// выбора роутера или шага-подхода -- провал, а не пропуск.
-export function optionalSkip({ optional, routerOk, failedStep, steps }) {
-  return Boolean(optional) && Boolean(routerOk) && failedStep >= 0 && failedStep === steps - 1
 }
 
 export function rowMismatches(rows = []) {

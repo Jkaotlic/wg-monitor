@@ -1,5 +1,5 @@
 // Скрипт раскладки (v0.52, спека §9): на каждую роль и каждую ширину поднимает
-// СВОЮ песочницу (порты 8121-8125; тревога песочницы стареет за 5 минут, так что
+// СВОЮ песочницу (порты 8121-8126; тревога песочницы стареет за 5 минут, так что
 // «Починить» каждый раз видит свежую), обходит SCREENS, снимает каждый экран и
 // падает при любой находке. В CI не входит, перед выпуском обязателен.
 // Каждую свою песочницу гасит сам -- и при обычном выходе, и по SIGINT/SIGTERM/
@@ -11,10 +11,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { collectLayout, findProblems, netProblems, optionalSkip, SMALL_OK, SKIP_TARGETS } from './checks.js'
+import { collectLayout, findProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
 import { killChild, stopChild } from './proc.mjs'
-import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, expectPattern } from './screens.js'
+import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, SANDBOX_LATEST, expectPattern } from './screens.js'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : null)).filter(Boolean))
@@ -76,8 +76,7 @@ function flush() {
     writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2))
     const bad = report.filter((e) => e.problems.length)
     const lines = bad.flatMap((e) => e.problems.map((p) => `${e.role}\t${e.width}\t${e.screen}\t[${p.check}] ${p.what}${e.router ? `\t(роутер ${e.router})` : ''}`))
-    const skipped = report.filter((e) => e.skipped).map((e) => `${e.role}\t${e.width}\t${e.screen}\tпропущен (optional)`)
-    writeFileSync(path.join(out, 'report.txt'), [...lines, ...skipped].join('\n') + '\n')
+    writeFileSync(path.join(out, 'report.txt'), lines.join('\n') + '\n')
   } catch {
     // отчёт -- не повод падать второй раз
   }
@@ -265,11 +264,41 @@ async function runStep(page, step, routerName, role) {
     // Только верхний слой (лист, иначе верхний оверлей, иначе страница): у
     // body.innerText есть и слой под ним -- фраза оттуда проходила бы вхолостую.
     const text = await page.evaluate(() => {
-      const top = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay')].pop() ?? document.body
+      const top = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay, .deploy-wait')].pop() ?? document.body
       return top.innerText.replace(/[‐‑]/g, '-')
     })
     // innerText отдаёт текст после text-transform (заголовки капсом): без учёта регистра.
     return new RegExp(expectPattern(step, role), 'i').test(text)
+  }
+  if (step.fillSel) {
+    // Поле листа по селектору. '$confirm' -- фраза, которую лист просит набрать
+    // (она на экране, в подписи поля): скрипт набирает то, что набрал бы человек.
+    const input = await page.$(`.sheet ${step.fillSel}`)
+    if (!input) return false
+    let value = step.value
+    if (value === '$confirm') {
+      value = await page.evaluate(() => document.querySelector('.sheet label[for=sheet-confirm-input] .q')?.textContent ?? null)
+      if (!value) return false
+      value = value.replace(/^«|»$/g, '').replace(/[‐‑]/g, '-')
+    }
+    await input.fill(value)
+    await page.waitForTimeout(300)
+    return true
+  }
+  if (step.waitText || step.waitButton) {
+    // Дождаться слов (или кнопки) в верхнем слое: задание песочницы идёт секунды.
+    const until = Date.now() + (step.ms ?? 15000)
+    while (Date.now() < until) {
+      const found = await page.evaluate(([text, button]) => {
+        const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').replace(/[‐‑]/g, '-')
+        const top = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay, .deploy-wait')].pop() ?? document.body
+        if (button) return [...top.querySelectorAll('button')].some((b) => b.offsetParent !== null && !b.disabled && norm(b.innerText) === button)
+        return norm(top.innerText).toLowerCase().includes(text.toLowerCase())
+      }, [step.waitText ?? null, step.waitButton ?? null])
+      if (found) return true
+      await page.waitForTimeout(300)
+    }
+    return false
   }
   if (step.rowIn) {
     const row = await page.$(`.section:has(.section-title:text-matches("^${hy(step.rowIn)}")) .list-row-btn`)
@@ -298,7 +327,7 @@ async function runStep(page, step, routerName, role) {
 async function expandEverything(page) {
   for (let pass = 0; pass < 3; pass++) {
     const n = await page.evaluate(() => {
-      const root = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay')].pop() ?? document.body
+      const root = document.querySelector('.sheet') ?? [...document.querySelectorAll('.overlay, .deploy-wait')].pop() ?? document.body
       let c = 0
       for (const d of root.querySelectorAll('details:not([open])')) { d.querySelector(':scope > summary')?.click(); c++ }
       for (const b of root.querySelectorAll('button')) {
@@ -325,7 +354,7 @@ async function shoot(page, file, width) {
     // ним, а не по странице под ними (иначе кадр тянулся на её длину пустотой).
     const fixed = (el) => el && getComputedStyle(el).position === 'fixed'
     const sheet = document.querySelector('.sheet')
-    const overlay = [...document.querySelectorAll('.overlay')].pop()
+    const overlay = [...document.querySelectorAll('.overlay, .deploy-wait')].pop()
     const root = sheet ? null : fixed(overlay) ? overlay : null
     let h = root ? window.innerHeight : document.scrollingElement.scrollHeight
     for (const el of (root ?? document.body).querySelectorAll('*')) {
@@ -352,7 +381,11 @@ async function runPass(bin, role, width, port) {
   mkdirSync(path.join(dir, 'tmp'), { recursive: true })
   const logFd = openSync(path.join(dir, 'sandbox.log'), 'w')
   // TMPDIR песочницы -- под выводом прогона: её временные каталоги не утекают.
-  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db')], {
+  // -latest: Парк без похода на GitHub (одна и та же «доступная версия» на
+  // каждом прогоне); -backend-update ignore: раскатка бэкенда остаётся в
+  // ожидании -- экран снимается в устойчивом состоянии, а не за секунду до
+  // перезагрузки страницы.
+  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore'], {
     cwd: REPO,
     detached: true,
     stdio: ['ignore', logFd, logFd],
@@ -372,7 +405,8 @@ async function runPass(bin, role, width, port) {
     const boot = { role, width, screen: 'boot', problems: [] }
     try {
       await page.goto(`http://127.0.0.1:${port}/miniapp/`)
-      await page.waitForSelector('.app-header, .wide-shell', { timeout: 15000 })
+      // .screen без оболочки -- экран «Роутер ещё не привязан» (роль none).
+      await page.waitForSelector('.app-header, .wide-shell, .screen', { timeout: 15000 })
       await page.waitForTimeout(1000)
     } catch (e) {
       boot.problems.push({ check: 0, what: `первая загрузка не дошла до оболочки: ${e.message.split('\n')[0]}` })
@@ -392,13 +426,10 @@ async function runPass(bin, role, width, port) {
           opened = await pickRouter(page, want)
           if (!opened) entry.problems.push({ check: 0, what: `роутер «${want}» не выбран: на экране «${await currentRouter(page)}»` })
         }
-        const routerOk = opened
-        let failedStep = -1
-        for (const [i, step] of screen.steps.entries()) {
+        for (const step of screen.steps) {
           if (!opened) break
           opened = await runStep(page, step, want, role)
           if (!opened) {
-            failedStep = i
             if (!entry.problems.length) entry.problems.push({ check: 0, what: `шаг обхода не удался: ${JSON.stringify(step)}` })
           }
         }
@@ -406,18 +437,21 @@ async function runPass(bin, role, width, port) {
           entry.router = await currentRouter(page)
           if (opened && entry.router !== want) entry.problems.push({ check: 0, what: `снят не тот роутер: нужен «${want}», на экране «${entry.router}»` })
         }
-        // Пропуск -- только «самой цели нет»; отказ выбора роутера или шага-подхода
-        // остаётся находкой и у optional-экрана.
-        if (!opened && optionalSkip({ optional: screen.optional, routerOk, failedStep, steps: screen.steps.length })) {
-          entry.problems = []
-          entry.skipped = true
-        } else if (opened) {
+        // Пропусков нет: экран, который не открылся, -- находка (шаг 0).
+        if (opened) {
           await expandEverything(page)
           await page.waitForTimeout(600)
           const data = await page.evaluate(collectLayout, { smallOk: SMALL_OK, skip: SKIP_TARGETS })
           entry.problems.push(...findProblems(data), ...netProblems(events))
           mkdirSync(dir, { recursive: true })
           await shoot(page, path.join(dir, `${screen.id}.png`), width)
+        }
+        // Закреплённый экран (ожидание раскатки бэкенда) «назад» не отпускает:
+        // дальше -- с чистой страницы.
+        if (screen.reload) {
+          await page.goto(`http://127.0.0.1:${port}/miniapp/`)
+          await page.waitForSelector('.app-header, .wide-shell, .screen', { timeout: 15000 })
+          await page.waitForTimeout(800)
         }
       } catch (e) {
         entry.problems.push({ check: 0, what: `исключение обхода: ${e.message.split('\n')[0]}` })
@@ -449,6 +483,6 @@ try {
 
 flush()
 const bad = report.filter((e) => e.problems.length)
-const skipped = report.filter((e) => e.skipped)
-console.log(`экранов: ${report.length}, с находками: ${bad.length}, пропущено: ${skipped.length}; отчёт и снимки: ${out}`)
+// «пропущено» -- всегда 0: пропусков в обходе нет, строка -- для сверки с прежними прогонами.
+console.log(`экранов: ${report.length}, с находками: ${bad.length}, пропущено: 0; отчёт и снимки: ${out}`)
 process.exit(bad.length ? 1 : 0)

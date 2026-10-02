@@ -66,7 +66,9 @@ func main() {
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
 	noAccess := flag.Bool("no-access", false, "открыть мини-апп человеком без доступа: парк принадлежит другому, экран «Роутер ещё не привязан» с Telegram ID")
-	role := flag.String("role", "", "роль зрителя для приёмки раскладки: admin | owner1 | owner3 | operator | issuer; пусто -- как раньше (-admin)")
+	role := flag.String("role", "", "роль зрителя для приёмки раскладки: admin | owner1 | owner3 | operator | issuer | none (без доступа); пусто -- как раньше (-admin)")
+	latest := flag.String("latest", "", "последний выпуск, который «видит» бэкенд: пусто -- настоящий поход на GitHub; версия (v0.34.0) -- без сети: Парк предлагает раскатку бэкенда до неё, переустановка агента ставит её")
+	hrneoStopped := flag.String("hrneo-stopped", "дача-северная", "роутер, на котором HydraRoute Neo засеян остановленным (лист «Запустить»); пусто -- запущен на всех")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
@@ -80,6 +82,11 @@ func main() {
 		*asAdmin = *role == "admin"
 	}
 	setSandboxEgress(*egress)
+	if v := strings.TrimSpace(*latest); v != "" {
+		// Без сети и без гонки с настоящим выпуском: приёмке раскладки нужен один
+		// и тот же Парк на каждом прогоне.
+		backend.SetLatestVersionLookup(func(context.Context) (string, error) { return v, nil })
+	}
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
 	// экран «Парк» было бы нечем проверить.
@@ -157,6 +164,13 @@ func main() {
 		if err := attachViewer(d, ids, *tgUser, *role); err != nil {
 			fatal(err)
 		}
+	}
+	if *hrneoStopped != "" {
+		uid, ok := ids[*hrneoStopped]
+		if !ok {
+			fatal(fmt.Errorf("-hrneo-stopped: в seed нет роутера %q", *hrneoStopped))
+		}
+		setHRNeoRunning(uid, false)
 	}
 	if *homeAgent != "" {
 		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-home"], *homeAgent); err != nil {
@@ -452,7 +466,7 @@ func (f *fakeAgent) Enqueue(userID int64, cmd wire.Command) error {
 	f.results[key(userID, cmd.ID)] = wire.CommandResult{
 		ID:         cmd.ID,
 		Status:     "ok",
-		Output:     sandboxOutput(cmd.Action, cmd.Args),
+		Output:     sandboxOutput(userID, cmd.Action, cmd.Args),
 		DurationMs: 42,
 	}
 	slog.Info("песочница: команда принята", "action", cmd.Action, "args", argsLine(cmd.Args))

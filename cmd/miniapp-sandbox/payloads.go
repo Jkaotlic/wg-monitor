@@ -19,14 +19,14 @@ import (
 // Экран, который не получил разбираемый ответ, честно говорит «снимок не
 // разобрать». Это правильно, но проверять на таком ответе можно только одну
 // ветку из десяти -- поэтому здесь лежат данные, а не заглушки.
-func sandboxOutput(action string, args map[string]any) string {
+func sandboxOutput(routerID int64, action string, args map[string]any) string {
 	switch action {
 	case "opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove":
 		return mustJSON(sandboxOpkgCron(action, args))
 	case "entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove":
 		return mustJSON(sandboxEntwareClean(action, args))
 	case "route_status":
-		return mustJSON(routeSnapshot(routerState()))
+		return mustJSON(routeSnapshot(routerState(routerID)))
 	case "tunnel_import":
 		// Мастер вытаскивает идентификатор нового туннеля из этой строки:
 		// формат ровно тот, что печатает агент. Соврать здесь форматом --
@@ -40,12 +40,12 @@ func sandboxOutput(action string, args map[string]any) string {
 		deleteTunnel(id)
 		return fmt.Sprintf("tunnel %s deleted", id)
 	case "hrneo_inventory":
-		return mustJSON(hrneoInventory(routerState()))
+		return mustJSON(hrneoInventory(routerState(routerID)))
 	case "service_restart":
 		name := argString(args, "name", "")
 		switch name {
 		case "hrneo_start", "hrneo_stop":
-			setHRNeoRunning(name == "hrneo_start")
+			setHRNeoRunning(routerID, name == "hrneo_start")
 			return "hrneo " + strings.TrimPrefix(name, "hrneo_") + " sent"
 		}
 		return "песочница: service_restart " + name + " выполнен"
@@ -124,16 +124,20 @@ func mustJSON(v any) string {
 //
 // Цикл 4: VPN-туннель можно удалить (deleted), HydraRoute Neo -- остановить
 // и запустить (hrneoStopped), главный выход роутера задаётся флагом -egress.
+//
+// HydraRoute Neo -- единственное, что у роутеров песочницы своё (hrneoStopped
+// по id роутера): один роутер засеян остановленным, чтобы лист «Запустить»
+// было на чём открыть, пока на остальных проверяется «Остановить».
 var sandboxRouter = struct {
 	mu           sync.Mutex
 	imported     []wire.TunnelMeta
 	active       string
 	disabled     map[string]bool
 	deleted      map[string]bool
-	hrneoStopped bool
+	hrneoStopped map[int64]bool
 	egress       string
 	nextID       int
-}{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, egress: wire.DefaultEgressDirect, nextID: 21}
+}{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, hrneoStopped: map[int64]bool{}, egress: wire.DefaultEgressDirect, nextID: 21}
 
 type routerSnapshotState struct {
 	imported     []wire.TunnelMeta
@@ -144,11 +148,11 @@ type routerSnapshotState struct {
 	egress       string
 }
 
-func routerState() routerSnapshotState {
+func routerState(routerID int64) routerSnapshotState {
 	sandboxRouter.mu.Lock()
 	defer sandboxRouter.mu.Unlock()
 	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}, deleted: map[string]bool{},
-		hrneoStopped: sandboxRouter.hrneoStopped, egress: sandboxRouter.egress}
+		hrneoStopped: sandboxRouter.hrneoStopped[routerID], egress: sandboxRouter.egress}
 	st.imported = append(st.imported, sandboxRouter.imported...)
 	for k, v := range sandboxRouter.disabled {
 		st.disabled[k] = v
@@ -177,10 +181,10 @@ func deleteTunnel(id string) {
 	sandboxRouter.deleted[id] = true
 }
 
-func setHRNeoRunning(on bool) {
+func setHRNeoRunning(routerID int64, on bool) {
 	sandboxRouter.mu.Lock()
 	defer sandboxRouter.mu.Unlock()
-	sandboxRouter.hrneoStopped = !on
+	sandboxRouter.hrneoStopped[routerID] = !on
 }
 
 // sandboxAnalyze -- ответ tunnel_analyze в форме агента (actions/analyze.go):
