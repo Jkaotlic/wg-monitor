@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,11 +18,103 @@ import (
 // local: сервер обновлений Keenetic не ответил. Мини-апп ищет эту строку.
 const FirmwareServerSilent = "firmware server did not answer"
 
-// GetFirmwareStatus runs `ndmc -c "components list"` and parses the output
-// into a wire.FirmwareStatus. The command returns two YAML-ish blocks:
-// `firmware:` (server-side release for the current sandbox) and `local:`
-// (what is installed). If they differ, an update is available.
-func GetFirmwareStatus(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus, error) {
+// GetFirmwareStatus отвечает, какая прошивка стоит и есть ли новее.
+//
+// Основной путь -- локальный RCI `components/list`: `ndmc -c "components
+// list"` -- «продолжаемая» команда и порой отдаёт пустой ответ за 0 с
+// (прод 02.10: «could not extract local.version»). Старый путь ndmc остаётся
+// запасным -- только когда RCI на роутере не отвечает вовсе (старый KeenOS).
+// rci == nil -- сразу ndmc.
+func GetFirmwareStatus(ctx context.Context, exec ExecFunc, rci RCIFunc) (wire.FirmwareStatus, error) {
+	if rci != nil {
+		fs, err := firmwareStatusRCI(ctx, rci)
+		if !errors.Is(err, ErrRCIUnreachable) {
+			return fs, err
+		}
+	}
+	return firmwareStatusNdmc(ctx, exec)
+}
+
+// firmwareListRetry -- сколько раз спрашивать `components/list`, пока роутер
+// отвечает «список ещё загружается» ({"continued": true}), и пауза между
+// попытками. 5 раз с паузой 2 с; тесты подменяют sleep.
+var firmwareListRetry = firmwareWatchCfg{total: 5, sleep: sleepTwoSeconds}
+
+func sleepTwoSeconds(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return nil
+	}
+}
+
+// rciComponentsList -- то немногое, что нужно из ответа в ~260 КБ: блок
+// component разбором пропускается и никуда не попадает.
+type rciComponentsList struct {
+	rciAnswer
+	Firmware *struct {
+		Version string `json:"version"`
+	} `json:"firmware"`
+	Sandbox string `json:"sandbox"`
+	Local   *struct {
+		Version string `json:"version"`
+	} `json:"local"`
+}
+
+func firmwareStatusRCI(ctx context.Context, rci RCIFunc) (wire.FirmwareStatus, error) {
+	var fs wire.FirmwareStatus
+	for i := 0; i < firmwareListRetry.total; i++ {
+		if i > 0 {
+			if err := firmwareListRetry.sleep(ctx); err != nil {
+				return fs, fmt.Errorf("rci components list: %w", err)
+			}
+		}
+		body, err := rci(ctx, "POST", "/rci/components/list", []byte(`{}`))
+		if err != nil {
+			return fs, err
+		}
+		var ans rciComponentsList
+		if err := json.Unmarshal(body, &ans); err != nil {
+			return fs, fmt.Errorf("rci components list: unexpected answer: %s", answerExcerpt(body))
+		}
+		if ans.Local != nil && ans.Local.Version != "" {
+			fs.Current = ans.Local.Version
+			fs.Channel = ans.Sandbox
+			if ans.Firmware != nil && ans.Firmware.Version != "" && ans.Firmware.Version != fs.Current {
+				fs.Available = ans.Firmware.Version
+			}
+			return fs, nil
+		}
+		if msg := ans.errorText(); msg != "" {
+			return fs, fmt.Errorf("rci components list: %s", msg)
+		}
+		if ans.Continued {
+			continue // список ещё загружается
+		}
+		if ans.Firmware != nil {
+			// Тот же случай, что `firmware:` без `local:` у ndmc.
+			return fs, fmt.Errorf("%s: firmware: %s | sandbox: %s", FirmwareServerSilent,
+				keenetic.Excerpt(ans.Firmware.Version, 1), keenetic.Excerpt(ans.Sandbox, 1))
+		}
+		return fs, fmt.Errorf("could not extract local.version from rci components/list answer")
+	}
+	return fs, fmt.Errorf("could not extract local.version: rci components/list is still being fetched")
+}
+
+// answerExcerpt -- начало неожиданного ответа RCI для текста ошибки: не
+// длиннее keenetic.ExcerptMaxRunes, сколько бы ни весил сам ответ.
+func answerExcerpt(body []byte) string {
+	if len(body) > 4*keenetic.ExcerptMaxRunes {
+		body = body[:4*keenetic.ExcerptMaxRunes]
+	}
+	return keenetic.Excerpt(strings.ToValidUTF8(string(body), ""), 1)
+}
+
+// firmwareStatusNdmc -- старый путь: `ndmc -c "components list"` отдаёт два
+// YAML-подобных блока, `firmware:` (выпуск на сервере для канала) и `local:`
+// (что установлено). Отличаются -- есть обновление.
+func firmwareStatusNdmc(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus, error) {
 	out, err := exec(ctx, "ndmc", "-c", "components list")
 	if err != nil {
 		if ex := keenetic.Excerpt(string(out), 3); ex != "" {
@@ -44,6 +137,9 @@ const (
 	FirmwareStartedMsg     = "firmware download started; router will reboot when done"
 	FirmwareUnconfirmedMsg = "firmware install kicked; not confirmed by router log"
 	FirmwareInterrupted    = "firmware update interrupted"
+	// firmwareViaNdmcNote дописывается к FirmwareUnconfirmedMsg, когда commit
+	// ушёл старым путём: мини-апп сверяет только начало строки.
+	firmwareViaNdmcNote = "; rci unavailable, started via ndmc"
 )
 
 // firmwareWatchCfg -- сколько раз и как часто смотреть журнал после commit.
@@ -53,17 +149,7 @@ type firmwareWatchCfg struct {
 	sleep func(ctx context.Context) error
 }
 
-var firmwareWatch = firmwareWatchCfg{
-	total: 10,
-	sleep: func(ctx context.Context) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-			return nil
-		}
-	},
-}
+var firmwareWatch = firmwareWatchCfg{total: 10, sleep: sleepTwoSeconds}
 
 // Терминальный провал -- только строка Components:: с этими метками. Строка
 // Core::Ndss сама по себе (например, «cannot connect») провалом не считается:
@@ -71,28 +157,37 @@ var firmwareWatch = firmwareWatchCfg{
 var firmwareFailMarks = []string{"update interrupted", "request failed"}
 
 // InstallFirmware запускает установку прошивки и сверяется с журналом.
-// `components commit` лишь ставит фоновую задачу и сразу отвечает кодом 0
-// (прод 30.09, workrouter: «ok» за 18 мс, а в журнале -- update interrupted),
-// поэтому судим по новым строкам Components:: и Core::Ndss в `show log`.
-// Окно наблюдения отрабатывается целиком: провал возвращается, как только
-// замечен, иначе -- «начато», если была строка «update task started».
-func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
+//
+// Запуск -- через локальный RCI `components/commit`. `ndmc -c "components
+// commit"` -- «продолжаемая» команда: задача живёт, пока жива сессия CLI, а
+// `ndmc -c` выходит сразу, и установка обрывается в ту же секунду (прод
+// 30.09 и 02.10, KeenOS 5.02: «ok» за 18 мс, в журнале -- Ndss: cannot
+// connect / request failed (0) / update interrupted). Через RCI та же
+// установка доходит до перезагрузки. ndmc остаётся запасным путём только
+// для роутера, где RCI не отвечает вовсе; такой запуск стартом не считается,
+// пока журнал не покажет перезагрузку.
+//
+// Дальше судим по новым строкам журнала. Провал возвращается, как только
+// замечен; строка о перезагрузке или обновлении прошивки -- сразу «начато»
+// (роутер вот-вот уйдёт, ждать нечего); иначе окно отрабатывается целиком.
+func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, error) {
 	before := map[string]bool{}
 	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
 	for _, l := range beforeLines {
 		before[l] = true
 	}
-	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
-		if ex := keenetic.ErrExcerpt(string(out)); ex != "" {
-			return "", fmt.Errorf("ndmc components commit: %w: %s", err, ex)
-		}
-		return "", fmt.Errorf("ndmc components commit: %w", err)
+	started, viaNdmc, err := commitFirmware(ctx, exec, rci)
+	if err != nil {
+		return "", err
+	}
+	unconfirmed := FirmwareUnconfirmedMsg
+	if viaNdmc {
+		unconfirmed += firmwareViaNdmcNote
 	}
 	if beforeErr != nil {
 		// Без снимка «до» старые строки не отличить от новых.
-		return FirmwareUnconfirmedMsg, nil
+		return unconfirmed, nil
 	}
-	started := false
 	for i := 0; i < firmwareWatch.total; i++ {
 		if err := firmwareWatch.sleep(ctx); err != nil {
 			break
@@ -107,11 +202,15 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
 				fresh = append(fresh, l)
 			}
 		}
-		failed := false
+		failed, rebooting := false, false
 		for _, l := range fresh {
-			started = started || strings.Contains(l, "update task started")
-			if isComponentsFailure(l) {
+			switch {
+			case isComponentsFailure(l):
 				failed = true
+			case isFirmwareGoingLine(l):
+				rebooting = true
+			case !viaNdmc && strings.Contains(l, "update task started"):
+				started = true
 			}
 		}
 		if failed {
@@ -123,11 +222,48 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) (string, error) {
 			}
 			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(msgs, " | "))
 		}
+		if rebooting {
+			return FirmwareStartedMsg, nil
+		}
 	}
 	if started {
 		return FirmwareStartedMsg, nil
 	}
-	return FirmwareUnconfirmedMsg, nil
+	return unconfirmed, nil
+}
+
+// commitFirmware даёт роутеру команду ставить прошивку. started -- роутер
+// сам подтвердил старт в ответе RCI; viaNdmc -- ушли на старый путь.
+func commitFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (started, viaNdmc bool, err error) {
+	if rci != nil {
+		body, rerr := rci(ctx, "POST", "/rci/components/commit", []byte(`{}`))
+		switch {
+		case rerr == nil:
+			var ans rciAnswer
+			if err := json.Unmarshal(body, &ans); err != nil {
+				return false, false, fmt.Errorf("rci components commit: unexpected answer: %s", answerExcerpt(body))
+			}
+			if msg := ans.errorText(); msg != "" {
+				return false, false, fmt.Errorf("rci components commit: %s", msg)
+			}
+			return ans.Continued || ans.hasMessage("update task started"), false, nil
+		case !errors.Is(rerr, ErrRCIUnreachable):
+			return false, false, rerr
+		}
+	}
+	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
+		if ex := keenetic.ErrExcerpt(string(out)); ex != "" {
+			return false, true, fmt.Errorf("ndmc components commit: %w: %s", err, ex)
+		}
+		return false, true, fmt.Errorf("ndmc components commit: %w", err)
+	}
+	return false, true, nil
+}
+
+// isFirmwareGoingLine -- строка журнала, после которой установка уже не
+// отменится: роутер перезагружается или обновляет прошивку.
+func isFirmwareGoingLine(l string) bool {
+	return strings.Contains(l, "RebootManager") || strings.Contains(strings.ToLower(l), "firmware update")
 }
 
 func isComponentsFailure(l string) bool {
@@ -142,7 +278,7 @@ func isComponentsFailure(l string) bool {
 	return false
 }
 
-// firmwareLogLines -- строки журнала про компоненты и Ndss, в порядке журнала
+// firmwareLogLines -- строки журнала про компоненты, Ndss и перезагрузку, в порядке журнала
 // (от него зависит понятный текст ошибки).
 func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
 	out, err := exec(ctx, "ndmc", "-c", "show log 40")
@@ -152,7 +288,7 @@ func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
 	var lines []string
 	for _, raw := range strings.Split(string(out), "\n") {
 		l := strings.TrimSpace(strings.ReplaceAll(raw, "\x1b[K", ""))
-		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") {
+		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") || isFirmwareGoingLine(l) {
 			lines = append(lines, l)
 		}
 	}
@@ -252,7 +388,7 @@ type AwgInfoClient interface {
 //   - hrneo version: `opkg info hrneo` (no API; HRStatus has no version field).
 //   - hrneo uptime, awgmgr uptime: /proc/$pid/stat starttime (jiffies, USER_HZ=100)
 //     subtracted from /proc/uptime system uptime.
-//   - firmware available: `ndmc components list` — populated only when the
+//   - firmware available: RCI `components/list` (ndmc as fallback) — populated only when the
 //     server-side release differs from the locally installed version.
 //
 // Best-effort everywhere: if hrneo isn't installed, hrneo fields stay empty;
@@ -264,7 +400,7 @@ type AwgInfoClient interface {
 // concurrently — they share no dependencies. Phase 2 fans out the two daemon
 // uptimes (which depend on phase 1's sysUp). On a healthy router the eight
 // sequential exec calls (~600ms wall) collapse to ~150ms.
-func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.VersionAudit, error) {
+func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc, rci RCIFunc) (wire.VersionAudit, error) {
 	var (
 		sys      *awgmgr.SystemInfo
 		sysErr   error
@@ -294,7 +430,7 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 		return nil
 	})
 	g.Go(func() error {
-		fs, fsErr = GetFirmwareStatus(gctx, exec)
+		fs, fsErr = GetFirmwareStatus(gctx, exec, rci)
 		return nil
 	})
 	g.Go(func() error {
