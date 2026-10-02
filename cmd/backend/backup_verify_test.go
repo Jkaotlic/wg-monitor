@@ -137,14 +137,17 @@ func TestBackupVerifyIgnoresChangesInLiveDBAfterBackup(t *testing.T) {
 func (f *backupFixture) rewriteLatestSmall(t *testing.T, mutate func(dir string)) {
 	t.Helper()
 	dir := t.TempDir()
-	names, err := extractEncryptedArchive(context.Background(), filepath.Join(f.outDir, fixtureSmallName), []byte(fixturePassphrase), dir, 0)
-	if err != nil {
+	if _, err := extractEncryptedArchive(context.Background(), filepath.Join(f.outDir, fixtureSmallName), []byte(fixturePassphrase), dir, 0); err != nil {
 		t.Fatal(err)
 	}
 	mutate(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var members []archiveMember
-	for _, n := range names {
-		members = append(members, archiveMember{n, filepath.Join(dir, n)})
+	for _, e := range entries {
+		members = append(members, archiveMember{e.Name(), filepath.Join(dir, e.Name())})
 	}
 	dst := filepath.Join(f.outDir, "wg-monitor-small-backup-20261008T020000Z.tgz.enc")
 	if err := writeEncryptedArchive(context.Background(), dst, members, []byte(fixturePassphrase), backup.TestParams()); err != nil {
@@ -213,18 +216,28 @@ func TestBackupVerifyChecksStores(t *testing.T) {
 	f.backupSmall(t)
 	f.verifyFails(t, "хранилище awg3-panels.json из архива -- не JSON")
 
-	// Хранилище появилось после бэкапа: в архиве его нет -- провал.
+	// Хранилище появилось после бэкапа: сверка идёт с манифестом, а не с
+	// живыми файлами, так что проверка проходит.
 	f2 := newBackupFixture(t)
 	hidemy := filepath.Join(f2.dir, "data", "hidemyname.json")
 	if err := os.Remove(hidemy); err != nil {
 		t.Fatal(err)
 	}
 	f2.backupSmall(t)
-	if err := runBackupVerify(context.Background(), f2.verifyOpts(&bytes.Buffer{})); err != nil {
-		t.Fatalf("хранилища нет нигде -- это не ошибка: %v", err)
-	}
 	mustWrite(t, hidemy, `{}`)
-	f2.verifyFails(t, "в архиве нет хранилища hidemyname.json")
+	if err := runBackupVerify(context.Background(), f2.verifyOpts(&bytes.Buffer{})); err != nil {
+		t.Fatalf("хранилище, заведённое после бэкапа, провалило проверку: %v", err)
+	}
+
+	// Манифест перечисляет хранилище, а в архиве его нет -- провал.
+	f3 := newBackupFixture(t)
+	f3.backupSmall(t)
+	f3.rewriteLatestSmall(t, func(dir string) {
+		if err := os.Remove(filepath.Join(dir, "hidemyname.json")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f3.verifyFails(t, "в архиве нет хранилища hidemyname.json, записанного в манифесте")
 }
 
 // По правилу ключа оживления в бэкапе нет: проверка его не требует, а в

@@ -229,11 +229,12 @@ wizard takes `WG_BACKUP_PASSPHRASE` from the local secret store or asks for it.
 Dry-run extracts the archive locally and shows the manifest, backend version,
 SQLite size, agent count, which stores are inside, and that `revive.key` is not in the backup.
 Restore mode uploads `state.db` and `backend.yaml`, plus (v0.53+ archives) the
-JSON stores; makes timestamped backups of any existing VPS
+JSON stores (and `revive.key` if an archive happens to carry one); makes timestamped backups of any existing VPS
 files, checks SQLite integrity, restores ownership/modes, starts
 `wg-monitor-backend`, and refreshes the backup timers. Stores land where the
 backend with the restored `backend.yaml` looks for them (next to `state.db`
-unless a path is set explicitly); all with
+unless a path is set explicitly), a `revive.key` found in an archive at
+`revive.key_file`; all with
 mode `0600`. After a restore the saved router passwords must be entered again
 (the revive key is not part of the backup). Destinations outside `/var/lib/wg-monitor` and `/etc/wg-monitor`
 are refused. The uploaded copies in `/tmp/wg-monitor-restore` are removed
@@ -384,8 +385,9 @@ wg-monitor-backend backup verify --config … --passphrase-file … --out-dir �
 Команда берёт самый свежий малый архив, расшифровывает его во временный каталог
 внутри `--out-dir` (каталог убирается при любом исходе) и проверяет: база
 проходит `PRAGMA integrity_check`; число роутеров, владельцев и операторов
-равно записанному в манифест при бэкапе; каждое хранилище, которое есть в живой
-системе, есть в архиве и разбирается как JSON. Ключа оживления в архиве нет, и
+равно записанному в манифест при бэкапе; каждое хранилище из строки `stores=`
+манифеста есть в архиве и разбирается как JSON (сверка с манифестом, а не с
+живыми файлами). Ключа оживления в архиве нет, и
 проверка его не требует; вывод напоминает, что после восстановления пароли
 роутеров вводятся заново. Итог пишется в секцию `verify`
 файла состояния; код выхода не ноль при провале.

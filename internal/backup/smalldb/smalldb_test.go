@@ -303,3 +303,50 @@ PRAGMA user_version = 7;`); err != nil {
 		t.Fatalf("user_version = %d, %v", uv, err)
 	}
 }
+
+// Счётчики для манифеста берутся из ИСТОЧНИКА в той же транзакции, что и
+// перенос, а не из собранной копии: иначе сверка копии с собой ничего не
+// доказывала бы.
+func TestBuildCountedReturnsSourceCounts(t *testing.T) {
+	d, src := liveDB(t)
+	var wantRouters, wantOps int
+	if err := d.SQL().QueryRow(`SELECT count(*) FROM users`).Scan(&wantRouters); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SQL().QueryRow(`SELECT count(*) FROM router_operators`).Scan(&wantOps); err != nil {
+		t.Fatal(err)
+	}
+	var wantOwners int
+	if err := d.SQL().QueryRow(`SELECT count(DISTINCT telegram_user_id) FROM users WHERE telegram_user_id IS NOT NULL AND telegram_user_id != 0`).Scan(&wantOwners); err != nil {
+		t.Fatal(err)
+	}
+	if wantRouters == 0 || wantOps == 0 {
+		t.Fatalf("фикстура пуста: %d %d", wantRouters, wantOps)
+	}
+	counts, err := BuildCounted(context.Background(), src, filepath.Join(t.TempDir(), "small.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !counts.Known || counts.Routers != wantRouters || counts.Owners != wantOwners || counts.Operators != wantOps {
+		t.Fatalf("счётчики %+v, источник: роутеров %d, владельцев %d, операторов %d", counts, wantRouters, wantOwners, wantOps)
+	}
+}
+
+func TestBuildCountedUnknownWithoutTablesIsNotAnError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "toy.db")
+	toy, err := sql.Open("sqlite", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := toy.Exec(`CREATE TABLE misc(a INTEGER); INSERT INTO misc VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+	toy.Close()
+	counts, err := BuildCounted(context.Background(), src, filepath.Join(t.TempDir(), "small.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Known {
+		t.Fatalf("счётчики без таблиц users: %+v", counts)
+	}
+}

@@ -79,6 +79,7 @@ func TestInspectRestoreBackupReadsV2SmallArchiveWithStoresAndKey(t *testing.T) {
 		"amnezia-selfhosted.json": "/var/lib/wg-monitor/amnezia-selfhosted.json",
 		"awg3-panels.json":        "/var/lib/wg-monitor/awg3-panels.json",
 		"hidemyname.json":         "/var/lib/wg-monitor/hidemyname.json",
+		"revive.key":              "/etc/wg-monitor/revive.key",
 	}
 	got := extrasByName(b)
 	if len(got) != len(want) {
@@ -105,14 +106,10 @@ func TestInspectRestoreBackupReadsV2SmallArchiveWithStoresAndKey(t *testing.T) {
 		t.Fatalf("предупреждения: %v", b.Warnings)
 	}
 	preview := RenderRestoreBackupPreview(b)
-	for _, wantLine := range []string{"stores: amnezia-premium.json, amnezia-selfhosted.json, awg3-panels.json, hidemyname.json", "revive.key: not in the backup"} {
+	for _, wantLine := range []string{"stores: amnezia-premium.json, amnezia-selfhosted.json, awg3-panels.json, hidemyname.json", "revive.key: yes"} {
 		if !strings.Contains(preview, wantLine) {
 			t.Errorf("в превью нет %q:\n%s", wantLine, preview)
 		}
-	}
-	// Ключ оживления в бэкап не входит; случайно оказавшийся в архиве -- не восстанавливается.
-	if _, err := os.Stat(filepath.Join(b.TempDir, "revive.key")); err == nil {
-		t.Fatal("revive.key извлечён из архива")
 	}
 	// Неизвестный файл из архива никуда не попал.
 	if _, err := os.Stat(filepath.Join(b.TempDir, "some-future-member.bin")); err == nil {
@@ -193,8 +190,9 @@ func TestInspectRestoreBackupReadsV1EncryptedArchive(t *testing.T) {
 	if len(b.Extras) != 0 || b.Manifest["format"] != "encrypted-full-v1" {
 		t.Fatalf("старый архив: %+v", b)
 	}
-	if strings.Contains(RenderRestoreBackupPreview(b), "revive.key: yes") {
-		t.Fatal("превью старого архива обещает ключ")
+	preview := RenderRestoreBackupPreview(b)
+	if strings.Contains(preview, "revive.key: yes") || !strings.Contains(preview, "saved router passwords must be entered again") {
+		t.Fatalf("превью архива без ключа: %s", preview)
 	}
 }
 
@@ -223,8 +221,14 @@ func TestInspectRestoreBackupStoreDestinationsFollowConfig(t *testing.T) {
 
 func TestInspectRestoreBackupRejectsUnsafeDestinations(t *testing.T) {
 	for name, extra := range map[string]string{
-		"хранилище вне каталогов": "hidemyname:\n  secrets_path: /root/.ssh/authorized_keys\n",
-		"хранилище поверх базы":   "hidemyname:\n  secrets_path: /var/lib/wg-monitor/state.db\n",
+		"ключ вне каталогов wg-monitor": "revive:\n  key_file: /etc/cron.d/revive.key\n",
+		"обход через ..":                "revive:\n  key_file: /etc/wg-monitor/../cron.d/x\n",
+		"относительный путь":            "revive:\n  key_file: secrets/revive.key\n",
+		"кавычка в пути":                "revive:\n  key_file: \"/etc/wg-monitor/a'b\"\n",
+		"пробел в пути":                 "revive:\n  key_file: \"/etc/wg-monitor/a b\"\n",
+		"хранилище вне каталогов":       "revive:\n  key_file: /etc/wg-monitor/revive.key\nhidemyname:\n  secrets_path: /root/.ssh/authorized_keys\n",
+		"хранилище поверх базы":         "revive:\n  key_file: /etc/wg-monitor/revive.key\nhidemyname:\n  secrets_path: /var/lib/wg-monitor/state.db\n",
+		"ключ поверх конфига":           "revive:\n  key_file: /etc/wg-monitor/backend.yaml\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			archive := writeEncryptedRestoreArchive(t, "a.tgz.enc", smallArchiveEntries(validRestoreBackendYAML()+extra))
@@ -236,7 +240,7 @@ func TestInspectRestoreBackupRejectsUnsafeDestinations(t *testing.T) {
 	}
 }
 
-func TestInspectRestoreBackupIgnoresReviveKeyInArchive(t *testing.T) {
+func TestInspectRestoreBackupKeyWithoutConfiguredPathIsWarning(t *testing.T) {
 	archive := writeEncryptedRestoreArchive(t, "a.tgz.enc", smallArchiveEntries(validRestoreBackendYAML()))
 	b, cleanup, err := InspectRestoreBackupWithPassphrase(archive, restoreTestPass)
 	if err != nil {
@@ -244,45 +248,45 @@ func TestInspectRestoreBackupIgnoresReviveKeyInArchive(t *testing.T) {
 	}
 	defer cleanup()
 	if _, ok := extrasByName(b)["revive.key"]; ok {
-		t.Fatal("ключ оживления не восстанавливается: его нет в бэкапе по правилу")
+		t.Fatal("ключ без пути в конфиге не должен никуда класться")
 	}
 	if len(b.Extras) != 4 {
 		t.Fatalf("хранилища должны восстановиться: %v", extrasByName(b))
 	}
-	if len(b.Warnings) != 0 {
-		t.Fatalf("предупреждения: %v", b.Warnings)
+	if len(b.Warnings) != 1 || !strings.Contains(b.Warnings[0], "revive.key_file") {
+		t.Fatalf("предупреждение о ключе: %v", b.Warnings)
 	}
 }
 
 func TestInspectRestoreBackupRejectsNestedAndDuplicateExtras(t *testing.T) {
 	base := smallArchiveEntries(restoreYAMLWithReviveKey())
-	nested := append(append([]tarEntryForTest{}, base...), tarEntryForTest{"nested/hidemyname.json", "x"})
+	nested := append(append([]tarEntryForTest{}, base...), tarEntryForTest{"nested/revive.key", "x"})
 	if _, _, err := InspectRestoreBackupWithPassphrase(writeEncryptedRestoreArchive(t, "a.tgz.enc", nested), restoreTestPass); err == nil || !strings.Contains(err.Error(), "unexpected restore member path") {
-		t.Fatalf("вложенное хранилище: %v", err)
+		t.Fatalf("вложенный revive.key: %v", err)
 	}
 	dup := append(append([]tarEntryForTest{}, base...), tarEntryForTest{"awg3-panels.json", "{}"})
 	if _, _, err := InspectRestoreBackupWithPassphrase(writeEncryptedRestoreArchive(t, "a.tgz.enc", dup), restoreTestPass); err == nil || !strings.Contains(err.Error(), "duplicate restore member") {
 		t.Fatalf("повтор хранилища: %v", err)
 	}
-	big := append(append([]tarEntryForTest{}, base[:len(base)-3]...), tarEntryForTest{"hidemyname.json", strings.Repeat("A", maxRestoreExtraBytes+1)})
+	big := append(append([]tarEntryForTest{}, base[:len(base)-2]...), tarEntryForTest{"revive.key", strings.Repeat("A", maxRestoreExtraBytes+1)})
 	if _, _, err := InspectRestoreBackupWithPassphrase(writeEncryptedRestoreArchive(t, "a.tgz.enc", big), restoreTestPass); err == nil || !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("огромное хранилище: %v", err)
+		t.Fatalf("огромный revive.key: %v", err)
 	}
 }
 
-func TestBuildRestoreRemoteScriptInstallsStores(t *testing.T) {
+func TestBuildRestoreRemoteScriptInstallsStoresAndKey(t *testing.T) {
 	extras := []RestoreExtraFile{
 		{Name: "awg3-panels.json", RemotePath: "/var/lib/wg-monitor/awg3-panels.json"},
-		{Name: "hidemyname.json", RemotePath: "/etc/wg-monitor/codes.json"},
+		{Name: "revive.key", RemotePath: "/etc/wg-monitor/revive.key"},
 	}
 	script := buildRestoreRemoteScript("20261007T020000Z", extras...)
 	for _, want := range []string{
 		"test -s '/tmp/wg-monitor-restore/awg3-panels.json'",
-		"test -s '/tmp/wg-monitor-restore/hidemyname.json'",
+		"test -s '/tmp/wg-monitor-restore/revive.key'",
 		"if [ -f '/var/lib/wg-monitor/awg3-panels.json' ]; then cp -p '/var/lib/wg-monitor/awg3-panels.json' '/var/lib/wg-monitor/awg3-panels.json.bak.20261007T020000Z'; fi",
 		"install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/awg3-panels.json' '/var/lib/wg-monitor/awg3-panels.json'",
-		"install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/hidemyname.json' '/etc/wg-monitor/codes.json'",
-		"cp -p '/etc/wg-monitor/codes.json.bak.20261007T020000Z' '/etc/wg-monitor/codes.json'",
+		"install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/revive.key' '/etc/wg-monitor/revive.key'",
+		"cp -p '/etc/wg-monitor/revive.key.bak.20261007T020000Z' '/etc/wg-monitor/revive.key'",
 		"rm -rf /tmp/wg-monitor-restore",
 	} {
 		if !strings.Contains(script, want) {
@@ -291,8 +295,8 @@ func TestBuildRestoreRemoteScriptInstallsStores(t *testing.T) {
 	}
 	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
 	start := strings.LastIndex(script, "systemctl start wg-monitor-backend")
-	preflight := strings.Index(script, "test -s '/tmp/wg-monitor-restore/hidemyname.json'")
-	install := strings.Index(script, "install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/hidemyname.json'")
+	preflight := strings.Index(script, "test -s '/tmp/wg-monitor-restore/revive.key'")
+	install := strings.Index(script, "install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/revive.key'")
 	if preflight > stop {
 		t.Error("проверка наличия файлов должна идти до остановки бэкенда")
 	}
@@ -301,7 +305,7 @@ func TestBuildRestoreRemoteScriptInstallsStores(t *testing.T) {
 	}
 	// Без хранилищ скрипт прежний по смыслу и тоже убирает за собой.
 	plain := buildRestoreRemoteScript("20261007T020000Z")
-	if strings.Contains(plain, "hidemyname.json") || !strings.Contains(plain, "rm -rf /tmp/wg-monitor-restore") {
+	if strings.Contains(plain, "revive.key") || !strings.Contains(plain, "rm -rf /tmp/wg-monitor-restore") {
 		t.Errorf("скрипт без хранилищ:\n%s", plain)
 	}
 }

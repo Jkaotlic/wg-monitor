@@ -29,16 +29,15 @@ type RestoreBackup struct {
 	AgentsPath      string
 	Manifest        map[string]string
 	Agents          []RestoreAgent
-	// Extras -- хранилища из архива (v0.53+): что и куда положить на сервере.
-	// В старых архивах их нет. Ключ оживления в бэкап не входит и сюда не
-	// попадает: пароли роутеров после восстановления вводятся заново.
+	// Extras -- хранилища и ключ оживления из архива (v0.53+): что и куда
+	// положить на сервере. В старых архивах их нет.
 	Extras []RestoreExtraFile
 	// Warnings -- что из архива восстановить не получится и почему.
 	Warnings []string
 }
 
 // RestoreExtraFile -- файл из архива, который восстановление кладёт на
-// сервер рядом с базой: JSON-хранилище.
+// сервер рядом с базой: JSON-хранилище или revive.key.
 type RestoreExtraFile struct {
 	Name       string // имя в архиве
 	LocalPath  string // куда извлечён локально
@@ -77,6 +76,9 @@ type restoreBackendConfig struct {
 	HideMy struct {
 		SecretsPath string `yaml:"secrets_path"`
 	} `yaml:"hidemyname"`
+	Revive struct {
+		KeyFile string `yaml:"key_file"`
+	} `yaml:"revive"`
 }
 
 // Имена файлов архива, которые восстановление кладёт на сервер помимо базы
@@ -87,6 +89,7 @@ const (
 	restoreSelfHostedStore = "amnezia-selfhosted.json"
 	restoreAwg3Store       = "awg3-panels.json"
 	restoreHideMyStore     = "hidemyname.json"
+	restoreReviveKey       = "revive.key"
 
 	maxRestoreExtraBytes = 16 << 20
 )
@@ -154,12 +157,19 @@ func resolveRestoreExtras(backendYAMLPath string, extracted map[string]string) (
 		return nil, nil, err
 	}
 	seenDest := map[string]string{}
-	for _, name := range restoreStoreNames {
+	for _, name := range append(append([]string{}, restoreStoreNames...), restoreReviveKey) {
 		local, ok := extracted[name]
 		if !ok {
 			continue
 		}
 		dest := cfg.storeDestination(name)
+		if name == restoreReviveKey {
+			dest = strings.TrimSpace(cfg.Revive.KeyFile)
+			if dest == "" {
+				warnings = append(warnings, "в архиве есть revive.key, но в backend.yaml не задан revive.key_file -- ключ на сервер не кладётся")
+				continue
+			}
+		}
 		if err := validateRestoreDestination(name, dest); err != nil {
 			return nil, nil, err
 		}
@@ -249,7 +259,7 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 		return nil, nil, fmt.Errorf("gzip backup archive: %w", err)
 	}
 	defer gz.Close()
-	extraNames := restoreStoreNames
+	extraNames := append(append([]string{}, restoreStoreNames...), restoreReviveKey)
 	extracted := map[string]string{}
 
 	tr := tar.NewReader(gz)
@@ -533,11 +543,16 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 		size = info.Size()
 	}
 	var stores []string
+	reviveKey := "no (not in the backup: saved router passwords must be entered again after the restore)"
 	for _, e := range b.Extras {
+		if e.Name == restoreReviveKey {
+			reviveKey = "yes"
+			continue
+		}
 		stores = append(stores, e.Name)
 	}
 	out := fmt.Sprintf(
-		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d\nstores: %s\nrevive.key: not in the backup (saved router passwords must be entered again after the restore)",
+		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d\nstores: %s\nrevive.key: %s",
 		b.ArchivePath,
 		emptyDash(b.Manifest["created_utc"]),
 		emptyDash(b.Manifest["host"]),
@@ -545,6 +560,7 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 		size,
 		len(b.Agents),
 		emptyDash(strings.Join(stores, ", ")),
+		reviveKey,
 	)
 	if b.Manifest["kind"] == "small" {
 		out += "\nkind: small (no event history: after restore the screens stay empty until agents report, up to a minute)"

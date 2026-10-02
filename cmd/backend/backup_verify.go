@@ -166,7 +166,11 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 	}
 	// Сверка со счётчиками из манифеста, записанными в момент бэкапа, а не с
 	// живой базой: за неделю между бэкапом и проверкой роутеры добавляются.
-	want, err := readManifestCounts(filepath.Join(tmpDir, archiveManifest))
+	manifest, err := readManifest(filepath.Join(tmpDir, archiveManifest))
+	if err != nil {
+		return archive, counts, err
+	}
+	want, err := manifestCounts(manifest)
 	if err != nil {
 		return archive, counts, err
 	}
@@ -183,22 +187,19 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		}
 	}
 
-	// Хранилища: всё, что лежит в живой системе, обязано быть в архиве и
-	// разбираться как JSON.
-	for _, st := range cfg.StoreFiles() {
-		inArchive := slices.Contains(members, st.Name)
-		if info, err := os.Stat(resolveLayoutPath(st.Path, opts.LayoutRoot)); err == nil && info.Mode().IsRegular() && !inArchive {
-			return archive, counts, fmt.Errorf("в архиве нет хранилища %s", st.Name)
+	// Хранилища: всё, что манифест перечисляет в `stores=`, обязано быть в
+	// архиве и разбираться как JSON. Сверка с манифестом, а не с живыми
+	// файлами: хранилище, заведённое после бэкапа, проверку не валит.
+	for _, name := range manifestList(manifest, "stores") {
+		if !slices.Contains(members, name) {
+			return archive, counts, fmt.Errorf("в архиве нет хранилища %s, записанного в манифесте", name)
 		}
-		if !inArchive {
-			continue
-		}
-		body, err := os.ReadFile(filepath.Join(tmpDir, st.Name)) // #nosec G304 -- имя из постоянного списка хранилищ
+		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста, проверено ниже
 		if err != nil {
-			return archive, counts, fmt.Errorf("хранилище %s из архива не читается: %w", st.Name, err)
+			return archive, counts, fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
 		}
 		if !json.Valid(body) {
-			return archive, counts, fmt.Errorf("хранилище %s из архива -- не JSON", st.Name)
+			return archive, counts, fmt.Errorf("хранилище %s из архива -- не JSON", name)
 		}
 	}
 
@@ -212,12 +213,11 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 	return archive, counts, nil
 }
 
-// readManifestCounts достаёт из манифеста счётчики роутеров, владельцев и
-// операторов, записанные при сборке архива.
-func readManifestCounts(path string) (verifyCounts, error) {
+// readManifest разбирает manifest.txt (строки key=value) архива.
+func readManifest(path string) (map[string]string, error) {
 	body, err := os.ReadFile(path) // #nosec G304 -- файл во временном каталоге проверки
 	if err != nil {
-		return verifyCounts{}, fmt.Errorf("манифест архива не читается: %w", err)
+		return nil, fmt.Errorf("манифест архива не читается: %w", err)
 	}
 	kv := map[string]string{}
 	for _, line := range strings.Split(string(body), "\n") {
@@ -225,12 +225,29 @@ func readManifestCounts(path string) (verifyCounts, error) {
 			kv[k] = v
 		}
 	}
+	return kv, nil
+}
+
+// manifestList -- значение key через запятую, без пустых.
+func manifestList(manifest map[string]string, key string) []string {
+	var out []string
+	for _, v := range strings.Split(manifest[key], ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// manifestCounts достаёт счётчики роутеров, владельцев и операторов,
+// записанные при сборке архива.
+func manifestCounts(manifest map[string]string) (verifyCounts, error) {
 	var c verifyCounts
 	for _, f := range []struct {
 		key string
 		dst *int
 	}{{"routers", &c.Routers}, {"owners", &c.Owners}, {"operators", &c.Operators}} {
-		n, err := strconv.Atoi(kv[f.key])
+		n, err := strconv.Atoi(manifest[f.key])
 		if err != nil || n < 0 {
 			return verifyCounts{}, errors.New("в манифесте архива нет счётчиков (" + f.key + ") -- архив собран без них, сверить нечем")
 		}

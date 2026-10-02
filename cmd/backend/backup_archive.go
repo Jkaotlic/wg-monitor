@@ -55,15 +55,30 @@ type archiveMember struct {
 func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir string) ([]archiveMember, error) {
 	opts, cfg := e.opts, e.cfg
 	dbCopy := filepath.Join(tmpDir, archiveStateDB)
+	// Счётчики манифеста: малая база считает их в ИСТОЧНИКЕ, в той же
+	// транзакции, что и перенос; полная -- из снимка VACUUM INTO, который
+	// SQLite сам делает одним срезом. Считать собранную нами копию нельзя:
+	// сверка копии с её же числами ничего не доказывала бы.
+	counts := verifyCounts{Routers: -1, Owners: -1, Operators: -1}
 	switch kind {
 	case backup.KindSmall:
-		if err := smalldb.Build(ctx, e.dbPath, dbCopy); err != nil {
+		c, err := smalldb.BuildCounted(ctx, e.dbPath, dbCopy)
+		if err != nil {
 			return nil, fmt.Errorf("small database: %w", err)
+		}
+		if c.Known {
+			counts = verifyCounts{Routers: c.Routers, Owners: c.Owners, Operators: c.Operators}
 		}
 	default:
 		if err := vacuumSQLite(ctx, e.dbPath, dbCopy); err != nil {
 			return nil, err
 		}
+		if c, err := countArchivedDB(ctx, dbCopy); err == nil {
+			counts = c
+		}
+	}
+	if counts.Routers < 0 {
+		slog.Warn("backup manifest counts not written", "kind", string(kind))
 	}
 	members := []archiveMember{
 		{archiveStateDB, dbCopy},
@@ -126,16 +141,6 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 			return nil, err
 		}
 	}
-	// Счётчики на момент бэкапа: по ним `backup verify` сверяет базу из
-	// архива, а не с живой базой, которая за неделю успевает измениться.
-	// Не посчитались -- архив всё равно нужен: манифест остаётся без цифр, а
-	// `backup verify` честно скажет, что сверить нечем.
-	counts, err := countArchivedDB(ctx, dbCopy)
-	if err != nil {
-		slog.Warn("backup manifest counts not written", "kind", string(kind), "err", err.Error())
-		counts = verifyCounts{Routers: -1, Owners: -1, Operators: -1}
-	}
-
 	agents := filepath.Join(tmpDir, archiveAgentsCSV)
 	if err := writeAgentsCSV(dbCopy, agents); err != nil {
 		return nil, err
