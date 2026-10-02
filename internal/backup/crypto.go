@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -91,9 +92,18 @@ func Encrypt(plain, passphrase []byte, params Params) ([]byte, error) {
 	return out, nil
 }
 
+// Decrypt расшифровывает архив целиком в памяти; читает оба формата -- v1
+// (один блок) и v2 (потоковый). Для больших архивов -- NewDecryptReader.
 func Decrypt(blob, passphrase []byte) ([]byte, error) {
 	if len(passphrase) == 0 {
 		return nil, errors.New("passphrase is required")
+	}
+	if bytes.HasPrefix(blob, streamMagic) {
+		r, err := NewDecryptReader(bytes.NewReader(blob), passphrase)
+		if err != nil {
+			return nil, err
+		}
+		return io.ReadAll(r)
 	}
 	if len(blob) < len(encryptedMagic)+4 || string(blob[:len(encryptedMagic)]) != string(encryptedMagic) {
 		return nil, errors.New("not an encrypted wg-monitor backup")
@@ -143,8 +153,9 @@ func Decrypt(blob, passphrase []byte) ([]byte, error) {
 	return plain, nil
 }
 
+// IsEncrypted узнаёт архив любого из двух форматов по первым байтам.
 func IsEncrypted(blob []byte) bool {
-	return len(blob) >= len(encryptedMagic) && string(blob[:len(encryptedMagic)]) == string(encryptedMagic)
+	return bytes.HasPrefix(blob, encryptedMagic) || bytes.HasPrefix(blob, streamMagic)
 }
 
 func validateDecryptParams(p Params) error {
