@@ -30,6 +30,10 @@ type BackendState struct {
 	Domain              string `toml:"domain"`
 	LastDeploy          string `toml:"last_deploy"`
 	LastDeployedVersion string `toml:"last_deployed_version"`
+	// Внешняя цель полного бэкапа: user@host:path и файл ключа SSH на
+	// бэкенде. Пусто -- полный архив остаётся только на диске бэкенда.
+	BackupOffsiteSCP string `toml:"backup_offsite_scp,omitempty"`
+	BackupOffsiteKey string `toml:"backup_offsite_key,omitempty"`
 }
 
 type TelegramState struct {

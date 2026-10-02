@@ -98,6 +98,8 @@ func TestStaticTemplates(t *testing.T) {
 		"wg-monitor-backend.service",
 		"wg-monitor-backup.service",
 		"wg-monitor-backup.timer",
+		"wg-monitor-backup-verify.service",
+		"wg-monitor-backup-verify.timer",
 	} {
 		got, err := ReadStaticTemplate(name)
 		if err != nil {
@@ -236,5 +238,125 @@ func TestRenderBackupServiceSupportsDockerLayout(t *testing.T) {
 		if strings.Contains(svc, bad) {
 			t.Errorf("docker user backup service must omit %q\nfull:\n%s", bad, svc)
 		}
+	}
+}
+
+// v0.53: служба бэкапа делает оба архива одним запуском и чистит старые.
+func TestBackupServiceRunsBothKindsWithRetention(t *testing.T) {
+	static, err := ReadStaticTemplate("wg-monitor-backup.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := RenderBackupService(BackupServiceParams{SendTelegram: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantExec = "ExecStart=/usr/local/bin/wg-monitor-backend backup --config /etc/wg-monitor/backend.yaml " +
+		"--passphrase-file /etc/wg-monitor/backup-passphrase.txt --operator-vault /var/lib/wg-monitor/operator-secrets.tgz.enc " +
+		"--out-dir /var/lib/wg-monitor/backups --kind both " +
+		"--small-keep-daily 7 --small-keep-weekly 4 --full-keep-daily 3 --full-keep-weekly 0 --send-telegram\n"
+	for name, svc := range map[string]string{"static": string(static), "rendered": string(rendered)} {
+		if !strings.Contains(svc, wantExec) {
+			t.Errorf("%s: ExecStart не тот, ждали\n%s\nполучили:\n%s", name, wantExec, svc)
+		}
+		if strings.Count(svc, "ExecStart=") != 1 {
+			t.Errorf("%s: ExecStart должен быть один", name)
+		}
+		if strings.Contains(svc, "--offsite") {
+			t.Errorf("%s: внешняя цель не настроена, а флаг есть", name)
+		}
+	}
+}
+
+func TestRenderBackupServiceOffsiteTarget(t *testing.T) {
+	got, err := RenderBackupService(BackupServiceParams{
+		SendTelegram: true,
+		OffsiteSCP:   "backup@198.51.100.20:/srv/wg-monitor/",
+		OffsiteKey:   "/etc/wg-monitor/offsite_ed25519",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := " --full-keep-weekly 0 --offsite-scp backup@198.51.100.20:/srv/wg-monitor/ --offsite-key /etc/wg-monitor/offsite_ed25519 --send-telegram\n"; !strings.Contains(string(got), want) {
+		t.Fatalf("нет флагов внешней цели %q:\n%s", want, got)
+	}
+	for name, p := range map[string]BackupServiceParams{
+		"цель без ключа":    {OffsiteSCP: "backup@198.51.100.20:/srv/"},
+		"ключ без цели":     {OffsiteKey: "/etc/wg-monitor/k"},
+		"пробел в цели":     {OffsiteSCP: "backup@198.51.100.20:/srv/a b", OffsiteKey: "/k"},
+		"перевод строки":    {OffsiteSCP: "backup@198.51.100.20:/srv/\nExecStartPre=/bin/x", OffsiteKey: "/k"},
+		"не user@host:path": {OffsiteSCP: "198.51.100.20", OffsiteKey: "/k"},
+		"ключ с пробелом":   {OffsiteSCP: "backup@198.51.100.20:/srv/", OffsiteKey: "/etc/my key"},
+		"цель с дефиса":     {OffsiteSCP: "-oProxyCommand=x@y:/z", OffsiteKey: "/k"},
+	} {
+		if _, err := RenderBackupService(p); err == nil {
+			t.Errorf("%s: принято", name)
+		}
+	}
+}
+
+func TestBackupVerifyUnits(t *testing.T) {
+	timer, err := ReadStaticTemplate("wg-monitor-backup-verify.timer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"OnCalendar=Sun *-*-* 06:30:00 Europe/Moscow", "Persistent=true", "WantedBy=timers.target"} {
+		if !strings.Contains(string(timer), want) {
+			t.Errorf("в таймере проверки нет %q:\n%s", want, timer)
+		}
+	}
+	static, err := ReadStaticTemplate("wg-monitor-backup-verify.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := RenderBackupVerifyService(BackupServiceParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantExec = "ExecStart=/usr/local/bin/wg-monitor-backend backup verify --config /etc/wg-monitor/backend.yaml " +
+		"--passphrase-file /etc/wg-monitor/backup-passphrase.txt --out-dir /var/lib/wg-monitor/backups\n"
+	for name, svc := range map[string]string{"static": string(static), "rendered": string(rendered)} {
+		for _, want := range []string{wantExec, "Type=oneshot", "User=wgmonitor", "ReadWritePaths=/var/lib/wg-monitor", "ProtectSystem=strict"} {
+			if !strings.Contains(svc, want) {
+				t.Errorf("%s: в службе проверки нет %q:\n%s", name, want, svc)
+			}
+		}
+		if strings.Contains(svc, "--send-telegram") || strings.Contains(svc, "--operator-vault") {
+			t.Errorf("%s: лишние флаги в службе проверки:\n%s", name, svc)
+		}
+	}
+	docker, err := RenderBackupVerifyService(BackupServiceParams{
+		BinaryPath:     "/home/user/wg-monitor/bin/wg-monitor-backend",
+		ConfigPath:     "/home/user/wg-monitor/config/backend.yaml",
+		PassphrasePath: "/home/user/wg-monitor/secrets/backup-passphrase.txt",
+		OutDir:         "/home/user/wg-monitor/data/backups",
+		LayoutRoot:     "/home/user/wg-monitor",
+		OmitUserGroup:  true,
+		OmitHardening:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "ExecStart=/home/user/wg-monitor/bin/wg-monitor-backend backup verify --config /home/user/wg-monitor/config/backend.yaml " +
+		"--passphrase-file /home/user/wg-monitor/secrets/backup-passphrase.txt --out-dir /home/user/wg-monitor/data/backups --layout-root /home/user/wg-monitor\n"; !strings.Contains(string(docker), want) {
+		t.Fatalf("докер-раскладка:\n%s", docker)
+	}
+	for _, bad := range []string{"User=", "ProtectSystem="} {
+		if strings.Contains(string(docker), bad) {
+			t.Errorf("пользовательская служба не должна содержать %q", bad)
+		}
+	}
+}
+
+func TestBackupLayoutCarriesOffsiteFromState(t *testing.T) {
+	st := &State{}
+	st.Backend.BackupOffsiteSCP = "backup@198.51.100.20:/srv/wg-monitor/"
+	st.Backend.BackupOffsiteKey = "/etc/wg-monitor/offsite_ed25519"
+	layout := backupLayoutForState(st)
+	if layout.OffsiteSCP != st.Backend.BackupOffsiteSCP || layout.OffsiteKey != st.Backend.BackupOffsiteKey {
+		t.Fatalf("раскладка без внешней цели: %+v", layout)
+	}
+	if l := backupLayoutForState(&State{}); l.OffsiteSCP != "" || l.OffsiteKey != "" {
+		t.Fatalf("внешняя цель из ниоткуда: %+v", l)
 	}
 }

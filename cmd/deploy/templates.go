@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"regexp"
+	"strings"
 	"text/template"
 )
 
@@ -32,16 +34,20 @@ type CaddyParams struct {
 }
 
 type BackupServiceParams struct {
-	User            string
-	Group           string
-	BinaryPath      string
-	ConfigPath      string
-	PassphrasePath  string
-	OperatorVault   string
-	OutDir          string
-	LayoutRoot      string
-	ReadWritePath   string
-	SendTelegram    bool
+	User           string
+	Group          string
+	BinaryPath     string
+	ConfigPath     string
+	PassphrasePath string
+	OperatorVault  string
+	OutDir         string
+	LayoutRoot     string
+	ReadWritePath  string
+	SendTelegram   bool
+	// OffsiteSCP -- куда копировать полный архив (user@host:path); пусто --
+	// внешняя цель не настроена. OffsiteKey -- файл ключа SSH на бэкенде.
+	OffsiteSCP      string
+	OffsiteKey      string
 	ProtectHomeMode string
 	OmitUserGroup   bool
 	OmitHardening   bool
@@ -75,7 +81,32 @@ func RenderCaddyfile(p CaddyParams) ([]byte, error) {
 	return renderTemplate("Caddyfile.tmpl", p)
 }
 
+// Значения уходят в строку ExecStart без кавычек: пробел или перевод строки
+// в них стал бы новым аргументом или новой директивой юнита.
+var (
+	backupOffsiteTargetRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9._\[\]:-]+:[A-Za-z0-9._~/+-]+$`)
+	backupOffsiteKeyRe    = regexp.MustCompile(`^/[A-Za-z0-9._/+-]+$`)
+)
+
 func RenderBackupService(p BackupServiceParams) ([]byte, error) {
+	p.OffsiteSCP, p.OffsiteKey = strings.TrimSpace(p.OffsiteSCP), strings.TrimSpace(p.OffsiteKey)
+	if p.OffsiteSCP != "" || p.OffsiteKey != "" {
+		if !backupOffsiteTargetRe.MatchString(p.OffsiteSCP) {
+			return nil, fmt.Errorf("backup offsite target must look like user@host:/path without spaces, got %q", p.OffsiteSCP)
+		}
+		if !backupOffsiteKeyRe.MatchString(p.OffsiteKey) {
+			return nil, fmt.Errorf("backup offsite key must be an absolute path without spaces, got %q", p.OffsiteKey)
+		}
+	}
+	return renderTemplate("wg-monitor-backup.service.tmpl", backupServiceDefaults(p))
+}
+
+// RenderBackupVerifyService -- служба еженедельной проверки восстановления.
+func RenderBackupVerifyService(p BackupServiceParams) ([]byte, error) {
+	return renderTemplate("wg-monitor-backup-verify.service.tmpl", backupServiceDefaults(p))
+}
+
+func backupServiceDefaults(p BackupServiceParams) BackupServiceParams {
 	if p.User == "" {
 		p.User = "wgmonitor"
 	}
@@ -103,7 +134,7 @@ func RenderBackupService(p BackupServiceParams) ([]byte, error) {
 	if p.ProtectHomeMode == "" {
 		p.ProtectHomeMode = "true"
 	}
-	return renderTemplate("wg-monitor-backup.service.tmpl", p)
+	return p
 }
 
 // ReadStaticTemplate returns an embedded file verbatim (no template processing).

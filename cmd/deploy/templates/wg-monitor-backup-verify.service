@@ -1,0 +1,29 @@
+[Unit]
+Description=wg-monitor weekly backup restore check
+Documentation=https://github.com/Jkaotlic/wg-monitor
+
+[Service]
+Type=oneshot
+User=wgmonitor
+Group=wgmonitor
+# Разворачивает последний малый архив во временный каталог и сверяет с живой
+# базой: целостность, число роутеров, владельцев и операторов, хранилища,
+# ключ оживления. Итог -- в секции verify файла backup-status.json.
+ExecStart=/usr/local/bin/wg-monitor-backend backup verify --config /etc/wg-monitor/backend.yaml --passphrase-file /etc/wg-monitor/backup-passphrase.txt --out-dir /var/lib/wg-monitor/backups
+
+# Hardening mirrors the backend service; the check needs no network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wg-monitor
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true

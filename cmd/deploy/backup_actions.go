@@ -26,12 +26,23 @@ type backupRemoteLayout struct {
 	ReadWritePath   string
 	ProtectHomeMode string
 	UnitDir         string
+	OffsiteSCP      string
+	OffsiteKey      string
 	UserSystemd     bool
 	OmitUserGroup   bool
 	OmitHardening   bool
 }
 
 func backupLayoutForState(state *State) backupRemoteLayout {
+	layout := backupPathsForState(state)
+	if state != nil {
+		layout.OffsiteSCP = strings.TrimSpace(state.Backend.BackupOffsiteSCP)
+		layout.OffsiteKey = strings.TrimSpace(state.Backend.BackupOffsiteKey)
+	}
+	return layout
+}
+
+func backupPathsForState(state *State) backupRemoteLayout {
 	user := "root"
 	if state != nil {
 		user = userOrDefault(state.Backend.User, "root")
@@ -86,6 +97,7 @@ func actionBackupStatus(state *State, secrets *SecretStore) error {
 		{"timer enabled", backupSystemctl(layout, "is-enabled wg-monitor-backup.timer 2>/dev/null || true")},
 		{"timer active", backupSystemctl(layout, "is-active wg-monitor-backup.timer 2>/dev/null || true")},
 		{"service last", backupSystemctl(layout, "show wg-monitor-backup.service -p Result -p ExecMainStatus --value 2>/dev/null || true")},
+		{"verify timer", backupSystemctl(layout, "is-active wg-monitor-backup-verify.timer 2>/dev/null || true")},
 		{"passphrase", "test -s " + shellSingleQuote(layout.PassphrasePath) + " && echo present || echo missing"},
 		{"operator vault", "test -s " + shellSingleQuote(layout.OperatorVault) + " && echo present || echo missing"},
 		{"latest small backup", "ls -1t " + shellSingleQuote(layout.OutDir) + "/wg-monitor-small-backup-*.tgz.enc 2>/dev/null | head -1 || true"},
@@ -196,7 +208,7 @@ func installBackupOnBackend(state *State, secrets *SecretStore, s *SSH, layout b
 			return err
 		}
 	}
-	service, err := RenderBackupService(BackupServiceParams{
+	params := BackupServiceParams{
 		User:            layout.User,
 		Group:           layout.Group,
 		BinaryPath:      layout.BinaryPath,
@@ -207,30 +219,52 @@ func installBackupOnBackend(state *State, secrets *SecretStore, s *SSH, layout b
 		LayoutRoot:      layout.LayoutRoot,
 		ReadWritePath:   layout.ReadWritePath,
 		SendTelegram:    true,
+		OffsiteSCP:      layout.OffsiteSCP,
+		OffsiteKey:      layout.OffsiteKey,
 		ProtectHomeMode: layout.ProtectHomeMode,
 		OmitUserGroup:   layout.OmitUserGroup,
 		OmitHardening:   layout.OmitHardening,
-	})
+	}
+	service, err := RenderBackupService(params)
 	if err != nil {
 		return err
 	}
-	if err := stepUploadFile(s, path.Join(layout.UnitDir, "wg-monitor-backup.service"), service, "644"); err != nil {
-		return err
-	}
-	timer, err := ReadStaticTemplate("wg-monitor-backup.timer")
+	verifyService, err := RenderBackupVerifyService(params)
 	if err != nil {
 		return err
 	}
-	if err := stepUploadFile(s, path.Join(layout.UnitDir, "wg-monitor-backup.timer"), timer, "644"); err != nil {
-		return err
+	units := []struct {
+		name string
+		body []byte
+	}{
+		{"wg-monitor-backup.service", service},
+		{"wg-monitor-backup-verify.service", verifyService},
+	}
+	for _, name := range []string{"wg-monitor-backup.timer", "wg-monitor-backup-verify.timer"} {
+		timer, err := ReadStaticTemplate(name)
+		if err != nil {
+			return err
+		}
+		units = append(units, struct {
+			name string
+			body []byte
+		}{name, timer})
+	}
+	for _, u := range units {
+		if err := stepUploadFile(s, path.Join(layout.UnitDir, u.name), u.body, "644"); err != nil {
+			return err
+		}
 	}
 	if layout.UserSystemd {
 		_, _ = s.MustRun("loginctl enable-linger " + shellSingleQuote(layout.User) + " 2>/dev/null || true")
 	}
-	if _, err := s.MustRun(backupSystemctl(layout, "daemon-reload") + " && " + backupSystemctl(layout, "enable --now wg-monitor-backup.timer")); err != nil {
+	if _, err := s.MustRun(backupSystemctl(layout, "daemon-reload") + " && " + backupSystemctl(layout, "enable --now wg-monitor-backup.timer wg-monitor-backup-verify.timer")); err != nil {
 		return err
 	}
-	PrintOK("encrypted nightly backup enabled")
+	if layout.OffsiteSCP == "" {
+		PrintInfo("off-site copy of the full backup is not configured (backup_offsite_scp / backup_offsite_key in wizard.toml)")
+	}
+	PrintOK("encrypted nightly backup and weekly restore check enabled")
 	_ = state
 	return nil
 }

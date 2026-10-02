@@ -1,5 +1,5 @@
 [Unit]
-Description=wg-monitor encrypted Telegram backup
+Description=wg-monitor encrypted nightly backup (small to Telegram, full to disk)
 Documentation=https://github.com/Jkaotlic/wg-monitor
 
 [Service]
@@ -8,7 +8,11 @@ Type=oneshot
 User={{.User}}
 Group={{.Group}}
 {{end}}
-ExecStart={{.BinaryPath}} backup --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --operator-vault {{.OperatorVault}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}}{{if .SendTelegram}} --send-telegram{{end}}
+# Один запуск делает оба архива: малый (без истории событий) уходит админу в
+# Telegram, полный остаётся на диске и копируется на внешний сервер, если тот
+# настроен. Провал одного вида не отменяет другой; код выхода не ноль при
+# любом провале. Итог пишется в backup-status.json рядом с базой.
+ExecStart={{.BinaryPath}} backup --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --operator-vault {{.OperatorVault}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}} --kind both --small-keep-daily 7 --small-keep-weekly 4 --full-keep-daily 3 --full-keep-weekly 0{{if .OffsiteSCP}} --offsite-scp {{.OffsiteSCP}} --offsite-key {{.OffsiteKey}}{{end}}{{if .SendTelegram}} --send-telegram{{end}}
 
 {{if not .OmitHardening}}
 # Hardening mirrors the backend service, with network enabled for Telegram API.
