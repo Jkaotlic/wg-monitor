@@ -194,7 +194,7 @@ func main() {
 			default:
 				if strings.HasPrefix(args[i], "--") {
 					fmt.Fprintf(os.Stderr, "restore-backup: unknown option %s\n", args[i])
-					fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]")
+					fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy restore-backup <archive.tgz|archive.tgz.enc> [--dry-run|--to-current-vps|--to-new-vps]")
 					os.Exit(2)
 				}
 				if opts.ArchivePath == "" {
@@ -455,7 +455,7 @@ Commands:
   adopt-backend                bind this PC to an already running current VPS
   migrate-backend [--agent <nick>]
                                re-enroll agents on the new VPS through AWG Manager
-  restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
+  restore-backup <archive.tgz|archive.tgz.enc> [--dry-run|--to-current-vps|--to-new-vps]
                                inspect or restore a Telegram recovery bundle
   backup status|install|run|push-secrets|password|restore <archive>
                                manage encrypted nightly full backups

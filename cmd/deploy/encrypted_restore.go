@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -14,17 +13,16 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
 )
 
+// ImportEncryptedFullBackup читает шифрованный архив (v1 или потоковый v2;
+// полный или малый) и импортирует из него секреты оператора. Архив
+// расшифровывается потоком во временный файл, а не в память.
 func ImportEncryptedFullBackup(path, passphrase string, force bool) error {
-	body, err := os.ReadFile(path)
+	encrypted, err := isEncryptedBackupFile(path)
 	if err != nil {
 		return fmt.Errorf("read encrypted backup: %w", err)
 	}
-	if !backup.IsEncrypted(body) {
+	if !encrypted {
 		return fmt.Errorf("%s is not an encrypted wg-monitor backup", path)
-	}
-	plainTGZ, err := backup.Decrypt(body, []byte(strings.TrimSpace(passphrase)))
-	if err != nil {
-		return err
 	}
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-full-restore.")
 	if err != nil {
@@ -32,7 +30,7 @@ func ImportEncryptedFullBackup(path, passphrase string, force bool) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	legacyPath := filepath.Join(tmpDir, "recovery.tgz")
-	if err := os.WriteFile(legacyPath, plainTGZ, 0o600); err != nil {
+	if err := decryptBackupToFile(path, legacyPath, []byte(strings.TrimSpace(passphrase))); err != nil {
 		return err
 	}
 	recovery, cleanup, err := InspectRestoreBackupForImport(legacyPath)
@@ -42,6 +40,11 @@ func ImportEncryptedFullBackup(path, passphrase string, force bool) error {
 	defer cleanup()
 	fmt.Println(RenderRestoreBackupPreview(recovery))
 
+	plainTGZ, err := os.Open(legacyPath)
+	if err != nil {
+		return err
+	}
+	defer plainTGZ.Close()
 	vault, err := extractTarMember(plainTGZ, "operator-secrets.tgz.enc")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -61,8 +64,32 @@ func ImportEncryptedFullBackup(path, passphrase string, force bool) error {
 	return ImportSecrets(operatorPath, DefaultStatePath(), force)
 }
 
-func extractTarMember(gzBody []byte, name string) ([]byte, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(gzBody))
+// decryptBackupToFile расшифровывает архив src в файл dst (0600) потоком.
+func decryptBackupToFile(src, dst string, passphrase []byte) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("read encrypted backup: %w", err)
+	}
+	defer in.Close()
+	dec, err := backup.NewDecryptReader(in, passphrase)
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	_, err = io.Copy(out, dec)
+	return err
+}
+
+func extractTarMember(gzBody io.Reader, name string) ([]byte, error) {
+	gr, err := gzip.NewReader(gzBody)
 	if err != nil {
 		return nil, err
 	}

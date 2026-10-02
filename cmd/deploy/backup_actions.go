@@ -88,7 +88,9 @@ func actionBackupStatus(state *State, secrets *SecretStore) error {
 		{"service last", backupSystemctl(layout, "show wg-monitor-backup.service -p Result -p ExecMainStatus --value 2>/dev/null || true")},
 		{"passphrase", "test -s " + shellSingleQuote(layout.PassphrasePath) + " && echo present || echo missing"},
 		{"operator vault", "test -s " + shellSingleQuote(layout.OperatorVault) + " && echo present || echo missing"},
-		{"latest backup", "ls -1t " + shellSingleQuote(layout.OutDir) + "/wg-monitor-full-backup-*.tgz.enc 2>/dev/null | head -1 || true"},
+		{"latest small backup", "ls -1t " + shellSingleQuote(layout.OutDir) + "/wg-monitor-small-backup-*.tgz.enc 2>/dev/null | head -1 || true"},
+		{"latest full backup", "ls -1t " + shellSingleQuote(layout.OutDir) + "/wg-monitor-full-backup-*.tgz.enc 2>/dev/null | head -1 || true"},
+		{"backup status", "cat " + shellSingleQuote(path.Join(path.Dir(layout.OutDir), "backup-status.json")) + " 2>/dev/null || echo 'no backup-status.json yet'"},
 	} {
 		out, _, _, _ := s.Run(probe.cmd)
 		PrintInfo(probe.label + ": " + strings.TrimSpace(out))
