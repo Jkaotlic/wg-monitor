@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -110,20 +111,73 @@ func TestBackupVerifyFailsWithoutArchive(t *testing.T) {
 	f.verifyFails(t, "малого архива ещё нет")
 }
 
-func TestBackupVerifyDetectsCountMismatch(t *testing.T) {
+// Проверка сверяет базу из архива со счётчиками, записанными в манифест в
+// момент бэкапа, а не с живой базой: роутер, добавленный между ночным
+// бэкапом и недельной проверкой, проверку не валит.
+func TestBackupVerifyIgnoresChangesInLiveDBAfterBackup(t *testing.T) {
 	f := newBackupFixture(t)
 	f.backupSmall(t)
 	f.exec(t, `INSERT INTO users (nickname, token_hash, expected_exit_ip, awg_iface, telegram_user_id) VALUES ('delta', 'h4', '198.51.100.4', 'nwg0', 1003)`)
-	f.verifyFails(t, "в архиве роутеров 3, в живой базе 4")
+	f.exec(t, `INSERT INTO router_operators (user_id, telegram_user_id, granted_by) VALUES (3, 2003, 1002)`)
+	var out bytes.Buffer
+	if err := runBackupVerify(context.Background(), f.verifyOpts(&out)); err != nil {
+		t.Fatalf("роутер, добавленный после бэкапа, провалил проверку: %v", err)
+	}
+	if got := f.status(t).Verify; !got.OK || got.Routers != 3 {
+		t.Fatalf("состояние проверки: %+v", got)
+	}
+	f.exec(t, `DELETE FROM users WHERE nickname IN ('alpha', 'delta')`)
+	if err := runBackupVerify(context.Background(), f.verifyOpts(&out)); err != nil {
+		t.Fatalf("удалённый после бэкапа роутер провалил проверку: %v", err)
+	}
+}
+
+// rewriteLatestSmall разворачивает свежий малый архив, даёт mutate испортить
+// файлы и пишет результат новым, ещё более свежим малым архивом.
+func (f *backupFixture) rewriteLatestSmall(t *testing.T, mutate func(dir string)) {
+	t.Helper()
+	dir := t.TempDir()
+	names, err := extractEncryptedArchive(context.Background(), filepath.Join(f.outDir, fixtureSmallName), []byte(fixturePassphrase), dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(dir)
+	var members []archiveMember
+	for _, n := range names {
+		members = append(members, archiveMember{n, filepath.Join(dir, n)})
+	}
+	dst := filepath.Join(f.outDir, "wg-monitor-small-backup-20261008T020000Z.tgz.enc")
+	if err := writeEncryptedArchive(context.Background(), dst, members, []byte(fixturePassphrase), backup.TestParams()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBackupVerifyDetectsArchiveDifferingFromManifestCounts(t *testing.T) {
+	f := newBackupFixture(t)
+	f.backupSmall(t)
+	f.rewriteLatestSmall(t, func(dir string) {
+		d, err := sql.Open("sqlite", filepath.Join(dir, "state.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer d.Close()
+		if _, err := d.Exec(`DELETE FROM router_operators WHERE telegram_user_id = 2002`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.verifyFails(t, "операторов 1, в манифесте архива 2")
 	if got := f.status(t).Verify.Routers; got != 3 {
 		t.Fatalf("routers в состоянии: %d", got)
 	}
-	f.exec(t, `DELETE FROM users WHERE nickname = 'delta'`)
-	f.exec(t, `INSERT INTO router_operators (user_id, telegram_user_id, granted_by) VALUES (3, 2003, 1002)`)
-	f.verifyFails(t, "в архиве операторов 2, в живой базе 3")
-	f.exec(t, `DELETE FROM router_operators WHERE telegram_user_id = 2003`)
-	f.exec(t, `UPDATE users SET telegram_user_id = 1009 WHERE nickname = 'beta'`)
-	f.verifyFails(t, "в архиве владельцев 2, в живой базе 3")
+}
+
+func TestBackupVerifyFailsWhenManifestHasNoCounts(t *testing.T) {
+	f := newBackupFixture(t)
+	f.backupSmall(t)
+	f.rewriteLatestSmall(t, func(dir string) {
+		mustWrite(t, filepath.Join(dir, "manifest.txt"), "kind=small\n")
+	})
+	f.verifyFails(t, "в манифесте архива нет счётчиков")
 }
 
 func TestBackupVerifyFailsOnWrongPassphraseAndTruncatedArchive(t *testing.T) {
@@ -173,7 +227,31 @@ func TestBackupVerifyChecksStores(t *testing.T) {
 	f2.verifyFails(t, "в архиве нет хранилища hidemyname.json")
 }
 
-func TestBackupVerifyChecksReviveKey(t *testing.T) {
+// По правилу ключа оживления в бэкапе нет: проверка его не требует, а в
+// выводе прямо сказано, что пароли роутеров после восстановления вводятся
+// заново.
+func TestBackupVerifyDoesNotRequireReviveKey(t *testing.T) {
+	setIncludeReviveKey(t, false)
+	f := newBackupFixture(t) // пароль роутера в базе есть, ключ на диске есть
+	f.backupSmall(t)
+	var out bytes.Buffer
+	if err := runBackupVerify(context.Background(), f.verifyOpts(&out)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ключа оживления в бэкапе нет", "пароли роутеров", "вводятся заново"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("в выводе проверки нет %q:\n%s", want, out.String())
+		}
+	}
+	// И без ключа на диске тоже.
+	f.writeConfig(t, false)
+	if err := runBackupVerify(context.Background(), f.verifyOpts(&bytes.Buffer{})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBackupVerifyChecksReviveKeyWhenIncluded(t *testing.T) {
+	setIncludeReviveKey(t, true)
 	t.Run("ключ не тот, которым сохранены пароли", func(t *testing.T) {
 		f := newBackupFixture(t)
 		mustWrite(t, f.keyPath, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, 32))+"\n")
@@ -252,7 +330,7 @@ func TestBackupExtractCommand(t *testing.T) {
 	if err := runBackupCommand(args); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"state.db", "backend.yaml", "revive.key", "awg3-panels.json", "manifest.txt"} {
+	for _, name := range []string{"state.db", "backend.yaml", "awg3-panels.json", "manifest.txt"} {
 		info, err := os.Stat(filepath.Join(to, name))
 		if err != nil {
 			t.Fatalf("%s не развёрнут: %v", name, err)

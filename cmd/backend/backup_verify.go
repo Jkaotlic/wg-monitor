@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -116,8 +117,11 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 		slog.Error("backup verify failed", "archive", archive, "err", verr.Error())
 		return errors.Join(fmt.Errorf("backup verify: %w", verr), serr)
 	}
-	fmt.Fprintf(opts.stdout, "архив %s восстанавливается: роутеров %d, владельцев %d, операторов %d -- как в живой базе\n",
+	fmt.Fprintf(opts.stdout, "архив %s восстанавливается: роутеров %d, владельцев %d, операторов %d -- как записано в манифесте при бэкапе\n",
 		archive, counts.Routers, counts.Owners, counts.Operators)
+	if !includeReviveKey {
+		fmt.Fprintln(opts.stdout, reviveKeyNotInBackupNote)
+	}
 	fmt.Fprintln(opts.stdout, "в малом архиве нет истории событий: после восстановления экран пуст до первого отчёта агентов (до минуты)")
 	return serr
 }
@@ -160,25 +164,22 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 	if err != nil {
 		return archive, counts, fmt.Errorf("база из архива не читается: %w", err)
 	}
-	live, err := openSQLiteForRead(ctx, dbPath)
+	// Сверка со счётчиками из манифеста, записанными в момент бэкапа, а не с
+	// живой базой: за неделю между бэкапом и проверкой роутеры добавляются.
+	want, err := readManifestCounts(filepath.Join(tmpDir, archiveManifest))
 	if err != nil {
-		return archive, counts, fmt.Errorf("живая база не открывается: %w", err)
-	}
-	defer live.Close()
-	liveCounts, err := readVerifyCounts(ctx, live)
-	if err != nil {
-		return archive, counts, fmt.Errorf("живая база не читается: %w", err)
+		return archive, counts, err
 	}
 	for _, c := range []struct {
 		what       string
 		got, wants int
 	}{
-		{"роутеров", counts.Routers, liveCounts.Routers},
-		{"владельцев", counts.Owners, liveCounts.Owners},
-		{"операторов", counts.Operators, liveCounts.Operators},
+		{"роутеров", counts.Routers, want.Routers},
+		{"владельцев", counts.Owners, want.Owners},
+		{"операторов", counts.Operators, want.Operators},
 	} {
 		if c.got != c.wants {
-			return archive, counts, fmt.Errorf("в архиве %s %d, в живой базе %d", c.what, c.got, c.wants)
+			return archive, counts, fmt.Errorf("в архиве %s %d, в манифесте архива %d", c.what, c.got, c.wants)
 		}
 	}
 
@@ -201,10 +202,41 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		}
 	}
 
-	if err := verifyReviveKey(ctx, restored, tmpDir, members, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot)); err != nil {
-		return archive, counts, err
+	// Ключ оживления в архиве по правилу не лежит (includeReviveKey), и
+	// проверять нечего. Если оператор включит его в архив -- проверяется.
+	if includeReviveKey {
+		if err := verifyReviveKey(ctx, restored, tmpDir, members, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot)); err != nil {
+			return archive, counts, err
+		}
 	}
 	return archive, counts, nil
+}
+
+// readManifestCounts достаёт из манифеста счётчики роутеров, владельцев и
+// операторов, записанные при сборке архива.
+func readManifestCounts(path string) (verifyCounts, error) {
+	body, err := os.ReadFile(path) // #nosec G304 -- файл во временном каталоге проверки
+	if err != nil {
+		return verifyCounts{}, fmt.Errorf("манифест архива не читается: %w", err)
+	}
+	kv := map[string]string{}
+	for _, line := range strings.Split(string(body), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			kv[k] = v
+		}
+	}
+	var c verifyCounts
+	for _, f := range []struct {
+		key string
+		dst *int
+	}{{"routers", &c.Routers}, {"owners", &c.Owners}, {"operators", &c.Operators}} {
+		n, err := strconv.Atoi(kv[f.key])
+		if err != nil || n < 0 {
+			return verifyCounts{}, errors.New("в манифесте архива нет счётчиков (" + f.key + ") -- архив собран без них, сверить нечем")
+		}
+		*f.dst = n
+	}
+	return c, nil
 }
 
 // verifyReviveKey: ключ оживления из архива читается и расшифровывает хотя

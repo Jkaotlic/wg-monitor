@@ -200,7 +200,16 @@ const (
 	fixtureFullName  = "wg-monitor-full-backup-20261007T020000Z.tgz.enc"
 )
 
-func TestBackupBothWritesSmallAndFullWithStoresAndReviveKey(t *testing.T) {
+// setIncludeReviveKey переключает единственный выключатель «ключ оживления
+// едет в архив» на время теста.
+func setIncludeReviveKey(t *testing.T, v bool) {
+	t.Helper()
+	old := includeReviveKey
+	includeReviveKey = v
+	t.Cleanup(func() { includeReviveKey = old })
+}
+
+func TestBackupBothWritesSmallAndFullWithStores(t *testing.T) {
 	f := newBackupFixture(t)
 	if err := runBackup(context.Background(), f.opts("both")); err != nil {
 		t.Fatal(err)
@@ -210,7 +219,10 @@ func TestBackupBothWritesSmallAndFullWithStoresAndReviveKey(t *testing.T) {
 	}
 	wantMembers := []string{
 		"state.db", "backend.yaml", "bot-token.txt", "wizard-token.txt", "dashboard-token.txt", "agents.csv", "manifest.txt",
-		"amnezia-premium.json", "amnezia-selfhosted.json", "awg3-panels.json", "hidemyname.json", "revive.key",
+		"amnezia-premium.json", "amnezia-selfhosted.json", "awg3-panels.json", "hidemyname.json",
+	}
+	if includeReviveKey {
+		wantMembers = append(wantMembers, "revive.key")
 	}
 	for kind, name := range map[string]string{"small": fixtureSmallName, "full": fixtureFullName} {
 		plain := f.decryptArchive(t, name)
@@ -228,14 +240,11 @@ func TestBackupBothWritesSmallAndFullWithStoresAndReviveKey(t *testing.T) {
 				t.Errorf("%s: права %s = %o", kind, n, mode)
 			}
 		}
-		wantKey, _ := os.ReadFile(f.keyPath)
-		if !bytes.Equal(tarMember(t, plain, "revive.key"), wantKey) {
-			t.Errorf("%s: revive.key в архиве не тот", kind)
-		}
 		manifest := string(tarMember(t, plain, "manifest.txt"))
 		for _, want := range []string{
 			"name=wg-monitor-" + kind + "-backup\n", "kind=" + kind + "\n", "format=encrypted-" + kind + "-v2\n",
-			"created_utc=20261007T020000Z\n", "revive_key=yes\n",
+			"created_utc=20261007T020000Z\n", "revive_key=no\n",
+			"routers=3\n", "owners=2\n", "operators=2\n",
 			"stores=amnezia-premium.json,amnezia-selfhosted.json,awg3-panels.json,hidemyname.json\n",
 		} {
 			if !strings.Contains(manifest, want) {
@@ -272,6 +281,54 @@ func TestBackupBothWritesSmallAndFullWithStoresAndReviveKey(t *testing.T) {
 	}
 	if smallInfo.Mode().Perm() != 0o600 || fullInfo.Mode().Perm() != 0o600 {
 		t.Errorf("права архивов: %o %o", smallInfo.Mode().Perm(), fullInfo.Mode().Perm())
+	}
+}
+
+// Ключ оживления живёт отдельно от базы: бэкап с базой и конфигом не должен
+// нести его ни отдельным файлом, ни внутри другого. Иначе утёкший бэкап
+// расшифровывал бы пароли роутеров из router_credentials. Выключатель --
+// includeReviveKey: тест проверяет оба положения.
+func TestBackupReviveKeyFollowsSwitch(t *testing.T) {
+	for _, include := range []bool{false, true} {
+		t.Run(fmt.Sprintf("includeReviveKey=%v", include), func(t *testing.T) {
+			setIncludeReviveKey(t, include)
+			f := newBackupFixture(t)
+			if err := runBackup(context.Background(), f.opts("both")); err != nil {
+				t.Fatal(err)
+			}
+			keyBody, err := os.ReadFile(f.keyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keyText := strings.TrimSpace(string(keyBody))
+			for kind, name := range map[string]string{"small": fixtureSmallName, "full": fixtureFullName} {
+				plain := f.decryptArchive(t, name)
+				members := tarMembers(t, plain)
+				manifest := string(tarMember(t, plain, "manifest.txt"))
+				if include {
+					if !members["revive.key"] || !bytes.Equal(tarMember(t, plain, "revive.key"), keyBody) {
+						t.Errorf("%s: ключа в архиве нет или он не тот", kind)
+					}
+					if !strings.Contains(manifest, "revive_key=yes\n") {
+						t.Errorf("%s: манифест не говорит, что ключ в архиве:\n%s", kind, manifest)
+					}
+					continue
+				}
+				for member := range members {
+					if strings.Contains(member, "revive") {
+						t.Errorf("%s: в бэкапе файл ключа оживления: %s", kind, member)
+					}
+					if bytes.Contains(tarMember(t, plain, member), []byte(keyText)) {
+						t.Errorf("%s: ключ оживления попал в бэкап внутри %s", kind, member)
+					}
+				}
+				for _, want := range []string{"revive_key=no\n", "пароли роутеров", "вводятся заново"} {
+					if !strings.Contains(manifest, want) {
+						t.Errorf("%s: манифест не говорит прямо, что ключа нет: нет %q\n%s", kind, want, manifest)
+					}
+				}
+			}
+		})
 	}
 }
 

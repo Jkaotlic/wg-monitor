@@ -29,8 +29,8 @@ except the event history) that is sent to the admin user as a private Telegram
 document, and a **full** one (with the history) that stays on disk and is copied
 to an off-site server when one is configured. Both contain SQLite `state.db`,
 `backend.yaml`, bot, wizard and dashboard token files, the JSON stores (VPN
-panels, own servers, cabinet keys), `revive.key`, agent inventory CSV, a
-manifest, and an encrypted operator vault when the wizard has pushed one. Raw
+panels, own servers, cabinet keys), agent inventory CSV, a
+manifest, and an encrypted operator vault when the wizard has pushed one. The agent revive key (`revive.key`) is deliberately **not** in the backups. Raw
 deploy secrets are not stored on the backend in plaintext; the vault is
 encrypted with the same backup password. Details: [Encrypted Nightly
 Backups](#encrypted-nightly-backups).
@@ -137,12 +137,16 @@ head -c 32 /dev/urandom | base64 | sudo tee /etc/wg-monitor/revive.key >/dev/nul
 `key_file: /etc/wg-monitor/revive.key`, `sudo systemctl restart wg-monitor-backend`,
 проверка — `sudo journalctl -u wg-monitor-backend -n 200 | grep -i оживлен`.
 
-С v0.53 ключ **входит** в ночные архивы (малый и полный) под именем `revive.key`
-(тест `TestBackupBothWritesSmallAndFullWithStoresAndReviveKey`): без него
-восстановленная база теряла все сохранённые пароли роутеров. Архив зашифрован
-парольной фразой бэкапа, так что ключ и база защищены одним секретом —
-`WG_BACKUP_PASSPHRASE`. Хранить эту фразу рядом с архивами нельзя. Открытый ключ
-отдельным файлом рядом с копией базы по-прежнему не кладётся.
+Ключ **не входит** в ночные архивы (малый и полный) — ни отдельным файлом, ни
+внутри другого (это проверяют тесты `TestRunBackupCommandDoesNotCarryReviveKey` и
+`TestBackupReviveKeyFollowsSwitch`). Иначе утёкший бэкап расшифровывал бы
+сохранённые пароли роутеров. Цена: после восстановления из бэкапа
+сохранённых паролей роутеров не расшифровать — их нужно ввести заново
+(ожидающие оживления закроются, как при потере ключа). Манифест архива и вывод
+`backup verify` говорят об этом прямо. Ключ надо хранить отдельно и самому;
+положить его рядом с копией базы — значит свести шифрование на нет. Решение
+обратимо одним выключателем `includeReviveKey` в `cmd/backend/backup_archive.go`
+(тесты параметризованы по нему), но по умолчанию он выключен.
 
 **Ключ потерян или испорчен** (файла нет, права не те, длина не 32 байта):
 `newReviveService` возвращает `nil`, функция выключена целиком (экран отвечает
@@ -223,14 +227,15 @@ encryption format, or a legacy unencrypted `.tgz`; for encrypted archives the
 wizard takes `WG_BACKUP_PASSPHRASE` from the local secret store or asks for it.
 
 Dry-run extracts the archive locally and shows the manifest, backend version,
-SQLite size, agent count, and which stores and whether `revive.key` are inside.
+SQLite size, agent count, which stores are inside, and that `revive.key` is not in the backup.
 Restore mode uploads `state.db` and `backend.yaml`, plus (v0.53+ archives) the
-JSON stores and `revive.key`; makes timestamped backups of any existing VPS
+JSON stores; makes timestamped backups of any existing VPS
 files, checks SQLite integrity, restores ownership/modes, starts
 `wg-monitor-backend`, and refreshes the backup timers. Stores land where the
 backend with the restored `backend.yaml` looks for them (next to `state.db`
-unless a path is set explicitly), `revive.key` at `revive.key_file`; all with
-mode `0600`. Destinations outside `/var/lib/wg-monitor` and `/etc/wg-monitor`
+unless a path is set explicitly); all with
+mode `0600`. After a restore the saved router passwords must be entered again
+(the revive key is not part of the backup). Destinations outside `/var/lib/wg-monitor` and `/etc/wg-monitor`
 are refused. The uploaded copies in `/tmp/wg-monitor-restore` are removed
 whether the restore succeeds or not.
 
@@ -276,8 +281,10 @@ Legacy unencrypted `.tgz` archives are still handled by `restore-backup`.
 
 В обоих: `state.db`, `backend.yaml`, токены бота, мастера и дашборда, четыре
 JSON-хранилища (`amnezia-premium.json`, `amnezia-selfhosted.json`,
-`awg3-panels.json`, `hidemyname.json` — те, что есть), `revive.key` (если задан
-`revive.key_file`), `agents.csv`, `manifest.txt`, хранилище секретов оператора.
+`awg3-panels.json`, `hidemyname.json` — те, что есть), `agents.csv`,
+`manifest.txt` (с числом роутеров, владельцев и операторов на момент бэкапа),
+хранилище секретов оператора. **`revive.key` в архивах нет** — по правилу,
+ключ живёт отдельно.
 
 Провал одного вида не отменяет другой; служба завершается с ошибкой, если не
 удался хотя бы один. Малый архив больше лимита Telegram (47 МБ) — это ошибка
@@ -376,15 +383,17 @@ wg-monitor-backend backup verify --config … --passphrase-file … --out-dir �
 
 Команда берёт самый свежий малый архив, расшифровывает его во временный каталог
 внутри `--out-dir` (каталог убирается при любом исходе) и проверяет: база
-проходит `PRAGMA integrity_check`; число роутеров, владельцев и операторов равно
-живой базе; каждое хранилище, которое есть в живой системе, есть в архиве и
-разбирается как JSON; `revive.key` читается и расшифровывает хотя бы один
-сохранённый пароль роутера, если такие есть. Итог пишется в секцию `verify`
+проходит `PRAGMA integrity_check`; число роутеров, владельцев и операторов
+равно записанному в манифест при бэкапе; каждое хранилище, которое есть в живой
+системе, есть в архиве и разбирается как JSON. Ключа оживления в архиве нет, и
+проверка его не требует; вывод напоминает, что после восстановления пароли
+роутеров вводятся заново. Итог пишется в секцию `verify`
 файла состояния; код выхода не ноль при провале.
 
-Сверка идёт с живой базой на момент проверки: если после ночного бэкапа
-добавили или удалили роутер, проверка честно скажет «в архиве роутеров 13, в
-живой базе 14» — после следующего бэкапа это пройдёт само.
+Счётчики сверяются с записанными в манифест при сборке архива, а не с живой
+базой: роутер, добавленный между ночным бэкапом и недельной проверкой, проверку
+не валит. Провал «в архиве операторов 1, в манифесте архива 2» значит, что база
+в архиве не та, что была снята.
 
 ### Восстановление из малого архива
 
@@ -419,7 +428,6 @@ install -m 600 data/restore-tmp/state.db data/state.db
 for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
   [ -f data/restore-tmp/$f ] && install -m 600 data/restore-tmp/$f data/$f
 done
-[ -f data/restore-tmp/revive.key ] && install -m 600 data/restore-tmp/revive.key secrets/revive.key
 # на пустой машине -- ещё конфиг и токены из того же каталога:
 #   backend.yaml -> config/; bot-token.txt, wizard-token.txt, dashboard-token.txt -> secrets/
 # запустить контейнер бэкенда
@@ -427,8 +435,9 @@ rm -rf data/restore-tmp
 ```
 
 Хранилища кладутся туда, где их ищет бэкенд: рядом с базой, если в
-`backend.yaml` путь не задан явно; `revive.key` — по пути из `revive.key_file`
-(в докер-раскладке `/secrets/revive.key` — это `secrets/revive.key` на хосте).
+`backend.yaml` путь не задан явно. Ключа оживления в архиве нет: свой `revive.key`
+верните вручную из места, где вы его храните (иначе включите оживление заново, а
+сохранённые пароли роутеров введите снова).
 Владелец файлов — тот же, что у остальных файлов в `data/` и `secrets/`.
 `backup extract` читает оба формата шифрования и оба вида архивов; в непустой
 каталог не разворачивает, а при битом архиве не оставляет половины файлов.

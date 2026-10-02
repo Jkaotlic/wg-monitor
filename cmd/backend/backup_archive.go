@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
@@ -30,6 +32,15 @@ const (
 	archiveOperatorVault  = "operator-secrets.tgz.enc"
 	archiveReviveKey      = "revive.key"
 )
+
+// includeReviveKey -- единственный выключатель: едет ли ключ оживления агента
+// (revive.key) в архивы. По правилу нет: ключ живёт отдельно от базы, бэкап с
+// базой и конфигом не должен нести его ни отдельным файлом, ни внутри другого,
+// иначе утёкший бэкап расшифровывал бы сохранённые пароли роутеров. Цена:
+// после восстановления эти пароли вводятся заново. Если оператор решит иначе,
+// достаточно true здесь (и вернуть чтение ключа в cmd/deploy/restore_backup.go,
+// убранное тем же коммитом).
+var includeReviveKey = false
 
 // archiveMember -- файл, который едет в архив под именем Name.
 type archiveMember struct {
@@ -106,11 +117,23 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 			stores = append(stores, st.Name)
 		}
 	}
-	// Ключ оживления: без него сохранённые пароли роутеров из базы не
-	// расшифровать, а архив и так зашифрован парольной фразой (v0.53).
-	hasKey, err := optional(archiveReviveKey, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot))
+	// Ключ оживления по правилу в архив не кладётся (см. includeReviveKey).
+	hasKey := false
+	if includeReviveKey {
+		var err error
+		hasKey, err = optional(archiveReviveKey, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot))
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Счётчики на момент бэкапа: по ним `backup verify` сверяет базу из
+	// архива, а не с живой базой, которая за неделю успевает измениться.
+	// Не посчитались -- архив всё равно нужен: манифест остаётся без цифр, а
+	// `backup verify` честно скажет, что сверить нечем.
+	counts, err := countArchivedDB(ctx, dbCopy)
 	if err != nil {
-		return nil, err
+		slog.Warn("backup manifest counts not written", "kind", string(kind), "err", err.Error())
+		counts = verifyCounts{Routers: -1, Owners: -1, Operators: -1}
 	}
 
 	agents := filepath.Join(tmpDir, archiveAgentsCSV)
@@ -125,6 +148,7 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 		ConfigPath: opts.ConfigPath,
 		Stores:     stores,
 		ReviveKey:  hasKey,
+		Counts:     counts,
 	}); err != nil {
 		return nil, err
 	}
@@ -161,14 +185,29 @@ type manifestInfo struct {
 	ConfigPath string
 	Stores     []string
 	ReviveKey  bool
+	Counts     verifyCounts
 }
+
+// countArchivedDB считает роутеры, владельцев и операторов в базе, которая
+// едет в архив (копия сделана одной транзакцией -- это срез на момент бэкапа).
+func countArchivedDB(ctx context.Context, dbCopy string) (verifyCounts, error) {
+	d, err := openSQLiteForRead(ctx, dbCopy)
+	if err != nil {
+		return verifyCounts{}, err
+	}
+	defer d.Close()
+	return readVerifyCounts(ctx, d)
+}
+
+// Тексты про ключ оживления: в манифесте и в выводе проверки.
+const reviveKeyNotInBackupNote = "ключа оживления в бэкапе нет: после восстановления сохранённые пароли роутеров вводятся заново"
 
 // writeManifest пишет паспорт архива. В нём только имена и пути: содержимое
 // хранилищ и ключа -- секреты.
 func writeManifest(path string, m manifestInfo) error {
-	reviveKey, skipped := "no", ""
+	reviveKey, reviveNote, skipped := "no", reviveKeyNotInBackupNote, ""
 	if m.ReviveKey {
-		reviveKey = "yes"
+		reviveKey, reviveNote = "yes", ""
 	}
 	if m.Kind == backup.KindSmall {
 		skipped = strings.Join(smalldb.SkipTables, ",")
@@ -185,11 +224,23 @@ func writeManifest(path string, m manifestInfo) error {
 		{"format", "encrypted-" + string(m.Kind) + "-v2"},
 		{"stores", strings.Join(m.Stores, ",")},
 		{"revive_key", reviveKey},
+		{"revive_key_note", reviveNote},
+		{"routers", countText(m.Counts.Routers)},
+		{"owners", countText(m.Counts.Owners)},
+		{"operators", countText(m.Counts.Operators)},
 		{"skipped_tables", skipped},
 	} {
 		b.WriteString(kv[0] + "=" + kv[1] + "\n")
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// countText: отрицательное значение -- «не посчиталось».
+func countText(n int) string {
+	if n < 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(n)
 }
 
 func hostname() string {
