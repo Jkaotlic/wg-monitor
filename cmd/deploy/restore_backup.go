@@ -644,11 +644,12 @@ func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *Resto
 	defer s.Close()
 
 	PrintStep(2, 4, "Upload backup files")
-	if err := uploadRestoreBackupFiles(s, backup); err != nil {
+	staging, err := uploadRestoreBackupFiles(s, backup)
+	if err != nil {
 		return err
 	}
 	PrintStep(3, 4, "Apply backend state")
-	if err := applyRestoreBackupOnRemote(s, backup.Extras); err != nil {
+	if err := applyRestoreBackupOnRemote(s, staging, backup.Extras); err != nil {
 		return err
 	}
 	PrintStep(4, 4, "Verify backend")
@@ -771,11 +772,12 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	}
 
 	PrintStep(9, 12, "Upload backup files")
-	if err := uploadRestoreBackupFiles(s, backup); err != nil {
+	staging, err := uploadRestoreBackupFiles(s, backup)
+	if err != nil {
 		return err
 	}
 	PrintStep(10, 12, "Apply restored DB/config")
-	if err := applyRestoreBackupOnRemote(s, backup.Extras); err != nil {
+	if err := applyRestoreBackupOnRemote(s, staging, backup.Extras); err != nil {
 		return err
 	}
 	PrintStep(11, 12, "Verify backend")
@@ -790,45 +792,81 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	return nil
 }
 
-const restoreRemoteStaging = "/tmp/wg-monitor-restore"
+// restoreStagingRe -- каталог выгрузки на сервере: непредсказуемое имя от
+// mktemp в /tmp. Имя уходит в скрипт, который исполняет root, поэтому
+// принимается только эта форма.
+var restoreStagingRe = regexp.MustCompile(`^/tmp/wg-monitor-restore\.[A-Za-z0-9]{6,}$`)
 
-func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) error {
-	// Каталог 0700: в нём база, а с v0.53 -- хранилища и ключ оживления.
-	if _, err := s.MustRun("rm -rf " + restoreRemoteStaging + " && mkdir -m 700 -p " + restoreRemoteStaging); err != nil {
-		return err
+// restoreStagingPrefix -- шаблон mktemp для каталога выгрузки.
+const restoreStagingPrefix = "/tmp/wg-monitor-restore."
+
+// removeRestoreStaging убирает каталог выгрузки на сервере; ошибка уборки
+// ничего не меняет в исходе восстановления, но о ней говорим.
+func removeRestoreStaging(s *SSH, staging string) {
+	if !restoreStagingRe.MatchString(staging) {
+		return
 	}
+	if _, err := s.MustRun("rm -rf " + staging); err != nil {
+		PrintWarn("не удалось убрать " + staging + " на сервере: " + err.Error())
+	}
+}
+
+// uploadRestoreBackupFiles выгружает базу, конфиг и хранилища в новый каталог
+// mktemp -d (0700, имя не угадать) и возвращает его путь. При любом провале
+// выгрузки каталог убирается.
+func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, err error) {
+	out, err := s.MustRun("mktemp -d " + restoreStagingPrefix + "XXXXXXXXXX")
+	if err != nil {
+		return "", err
+	}
+	staging = strings.TrimSpace(out)
+	if !restoreStagingRe.MatchString(staging) {
+		return "", fmt.Errorf("unexpected staging directory from mktemp: %q", staging)
+	}
+	defer func() {
+		if err != nil {
+			removeRestoreStaging(s, staging)
+		}
+	}()
 	db, err := os.ReadFile(backup.StateDBPath)
 	if err != nil {
-		return fmt.Errorf("read extracted state.db: %w", err)
+		return staging, fmt.Errorf("read extracted state.db: %w", err)
 	}
-	if err := stepUploadFile(s, restoreRemoteStaging+"/state.db", db, "600"); err != nil {
-		return err
+	if err = stepUploadFile(s, staging+"/state.db", db, "600"); err != nil {
+		return staging, err
 	}
 	yamlBytes, err := os.ReadFile(backup.BackendYAMLPath)
 	if err != nil {
-		return fmt.Errorf("read extracted backend.yaml: %w", err)
+		return staging, fmt.Errorf("read extracted backend.yaml: %w", err)
 	}
-	if err := stepUploadFile(s, restoreRemoteStaging+"/backend.yaml", yamlBytes, "600"); err != nil {
-		return err
+	if err = stepUploadFile(s, staging+"/backend.yaml", yamlBytes, "600"); err != nil {
+		return staging, err
 	}
 	for _, e := range backup.Extras {
-		body, err := os.ReadFile(e.LocalPath)
-		if err != nil {
-			return fmt.Errorf("read extracted %s: %w", e.Name, err)
+		body, rerr := os.ReadFile(e.LocalPath)
+		if rerr != nil {
+			return staging, fmt.Errorf("read extracted %s: %w", e.Name, rerr)
 		}
-		if err := stepUploadFile(s, restoreRemoteStaging+"/"+e.Name, body, "600"); err != nil {
-			return err
+		if err = stepUploadFile(s, staging+"/"+e.Name, body, "600"); err != nil {
+			return staging, err
 		}
 	}
-	return nil
+	return staging, nil
 }
 
-func applyRestoreBackupOnRemote(s *SSH, extras []RestoreExtraFile) error {
+func applyRestoreBackupOnRemote(s *SSH, staging string, extras []RestoreExtraFile) error {
+	if !restoreStagingRe.MatchString(staging) {
+		return fmt.Errorf("unexpected staging directory %q", staging)
+	}
 	if err := ensureRemoteSQLite3(s); err != nil {
+		removeRestoreStaging(s, staging)
 		return err
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	if _, err := s.MustRun(buildRestoreRemoteScript(stamp, extras...)); err != nil {
+	if _, err := s.MustRun(buildRestoreRemoteScript(stamp, staging, extras...)); err != nil {
+		// Сам скрипт убирает каталог при любом исходе, но если оборвалась
+		// связь, он мог не дойти до этого.
+		removeRestoreStaging(s, staging)
 		return err
 	}
 	return nil
@@ -837,11 +875,12 @@ func applyRestoreBackupOnRemote(s *SSH, extras []RestoreExtraFile) error {
 // buildRestoreRemoteScript собирает скрипт, который на сервере кладёт базу,
 // конфиг, а также хранилища и ключ оживления (extras) на место: проверки до
 // остановки бэкенда, копии прежних файлов, откат при сбое, уборка каталога
-// с выгруженными секретами при любом исходе.
-func buildRestoreRemoteScript(stamp string, extras ...RestoreExtraFile) string {
+// выгрузки staging с секретами при любом исходе -- ловушка очистки взводится
+// сразу после set -eu, раньше первой проверки.
+func buildRestoreRemoteScript(stamp, staging string, extras ...RestoreExtraFile) string {
 	var preflight, rollback, backupOld, install strings.Builder
 	for _, e := range extras {
-		src := shellSingleQuote(restoreRemoteStaging + "/" + e.Name)
+		src := shellSingleQuote(staging + "/" + e.Name)
 		dst := shellSingleQuote(e.RemotePath)
 		bak := shellSingleQuote(e.RemotePath + ".bak." + stamp)
 		dir := shellSingleQuote(path.Dir(e.RemotePath))
@@ -852,12 +891,19 @@ func buildRestoreRemoteScript(stamp string, extras ...RestoreExtraFile) string {
 		fmt.Fprintf(&install, "install -m 600 -o wgmonitor -g wgmonitor %s %s\n", src, dst)
 	}
 	return fmt.Sprintf(`set -eu
-test "$(sqlite3 /tmp/wg-monitor-restore/state.db 'PRAGMA integrity_check;')" = "ok"
+trap 'rm -rf %[6]s' EXIT
+test "$(sqlite3 %[6]s/state.db 'PRAGMA integrity_check;')" = "ok"
 test -s /etc/wg-monitor/bot-token.txt
 test -s /etc/wg-monitor/wizard-token.txt
 %[2]srollback() {
 	if [ -f /var/lib/wg-monitor/state.db.bak.%[1]s ]; then
 		cp -p /var/lib/wg-monitor/state.db.bak.%[1]s /var/lib/wg-monitor/state.db || true
+	fi
+	if [ -f /var/lib/wg-monitor/state.db-wal.bak.%[1]s ]; then
+		cp -p /var/lib/wg-monitor/state.db-wal.bak.%[1]s /var/lib/wg-monitor/state.db-wal || true
+	fi
+	if [ -f /var/lib/wg-monitor/state.db-shm.bak.%[1]s ]; then
+		cp -p /var/lib/wg-monitor/state.db-shm.bak.%[1]s /var/lib/wg-monitor/state.db-shm || true
 	fi
 	if [ -f /etc/wg-monitor/backend.yaml.bak.%[1]s ]; then
 		cp -p /etc/wg-monitor/backend.yaml.bak.%[1]s /etc/wg-monitor/backend.yaml || true
@@ -865,15 +911,18 @@ test -s /etc/wg-monitor/wizard-token.txt
 %[3]s	systemctl start wg-monitor-backend 2>/dev/null || true
 }
 systemctl stop wg-monitor-backend 2>/dev/null || true
-trap 'rc=$?; if [ "$rc" != 0 ]; then rollback; fi; rm -rf /tmp/wg-monitor-restore; exit $rc' EXIT
+trap 'rc=$?; if [ "$rc" != 0 ]; then rollback; fi; rm -rf %[6]s; exit $rc' EXIT
 if [ -f /var/lib/wg-monitor/state.db ]; then cp -p /var/lib/wg-monitor/state.db /var/lib/wg-monitor/state.db.bak.%[1]s; fi
+if [ -f /var/lib/wg-monitor/state.db-wal ]; then cp -p /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-wal.bak.%[1]s; fi
+if [ -f /var/lib/wg-monitor/state.db-shm ]; then cp -p /var/lib/wg-monitor/state.db-shm /var/lib/wg-monitor/state.db-shm.bak.%[1]s; fi
 if [ -f /etc/wg-monitor/backend.yaml ]; then cp -p /etc/wg-monitor/backend.yaml /etc/wg-monitor/backend.yaml.bak.%[1]s; fi
-%[4]sinstall -m 600 -o wgmonitor -g wgmonitor /tmp/wg-monitor-restore/state.db /var/lib/wg-monitor/state.db
-install -m 640 -o root -g wgmonitor /tmp/wg-monitor-restore/backend.yaml /etc/wg-monitor/backend.yaml
+%[4]srm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm
+install -m 600 -o wgmonitor -g wgmonitor %[6]s/state.db /var/lib/wg-monitor/state.db
+install -m 640 -o root -g wgmonitor %[6]s/backend.yaml /etc/wg-monitor/backend.yaml
 %[5]ssystemctl start wg-monitor-backend
 trap - EXIT
-rm -rf /tmp/wg-monitor-restore
-`, stamp, preflight.String(), rollback.String(), backupOld.String(), install.String())
+rm -rf %[6]s
+`, stamp, preflight.String(), rollback.String(), backupOld.String(), install.String(), staging)
 }
 
 func verifyRestoredBackend(s *SSH, domain string) error {

@@ -279,15 +279,15 @@ func TestBuildRestoreRemoteScriptInstallsStoresAndKey(t *testing.T) {
 		{Name: "awg3-panels.json", RemotePath: "/var/lib/wg-monitor/awg3-panels.json"},
 		{Name: "revive.key", RemotePath: "/etc/wg-monitor/revive.key"},
 	}
-	script := buildRestoreRemoteScript("20261007T020000Z", extras...)
+	script := buildRestoreRemoteScript("20261007T020000Z", testStaging, extras...)
 	for _, want := range []string{
-		"test -s '/tmp/wg-monitor-restore/awg3-panels.json'",
-		"test -s '/tmp/wg-monitor-restore/revive.key'",
+		"test -s '" + testStaging + "/awg3-panels.json'",
+		"test -s '" + testStaging + "/revive.key'",
 		"if [ -f '/var/lib/wg-monitor/awg3-panels.json' ]; then cp -p '/var/lib/wg-monitor/awg3-panels.json' '/var/lib/wg-monitor/awg3-panels.json.bak.20261007T020000Z'; fi",
-		"install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/awg3-panels.json' '/var/lib/wg-monitor/awg3-panels.json'",
-		"install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/revive.key' '/etc/wg-monitor/revive.key'",
+		"install -m 600 -o wgmonitor -g wgmonitor '" + testStaging + "/awg3-panels.json' '/var/lib/wg-monitor/awg3-panels.json'",
+		"install -m 600 -o wgmonitor -g wgmonitor '" + testStaging + "/revive.key' '/etc/wg-monitor/revive.key'",
 		"cp -p '/etc/wg-monitor/revive.key.bak.20261007T020000Z' '/etc/wg-monitor/revive.key'",
-		"rm -rf /tmp/wg-monitor-restore",
+		"rm -rf " + testStaging,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("в скрипте нет %q:\n%s", want, script)
@@ -295,8 +295,8 @@ func TestBuildRestoreRemoteScriptInstallsStoresAndKey(t *testing.T) {
 	}
 	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
 	start := strings.LastIndex(script, "systemctl start wg-monitor-backend")
-	preflight := strings.Index(script, "test -s '/tmp/wg-monitor-restore/revive.key'")
-	install := strings.Index(script, "install -m 600 -o wgmonitor -g wgmonitor '/tmp/wg-monitor-restore/revive.key'")
+	preflight := strings.Index(script, "test -s '"+testStaging+"/revive.key'")
+	install := strings.Index(script, "install -m 600 -o wgmonitor -g wgmonitor '"+testStaging+"/revive.key'")
 	if preflight > stop {
 		t.Error("проверка наличия файлов должна идти до остановки бэкенда")
 	}
@@ -304,8 +304,8 @@ func TestBuildRestoreRemoteScriptInstallsStoresAndKey(t *testing.T) {
 		t.Error("файлы кладутся на место, пока бэкенд остановлен")
 	}
 	// Без хранилищ скрипт прежний по смыслу и тоже убирает за собой.
-	plain := buildRestoreRemoteScript("20261007T020000Z")
-	if strings.Contains(plain, "revive.key") || !strings.Contains(plain, "rm -rf /tmp/wg-monitor-restore") {
+	plain := buildRestoreRemoteScript("20261007T020000Z", testStaging)
+	if strings.Contains(plain, "revive.key") || !strings.Contains(plain, "rm -rf "+testStaging) {
 		t.Errorf("скрипт без хранилищ:\n%s", plain)
 	}
 }
