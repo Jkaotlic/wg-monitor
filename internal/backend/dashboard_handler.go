@@ -305,6 +305,8 @@ type dashboardSummary struct {
 	// операторов. Оба состояния тихие, и панель -- единственное место, где
 	// их видно.
 	Notify dashboardNotifyGaps `json:"notify"`
+	// Backup -- состояние ночного бэкапа; нет поля -- источник не подключён.
+	Backup *backupSummary `json:"backup,omitempty"`
 }
 
 type dashboardNotifyGaps struct {
@@ -487,6 +489,10 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			resp.Watchdog = wd
 		}
 		resp.Notify = buildDashboardNotifyGaps(d)
+		if d.BackupStatus != nil {
+			b := d.BackupStatus.Summary()
+			resp.Backup = &b
+		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

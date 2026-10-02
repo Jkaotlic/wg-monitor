@@ -28,6 +28,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/updatespoll"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
+	"github.com/Jkaotlic/wg-monitor/internal/backup"
 )
 
 var Version = "0.8.0-tunnel-import"
@@ -258,10 +259,12 @@ func main() {
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		HeartbeatStats: watcher.Snapshot,
-		DB:             d,
-		Dispatcher:     disp,
-		Resumer:        watcher,
-		CommandSink:    cmdQueue,
+		// Состояние ночного бэкапа: файл рядом с базой, читается по требованию.
+		BackupStatus: backend.NewBackupStatusSource(backup.StatusPath(cfg.DBPath), nil),
+		DB:           d,
+		Dispatcher:   disp,
+		Resumer:      watcher,
+		CommandSink:  cmdQueue,
 		// Кэш релизов апстрима: второй поход в GitHub сжёг бы лимит анонимного API.
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
