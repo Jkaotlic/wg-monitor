@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { collectLayout, findProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
+import { collectLayout, findProblems, neighbourProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
 import { killChild, stopChild } from './proc.mjs'
 import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, SANDBOX_LATEST, HRNEO_STOPPED, expectPattern } from './screens.js'
@@ -169,6 +169,44 @@ async function runStep(page, step, routerName, role) {
     await page.waitForTimeout(500)
     // Уже раскрыто прежним экраном (состояние карточек живёт между экранами): «Скрыть ▾».
     return n > 0 || (await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.offsetParent !== null && b.innerText.trim().startsWith('Скрыть'))))
+  }
+  if (step.parkOneOpen) {
+    // По очереди раскрыть каждую карточку Парка, у которой есть сосед по ряду,
+    // и сверить соседа с ним же до раскрытия. Карточка без своей коробки
+    // (display: contents) меряется по первой части. В конце раскрыта первая.
+    const measure = () =>
+      page.evaluate(() => {
+        const boxOf = (c) => (getComputedStyle(c).display === 'contents' ? c.firstElementChild : c)
+        return [...document.querySelectorAll('.park-cards .park-row')].map((c, i) => {
+          const r = boxOf(c).getBoundingClientRect()
+          const btn = c.querySelector('.park-card-actions button')
+          return { i, name: c.querySelector('.data-row-main')?.textContent.trim() ?? String(i), top: r.top, left: r.left, height: r.height, btnTop: btn ? btn.getBoundingClientRect().top : null }
+        })
+      })
+    const toggle = async (i, want) => {
+      await page.evaluate(([n, w]) => {
+        const b = document.querySelectorAll('.park-cards .park-row')[n]?.querySelector('.park-more')
+        if (b && b.getAttribute('aria-expanded') !== w) b.click()
+      }, [i, want])
+      await page.waitForTimeout(300)
+    }
+    let cards = await measure()
+    if (!cards.length) return false
+    for (const c of cards) await toggle(c.i, 'false')
+    cards = await measure()
+    const bad = []
+    for (const c of cards) {
+      const mate = cards.find((o) => o.i !== c.i && Math.abs(o.top - c.top) <= 1)
+      if (!mate) continue
+      await toggle(c.i, 'true')
+      const after = (await measure()).find((o) => o.i === mate.i)
+      console.log(`  [парк, раскрыта «${c.name}» ${role} ${page.viewportSize().width}] сосед «${mate.name}»: высота ${mate.height} → ${after?.height}, кнопки ${mate.btnTop} → ${after?.btnTop}`)
+      bad.push(...neighbourProblems(c.name, mate, after))
+      await toggle(c.i, 'false')
+    }
+    await toggle(cards[0].i, 'true')
+    for (const b of bad) console.log(`  [парк] ${b}`)
+    return bad.length === 0
   }
   if (step.headerPick) {
     // На широкой раскладке список роутеров -- колонка и всегда на экране: он

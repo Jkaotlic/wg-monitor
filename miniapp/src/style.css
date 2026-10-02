@@ -2947,7 +2947,7 @@ body {
   padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
-.park-row > .data-row {
+.park-card-head > .data-row {
   border-bottom: none;
   padding-left: 0;
   padding-right: 0;
@@ -5192,29 +5192,75 @@ body {
   margin-bottom: var(--sp-2);
 }
 
+/* Пара карточек: на телефоне -- те же карточки столбиком с тем же зазором. */
+.park-pair {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+/* От 1100 px пара -- ряд из двух карточек. Верх карточки (имя, подпись,
+   кнопки) -- колонка, подпись забирает лишнюю высоту: кнопки «Открыть роутер /
+   Ещё» у соседей на одной линии при любом переносе подписи. subgrid не нужен
+   (старые WebView). */
 @media (min-width: 1100px) {
-  .park-cards {
+  .park-pair {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0;
   }
 
-  /* Две карточки в ряд: подпись у соседей переносится по-разному, и кнопки
-     «Открыть роутер / Ещё» вставали на разной высоте. Части карточки (имя,
-     подпись, кнопки, «Ещё») садятся на общие ряды сетки -- кнопки соседей на
-     одной линии, а раскрытое «Ещё» растёт вниз, не утягивая кнопки соседа.
-     Промежуток между рядами карточек -- отступом карточки: ряды сетки теперь
-     внутри неё. Без subgrid остаётся прежняя раскладка. */
-  @supports (grid-template-rows: subgrid) {
-    .park-cards {
-      row-gap: 0;
-      margin-bottom: calc(-1 * var(--sp-2));
+  .park-pair > .park-row {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .park-card-head {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+  }
+
+  .park-card-head > .park-card-line {
+    margin-bottom: auto;
+  }
+
+  /* Раскрытое «Ещё» не участвует в высоте ряда: у карточки нет своей коробки,
+     её верх стоит в первом ряду пары (высота ряда -- по верхам обеих карточек),
+     а «Ещё» -- во втором, под своей колонкой. Сосед остаётся каким был. Рамку
+     карточки несут обе части; на стыке она прозрачная, а не снята -- высота
+     верха от раскрытия не меняется. */
+  @supports (display: contents) {
+    .park-pair > .park-row {
+      display: contents;
     }
 
-    .park-cards > .park-row {
-      display: grid;
-      grid-row: span 4;
-      grid-template-rows: subgrid;
-      align-content: start;
-      margin-bottom: var(--sp-2);
+    .park-pair > .park-row > * {
+      grid-column: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-card);
+      padding: 0 var(--sp-3) var(--sp-3);
+    }
+
+    .park-pair > .park-row:nth-child(2) > * {
+      grid-column: 2;
+    }
+
+    .park-pair > .park-row > .park-card-head {
+      grid-row: 1;
+      border-radius: var(--radius);
+      padding-top: var(--sp-2);
+    }
+
+    .park-pair > .park-row > .park-more-body {
+      grid-row: 2;
+      margin-top: -1px;
+      border-top: none;
+      border-radius: 0 0 var(--radius) var(--radius);
+    }
+
+    .park-pair > .park-row-open > .park-card-head {
+      border-bottom-color: transparent;
+      border-radius: var(--radius) var(--radius) 0 0;
     }
   }
 }

@@ -81,6 +81,9 @@ export const SCREENS = [
   { id: 'long-manage', roles: ['owner3'], router: 'дача-северная', routers: { owner3: 'дача-северная' }, steps: MANAGE },
   { id: 'fleet-list', roles: ['admin'], steps: [PARK, { headerPick: true }] },
   { id: 'park', roles: ['admin'], steps: [PARK] },
+  // Одна карточка ряда раскрыта (v0.52.1): сосед держит свою высоту и кнопки.
+  // Стоит до park-more: начинает со свёрнутых карточек (и сворачивает сам).
+  { id: 'park-one-open', roles: ['admin'], steps: [PARK, { parkOneOpen: true }] },
   { id: 'park-more', roles: ['admin'], steps: [PARK, { clickAll: 'Ещё' }] },
   { id: 'park-recheck-all', roles: ['admin'], steps: [PARK, { click: 'Проверить заново все' }] },
   { id: 'park-doctor-all', roles: ['admin'], steps: [PARK, { click: 'Осмотреть все' }] },

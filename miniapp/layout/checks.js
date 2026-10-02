@@ -187,12 +187,15 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
   const gridCards = []
   for (const grid of document.querySelectorAll('body *')) {
     if (!visible(grid) || !/grid/.test(getComputedStyle(grid).display)) continue
-    const cards = [...grid.children].filter((c) => c.classList.contains('card') && visible(c))
+    // Карточка без своей коробки (display: contents -- её части сами стоят в
+    // сетке, Парк v0.52.1) меряется по первой части.
+    const boxOf = (c) => (getComputedStyle(c).display === 'contents' ? c.firstElementChild ?? c : c)
+    const cards = [...grid.children].filter((c) => c.classList.contains('card') && visible(boxOf(c)))
     if (cards.length < 2) continue
     for (const c of cards) {
       const btn = [...c.querySelectorAll('.action-row button, .action-row a.btn')].find(visible)
       if (!btn) continue
-      gridCards.push({ sel: sel(grid), name: (c.innerText || '').trim().split('\n')[0].trim().slice(0, 40), top: c.getBoundingClientRect().top, btnTop: btn.getBoundingClientRect().top })
+      gridCards.push({ sel: sel(grid), name: (boxOf(c).innerText || '').trim().split('\n')[0].trim().slice(0, 40), top: boxOf(c).getBoundingClientRect().top, btnTop: btn.getBoundingClientRect().top })
     }
   }
 
@@ -234,6 +237,17 @@ export function stripProblems(strip = []) {
 // более глубокого уровня -- у скринридера «h2 в h2».
 export function headingProblems(headings = []) {
   return headings.filter((h) => h.owner && h.level <= h.owner.level).map((h) => `заголовок h${h.level} «${h.text}» вложен в раздел с заголовком h${h.owner.level} «${h.owner.text}»`)
+}
+
+// Раскрытая карточка ряда (v0.52.1): сосед не должен ни вытягиваться, ни
+// двигать свои кнопки. before/after -- замеры соседа до и после раскрытия
+// { name, height, btnTop }; допуск 1 px.
+export function neighbourProblems(opened, before, after) {
+  const out = []
+  if (!before || !after) return [`сосед карточки «${opened}» не найден`]
+  if (Math.abs(after.height - before.height) > 1) out.push(`раскрыли «${opened}» -- сосед «${before.name}» сменил высоту: ${Math.round(before.height)} → ${Math.round(after.height)}`)
+  if (Math.abs(after.btnTop - before.btnTop) > 1) out.push(`раскрыли «${opened}» -- кнопки соседа «${before.name}» уехали: ${Math.round(before.btnTop)} → ${Math.round(after.btnTop)}`)
+  return out
 }
 
 // Проверка 10: карточки одной сетки с одинаковым верхом -- один ряд; верх

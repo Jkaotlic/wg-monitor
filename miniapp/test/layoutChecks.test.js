@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems, neighbourProblems } from '../layout/checks.js'
 import { SCREENS, ROLES, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
@@ -153,6 +153,24 @@ describe('скрипт раскладки: кнопки карточек одн�
   })
   it('карточки разных рядов и разных сеток не сравниваются', () => {
     expect(gridRowProblems([card('a', 805, 917), card('b', 981, 1094), { ...card('c', 805, 870), sel: 'div.other' }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: сосед раскрытой карточки ряда', () => {
+  const m = (height, btnTop) => ({ name: 'sandbox-bronya', height, btnTop })
+  it('высота и кнопки соседа на месте -- находок нет', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), m(133.4, 917))).toEqual([])
+  })
+  it('сосед вытянулся -- находка', () => {
+    const p = neighbourProblems('sandbox-broken', m(133, 917), m(420, 917))
+    expect(p).toHaveLength(1)
+    expect(p[0]).toContain('сменил высоту: 133 → 420')
+  })
+  it('кнопки соседа уехали -- находка', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), m(133, 896))[0]).toContain('кнопки соседа «sandbox-bronya» уехали: 917 → 896')
+  })
+  it('соседа не стало -- находка', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), undefined)).toHaveLength(1)
   })
 })
 

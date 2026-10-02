@@ -114,6 +114,14 @@ import {
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
+// Карточки Парка -- парами: на широком экране пара -- один ряд сетки, и
+// раскрытое «Ещё» одной карточки не тянет соседа (style.css, .park-pair).
+function cardPairs(rows) {
+  const out = []
+  for (let i = 0; i < rows.length; i += 2) out.push(rows.slice(i, i + 2))
+  return out
+}
+
 export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, openLayer, onOpenConnection }) {
   const { mode } = useContext(AppContext)
   const recheck = useFleetRecheck(routers)
@@ -609,7 +617,10 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
             {rows.length === 0 && <p class="state">{EMPTY_PARK}</p>}
             {rows.length > 0 && (
               <div class="park-cards">
-                {rows.map((row) => {
+                {/* Карточки -- парами: на широком экране пара -- ряд из двух. */}
+                {cardPairs(rows).map((pair) => (
+                  <div class="park-pair" key={pair[0].id}>
+                {pair.map((row) => {
                   const rv = revives.get(row.id)
                   const saved = savedPasswordLine(row.router)
                   const blocked = autoReviveBlockedLine(row.router)
@@ -617,7 +628,8 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                   const open = moreOpen.has(row.id)
                   const canOpen = Boolean(onOpenRouter) && row.id !== currentID
                   return (
-                    <div class="card park-row" key={row.id}>
+                    <div class={`card park-row${open ? ' park-row-open' : ''}`} key={row.id}>
+                      <div class="park-card-head">
                       {/* Имя и та же пилюля, что в «Мои роутеры» (спека п. 2.4). */}
                       <DataRow title={row.name} value={<Chip tone={row.pill.tone}>{row.pill.text}</Chip>} />
                       <p class={`park-card-line${parkCardTone(row, rv) ? ` park-update-${parkCardTone(row, rv)}` : ''}`}>
@@ -632,6 +644,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                         <button type="button" class="btn btn-ghost park-more" aria-expanded={open ? 'true' : 'false'} onClick={() => toggleMore(row.id)}>
                           {open ? 'Скрыть ▾' : 'Ещё ▸'}
                         </button>
+                      </div>
                       </div>
                       {/* Всё остальное -- по «Ещё ▸». В DOM всегда (hidden), чтобы
                           состояние листов и занятость переключателя не терялись. */}
@@ -712,6 +725,8 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                     </div>
                   )
                 })}
+                  </div>
+                ))}
               </div>
             )}
 
