@@ -123,6 +123,45 @@ beforeEach(() => {
   mocks.conn = { awgm_url: 'https://router.example.com' }
 })
 
+describe('Парк: строка «Бэкап» в карточке «Бэкенд»', () => {
+  const GOOD = {
+    known: true,
+    small: { last_ok_at: '2026-09-17T02:00:05Z', last_run_at: '2026-09-17T02:00:05Z', ok: true, size_bytes: 4 * 1024 * 1024, telegram: 'ok' },
+    full: { last_ok_at: '2026-09-17T02:03:00Z', last_run_at: '2026-09-17T02:03:00Z', ok: true, size_bytes: 190 * 1024 * 1024, telegram: 'off', offsite: 'off' },
+    verify: { last_run_at: '', ok: false, routers: 0 },
+  }
+
+  it('нет поля backup -- строки нет', async () => {
+    const { root } = await mountPark()
+    expect(root.querySelector('.park-backup')).toBe(null)
+    cleanup(root)
+  })
+
+  it('всё хорошо -- строка в карточке «Бэкенд», тон ok', async () => {
+    mocks.fleet = { ...FLEET, backup: GOOD }
+    const { root } = await mountPark()
+    const row = root.querySelector('.park-backend .park-backup')
+    expect(row.querySelector('.park-backup-line').textContent).toMatch(/^Бэкап: 17 сен \d\d:\d\d · малый 4 МБ ушёл в Telegram · полный 190 МБ на диске Pi$/)
+    expect(row.classList.contains('park-backup-ok')).toBe(true)
+    cleanup(root)
+  })
+
+  it('провал -- красная строка со словами; состояние неизвестно -- жёлтая', async () => {
+    mocks.fleet = { ...FLEET, backup: { ...GOOD, full: { ...GOOD.full, ok: false, reason: 'архив не записан на диск' } } }
+    const failed = await mountPark()
+    const row = failed.root.querySelector('.park-backup')
+    expect(row.textContent).toBe('Полный бэкап не сделан: архив не записан на диск')
+    expect(row.classList.contains('park-backup-danger')).toBe(true)
+    cleanup(failed.root)
+
+    mocks.fleet = { ...FLEET, backup: { known: false } }
+    const unknown = await mountPark()
+    expect(unknown.root.querySelector('.park-backup').textContent).toBe('Состояние бэкапа неизвестно')
+    expect(unknown.root.querySelector('.park-backup-warn')).not.toBe(null)
+    cleanup(unknown.root)
+  })
+})
+
 describe('Парк: сторож и отложенное', () => {
   it('строка «Сторож» -- в карточке бэкенда, старой строки внизу нет', async () => {
     const { root } = await mountPark()

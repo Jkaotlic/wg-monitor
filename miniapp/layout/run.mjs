@@ -22,6 +22,9 @@ const roles = args.roles ? args.roles.split(',') : ROLES
 const widths = args.widths ? args.widths.split(',').map(Number) : WIDTHS
 // --screens a,b -- только эти экраны (отладка одного места; приёмка -- без него).
 const only = args.screens ? args.screens.split(',') : null
+// --backup good|failed|unknown|off -- состояние бэкапа в Парке (по умолчанию good):
+// строка «Бэкап» снимается и в хорошем, и в плохом виде.
+const backupMode = args.backup ?? 'good'
 const out = args.out ?? path.join(os.tmpdir(), `wgm-layout-${new Date().toISOString().replace(/[:.]/g, '-')}`)
 mkdirSync(out, { recursive: true })
 
@@ -429,7 +432,7 @@ async function runPass(bin, role, width, port) {
   // ожидании -- экран снимается в устойчивом состоянии, а не за секунду до
   // перезагрузки страницы; -hrneo-stopped: роутер с остановленным HydraRoute
   // Neo (по умолчанию песочница никого не останавливает).
-  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore', '-hrneo-stopped', HRNEO_STOPPED], {
+  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore', '-hrneo-stopped', HRNEO_STOPPED, '-backup', backupMode], {
     cwd: REPO,
     detached: true,
     stdio: ['ignore', logFd, logFd],
