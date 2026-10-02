@@ -45,6 +45,11 @@ func fakeFirmware(commitAnswer string, commitErr error, before string, after ...
 		return nil, fmt.Errorf("unexpected %q", cmd)
 	}
 	rci := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/components/list" {
+			// Проверка «есть ли что ставить» перед commit: по умолчанию статус
+			// не получен -- установка идёт как раньше. См. withList.
+			return nil, errors.New("rci: HTTP 500")
+		}
 		calls = append(calls, "rci "+method+" "+path+" "+string(body))
 		if path != "/rci/components/commit" {
 			return nil, fmt.Errorf("unexpected rci %q", path)
@@ -99,14 +104,19 @@ func TestInstallFirmware_RCIContinuedAloneIsStarted(t *testing.T) {
 
 func TestInstallFirmware_RCIErrorObjectIsError(t *testing.T) {
 	noWait(t)
-	answer := `{"status":[{"status":"error","code":"24248321","ident":"Components::Manager","message":"nothing to commit."}]}`
+	// Ответ СИНТЕТИЧЕСКИЙ: форма записи об ошибке -- по общему виду ответов
+	// RCI, текст выдуман; настоящий отказ commit на роутере не снимался.
+	answer := `{"status":[{"status":"error","code":"0","ident":"Synthetic::Test","message":"synthetic refusal for the test."}]}`
 	exec, rci, calls := fakeFirmware(answer, nil, logBefore, logBefore)
 	_, err := InstallFirmware(context.Background(), exec, rci)
-	if err == nil || !strings.Contains(err.Error(), "nothing to commit.") {
+	if err == nil || !strings.Contains(err.Error(), "synthetic refusal for the test.") {
 		t.Fatalf("err = %v", err)
 	}
 	if countCalls(*calls, "-c components commit") != 0 {
 		t.Fatalf("после отказа RCI commit повторён через ndmc: %v", *calls)
+	}
+	if countCalls(*calls, "-c show log 40") != 1 {
+		t.Fatalf("после отказа RCI журнал смотреть незачем: %v", *calls)
 	}
 }
 
@@ -126,14 +136,31 @@ func TestInstallFirmware_RCIErrorMessageIsExcerpt(t *testing.T) {
 
 func TestInstallFirmware_RCIGarbageNeverLeaksIntoError(t *testing.T) {
 	noWait(t)
+	// 200 с ответом не-JSON: запрос ушёл, задача могла стартовать -- решает журнал.
 	garbage := "<html>" + strings.Repeat("A", 300_000) + "TAILMARK</html>"
-	exec, rci, _ := fakeFirmware(garbage, nil, logBefore, logBefore)
-	_, err := InstallFirmware(context.Background(), exec, rci)
-	if err == nil {
-		t.Fatal("ждали ошибку на ответ не-JSON")
+	exec, rci, calls := fakeFirmware(garbage, nil, logBefore, logBefore)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
+	if err != nil || msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("%.80q %v", msg, err)
 	}
-	if strings.Contains(err.Error(), "TAILMARK") || len([]rune(err.Error())) > 300 {
-		t.Fatalf("тело утекло: длина %d", len(err.Error()))
+	if strings.Contains(msg, "TAILMARK") || strings.Contains(msg, "AAAA") {
+		t.Fatalf("тело утекло в ответ")
+	}
+	if countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+func TestInstallFirmware_RCIEmptyAnswerWatchesLog(t *testing.T) {
+	noWait(t)
+	after := logBefore + "I [Oct 02 11:32:34] ndm: Core::System::RebootManager: started a reboot process.\n"
+	exec, rci, calls := fakeFirmware("", nil, logBefore, after)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("calls = %v", *calls)
 	}
 }
 
@@ -167,15 +194,172 @@ func TestInstallFirmware_NilRCIUsesNdmc(t *testing.T) {
 	}
 }
 
+// Сбой ПОСЛЕ отправки commit (таймаут, 5xx, оборванное чтение): задача на
+// роутере могла стартовать. Ошибкой это не называем и второй раз через ndmc
+// не запускаем -- смотрим журнал.
 func TestInstallFirmware_RCIOtherErrorIsErrorWithoutNdmc(t *testing.T) {
 	noWait(t)
 	exec, rci, calls := fakeFirmware("", errors.New("rci: HTTP 500"), logBefore, logBefore)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
+	if err != nil || msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+func TestInstallFirmware_RCITimeoutThenRebootIsStarted(t *testing.T) {
+	noWait(t)
+	after := logBefore +
+		"I [Oct 02 11:31:54] ndm: Components::Manager: update task started.\n" +
+		"I [Oct 02 11:32:34] ndm: Core::System::RebootManager: activated reboot.\n"
+	exec, rci, calls := fakeFirmware("", errors.New("rci /rci/components/commit: context deadline exceeded"), logBefore, after)
+	// Журнал «после» отдаётся и без подтверждённого commit: запрос ушёл.
+	committedExec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "-c show log 40" && countCalls(*calls, rciCommitCall) > 0 {
+			return []byte(after), nil
+		}
+		return exec(ctx, name, args...)
+	}
+	msg, err := InstallFirmware(context.Background(), committedExec, rci)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+func TestInstallFirmware_RCITimeoutThenFailureIsInterrupted(t *testing.T) {
+	noWait(t)
+	after := logBefore + "W [Oct 02 11:31:54] ndm: Components::Manager: update interrupted.\n"
+	exec, rci, calls := fakeFirmware("", errors.New("rci: timeout"), logBefore, after)
+	committedExec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "-c show log 40" && countCalls(*calls, rciCommitCall) > 0 {
+			return []byte(after), nil
+		}
+		return exec(ctx, name, args...)
+	}
+	_, err := InstallFirmware(context.Background(), committedExec, rci)
+	if err == nil || !strings.HasPrefix(err.Error(), FirmwareInterrupted+": ") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// 401/403/405: роутер запрос не принял -- задача не стартовала, это отказ.
+func TestInstallFirmware_RCIRejectedIsErrorWithoutNdmc(t *testing.T) {
+	noWait(t)
+	exec, rci, calls := fakeFirmware("", fmt.Errorf("rci: HTTP 401: %w", ErrRCIRejected), logBefore, logBefore)
 	_, err := InstallFirmware(context.Background(), exec, rci)
-	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
 		t.Fatalf("err = %v", err)
 	}
 	if countCalls(*calls, "-c components commit") != 0 {
 		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+// --- «ставить нечего» ---
+
+// withList подставляет ответ на components/list перед commit.
+func withList(rci RCIFunc, answer string, asked *int) RCIFunc {
+	return func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/components/list" {
+			*asked++
+			return []byte(answer), nil
+		}
+		return rci(ctx, method, path, body)
+	}
+}
+
+func TestInstallFirmware_UpToDateDoesNotCommit(t *testing.T) {
+	noWait(t)
+	noListWait(t)
+	exec, rci, calls := fakeFirmware(rciCommitStarted, nil, logBefore, logBefore)
+	asked := 0
+	_, err := InstallFirmware(context.Background(), exec, withList(rci, rciListNoUpdate, &asked))
+	if err == nil || err.Error() != FirmwareUpToDate+": 5.02.B.0.0-0" {
+		t.Fatalf("err = %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("статус спрошен %d раз", asked)
+	}
+	if countCalls(*calls, rciCommitCall) != 0 || countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("commit ушёл, хотя ставить нечего: %v", *calls)
+	}
+}
+
+func TestInstallFirmware_UpdateAvailableCommits(t *testing.T) {
+	noWait(t)
+	noListWait(t)
+	exec, rci, calls := fakeFirmware(rciCommitStarted, nil, logBefore, logBefore)
+	asked := 0
+	msg, err := InstallFirmware(context.Background(), exec, withList(rci, rciListHasUpdate, &asked))
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if countCalls(*calls, rciCommitCall) != 1 {
+		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+func TestInstallFirmware_StatusFailureStillCommits(t *testing.T) {
+	noWait(t)
+	noListWait(t)
+	exec, rci, calls := fakeFirmware(rciCommitStarted, nil, logBefore, logBefore)
+	asked := 0
+	// Сервер обновлений молчит: статус неизвестен -- поведение прежнее.
+	msg, err := InstallFirmware(context.Background(), exec, withList(rci, `{"firmware":{"version":"5.02.B.0.0-0"},"sandbox":"stable"}`, &asked))
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if countCalls(*calls, rciCommitCall) != 1 {
+		t.Fatalf("calls = %v", *calls)
+	}
+}
+
+func TestFirmwareWatchWindows(t *testing.T) {
+	// Строки о перезагрузке приходят ~через 40 с после commit (роутер 02.10):
+	// окно пути RCI -- 25 взглядов по 2 с; старый путь ndmc -- прежние 10.
+	if firmwareWatchRCI.total != 25 || firmwareWatch.total != 10 {
+		t.Fatalf("rci=%d ndmc=%d", firmwareWatchRCI.total, firmwareWatch.total)
+	}
+}
+
+func TestInstallFirmware_RCIWatchesLongerThanNdmc(t *testing.T) {
+	oldN, oldR := firmwareWatch, firmwareWatchRCI
+	nop := func(context.Context) error { return nil }
+	firmwareWatch = firmwareWatchCfg{total: 2, sleep: nop}
+	firmwareWatchRCI = firmwareWatchCfg{total: 7, sleep: nop}
+	t.Cleanup(func() { firmwareWatch, firmwareWatchRCI = oldN, oldR })
+	exec, rci, calls := fakeFirmware(`{}`, nil, logBefore, logBefore)
+	if _, err := InstallFirmware(context.Background(), exec, rci); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCalls(*calls, "-c show log 40"); got != 1+7 {
+		t.Fatalf("путь RCI: взглядов в журнал %d, ждали 8", got)
+	}
+	exec, _, calls = fakeFirmware("", nil, logBefore, logBefore)
+	if _, err := InstallFirmware(context.Background(), exec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countCalls(*calls, "-c show log 40"); got != 1+2 {
+		t.Fatalf("путь ndmc: взглядов в журнал %d, ждали 3", got)
+	}
+}
+
+func TestInstallFirmware_NdmcFallbackFailureCarriesNote(t *testing.T) {
+	noWait(t)
+	after := logBefore +
+		"I [Oct 02 11:31:54] ndm: Components::Manager: update task started.\n" +
+		"E [Oct 02 11:31:54] ndm: Core::Ndss: [7758] cannot connect to the server.\n" +
+		"W [Oct 02 11:31:54] ndm: Components::Manager: update interrupted.\n"
+	exec, rci, _ := fakeFirmware("", ErrRCIUnreachable, logBefore, after)
+	_, err := InstallFirmware(context.Background(), exec, rci)
+	want := "firmware update interrupted; rci unavailable, started via ndmc: "
+	if err == nil || !strings.HasPrefix(err.Error(), want) || !strings.HasPrefix(err.Error(), FirmwareInterrupted) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -193,13 +377,34 @@ func TestInstallFirmware_RebootLineIsStartedAtOnce(t *testing.T) {
 	}
 }
 
-func TestInstallFirmware_FirmwareUpdateLineIsStarted(t *testing.T) {
-	noWait(t)
-	after := logBefore + "I [Oct 02 11:32:30] ndm: Core::System::Firmware: firmware update started.\n"
-	exec, rci, _ := fakeFirmware(`{}`, nil, logBefore, after)
-	msg, err := InstallFirmware(context.Background(), exec, rci)
-	if err != nil || msg != FirmwareStartedMsg {
-		t.Fatalf("%q %v", msg, err)
+// Настоящие строки журнала перед перезагрузкой (роутер, KeenOS 5.02, 02.10).
+func TestInstallFirmware_RealGoingLinesAreStarted(t *testing.T) {
+	for _, line := range []string{
+		"I [Oct 02 11:32:33] ndm: Core::System::RebootManager: activated reboot.",
+		"I [Oct 02 11:32:33] ndm: Core::System::Update::RunningConfig: firmware update...",
+		"I [Oct 02 11:32:34] ndm: Core::System::RebootManager: started a reboot process.",
+	} {
+		noWait(t)
+		exec, rci, _ := fakeFirmware(`{}`, nil, logBefore, logBefore+line+"\n")
+		msg, err := InstallFirmware(context.Background(), exec, rci)
+		if err != nil || msg != FirmwareStartedMsg {
+			t.Fatalf("%s: %q %v", line, msg, err)
+		}
+	}
+}
+
+func TestInstallFirmware_LookalikeLinesAreNotStarted(t *testing.T) {
+	for _, line := range []string{
+		"I [Oct 02 11:32:30] ndm: Core::System::Firmware: firmware update started.",
+		"I [Oct 02 11:32:30] ndm: Core::System::RebootManager: reboot schedule cleared.",
+		"W [Oct 02 11:32:30] ndm: Components::Manager: firmware update is not available.",
+	} {
+		noWait(t)
+		exec, rci, _ := fakeFirmware(`{}`, nil, logBefore, logBefore+line+"\n")
+		msg, err := InstallFirmware(context.Background(), exec, rci)
+		if err != nil || msg != FirmwareUnconfirmedMsg {
+			t.Fatalf("%s: %q %v", line, msg, err)
+		}
 	}
 }
 
@@ -256,6 +461,7 @@ func TestFirmwareResultPrefixesAreStable(t *testing.T) {
 		FirmwareUnconfirmedMsg: "firmware install kicked; not confirmed by router log",
 		FirmwareInterrupted:    "firmware update interrupted",
 		FirmwareServerSilent:   "firmware server did not answer",
+		FirmwareUpToDate:       "firmware is up to date",
 	} {
 		if got != want {
 			t.Fatalf("%q != %q", got, want)

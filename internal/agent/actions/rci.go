@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
@@ -26,10 +27,14 @@ import (
 // сессии не держит: задача остаётся жить в самом роутере.
 type RCIFunc func(ctx context.Context, method, path string, body []byte) ([]byte, error)
 
-// ErrRCIUnreachable -- RCI на этом роутере не отвечает вовсе (порт закрыт,
-// пути нет, требует входа). Вызывающий вправе уйти на старый путь ndmc.
+// ErrRCIUnreachable -- RCI на этом роутере нет: порт никто не слушает или
+// пути нет (404). Вызывающий вправе уйти на старый путь ndmc.
 // Любая другая ошибка RCI -- это ответ роутера, а не его отсутствие.
 var ErrRCIUnreachable = errors.New("rci unreachable")
+
+// ErrRCIRejected -- роутер ответил, но запрос не принял (HTTP 4xx, кроме
+// 404): команда не выполнялась. Это отказ, а не повод идти в ndmc.
+var ErrRCIRejected = errors.New("rci rejected the request")
 
 const (
 	// rciLoopbackBase -- RCI на самом роутере: с петли вход не требуется.
@@ -69,16 +74,26 @@ func newRCIClient(base string) RCIFunc {
 		}
 		resp, err := client.Do(req)
 		if err != nil {
+			// Отмена и срок -- не «RCI нет»: иначе оборванная по времени команда
+			// ушла бы вторым запуском в ndmc.
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("rci %s: %w", p, ctx.Err())
+			}
+			// «RCI нет» -- только когда порт никто не слушает.
 			var op *net.OpError
-			if errors.As(err, &op) && op.Op == "dial" {
-				return nil, fmt.Errorf("rci %s: %w: %v", p, ErrRCIUnreachable, op.Err)
+			if errors.As(err, &op) && op.Op == "dial" && errors.Is(err, syscall.ECONNREFUSED) {
+				return nil, fmt.Errorf("rci %s: %w: connection refused", p, ErrRCIUnreachable)
 			}
 			return nil, fmt.Errorf("rci %s: %w", p, err)
 		}
 		defer resp.Body.Close()
-		switch resp.StatusCode {
-		case http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed:
+		// Неизвестный путь RCI отвечает 404 с пустым телом (роутер, 02.10):
+		// на этой прошивке такой команды в RCI нет.
+		if resp.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("rci %s: HTTP %d: %w", p, resp.StatusCode, ErrRCIUnreachable)
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode <= 499 {
+			return nil, fmt.Errorf("rci %s: HTTP %d: %w", p, resp.StatusCode, ErrRCIRejected)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			// Тело в ошибку не кладём: у RCI оно бывает в сотни килобайт.

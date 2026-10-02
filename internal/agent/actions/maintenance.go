@@ -137,8 +137,12 @@ const (
 	FirmwareStartedMsg     = "firmware download started; router will reboot when done"
 	FirmwareUnconfirmedMsg = "firmware install kicked; not confirmed by router log"
 	FirmwareInterrupted    = "firmware update interrupted"
-	// firmwareViaNdmcNote дописывается к FirmwareUnconfirmedMsg, когда commit
-	// ушёл старым путём: мини-апп сверяет только начало строки.
+	// FirmwareUpToDate -- ставить нечего: стоит та же версия, что на сервере.
+	// После двоеточия -- установленная версия. Мини-апп ищет начало строки.
+	FirmwareUpToDate = "firmware is up to date"
+	// firmwareViaNdmcNote дописывается к FirmwareUnconfirmedMsg и к
+	// FirmwareInterrupted, когда commit ушёл старым путём: начало строки
+	// прежнее, а по пометке мини-апп говорит «обновите в веб-панели роутера».
 	firmwareViaNdmcNote = "; rci unavailable, started via ndmc"
 )
 
@@ -150,6 +154,12 @@ type firmwareWatchCfg struct {
 }
 
 var firmwareWatch = firmwareWatchCfg{total: 10, sleep: sleepTwoSeconds}
+
+// firmwareWatchRCI -- окно пути RCI: строки о перезагрузке приходят примерно
+// через 40 с после «update task started» (роутер, KeenOS 5.02, 02.10), так
+// что смотрим 25 раз по 2 с = 50 с. Выход раньше -- по строке о перезагрузке
+// или по провалу.
+var firmwareWatchRCI = firmwareWatchCfg{total: 25, sleep: sleepTwoSeconds}
 
 // Терминальный провал -- только строка Components:: с этими метками. Строка
 // Core::Ndss сама по себе (например, «cannot connect») провалом не считается:
@@ -167,10 +177,22 @@ var firmwareFailMarks = []string{"update interrupted", "request failed"}
 // для роутера, где RCI не отвечает вовсе; такой запуск стартом не считается,
 // пока журнал не покажет перезагрузку.
 //
+// Перед запуском через RCI спрашиваем статус: стоит свежая прошивка --
+// FirmwareUpToDate и никакого commit.
+//
 // Дальше судим по новым строкам журнала. Провал возвращается, как только
-// замечен; строка о перезагрузке или обновлении прошивки -- сразу «начато»
-// (роутер вот-вот уйдёт, ждать нечего); иначе окно отрабатывается целиком.
+// замечен; строка о перезагрузке -- сразу «начато» (роутер вот-вот уйдёт,
+// ждать нечего); иначе окно отрабатывается целиком: 50 с на пути RCI
+// (перезагрузка приходит через ~40 с после старта), 20 с на пути ndmc.
 func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, error) {
+	// Ставить нечего -- commit не шлём: роутер ответил бы «начато» и ничего
+	// бы не сделал. Статус не получен (сервер молчит, RCI нет) -- идём как
+	// раньше, решит сам роутер.
+	if rci != nil {
+		if fs, err := firmwareStatusRCI(ctx, rci); err == nil && fs.Available == "" {
+			return "", fmt.Errorf("%s: %s", FirmwareUpToDate, keenetic.Excerpt(fs.Current, 1))
+		}
+	}
 	before := map[string]bool{}
 	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
 	for _, l := range beforeLines {
@@ -180,16 +202,18 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 	if err != nil {
 		return "", err
 	}
-	unconfirmed := FirmwareUnconfirmedMsg
+	unconfirmed, interrupted, watch := FirmwareUnconfirmedMsg, FirmwareInterrupted, firmwareWatchRCI
 	if viaNdmc {
 		unconfirmed += firmwareViaNdmcNote
+		interrupted += firmwareViaNdmcNote
+		watch = firmwareWatch
 	}
 	if beforeErr != nil {
 		// Без снимка «до» старые строки не отличить от новых.
 		return unconfirmed, nil
 	}
-	for i := 0; i < firmwareWatch.total; i++ {
-		if err := firmwareWatch.sleep(ctx); err != nil {
+	for i := 0; i < watch.total; i++ {
+		if err := watch.sleep(ctx); err != nil {
 			break
 		}
 		lines, err := firmwareLogLines(ctx, exec)
@@ -220,7 +244,7 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 					msgs = append(msgs, logMessage(l))
 				}
 			}
-			return "", fmt.Errorf("%s: %s", FirmwareInterrupted, strings.Join(msgs, " | "))
+			return "", fmt.Errorf("%s: %s", interrupted, strings.Join(msgs, " | "))
 		}
 		if rebooting {
 			return FirmwareStartedMsg, nil
@@ -234,21 +258,30 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 
 // commitFirmware даёт роутеру команду ставить прошивку. started -- роутер
 // сам подтвердил старт в ответе RCI; viaNdmc -- ушли на старый путь.
+//
+// Ошибка -- только когда установка точно не началась: роутер отказал
+// (запись об ошибке в ответе, HTTP 4xx) или не сработал старый путь. Любой
+// сбой ПОСЛЕ отправки запроса в RCI (срок, 5xx, оборванное чтение, пустой
+// или не-JSON ответ) ошибкой не считается и вторым запуском через ndmc не
+// лечится: задача могла стартовать, и роутер через ~40 с уйдёт в
+// перезагрузку -- это покажет журнал.
 func commitFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (started, viaNdmc bool, err error) {
 	if rci != nil {
 		body, rerr := rci(ctx, "POST", "/rci/components/commit", []byte(`{}`))
 		switch {
 		case rerr == nil:
 			var ans rciAnswer
-			if err := json.Unmarshal(body, &ans); err != nil {
-				return false, false, fmt.Errorf("rci components commit: unexpected answer: %s", answerExcerpt(body))
+			if json.Unmarshal(body, &ans) != nil {
+				return false, false, nil
 			}
 			if msg := ans.errorText(); msg != "" {
 				return false, false, fmt.Errorf("rci components commit: %s", msg)
 			}
 			return ans.Continued || ans.hasMessage("update task started"), false, nil
-		case !errors.Is(rerr, ErrRCIUnreachable):
+		case errors.Is(rerr, ErrRCIRejected):
 			return false, false, rerr
+		case !errors.Is(rerr, ErrRCIUnreachable):
+			return false, false, nil
 		}
 	}
 	if out, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
@@ -260,10 +293,23 @@ func commitFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (started, v
 	return false, true, nil
 }
 
-// isFirmwareGoingLine -- строка журнала, после которой установка уже не
-// отменится: роутер перезагружается или обновляет прошивку.
+// firmwareGoingMarks -- строки журнала перед перезагрузкой на новую прошивку
+// (сняты с роутера, KeenOS 5.02, 02.10). После любой из них установка уже
+// не отменится. Только эти три: «RebootManager» и «firmware update» сами по
+// себе встречаются и в строках, ничего не обещающих.
+var firmwareGoingMarks = []string{
+	"RebootManager: activated reboot",
+	"RebootManager: started a reboot process",
+	"Update::RunningConfig: firmware update",
+}
+
 func isFirmwareGoingLine(l string) bool {
-	return strings.Contains(l, "RebootManager") || strings.Contains(strings.ToLower(l), "firmware update")
+	for _, m := range firmwareGoingMarks {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func isComponentsFailure(l string) bool {

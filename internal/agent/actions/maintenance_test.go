@@ -683,8 +683,10 @@ const logBefore = "I [Sep 30 11:30:37] ndm: Core::System::StartupConfig: configu
 
 func noWait(t *testing.T) {
 	old := firmwareWatch
+	oldRCI := firmwareWatchRCI
 	firmwareWatch = firmwareWatchCfg{total: 3, sleep: func(context.Context) error { return nil }}
-	t.Cleanup(func() { firmwareWatch = old })
+	firmwareWatchRCI = firmwareWatch
+	t.Cleanup(func() { firmwareWatch, firmwareWatchRCI = old, oldRCI })
 }
 
 func TestInstallFirmware_NdssFailureIsError(t *testing.T) {

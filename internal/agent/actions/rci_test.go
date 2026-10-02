@@ -31,16 +31,39 @@ func TestRCIClient_PostsBodyAndReturnsAnswer(t *testing.T) {
 	}
 }
 
-func TestRCIClient_UnavailableStatusesAreUnreachable(t *testing.T) {
+// Неизвестный путь RCI отвечает 404 с пустым телом (роутер, 02.10) -- только
+// это и закрытый порт значат «RCI нет». 401/403/405 -- ответ роутера: отказ.
+func TestRCIClient_Only404IsUnreachable(t *testing.T) {
 	for _, code := range []int{http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 		}))
 		_, err := newRCIClient(srv.URL)(context.Background(), http.MethodPost, "/rci/components/list", []byte(`{}`))
 		srv.Close()
-		if !errors.Is(err, ErrRCIUnreachable) {
-			t.Fatalf("HTTP %d: err = %v, ждали ErrRCIUnreachable", code, err)
+		if err == nil {
+			t.Fatalf("HTTP %d: ошибки нет", code)
 		}
+		if got, want := errors.Is(err, ErrRCIUnreachable), code == http.StatusNotFound; got != want {
+			t.Fatalf("HTTP %d: unreachable=%v, err = %v", code, got, err)
+		}
+		if got, want := errors.Is(err, ErrRCIRejected), code != http.StatusNotFound; got != want {
+			t.Fatalf("HTTP %d: rejected=%v, err = %v", code, got, err)
+		}
+	}
+}
+
+func TestRCIClient_CancelledContextIsNotUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := newRCIClient(base)(ctx, http.MethodPost, "/rci/components/list", []byte(`{}`))
+	if err == nil || errors.Is(err, ErrRCIUnreachable) {
+		t.Fatalf("отменённый запрос выдан за «RCI нет»: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
