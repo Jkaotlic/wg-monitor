@@ -24,6 +24,8 @@ export const MAINT_TEXTS = {
   rebootForbidden: 'Перезагрузка с роутера запрещена в настройках агента.',
   firmwareNoServer: 'Роутер не смог связаться с сервером обновлений Keenetic — прошивка не поставлена. Проверьте, что у роутера есть интернет не через VPN, и попробуйте ещё раз.',
   firmwareInterrupted: 'Роутер прервал обновление прошивки — она не поставлена.',
+  firmwareUpToDate: 'На роутере уже стоит свежая прошивка — обновлять нечего.',
+  firmwareNeedsWebPanel: 'Этот роутер не умеет обновляться из приложения — обновите прошивку в его веб-панели.',
   firmwareStarted: 'Роутер скачивает прошивку и перезагрузится сам, когда она встанет.',
   firmwareUnconfirmed: 'Команда на установку отдана, но роутер её не подтвердил. Проверьте версию прошивки через несколько минут.',
   firmwareStatusNoServer: 'Роутер не получил ответ от сервера обновлений Keenetic — доступную версию сейчас не узнать.',
@@ -342,6 +344,11 @@ export function maintenanceOutcomeLabel(action, result, args = {}) {
       if (refusal) return refusal.text
       const out = String(result?.output ?? '')
       if (result?.status !== 'ok') {
+        // Маркеры -- internal/agent/actions/maintenance.go (FirmwareUpToDate,
+        // firmwareViaNdmcNote). Пометка запасного пути важнее строки Ndss:
+        // на таком роутере установку рвёт сам способ запуска, а не сервер.
+        if (out.startsWith('firmware is up to date')) return MAINT_TEXTS.firmwareUpToDate
+        if (out.startsWith('firmware update interrupted; rci unavailable')) return MAINT_TEXTS.firmwareNeedsWebPanel
         if (out.startsWith('firmware update interrupted')) {
           return /cannot connect|request failed/i.test(out) ? MAINT_TEXTS.firmwareNoServer : MAINT_TEXTS.firmwareInterrupted
         }

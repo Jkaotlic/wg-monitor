@@ -242,6 +242,28 @@ describe('итоги', () => {
     )
   })
 
+  it('прошивка v0.52.2: ставить нечего и роутер без RCI -- своими фразами, без сырого вывода', () => {
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware is up to date: 5.02.B.0.0-0' })).toBe(
+      'На роутере уже стоит свежая прошивка — обновлять нечего.',
+    )
+    expect(MAINT_TEXTS.firmwareUpToDate).toBe('На роутере уже стоит свежая прошивка — обновлять нечего.')
+    // Запасной путь ndmc (RCI на роутере нет): провал там -- не «нет связи с
+    // сервером обновлений», даже если в журнале была строка Ndss.
+    const viaNdmc = 'firmware update interrupted; rci unavailable, started via ndmc: Core::Ndss: [7758] cannot connect to the server. | Components::Manager: update interrupted.'
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: viaNdmc })).toBe(
+      'Этот роутер не умеет обновляться из приложения — обновите прошивку в его веб-панели.',
+    )
+    expect(MAINT_TEXTS.firmwareNeedsWebPanel).toBe('Этот роутер не умеет обновляться из приложения — обновите прошивку в его веб-панели.')
+    // «Не подтверждено» с пометкой запасного пути остаётся «не подтверждено».
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware install kicked; not confirmed by router log; rci unavailable, started via ndmc' })).toBe(
+      MAINT_TEXTS.firmwareUnconfirmed,
+    )
+    // Провал на пути RCI -- прежние фразы.
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware update interrupted: Core::Ndss: [7758] cannot connect to the server. | Components::Manager: update interrupted.' })).toBe(
+      MAINT_TEXTS.firmwareNoServer,
+    )
+  })
+
   it('firmware_status: молчание сервера обновлений -- своей фразой, прочее -- общей', () => {
     expect(firmwareStatusErrorText({ status: 'err', output: 'firmware server did not answer: firmware: | sandbox: stable' })).toBe(MAINT_TEXTS.firmwareStatusNoServer)
     expect(firmwareStatusErrorText({ status: 'err', output: 'ndmc components list: exit status 1: Core::Ndss: cannot connect to the server.' })).toBe(MAINT_TEXTS.firmwareStatusNoServer)

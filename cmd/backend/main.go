@@ -63,6 +63,10 @@ func main() {
 	}
 	backend.SetVersion(Version)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
+	// Хранилища, оставшиеся на старом месте по умолчанию (внутри контейнера,
+	// без тома), один раз переезжают к базе -- до того, как их кто-то откроет.
+	backend.MigrateLegacyStores(backend.LegacyStoreDir, cfg.StoreFiles(), logger)
+	backend.WarnStoresOutsideDBDir(cfg, logger)
 	slog.SetDefault(logger)
 
 	d, err := db.Open(cfg.DBPath)

@@ -68,10 +68,14 @@ type OpkgExecutor interface {
 
 // Runner is built once at agent startup and re-used per-command.
 type Runner struct {
-	AwgClient            *awgmgr.Client
-	ForceRecheck         func(ctx context.Context) // typically wraps reporter.SendOnce
-	Opkg                 OpkgExecutor
-	Exec                 ExecFunc // for tunnel_enable/disable via ndmc
+	AwgClient    *awgmgr.Client
+	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
+	Opkg         OpkgExecutor
+	Exec         ExecFunc // for tunnel_enable/disable via ndmc
+	// RCI -- локальный REST-интерфейс KeenOS для команд прошивки: `ndmc -c`
+	// обрывает «продолжаемые» команды (components commit/list). nil --
+	// команды прошивки идут старым путём через Exec.
+	RCI                  RCIFunc
 	Now                  func() time.Time
 	Sleep                func(ctx context.Context, d time.Duration) error
 	AllowRouterReboot    bool // gates `service_restart router`
@@ -723,7 +727,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		fs, err := GetFirmwareStatus(ctx, r.Exec)
+		fs, err := GetFirmwareStatus(ctx, r.Exec, r.RCI)
 		if err != nil {
 			return "err", err.Error(), payload
 		}
@@ -740,7 +744,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		msg, err := InstallFirmware(ctx, r.Exec)
+		msg, err := InstallFirmware(ctx, r.Exec, r.RCI)
 		if err != nil {
 			return "err", err.Error(), payload
 		}
@@ -753,7 +757,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		va, err := VersionAudit(ctx, r.AwgClient, r.Exec)
+		va, err := VersionAudit(ctx, r.AwgClient, r.Exec, r.RCI)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

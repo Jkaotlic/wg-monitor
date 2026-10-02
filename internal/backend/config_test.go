@@ -43,16 +43,18 @@ telegram:
 	if cfg.Heartbeat.StaleAfterSec != 300 {
 		t.Fatalf("hb default: %d", cfg.Heartbeat.StaleAfterSec)
 	}
-	if cfg.Amnezia.SecretsPath != "/var/lib/wg-monitor/amnezia-premium.json" {
+	// Хранилища по умолчанию -- рядом с базой (db_path: /tmp/state.db), на том
+	// же томе: /var/lib/wg-monitor внутри контейнера пропадает при пересоздании.
+	if cfg.Amnezia.SecretsPath != "/tmp/amnezia-premium.json" {
 		t.Fatalf("amnezia secrets default: %q", cfg.Amnezia.SecretsPath)
 	}
-	if cfg.SelfHostedAmnezia.StorePath != "/var/lib/wg-monitor/amnezia-selfhosted.json" {
+	if cfg.SelfHostedAmnezia.StorePath != "/tmp/amnezia-selfhosted.json" {
 		t.Fatalf("self-hosted amnezia store default: %q", cfg.SelfHostedAmnezia.StorePath)
 	}
 	if cfg.HideMy.BaseURL != "https://hide-my-name.cloud" {
 		t.Fatalf("hidemy base default: %q", cfg.HideMy.BaseURL)
 	}
-	if cfg.HideMy.SecretsPath != "/var/lib/wg-monitor/hidemyname.json" {
+	if cfg.HideMy.SecretsPath != "/tmp/hidemyname.json" {
 		t.Fatalf("hidemy secrets default: %q", cfg.HideMy.SecretsPath)
 	}
 }

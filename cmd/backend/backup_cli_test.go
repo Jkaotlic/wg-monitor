@@ -258,3 +258,130 @@ func TestRunBackupCommandDoesNotCarryReviveKey(t *testing.T) {
 		}
 	}
 }
+
+func TestRunBackupCommandCarriesStoreFiles(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "wg-monitor")
+	for _, sub := range []string{"data", "config", "secrets"} {
+		if err := os.MkdirAll(filepath.Join(root, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initBackupTestDB(t, filepath.Join(root, "data", "state.db"))
+	mustWrite(t, filepath.Join(root, "secrets", "bot-token.txt"), "bot-secret-token\n")
+	mustWrite(t, filepath.Join(root, "secrets", "backup-passphrase.txt"), "backup password\n")
+	// Три хранилища по умолчанию лежат рядом с базой; четвёртого (hidemyname)
+	// нет вовсе -- это не ошибка. Файл своих серверов задан явно, панели едут
+	// за ним.
+	mustWrite(t, filepath.Join(root, "data", "amnezia-premium.json"), `{"keys":["vpn://PREMIUM-KEY"]}`)
+	mustWrite(t, filepath.Join(root, "secrets", "own-vps.json"), `{"instances":[{"ssh_host":"203.0.113.7"}]}`)
+	mustWrite(t, filepath.Join(root, "secrets", "awg3-panels.json"), `{"panels":[{"url":"https://panel.example.com"}]}`)
+	cfgPath := filepath.Join(root, "config", "backend.yaml")
+	mustWrite(t, cfgPath, "db_path: /data/state.db\n"+
+		"telegram:\n"+
+		"  bot_token_file: /secrets/bot-token.txt\n"+
+		"  admin_user_id: 42\n"+
+		"amnezia_selfhosted:\n"+
+		"  store_path: /secrets/own-vps.json\n")
+
+	if err := runBackupCommand([]string{
+		"--config", cfgPath,
+		"--passphrase-file", filepath.Join(root, "secrets", "backup-passphrase.txt"),
+		"--layout-root", root,
+		"--out-dir", filepath.Join(root, "data", "backups"),
+		"--test-kdf",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "data", "backups", "wg-monitor-full-backup-*.tgz.enc"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("backup files=%v err=%v", files, err)
+	}
+	blob, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"PREMIUM-KEY", "203.0.113.7", "panel.example.com"} {
+		if bytes.Contains(blob, []byte(secret)) {
+			t.Fatalf("encrypted blob contains plaintext %q", secret)
+		}
+	}
+	plain, err := backup.Decrypt(blob, []byte("backup password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := tarMembers(t, plain)
+	for _, want := range []string{"state.db", "amnezia-premium.json", "amnezia-selfhosted.json", "awg3-panels.json"} {
+		if !members[want] {
+			t.Fatalf("backup missing %s; members=%v", want, members)
+		}
+	}
+	if members["hidemyname.json"] {
+		t.Fatalf("в архиве файл, которого не было: %v", members)
+	}
+	if got := string(tarMember(t, plain, "amnezia-premium.json")); !strings.Contains(got, "PREMIUM-KEY") {
+		t.Fatalf("amnezia-premium.json: %q", got)
+	}
+	if got := string(tarMember(t, plain, "amnezia-selfhosted.json")); !strings.Contains(got, "203.0.113.7") {
+		t.Fatalf("amnezia-selfhosted.json: %q", got)
+	}
+	manifest := string(tarMember(t, plain, "manifest.txt"))
+	if !strings.Contains(manifest, "stores=amnezia-premium.json,amnezia-selfhosted.json,awg3-panels.json\n") {
+		t.Fatalf("manifest: %s", manifest)
+	}
+	if strings.Contains(manifest, "PREMIUM-KEY") {
+		t.Fatalf("содержимое хранилища в манифесте: %s", manifest)
+	}
+	if modes := tarModes(t, plain); modes["amnezia-premium.json"] != 0o600 || modes["awg3-panels.json"] != 0o600 {
+		t.Fatalf("modes: %v", modes)
+	}
+}
+
+func TestRunBackupCommandWithoutStoresListsNone(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	initBackupTestDB(t, dbPath)
+	mustWrite(t, filepath.Join(dir, "bot-token.txt"), "bot-secret-token\n")
+	mustWrite(t, filepath.Join(dir, "pass.txt"), "backup password\n")
+	cfgPath := filepath.Join(dir, "backend.yaml")
+	mustWrite(t, cfgPath, "db_path: "+slash(dbPath)+"\ntelegram:\n  bot_token_file: "+slash(filepath.Join(dir, "bot-token.txt"))+"\n  admin_user_id: 42\n")
+	if err := runBackupCommand([]string{"--config", cfgPath, "--passphrase-file", filepath.Join(dir, "pass.txt"), "--out-dir", filepath.Join(dir, "backups"), "--test-kdf"}); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "backups", "*.tgz.enc"))
+	if len(files) != 1 {
+		t.Fatalf("files=%v", files)
+	}
+	blob, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := backup.Decrypt(blob, []byte("backup password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest := string(tarMember(t, plain, "manifest.txt")); !strings.Contains(manifest, "stores=\n") {
+		t.Fatalf("manifest: %s", manifest)
+	}
+}
+
+func tarModes(t *testing.T, gzBody []byte) map[string]int64 {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(gzBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	out := map[string]int64{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[hdr.Name] = hdr.Mode
+	}
+}

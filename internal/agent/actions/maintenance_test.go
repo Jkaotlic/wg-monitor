@@ -126,7 +126,7 @@ func TestGetFirmwareStatus_ExecError(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, &execErr{msg: "boom"}
 	}
-	if _, err := GetFirmwareStatus(context.Background(), exec); err == nil {
+	if _, err := GetFirmwareStatus(context.Background(), exec, nil); err == nil {
 		t.Fatal("expected error from exec failure")
 	}
 }
@@ -145,7 +145,7 @@ func TestInstallFirmware_ExecCommand(t *testing.T) {
 		}
 		return inner(ctx, name, args...)
 	}
-	if _, err := InstallFirmware(context.Background(), exec); err != nil {
+	if _, err := InstallFirmware(context.Background(), exec, nil); err != nil {
 		t.Fatalf("InstallFirmware: %v", err)
 	}
 	if !slicesEq(commitArgv, []string{"ndmc", "-c", "components commit"}) {
@@ -171,7 +171,7 @@ func TestInstallFirmware_ExecError(t *testing.T) {
 		return nil, &execErr{msg: "no such command"}
 	}
 	noWait(t)
-	if _, err := InstallFirmware(context.Background(), exec); err == nil {
+	if _, err := InstallFirmware(context.Background(), exec, nil); err == nil {
 		t.Error("expected error from exec failure")
 	}
 }
@@ -301,7 +301,7 @@ func TestVersionAudit_AllFields(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected exec: %s %v", name, args)
 	}
-	got, err := VersionAudit(context.Background(), awg, exec)
+	got, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestVersionAudit_HrneoStatusFailed_LeavesInstalledUnknown(t *testing.T) {
 		return nil, fmt.Errorf("unexpected: %s %v", name, args)
 	}
 	// Опрос hrneo -- best-effort: его отказ не имеет права уронить весь аудит.
-	got, err := VersionAudit(context.Background(), awg, exec)
+	got, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestVersionAudit_HrneoNotInstalled(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected: %s %v", name, args)
 	}
-	got, err := VersionAudit(context.Background(), awg, exec)
+	got, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestVersionAudit_HrneoInstalledButStopped(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected: %s %v", name, args)
 	}
-	got, err := VersionAudit(context.Background(), awg, exec)
+	got, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestVersionAudit_SysInfoError(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("ignored")
 	}
-	_, err := VersionAudit(context.Background(), awg, exec)
+	_, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err == nil {
 		t.Fatal("expected non-nil error when SystemInfo fails")
 	}
@@ -500,7 +500,7 @@ func TestVersionAudit_CarriesKernelModuleFields(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("ignored: остальные источники здесь не при чём")
 	}
-	va, err := VersionAudit(context.Background(), awg, exec)
+	va, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestVersionAudit_KernelModuleNotLoadedIsAnswerNotSilence(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("ignored")
 	}
-	va, err := VersionAudit(context.Background(), awg, exec)
+	va, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +540,7 @@ func TestVersionAudit_CarriesLoadedKernelModuleVersion(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("ignored")
 	}
-	va, err := VersionAudit(context.Background(), awg, exec)
+	va, err := VersionAudit(context.Background(), awg, exec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +629,7 @@ func TestGetFirmwareStatus_ParseErrorCarriesExcerpt(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("\x1b[K\n   Components::Manager: list is being updated, try later.\n"), nil
 	}
-	_, err := GetFirmwareStatus(context.Background(), exec)
+	_, err := GetFirmwareStatus(context.Background(), exec, nil)
 	if err == nil || !strings.Contains(err.Error(), "list is being updated, try later.") {
 		t.Fatalf("err = %v", err)
 	}
@@ -639,7 +639,7 @@ func TestGetFirmwareStatus_FirmwareWithoutLocalMeansServerSilent(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("\x1b[K\n         firmware: \n          sandbox: stable\n"), nil
 	}
-	_, err := GetFirmwareStatus(context.Background(), exec)
+	_, err := GetFirmwareStatus(context.Background(), exec, nil)
 	if err == nil || !strings.HasPrefix(err.Error(), FirmwareServerSilent) {
 		t.Fatalf("err = %v", err)
 	}
@@ -649,7 +649,7 @@ func TestGetFirmwareStatus_ExecErrorCarriesExcerpt(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("Core::Ndss: cannot connect to the server.\n"), errors.New("exit status 1")
 	}
-	_, err := GetFirmwareStatus(context.Background(), exec)
+	_, err := GetFirmwareStatus(context.Background(), exec, nil)
 	if err == nil || !strings.Contains(err.Error(), "cannot connect to the server") {
 		t.Fatalf("err = %v", err)
 	}
@@ -683,8 +683,10 @@ const logBefore = "I [Sep 30 11:30:37] ndm: Core::System::StartupConfig: configu
 
 func noWait(t *testing.T) {
 	old := firmwareWatch
+	oldRCI := firmwareWatchRCI
 	firmwareWatch = firmwareWatchCfg{total: 3, sleep: func(context.Context) error { return nil }}
-	t.Cleanup(func() { firmwareWatch = old })
+	firmwareWatchRCI = firmwareWatch
+	t.Cleanup(func() { firmwareWatch, firmwareWatchRCI = old, oldRCI })
 }
 
 func TestInstallFirmware_NdssFailureIsError(t *testing.T) {
@@ -695,7 +697,7 @@ func TestInstallFirmware_NdssFailureIsError(t *testing.T) {
 		"E [Sep 30 11:31:54] ndm: Components::UpdateTask: request failed (0).\n" +
 		"W [Sep 30 11:31:54] ndm: Components::Manager: update interrupted.\n"
 	exec, _ := fakeFirmwareExec(logBefore, after)
-	_, err := InstallFirmware(context.Background(), exec)
+	_, err := InstallFirmware(context.Background(), exec, nil)
 	if err == nil || !strings.HasPrefix(err.Error(), FirmwareInterrupted) || !strings.Contains(err.Error(), "cannot connect to the server") {
 		t.Fatalf("err = %v", err)
 	}
@@ -707,8 +709,8 @@ func TestInstallFirmware_NdssFailureIsError(t *testing.T) {
 func TestInstallFirmware_StartedWithoutFailure(t *testing.T) {
 	noWait(t)
 	after := logBefore + "I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n"
-	exec, _ := fakeFirmwareExec(logBefore, after, after, after)
-	msg, err := InstallFirmware(context.Background(), exec)
+	exec, rci, _ := fakeFirmware(rciCommitStarted, nil, logBefore, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
 	if err != nil || msg != FirmwareStartedMsg {
 		t.Fatalf("%q %v", msg, err)
 	}
@@ -717,8 +719,9 @@ func TestInstallFirmware_StartedWithoutFailure(t *testing.T) {
 func TestInstallFirmware_SilenceIsUnconfirmed(t *testing.T) {
 	noWait(t)
 	exec, _ := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
-	msg, err := InstallFirmware(context.Background(), exec)
-	if err != nil || msg != FirmwareUnconfirmedMsg {
+	msg, err := InstallFirmware(context.Background(), exec, nil)
+	// Путь ndmc (RCI нет): к метке дописана пометка, начало строки прежнее.
+	if err != nil || !strings.HasPrefix(msg, FirmwareUnconfirmedMsg) {
 		t.Fatalf("%q %v", msg, err)
 	}
 }
@@ -727,8 +730,8 @@ func TestInstallFirmware_IgnoresOldLines(t *testing.T) {
 	noWait(t)
 	old := "W [Sep 29 09:00:00] ndm: Components::Manager: update interrupted.\n"
 	after := old + "I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n"
-	exec, _ := fakeFirmwareExec(old, after, after, after)
-	msg, err := InstallFirmware(context.Background(), exec)
+	exec, rci, _ := fakeFirmware(rciCommitStarted, nil, old, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
 	if err != nil || msg != FirmwareStartedMsg {
 		t.Fatalf("старая строка засчитана: %q %v", msg, err)
 	}
@@ -742,7 +745,7 @@ func TestInstallFirmware_CommitErrorStillError(t *testing.T) {
 		}
 		return []byte(logBefore), nil
 	}
-	_, err := InstallFirmware(context.Background(), exec)
+	_, err := InstallFirmware(context.Background(), exec, nil)
 	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
 		t.Fatalf("err = %v", err)
 	}
@@ -753,8 +756,8 @@ func TestInstallFirmware_NdssAloneIsNotFailure(t *testing.T) {
 	after := logBefore +
 		"I [Sep 30 11:31:54] ndm: Components::Manager: update task started.\n" +
 		"E [Sep 30 11:31:54] ndm: Core::Ndss: [7758] cannot connect to the server.\n"
-	exec, _ := fakeFirmwareExec(logBefore, after, after, after)
-	msg, err := InstallFirmware(context.Background(), exec)
+	exec, rci, _ := fakeFirmware(rciCommitStarted, nil, logBefore, after, after, after)
+	msg, err := InstallFirmware(context.Background(), exec, rci)
 	if err != nil || msg != FirmwareStartedMsg {
 		t.Fatalf("%q %v", msg, err)
 	}
@@ -777,8 +780,9 @@ func TestInstallFirmware_PreReadFailureIsUnconfirmed(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected %v", args)
 	}
-	msg, err := InstallFirmware(context.Background(), exec)
-	if err != nil || msg != FirmwareUnconfirmedMsg {
+	msg, err := InstallFirmware(context.Background(), exec, nil)
+	// Путь ndmc (RCI нет): к метке дописана пометка, начало строки прежнее.
+	if err != nil || !strings.HasPrefix(msg, FirmwareUnconfirmedMsg) {
 		t.Fatalf("%q %v", msg, err)
 	}
 }

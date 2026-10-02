@@ -107,14 +107,31 @@ func runBackup(opts backupCommandOptions) error {
 			}
 		}
 	}
+	// JSON-хранилища вне базы: панели, свои серверы, ключи кабинетов, коды
+	// HideMy. Без них бэкап не восстанавливал то, что стёрло пересоздание
+	// контейнера 02.10.2026. Файла нет -- не ошибка: хранилище ещё не заводили.
+	var stores []string
+	for _, st := range cfg.StoreFiles() {
+		src := resolveLayoutPath(st.Path, opts.LayoutRoot)
+		if info, err := os.Stat(src); err != nil || !info.Mode().IsRegular() {
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("stat store %s: %w", st.Name, err)
+			}
+			continue
+		}
+		if err := copyFile(src, filepath.Join(tmpDir, st.Name), 0o600); err != nil {
+			return err
+		}
+		stores = append(stores, st.Name)
+	}
 	if err := writeAgentsCSV(dbCopy, filepath.Join(tmpDir, "agents.csv")); err != nil {
 		return err
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	if err := writeManifest(filepath.Join(tmpDir, "manifest.txt"), stamp, cfg.DBPath, opts.ConfigPath); err != nil {
+	if err := writeManifest(filepath.Join(tmpDir, "manifest.txt"), stamp, cfg.DBPath, opts.ConfigPath, stores); err != nil {
 		return err
 	}
-	plainTGZ, err := makeTGZ(tmpDir, []string{
+	plainTGZ, err := makeTGZ(tmpDir, append([]string{
 		"state.db",
 		"backend.yaml",
 		"bot-token.txt",
@@ -122,7 +139,7 @@ func runBackup(opts backupCommandOptions) error {
 		"agents.csv",
 		"manifest.txt",
 		"operator-secrets.tgz.enc",
-	})
+	}, stores...))
 	if err != nil {
 		return err
 	}
@@ -204,6 +221,8 @@ func loadBackupConfig(path string) (*backend.Config, error) {
 	if cfg.Telegram.ChatID == 0 && cfg.Telegram.AdminUserID == 0 {
 		return nil, fmt.Errorf("telegram chat_id/admin_user_id is required")
 	}
+	// Те же пути хранилищ, что видит работающий бэкенд.
+	backend.ApplyStoreDefaults(&cfg)
 	return &cfg, nil
 }
 
@@ -270,9 +289,11 @@ func csvCell(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-func writeManifest(path, stamp, dbPath, configPath string) error {
-	body := fmt.Sprintf("name=wg-monitor-full-backup\ncreated_utc=%s\nbackend_version=%s\ndb_path=%s\nconfig_path=%s\nhost=%s\nformat=encrypted-full-v1\n",
-		stamp, Version, dbPath, configPath, hostname())
+// writeManifest пишет паспорт архива. stores -- имена JSON-хранилищ, попавших
+// в архив (только имена: содержимое -- секреты).
+func writeManifest(path, stamp, dbPath, configPath string, stores []string) error {
+	body := fmt.Sprintf("name=wg-monitor-full-backup\ncreated_utc=%s\nbackend_version=%s\ndb_path=%s\nconfig_path=%s\nhost=%s\nformat=encrypted-full-v1\nstores=%s\n",
+		stamp, Version, dbPath, configPath, hostname(), strings.Join(stores, ","))
 	return os.WriteFile(path, []byte(body), 0o600)
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"log/slog"
-	"path/filepath"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
@@ -11,10 +10,10 @@ import (
 
 var _ backend.Awg3Panels = (*awg3panel.Service)(nil)
 
-// awg3StorePath -- файл awg3-панелей рядом с файлом своих серверов: тот же
-// каталог состояния, тот же том докера, те же права.
+// awg3StorePath -- файл awg3-панелей рядом с файлом своих серверов (правило
+// живёт в backend.Awg3StorePath: по нему же файл попадает в бэкап).
 func awg3StorePath(selfHosted selfhostedamnezia.Config) string {
-	return filepath.Join(filepath.Dir(selfHosted.StorePathOrDefault()), awg3panel.DefaultStoreName)
+	return backend.Awg3StorePath(selfHosted)
 }
 
 // newAwg3PanelService -- панели без фонового опроса; корни TLS -- системные

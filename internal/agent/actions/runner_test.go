@@ -1142,7 +1142,8 @@ func TestRunner_FirmwareInstall_Allowed(t *testing.T) {
 	exec, calls := fakeFirmwareExec(logBefore, logBefore, logBefore, logBefore)
 	r := &Runner{AllowFirmwareInstall: true, Exec: exec}
 	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
-	if res.Status != "ok" || res.Output != FirmwareUnconfirmedMsg {
+	// Без RCI commit идёт старым путём ndmc -- он старта не доказывает.
+	if res.Status != "ok" || !strings.HasPrefix(res.Output, FirmwareUnconfirmedMsg) {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
 	commits := 0
@@ -1163,6 +1164,36 @@ func TestRunner_FirmwareInstall_NdssFailureIsErr(t *testing.T) {
 	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
 	if res.Status != "err" || !strings.HasPrefix(res.Output, FirmwareInterrupted) {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_FirmwareInstall_ViaRCI(t *testing.T) {
+	noWait(t)
+	exec, rci, calls := fakeFirmware(rciCommitStarted, nil, logBefore, logBefore)
+	r := &Runner{AllowFirmwareInstall: true, Exec: exec, RCI: rci}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
+	if res.Status != "ok" || res.Output != FirmwareStartedMsg {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if countCalls(*calls, rciCommitCall) != 1 || countCalls(*calls, "-c components commit") != 0 {
+		t.Fatalf("calls=%v", *calls)
+	}
+}
+
+func TestRunner_FirmwareStatus_ViaRCI(t *testing.T) {
+	noListWait(t)
+	rci, _ := listRCI(rciListHasUpdate)
+	r := &Runner{Exec: failExec(t), RCI: rci}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_status"})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	var fs wire.FirmwareStatus
+	if err := json.Unmarshal([]byte(res.Output), &fs); err != nil {
+		t.Fatalf("output not valid JSON FirmwareStatus: %v", err)
+	}
+	if fs.Current != "5.02.A.9.0-0" || fs.Available != "5.02.B.0.0-0" {
+		t.Fatalf("fs = %+v", fs)
 	}
 }
 
