@@ -155,7 +155,83 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
     return { tag: el.tagName.toLowerCase(), text: label(el), sel: sel(el), bg: cs.backgroundColor, border: cs.borderTopStyle, font: cs.fontFamily, color: cs.color }
   })
 
-  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua }
+  // Полоса «Мои роутеры» (проверка 9): видимая часть каждого чипа -- его
+  // прямоугольник, обрезанный ближайшим предком с прокруткой или обрезкой
+  // внутри полосы. hit -- что получит палец в середине видимой части.
+  const strip = []
+  const stripEl = document.querySelector('.router-strip')
+  if (stripEl && visible(stripEl)) {
+    const clipBox = (el) => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        if (getComputedStyle(p).overflowX !== 'visible') return p.getBoundingClientRect()
+        if (p === stripEl) break
+      }
+      return null
+    }
+    for (const chip of stripEl.querySelectorAll('.strip-chip')) {
+      const r = chip.getBoundingClientRect()
+      const box = clipBox(chip)
+      const left = box ? Math.max(r.left, box.left) : r.left
+      const right = box ? Math.min(r.right, box.right) : r.right
+      if (right - left <= 0 || r.height === 0) continue
+      const x = (left + right) / 2
+      const y = (r.top + r.bottom) / 2
+      const inView = x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight
+      strip.push({ text: label(chip), alert: chip.classList.contains('strip-chip-alert'), left, right, top: r.top, bottom: r.bottom, hit: inView ? chip.contains(document.elementFromPoint(x, y)) : true })
+    }
+  }
+
+  // Карточки одного ряда сетки (проверка 10): у карточек с рядом кнопок этот
+  // ряд обязан стоять на одной высоте -- иначе кнопки соседей «пляшут».
+  const gridCards = []
+  for (const grid of document.querySelectorAll('body *')) {
+    if (!visible(grid) || !/grid/.test(getComputedStyle(grid).display)) continue
+    const cards = [...grid.children].filter((c) => c.classList.contains('card') && visible(c))
+    if (cards.length < 2) continue
+    for (const c of cards) {
+      const btn = [...c.querySelectorAll('.action-row button, .action-row a.btn')].find(visible)
+      if (!btn) continue
+      gridCards.push({ sel: sel(grid), name: (c.innerText || '').trim().split('\n')[0].trim().slice(0, 40), top: c.getBoundingClientRect().top, btnTop: btn.getBoundingClientRect().top })
+    }
+  }
+
+  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua, strip, gridCards }
+}
+
+// Проверка 9: видимые части двух чипов полосы не пересекаются (допуск 0,5 px),
+// и касание в середину видимой части чипа попадает в него самого.
+export function stripProblems(strip = []) {
+  const out = []
+  for (let i = 0; i < strip.length; i++) {
+    for (let j = i + 1; j < strip.length; j++) {
+      const a = strip[i]
+      const b = strip[j]
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      if (w > 0.5 && h > 0.5) out.push(`чипы полосы перекрываются на ${Math.round(w)} px: «${a.text}» ${Math.round(a.left)}–${Math.round(a.right)} и «${b.text}» ${Math.round(b.left)}–${Math.round(b.right)}`)
+    }
+  }
+  for (const c of strip) if (c.hit === false) out.push(`касание чипа «${c.text}» попадает в другой элемент`)
+  return out
+}
+
+// Проверка 10: карточки одной сетки с одинаковым верхом -- один ряд; верх
+// первой кнопки у них обязан совпадать (допуск 1 px).
+export function gridRowProblems(cards = []) {
+  const out = []
+  const rows = new Map()
+  for (const c of cards) {
+    const key = `${c.sel}|${Math.round(c.top)}`
+    if (!rows.has(key)) rows.set(key, [])
+    rows.get(key).push(c)
+  }
+  for (const row of rows.values()) {
+    const tops = row.map((c) => c.btnTop)
+    if (row.length > 1 && Math.max(...tops) - Math.min(...tops) > 1) {
+      out.push(`кнопки карточек одного ряда на разной высоте: ${row.map((c) => `«${c.name}» ${Math.round(c.btnTop)}`).join(', ')} (${row[0].sel})`)
+    }
+  }
+  return out
 }
 
 // Проверка 8: кнопка, поле, список или раскрывашка в оформлении браузера --
@@ -203,6 +279,8 @@ export function findProblems(d) {
   for (const c of d.clipped) out.push({ check: 5, what: `текст обрезан: «${c.text}» ${c.sw} > ${c.cw} (${c.sel})` })
   for (const r of rowMismatches(d.rows)) out.push({ check: 6, what: `кнопки одного ряда разной высоты: ${r.items.map((i) => `«${i.text}» ${i.h}`).join(', ')} (${r.sel})` })
   for (const c of unstyledControls(d)) out.push({ check: 8, what: `элемент в оформлении браузера: «${c.text}» -- ${c.why.join('; ')} (${c.sel})` })
+  for (const w of stripProblems(d.strip)) out.push({ check: 9, what: w })
+  for (const w of gridRowProblems(d.gridCards)) out.push({ check: 10, what: w })
   return out
 }
 

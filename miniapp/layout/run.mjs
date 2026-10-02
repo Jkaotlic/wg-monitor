@@ -20,6 +20,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : null)).filter(Boolean))
 const roles = args.roles ? args.roles.split(',') : ROLES
 const widths = args.widths ? args.widths.split(',').map(Number) : WIDTHS
+// --screens a,b -- только эти экраны (отладка одного места; приёмка -- без него).
+const only = args.screens ? args.screens.split(',') : null
 const out = args.out ?? path.join(os.tmpdir(), `wgm-layout-${new Date().toISOString().replace(/[:.]/g, '-')}`)
 mkdirSync(out, { recursive: true })
 
@@ -180,8 +182,9 @@ async function runStep(page, step, routerName, role) {
     return (await page.$$('.fleet-row')).length > 0
   }
   if (step.stripScroll) {
+    // Прокрутка рукой: красный чип -- вне прокрутки, двигаются остальные.
     const ok = await page.evaluate((to) => {
-      const el = document.querySelector('.router-strip')
+      const el = document.querySelector('.router-strip .strip-scroll') ?? document.querySelector('.router-strip')
       if (!el) return false
       el.scrollLeft = to === 'end' ? el.scrollWidth : Number(to)
       return true
@@ -192,8 +195,9 @@ async function runStep(page, step, routerName, role) {
   if (step.stripPick) {
     for (const c of await page.$$('.router-strip .strip-chip')) {
       if ((await c.getAttribute('aria-label') ?? '').startsWith(step.stripPick)) {
-        // DOM-клик: чип под прилипшим красным не достать пальцем -- это не предмет проверки.
-        await c.evaluate((el) => el.click())
+        // Настоящее нажатие: Playwright сам докручивает чип в кадр и убеждается,
+        // что нажатие получает он, а не то, что лежит поверх.
+        await c.click({ timeout: 5000 })
         await page.waitForTimeout(900)
         return true
       }
@@ -201,29 +205,37 @@ async function runStep(page, step, routerName, role) {
     return false
   }
   if (step.stripExpect) {
-    // Геометрия полосы: красный чип стоит у левого поля содержимого (sticky left:0)
-    // и, когда перемотку сделало приложение, не пересекает текущий, а начало
-    // имени текущего в кадре. Числа -- в журнал прогона.
+    // Геометрия полосы: красный чип стоит у левого поля и НЕ пересекается ни с
+    // одним другим чипом (видимые части -- по краю своей прокрутки), где бы ни
+    // стояла прокрутка. 'effect' -- перемотку сделало приложение: текущий чип
+    // начинается в кадре. Числа -- в журнал прогона.
     const g = await page.evaluate(() => {
       const strip = document.querySelector('.router-strip')
       const red = strip?.querySelector('.strip-chip-alert')
       const cur = strip?.querySelector('.strip-chip-current')
       if (!strip || !red || !cur) return null
-      const cs = getComputedStyle(strip)
+      const scroll = strip.querySelector('.strip-scroll') ?? strip
       const sr = strip.getBoundingClientRect()
+      const box = scroll.getBoundingClientRect()
       const rr = red.getBoundingClientRect()
       const cr = cur.getBoundingClientRect()
+      const others = [...strip.querySelectorAll('.strip-chip')].filter((c) => c !== red).map((c) => {
+        const r = c.getBoundingClientRect()
+        const inScroll = scroll !== strip && scroll.contains(c)
+        return { name: c.textContent.trim(), left: inScroll ? Math.max(r.left, box.left) : r.left, right: inScroll ? Math.min(r.right, box.right) : r.right }
+      }).filter((o) => o.right > o.left)
       return {
-        contentLeft: sr.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth),
-        stripRight: sr.right,
+        stripLeft: sr.left, stripRight: sr.right, scrollBoxLeft: box.left,
         redLeft: rr.left, redRight: rr.right, curLeft: cr.left, curRight: cr.right,
-        same: red === cur, scrollLeft: strip.scrollLeft,
+        same: red === cur, scrollLeft: scroll.scrollLeft, scrollMax: scroll.scrollWidth - scroll.clientWidth, others,
       }
     })
     if (!g) return false
     console.log(`  [полоса ${step.stripExpect} ${role} ${page.viewportSize().width}] ` + JSON.stringify(g))
-    if (Math.abs(g.redLeft - g.contentLeft) > 0.5) return false
-    if (step.stripExpect === 'effect' && !g.same) return g.redRight <= g.curLeft && g.curLeft >= g.contentLeft && g.curLeft < g.stripRight
+    if (Math.abs(g.redLeft - g.stripLeft - 16) > 0.5) return false
+    if (g.others.some((o) => Math.min(o.right, g.redRight) - Math.max(o.left, g.redLeft) > 0.5)) return false
+    if (step.stripExpect === 'pinned') return g.scrollMax > 0 && Math.abs(g.scrollLeft - g.scrollMax) <= 1
+    if (step.stripExpect === 'effect' && !g.same) return g.curLeft >= g.redRight && g.curLeft >= g.scrollBoxLeft - 0.5 && g.curLeft < g.stripRight
     return true
   }
   if (step.sheetChoice) {
@@ -369,7 +381,7 @@ async function runPass(bin, role, width, port) {
     record(boot)
     if (boot.problems.some((p) => p.check === 0)) return
 
-    for (const screen of SCREENS.filter((s) => s.roles.includes(role) && (s.maxWidth == null || width <= s.maxWidth))) {
+    for (const screen of SCREENS.filter((s) => s.roles.includes(role) && (s.maxWidth == null || width <= s.maxWidth) && (!only || only.includes(s.id)))) {
       await reset(page)
       events.length = 0
       const entry = { role, width, screen: screen.id, router: null, problems: [] }

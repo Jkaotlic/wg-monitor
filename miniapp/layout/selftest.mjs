@@ -1,4 +1,4 @@
-// Самопроверка скрипта раскладки: на каждую из 8 проверок -- одна НАРУШАЮЩАЯ
+// Самопроверка скрипта раскладки: на каждую из 10 проверок -- одна НАРУШАЮЩАЯ
 // страница, на которой проверка обязана сработать, и одна чистая, на которой
 // не срабатывает ничего. Так видно, что проверка вообще умеет стрелять.
 // Запуск: node miniapp/layout/selftest.mjs  (код выхода 1 при любом провале).
@@ -8,11 +8,16 @@ import { watchNet } from './net.mjs'
 
 const base = '<style>body{margin:0;font:14px sans-serif} button,select{font:inherit;padding:0;border:0;background:#223}</style>'
 const btn = (t, extra = '') => `<button style="min-width:48px;height:48px;${extra}">${t}</button>`
+const chip = (n, extra = '') => `<button class="strip-chip" style="flex:none;height:44px;padding:0 12px;${extra}"><span>${n}</span></button>`
+const STRIP_LEAD = `<div class="strip-lead" style="flex:none;padding-right:8px">${chip('sandbox-broken').replace('strip-chip', 'strip-chip strip-chip-alert')}</div>`
+const gridCard = (name, line, extra = '') => `<div class="card" style="${extra}"><p style="margin:0">${name}</p><p style="margin:0">${line}</p><div class="action-row" style="display:flex;gap:8px">${btn('Открыть')}${btn('Ещё')}</div></div>`
 const CLEAN = `${base}<div style="padding:8px"><button class="btn-primary" style="width:120px;height:48px">Главная</button>
   <div style="display:flex;gap:8px;margin-top:8px">${btn('Раз')}${btn('Два')}</div>
   <div style="width:200px;overflow:hidden;white-space:nowrap"><span>короткий</span></div>
   <label style="display:inline-block;min-width:48px;min-height:48px"><input type="checkbox"> тумблер</label>
-  <div style="width:300px;overflow:hidden"><nav style="display:flex;gap:8px;overflow-x:auto;white-space:nowrap">${['router4car4new', 'дача-северная', 'sandbox-broken', 'четвёртый-роутер'].map((n) => `<button style="flex:none;height:44px;padding:0 12px"><span>${n}</span></button>`).join('')}</nav></div></div>`
+  <nav class="router-strip" style="display:flex;width:340px">${STRIP_LEAD}<div class="strip-scroll" style="display:flex;gap:8px;overflow-x:auto;white-space:nowrap;flex:1 1 0;min-width:0">${['router4car4new', 'дача-северная', 'четвёртый-роутер'].map((n) => chip(n)).join('')}</div></nav>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">${gridCard('первая', 'короткая строка')}${gridCard('вторая', 'короткая строка')}</div></div>
+  <script>document.querySelector('.strip-scroll').scrollLeft = 120</script>`
 
 const FIXTURES = [
   [1, 'страница шире окна', `${base}<div style="width:900px;height:20px;background:#ccc">широкая</div>`],
@@ -27,6 +32,9 @@ const FIXTURES = [
   [6, 'ряд кнопок разной высоты (прямые соседи)', `${base}<div style="display:flex;align-items:flex-start;gap:8px"><button style="height:64px;width:90px">Высокая</button><button style="height:44px;width:90px">Низкая</button></div>`],
   [6, 'ряд через display:contents', `${base}<div style="display:flex;align-items:flex-start;gap:8px"><div style="display:contents"><button style="height:64px;width:90px">Высокая</button></div><button style="height:44px;width:90px">Низкая</button></div>`],
   [6, 'разная высота при смещённом верхе (центр)', `${base}<div style="display:flex;align-items:center;gap:8px"><button style="height:64px;width:90px">Высокая</button><a class="btn" href="#x" style="display:inline-block;height:44px;width:90px">Ссылка</a></div>`],
+  // Прежнее устройство полосы: красный чип прилип внутри прокрутки, и прокрученный сосед уехал под него.
+  [9, 'чип под прилипшим красным', `${base}<nav class="router-strip" style="display:flex;gap:8px;width:340px;overflow-x:auto;white-space:nowrap">${chip('sandbox-broken', 'position:sticky;left:0;z-index:1').replace('strip-chip', 'strip-chip strip-chip-alert')}${['router4car4new', 'дача-северная', 'четвёртый-роутер'].map((n) => chip(n)).join('')}</nav><script>document.querySelector('.router-strip').scrollLeft = 120</script>`],
+  [10, 'кнопки карточек одного ряда на разной высоте', `${base}<div style="display:grid;grid-template-columns:150px 150px;gap:8px">${gridCard('первая', 'строка в два ряда строка в два ряда')}${gridCard('вторая', 'коротко')}</div>`],
   [8, 'кнопка в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><button style="min-width:120px;height:48px">голая кнопка</button>'],
   [8, 'поле ввода в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><input style="width:200px;height:48px" value="поле">'],
   [8, 'кнопка без фона, но со шрифтом браузера', '<style>body{margin:0;font:14px sans-serif}</style><button style="min-width:120px;height:48px;background:#223;border:0">чужой шрифт</button>'],

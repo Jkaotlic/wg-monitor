@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip, stripProblems, gridRowProblems } from '../layout/checks.js'
 import { SCREENS, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
@@ -114,5 +114,44 @@ describe('скрипт раскладки: оценщики', () => {
     expect(optionalSkip({ optional: true, routerOk: false, failedStep: -1, steps: 3 })).toBe(false)
     expect(optionalSkip({ optional: false, routerOk: true, failedStep: 2, steps: 3 })).toBe(false)
     expect(optionalSkip({ optional: true, routerOk: true, failedStep: -1, steps: 3 })).toBe(false)
+  })
+})
+
+// Проверки 9 и 10 (доводка v0.52): полоса роутеров и ряд карточек Парка.
+describe('скрипт раскладки: полоса роутеров (9)', () => {
+  const chipAt = (text, left, right, extra = {}) => ({ text, left, right, top: 70, bottom: 110, alert: false, hit: true, ...extra })
+  it('чипы рядом, касание попадает в свой чип -- находок нет', () => {
+    expect(stripProblems([chipAt('sandbox-broken', 16, 166, { alert: true }), chipAt('дача-северная', 174, 320), chipAt('router4car4new', 328, 360)])).toEqual([])
+    expect(findProblems({ ...clean, strip: [chipAt('a', 16, 106), chipAt('b', 114, 204)] })).toEqual([])
+  })
+  it('красный закрывает соседа -- находка с числами', () => {
+    const p = findProblems({ ...clean, strip: [chipAt('sandbox-broken', 16, 165.5, { alert: true }), chipAt('дача-северная', 41.5, 186.9, { hit: false })] })
+    expect(p.map((x) => x.check)).toEqual([9, 9])
+    expect(p[0].what).toContain('«sandbox-broken»')
+    expect(p[0].what).toContain('«дача-северная»')
+    expect(p[0].what).toContain('124')
+    expect(p[1].what).toContain('касание')
+  })
+  it('соприкосновение краями и полпикселя -- не наложение', () => {
+    expect(stripProblems([chipAt('a', 16, 106), chipAt('b', 106.4, 200)])).toEqual([])
+  })
+  it('чипы на разных строках не пересекаются', () => {
+    expect(stripProblems([chipAt('a', 16, 106), { ...chipAt('b', 16, 106), top: 120, bottom: 160 }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: кнопки карточек одного ряда сетки (10)', () => {
+  const card = (name, top, btnTop) => ({ sel: 'div.park-cards', name, top, btnTop })
+  it('в одном ряду кнопки на одной высоте -- находок нет', () => {
+    expect(gridRowProblems([card('a', 805, 917), card('b', 805, 917), card('c', 981, 1094), card('d', 981, 1094.4)])).toEqual([])
+  })
+  it('в одном ряду кнопки на разной высоте -- находка', () => {
+    const p = findProblems({ ...clean, gridCards: [card('sandbox-broken', 805, 917), card('sandbox-bronya', 805, 896)] })
+    expect(p.map((x) => x.check)).toEqual([10])
+    expect(p[0].what).toContain('«sandbox-broken» 917')
+    expect(p[0].what).toContain('«sandbox-bronya» 896')
+  })
+  it('карточки разных рядов и разных сеток не сравниваются', () => {
+    expect(gridRowProblems([card('a', 805, 917), card('b', 981, 1094), { ...card('c', 805, 870), sel: 'div.other' }])).toEqual([])
   })
 })
