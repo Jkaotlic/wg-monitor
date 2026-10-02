@@ -81,7 +81,7 @@ describe('строка «Бэкап» в карточке «Бэкенд»', () 
     const never = { last_ok_at: '', last_run_at: '', ok: false, size_bytes: 0, telegram: 'off' }
     expect(line({ known: true, small: never, full: { ...never, offsite: 'off' }, verify: { last_run_at: '', ok: false, routers: 0 } })).toEqual({
       text: 'Бэкап ещё не делался',
-      tone: 'danger',
+      tone: 'warn',
     })
   })
 
@@ -102,6 +102,29 @@ describe('строка «Бэкап» в карточке «Бэкенд»', () 
       full: full(),
     })
     expect(l.text).toBe('Малый бэкап не ушёл в Telegram: Telegram не принял архив · последний удачный 4 дн назад')
+  })
+
+  it('доставку винит только когда архив есть: размер 0 -- «не сделан» со словами причины', () => {
+    const built = line({
+      known: true,
+      small: small({ ok: false, telegram: 'error', size_bytes: 0, reason: 'не удалось собрать архив' }),
+      full: full(),
+      verify: verify(),
+    })
+    expect(built.text).toBe('Малый бэкап не сделан: не удалось собрать архив')
+    const fullBuilt = line({
+      known: true,
+      small: small(),
+      full: full({ ok: false, offsite: 'error', size_bytes: 0, reason: 'не удалось собрать архив' }),
+      verify: verify(),
+    })
+    expect(fullBuilt.text).toBe('Полный бэкап не сделан: не удалось собрать архив')
+  })
+
+  it('полный ни разу не запускался -- не «на диске Pi», а «ещё не делался»', () => {
+    const l = line({ known: true, small: small(), full: { last_ok_at: '', last_run_at: '', ok: false, size_bytes: 0, telegram: 'off', offsite: 'off' }, verify: verify() })
+    expect(l.text).toBe('Бэкап: сегодня 02:00 · малый 4 МБ ушёл в Telegram · полный ещё не делался · проверка восстановления 4 окт')
+    expect(l.tone).toBe('ok')
   })
 
   it('полный не сделан / не скопирован на сервер', () => {

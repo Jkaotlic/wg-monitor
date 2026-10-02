@@ -56,7 +56,7 @@ export function backupLine(fleet, opts = {}) {
   const lastGood = stale ? ` · последний удачный ${days} дн назад` : ''
   if (!running(small)) {
     if (!small.ok && small.last_run_at) {
-      const word = small.telegram === 'error' && !small.unfinished ? 'Малый бэкап не ушёл в Telegram' : 'Малый бэкап не сделан'
+      const word = small.telegram === 'error' && !small.unfinished && small.size_bytes > 0 ? 'Малый бэкап не ушёл в Telegram' : 'Малый бэкап не сделан'
       problems.push(`${word}${reasonTail(small)}${lastGood}`)
     } else if (!small.last_ok_at) {
       problems.push('Бэкап ещё не делался')
@@ -65,13 +65,17 @@ export function backupLine(fleet, opts = {}) {
     }
   }
   if (!running(full) && !full.ok && full.last_run_at) {
-    const word = full.offsite === 'error' && !full.unfinished ? 'Полный бэкап не скопирован на сервер' : 'Полный бэкап не сделан'
+    const word = full.offsite === 'error' && !full.unfinished && full.size_bytes > 0 ? 'Полный бэкап не скопирован на сервер' : 'Полный бэкап не сделан'
     problems.push(`${word}${reasonTail(full)}`)
   }
   if (verify.last_run_at && !verify.ok) {
     problems.push(`Проверка восстановления не прошла${reasonTail(verify)}`)
   }
-  if (problems.length) return { text: problems.join(' · '), tone: 'danger' }
+  if (problems.length) {
+    // Свежая установка (ни одного прогона) -- предупреждение, не беда.
+    const fresh = problems.length === 1 && problems[0] === 'Бэкап ещё не делался'
+    return { text: problems.join(' · '), tone: fresh ? 'warn' : 'danger' }
+  }
 
   const when = whenText(small.last_ok_at, opts).replace(', ', ' ')
   const parts = [when ? `Бэкап: ${when}` : 'Бэкап']
@@ -80,7 +84,7 @@ export function backupLine(fleet, opts = {}) {
     return [label === 'малый' ? 'малый' : 'полный', sizeText(s.size_bytes), where].filter(Boolean).join(' ')
   }
   parts.push(kind('малый', small, small.telegram === 'ok' ? 'ушёл в Telegram' : 'на диске Pi'))
-  parts.push(kind('полный', full, full.offsite === 'ok' ? 'на сервер' : 'на диске Pi'))
+  parts.push(full.last_run_at ? kind('полный', full, full.offsite === 'ok' ? 'на сервер' : 'на диске Pi') : 'полный ещё не делался')
   if (verify.last_run_at && verify.ok) {
     const day = whenText(verify.last_run_at, opts).replace(/,? \d{2}:\d{2}$/, '')
     if (day) parts.push(`проверка восстановления ${day}`)
