@@ -2,16 +2,21 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +29,19 @@ type RestoreBackup struct {
 	AgentsPath      string
 	Manifest        map[string]string
 	Agents          []RestoreAgent
+	// Extras -- хранилища и ключ оживления из архива (v0.53+): что и куда
+	// положить на сервере. В старых архивах их нет.
+	Extras []RestoreExtraFile
+	// Warnings -- что из архива восстановить не получится и почему.
+	Warnings []string
+}
+
+// RestoreExtraFile -- файл из архива, который восстановление кладёт на
+// сервер рядом с базой: JSON-хранилище или revive.key.
+type RestoreExtraFile struct {
+	Name       string // имя в архиве
+	LocalPath  string // куда извлечён локально
+	RemotePath string // куда лечь на сервере (режим 0600)
 }
 
 type RestoreAgent struct {
@@ -49,6 +67,134 @@ type restoreBackendConfig struct {
 		TokenFile         string `yaml:"token_file"`
 		BackendUpdateFile string `yaml:"backend_update_file"`
 	} `yaml:"wizard"`
+	Amnezia struct {
+		SecretsPath string `yaml:"secrets_path"`
+	} `yaml:"amnezia_premium"`
+	SelfHosted struct {
+		StorePath string `yaml:"store_path"`
+	} `yaml:"amnezia_selfhosted"`
+	HideMy struct {
+		SecretsPath string `yaml:"secrets_path"`
+	} `yaml:"hidemyname"`
+	Revive struct {
+		KeyFile string `yaml:"key_file"`
+	} `yaml:"revive"`
+}
+
+// Имена файлов архива, которые восстановление кладёт на сервер помимо базы
+// и конфига. Список хранилищ сверяется с бэкендом тестом
+// TestRestoreStoreNamesMatchBackend.
+const (
+	restoreAmneziaStore    = "amnezia-premium.json" // #nosec G101 -- имя файла хранилища, не секрет
+	restoreSelfHostedStore = "amnezia-selfhosted.json"
+	restoreAwg3Store       = "awg3-panels.json"
+	restoreHideMyStore     = "hidemyname.json"
+	restoreReviveKey       = "revive.key"
+
+	maxRestoreExtraBytes = 16 << 20
+)
+
+var restoreStoreNames = []string{restoreAmneziaStore, restoreSelfHostedStore, restoreAwg3Store, restoreHideMyStore}
+
+// storeDestination -- где бэкенд с этим конфигом ищет хранилище name: путь
+// из конфига, а не заданный -- рядом с базой. Панели awg3 лежат рядом с
+// файлом своих серверов. Та же логика, что backend.ApplyStoreDefaults.
+func (c *restoreBackendConfig) storeDestination(name string) string {
+	dbDir := path.Dir(strings.TrimSpace(c.DBPath))
+	explicit := func(configured, def string) string {
+		if p := strings.TrimSpace(configured); p != "" {
+			return p
+		}
+		return path.Join(dbDir, def)
+	}
+	switch name {
+	case restoreAmneziaStore:
+		return explicit(c.Amnezia.SecretsPath, restoreAmneziaStore)
+	case restoreSelfHostedStore:
+		return explicit(c.SelfHosted.StorePath, restoreSelfHostedStore)
+	case restoreAwg3Store:
+		return path.Join(path.Dir(explicit(c.SelfHosted.StorePath, restoreSelfHostedStore)), restoreAwg3Store)
+	case restoreHideMyStore:
+		return explicit(c.HideMy.SecretsPath, restoreHideMyStore)
+	}
+	return ""
+}
+
+var restoreDestinationRe = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+
+// validateRestoreDestination: путь из backend.yaml архива уходит в скрипт,
+// который на сервере исполняет root. Поэтому только обычные имена внутри
+// каталогов wg-monitor и не поверх файлов, которые восстановление кладёт само.
+func validateRestoreDestination(name, dest string) error {
+	bad := func(why string) error {
+		return fmt.Errorf("unsupported restore destination for %s: %q (%s)", name, dest, why)
+	}
+	if !restoreDestinationRe.MatchString(dest) || path.Clean(dest) != dest {
+		return bad("need a clean absolute path of letters, digits, dot, dash, underscore")
+	}
+	if !strings.HasPrefix(dest, "/var/lib/wg-monitor/") && !strings.HasPrefix(dest, "/etc/wg-monitor/") {
+		return bad("must be under /var/lib/wg-monitor or /etc/wg-monitor")
+	}
+	for _, reserved := range []string{
+		restoreRemoteDBPath, restoreRemoteBotTokenPath, restoreRemoteWizardTokenPath, restoreRemoteBackendUpdatePath,
+		"/etc/wg-monitor/backend.yaml", "/etc/wg-monitor/backup-passphrase.txt",
+	} {
+		if dest == reserved {
+			return bad("path is taken by another wg-monitor file")
+		}
+	}
+	return nil
+}
+
+// resolveRestoreExtras сопоставляет извлечённым хранилищам и ключу их места
+// на сервере по backend.yaml из того же архива.
+func resolveRestoreExtras(backendYAMLPath string, extracted map[string]string) (extras []RestoreExtraFile, warnings []string, err error) {
+	if len(extracted) == 0 {
+		return nil, nil, nil
+	}
+	cfg, err := readRestoreBackendYAML(backendYAMLPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	seenDest := map[string]string{}
+	for _, name := range append(append([]string{}, restoreStoreNames...), restoreReviveKey) {
+		local, ok := extracted[name]
+		if !ok {
+			continue
+		}
+		dest := cfg.storeDestination(name)
+		if name == restoreReviveKey {
+			dest = strings.TrimSpace(cfg.Revive.KeyFile)
+			if dest == "" {
+				warnings = append(warnings, "в архиве есть revive.key, но в backend.yaml не задан revive.key_file -- ключ на сервер не кладётся")
+				continue
+			}
+		}
+		if err := validateRestoreDestination(name, dest); err != nil {
+			return nil, nil, err
+		}
+		if other, taken := seenDest[dest]; taken {
+			return nil, nil, fmt.Errorf("unsupported restore destination for %s: %q (same path as %s)", name, dest, other)
+		}
+		seenDest[dest] = name
+		extras = append(extras, RestoreExtraFile{Name: name, LocalPath: local, RemotePath: dest})
+	}
+	return extras, warnings, nil
+}
+
+// isEncryptedBackupFile -- архив зашифрован (формат v1 или v2)?
+func isEncryptedBackupFile(archivePath string) (bool, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return false, fmt.Errorf("open backup archive: %w", err)
+	}
+	defer f.Close()
+	head := make([]byte, 16)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false, fmt.Errorf("read backup archive: %w", err)
+	}
+	return backup.IsEncrypted(head[:n]), nil
 }
 
 const (
@@ -58,15 +204,26 @@ const (
 	restoreRemoteBackendUpdatePath = "/var/lib/wg-monitor/backend-update.json"
 )
 
+// InspectRestoreBackup читает нешифрованный архив .tgz (старый формат).
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, validateRestoreBackendYAML)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAML, true)
+}
+
+// InspectRestoreBackupWithPassphrase читает архив любого вида: нешифрованный
+// .tgz, шифрованный v1 и потоковый v2 (малый и полный архивы v0.53+).
+// Шифрованный расшифровывается потоком прямо в распаковку -- открытого
+// архива целиком на диске не появляется.
+func InspectRestoreBackupWithPassphrase(archivePath, passphrase string) (*RestoreBackup, func(), error) {
+	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAML, true)
 }
 
 func InspectRestoreBackupForImport(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, validateRestoreBackendYAMLForImport)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAMLForImport, false)
 }
 
-func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) error) (*RestoreBackup, func(), error) {
+// inspectRestoreBackup: withExtras=false -- хранилища и ключ не извлекаются
+// (импорт секретов оператора: на сервер ничего не кладётся).
+func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML func(string) error, withExtras bool) (*RestoreBackup, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("temp dir: %w", err)
@@ -79,12 +236,31 @@ func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) e
 		return nil, nil, fmt.Errorf("open backup archive: %w", err)
 	}
 	defer in.Close()
-	gz, err := gzip.NewReader(in)
+	br := bufio.NewReaderSize(in, 64<<10)
+	var (
+		src io.Reader = br
+		dec io.Reader // не nil -- архив шифрованный, поток надо дочитать до конца
+	)
+	if head, _ := br.Peek(16); backup.IsEncrypted(head) {
+		if strings.TrimSpace(passphrase) == "" {
+			cleanup()
+			return nil, nil, fmt.Errorf("backup archive is encrypted: the backup recovery password is required")
+		}
+		dec, err = backup.NewDecryptReader(br, []byte(strings.TrimSpace(passphrase)))
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		src = dec
+	}
+	gz, err := gzip.NewReader(src)
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("gzip backup archive: %w", err)
 	}
 	defer gz.Close()
+	extraNames := append(append([]string{}, restoreStoreNames...), restoreReviveKey)
+	extracted := map[string]string{}
 
 	tr := tar.NewReader(gz)
 	seen := map[string]string{}
@@ -137,7 +313,44 @@ func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) e
 				cleanup()
 				return nil, nil, fmt.Errorf("backup archive contains unexpected restore member path %q", hdr.Name)
 			}
-			// Ignore future archive members.
+			if !slices.Contains(extraNames, base) {
+				continue // Ignore future archive members.
+			}
+			if name != base {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive contains unexpected restore member path %q", hdr.Name)
+			}
+			if _, dup := extracted[name]; dup {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive contains duplicate restore member %q", hdr.Name)
+			}
+			if !withExtras {
+				extracted[name] = ""
+				continue
+			}
+			body, err := readArchiveMemberLimited(tr, name, maxRestoreExtraBytes)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			dst := filepath.Join(tmpDir, name)
+			if err := os.WriteFile(dst, body, 0o600); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("create extracted %s: %w", name, err)
+			}
+			extracted[name] = dst
+		}
+	}
+	if dec != nil {
+		// tar останавливается на своём конце; дочитываем поток, иначе
+		// обрезанный или дописанный шифрованный архив сойдёт за целый.
+		if _, err := io.Copy(io.Discard, gz); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("gzip backup archive: %w", err)
+		}
+		if _, err := io.Copy(io.Discard, dec); err != nil {
+			cleanup()
+			return nil, nil, err
 		}
 	}
 
@@ -165,6 +378,18 @@ func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) e
 		return nil, nil, err
 	}
 
+	var (
+		extras   []RestoreExtraFile
+		warnings []string
+	)
+	if withExtras {
+		extras, warnings, err = resolveRestoreExtras(seen["backend.yaml"], extracted)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+
 	return &RestoreBackup{
 		ArchivePath:     archivePath,
 		TempDir:         tmpDir,
@@ -174,6 +399,8 @@ func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) e
 		AgentsPath:      seen["agents.csv"],
 		Manifest:        manifest,
 		Agents:          agents,
+		Extras:          extras,
+		Warnings:        warnings,
 	}, cleanup, nil
 }
 
@@ -315,32 +542,61 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 	if info != nil {
 		size = info.Size()
 	}
-	return fmt.Sprintf(
-		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d",
+	var stores []string
+	reviveKey := "no (not in the backup: saved router passwords must be entered again after the restore)"
+	for _, e := range b.Extras {
+		if e.Name == restoreReviveKey {
+			reviveKey = "yes"
+			continue
+		}
+		stores = append(stores, e.Name)
+	}
+	out := fmt.Sprintf(
+		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d\nstores: %s\nrevive.key: %s",
 		b.ArchivePath,
 		emptyDash(b.Manifest["created_utc"]),
 		emptyDash(b.Manifest["host"]),
 		emptyDash(b.Manifest["backend_version"]),
 		size,
 		len(b.Agents),
+		emptyDash(strings.Join(stores, ", ")),
+		reviveKey,
 	)
+	if b.Manifest["kind"] == "small" {
+		out += "\nkind: small (no event history: after restore the screens stay empty until agents report, up to a minute)"
+	}
+	return out
 }
 
 func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opts RestoreBackupOptions) error {
 	path := strings.TrimSpace(opts.ArchivePath)
 	if path == "" {
-		path = strings.TrimSpace(Ask("Path to wg-monitor backup .tgz", ""))
+		path = strings.TrimSpace(Ask("Path to wg-monitor backup (.tgz or .tgz.enc)", ""))
 	}
 	if path == "" {
 		return fmt.Errorf("backup archive path is required")
 	}
 
-	backup, cleanup, err := InspectRestoreBackup(path)
+	passphrase := ""
+	encrypted, err := isEncryptedBackupFile(path)
+	if err != nil {
+		return err
+	}
+	if encrypted {
+		passphrase, _ = secrets.Get(backupPassphraseEnv, "Backup recovery password", nil)
+		if strings.TrimSpace(passphrase) == "" {
+			return fmt.Errorf("backup archive is encrypted: the backup recovery password is required")
+		}
+	}
+	backup, cleanup, err := InspectRestoreBackupWithPassphrase(path, passphrase)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 	fmt.Println(RenderRestoreBackupPreview(backup))
+	for _, w := range backup.Warnings {
+		PrintWarn(w)
+	}
 
 	mode := strings.ToLower(strings.TrimSpace(opts.Mode))
 	if opts.DryRun || mode == "dry-run" || mode == "inspect" {
@@ -388,11 +644,12 @@ func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *Resto
 	defer s.Close()
 
 	PrintStep(2, 4, "Upload backup files")
-	if err := uploadRestoreBackupFiles(s, backup); err != nil {
+	staging, err := uploadRestoreBackupFiles(s, backup)
+	if err != nil {
 		return err
 	}
 	PrintStep(3, 4, "Apply backend state")
-	if err := applyRestoreBackupOnRemote(s); err != nil {
+	if err := applyRestoreBackupOnRemote(s, staging, backup.Extras); err != nil {
 		return err
 	}
 	PrintStep(4, 4, "Verify backend")
@@ -515,11 +772,12 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	}
 
 	PrintStep(9, 12, "Upload backup files")
-	if err := uploadRestoreBackupFiles(s, backup); err != nil {
+	staging, err := uploadRestoreBackupFiles(s, backup)
+	if err != nil {
 		return err
 	}
 	PrintStep(10, 12, "Apply restored DB/config")
-	if err := applyRestoreBackupOnRemote(s); err != nil {
+	if err := applyRestoreBackupOnRemote(s, staging, backup.Extras); err != nil {
 		return err
 	}
 	PrintStep(11, 12, "Verify backend")
@@ -534,58 +792,138 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	return nil
 }
 
-func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) error {
-	if _, err := s.MustRun("rm -rf /tmp/wg-monitor-restore && mkdir -p /tmp/wg-monitor-restore"); err != nil {
-		return err
+// restoreStagingRe -- каталог выгрузки на сервере: непредсказуемое имя от
+// mktemp в /tmp. Имя уходит в скрипт, который исполняет root, поэтому
+// принимается только эта форма.
+var restoreStagingRe = regexp.MustCompile(`^/tmp/wg-monitor-restore\.[A-Za-z0-9]{6,}$`)
+
+// restoreStagingPrefix -- шаблон mktemp для каталога выгрузки.
+const restoreStagingPrefix = "/tmp/wg-monitor-restore."
+
+// removeRestoreStaging убирает каталог выгрузки на сервере; ошибка уборки
+// ничего не меняет в исходе восстановления, но о ней говорим.
+func removeRestoreStaging(s *SSH, staging string) {
+	if !restoreStagingRe.MatchString(staging) {
+		return
 	}
+	if _, err := s.MustRun("rm -rf " + staging); err != nil {
+		PrintWarn("не удалось убрать " + staging + " на сервере: " + err.Error())
+	}
+}
+
+// uploadRestoreBackupFiles выгружает базу, конфиг и хранилища в новый каталог
+// mktemp -d (0700, имя не угадать) и возвращает его путь. При любом провале
+// выгрузки каталог убирается.
+func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, err error) {
+	out, err := s.MustRun("mktemp -d " + restoreStagingPrefix + "XXXXXXXXXX")
+	if err != nil {
+		return "", err
+	}
+	staging = strings.TrimSpace(out)
+	if !restoreStagingRe.MatchString(staging) {
+		return "", fmt.Errorf("unexpected staging directory from mktemp: %q", staging)
+	}
+	defer func() {
+		if err != nil {
+			removeRestoreStaging(s, staging)
+		}
+	}()
 	db, err := os.ReadFile(backup.StateDBPath)
 	if err != nil {
-		return fmt.Errorf("read extracted state.db: %w", err)
+		return staging, fmt.Errorf("read extracted state.db: %w", err)
 	}
-	if err := stepUploadFile(s, "/tmp/wg-monitor-restore/state.db", db, "600"); err != nil {
-		return err
+	if err = stepUploadFile(s, staging+"/state.db", db, "600"); err != nil {
+		return staging, err
 	}
 	yamlBytes, err := os.ReadFile(backup.BackendYAMLPath)
 	if err != nil {
-		return fmt.Errorf("read extracted backend.yaml: %w", err)
+		return staging, fmt.Errorf("read extracted backend.yaml: %w", err)
 	}
-	return stepUploadFile(s, "/tmp/wg-monitor-restore/backend.yaml", yamlBytes, "600")
+	if err = stepUploadFile(s, staging+"/backend.yaml", yamlBytes, "600"); err != nil {
+		return staging, err
+	}
+	for _, e := range backup.Extras {
+		body, rerr := os.ReadFile(e.LocalPath)
+		if rerr != nil {
+			return staging, fmt.Errorf("read extracted %s: %w", e.Name, rerr)
+		}
+		if err = stepUploadFile(s, staging+"/"+e.Name, body, "600"); err != nil {
+			return staging, err
+		}
+	}
+	return staging, nil
 }
 
-func applyRestoreBackupOnRemote(s *SSH) error {
+func applyRestoreBackupOnRemote(s *SSH, staging string, extras []RestoreExtraFile) error {
+	if !restoreStagingRe.MatchString(staging) {
+		return fmt.Errorf("unexpected staging directory %q", staging)
+	}
 	if err := ensureRemoteSQLite3(s); err != nil {
+		removeRestoreStaging(s, staging)
 		return err
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	if _, err := s.MustRun(buildRestoreRemoteScript(stamp)); err != nil {
+	if _, err := s.MustRun(buildRestoreRemoteScript(stamp, staging, extras...)); err != nil {
+		// Сам скрипт убирает каталог при любом исходе, но если оборвалась
+		// связь, он мог не дойти до этого.
+		removeRestoreStaging(s, staging)
 		return err
 	}
 	return nil
 }
 
-func buildRestoreRemoteScript(stamp string) string {
+// buildRestoreRemoteScript собирает скрипт, который на сервере кладёт базу,
+// конфиг, а также хранилища и ключ оживления (extras) на место: проверки до
+// остановки бэкенда, копии прежних файлов, откат при сбое, уборка каталога
+// выгрузки staging с секретами при любом исходе -- ловушка очистки взводится
+// сразу после set -eu, раньше первой проверки.
+func buildRestoreRemoteScript(stamp, staging string, extras ...RestoreExtraFile) string {
+	var preflight, rollback, backupOld, install strings.Builder
+	for _, e := range extras {
+		src := shellSingleQuote(staging + "/" + e.Name)
+		dst := shellSingleQuote(e.RemotePath)
+		bak := shellSingleQuote(e.RemotePath + ".bak." + stamp)
+		dir := shellSingleQuote(path.Dir(e.RemotePath))
+		fmt.Fprintf(&preflight, "test -s %s\n", src)
+		fmt.Fprintf(&rollback, "\tif [ -f %s ]; then\n\t\tcp -p %s %s || true\n\tfi\n", bak, bak, dst)
+		fmt.Fprintf(&backupOld, "if [ -f %s ]; then cp -p %s %s; fi\n", dst, dst, bak)
+		fmt.Fprintf(&install, "[ -d %s ] || install -d -m 700 -o wgmonitor -g wgmonitor %s\n", dir, dir)
+		fmt.Fprintf(&install, "install -m 600 -o wgmonitor -g wgmonitor %s %s\n", src, dst)
+	}
 	return fmt.Sprintf(`set -eu
-test "$(sqlite3 /tmp/wg-monitor-restore/state.db 'PRAGMA integrity_check;')" = "ok"
+trap 'rm -rf %[6]s' EXIT
+test "$(sqlite3 %[6]s/state.db 'PRAGMA integrity_check;')" = "ok"
 test -s /etc/wg-monitor/bot-token.txt
 test -s /etc/wg-monitor/wizard-token.txt
-rollback() {
+%[2]srollback() {
+	rm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm
 	if [ -f /var/lib/wg-monitor/state.db.bak.%[1]s ]; then
 		cp -p /var/lib/wg-monitor/state.db.bak.%[1]s /var/lib/wg-monitor/state.db || true
+	fi
+	if [ -f /var/lib/wg-monitor/state.db-wal.bak.%[1]s ]; then
+		cp -p /var/lib/wg-monitor/state.db-wal.bak.%[1]s /var/lib/wg-monitor/state.db-wal || true
+	fi
+	if [ -f /var/lib/wg-monitor/state.db-shm.bak.%[1]s ]; then
+		cp -p /var/lib/wg-monitor/state.db-shm.bak.%[1]s /var/lib/wg-monitor/state.db-shm || true
 	fi
 	if [ -f /etc/wg-monitor/backend.yaml.bak.%[1]s ]; then
 		cp -p /etc/wg-monitor/backend.yaml.bak.%[1]s /etc/wg-monitor/backend.yaml || true
 	fi
-	systemctl start wg-monitor-backend 2>/dev/null || true
+%[3]s	systemctl start wg-monitor-backend 2>/dev/null || true
 }
 systemctl stop wg-monitor-backend 2>/dev/null || true
-trap 'rc=$?; if [ "$rc" != 0 ]; then rollback; fi; exit $rc' EXIT
+trap 'rc=$?; if [ "$rc" != 0 ]; then rollback; fi; rm -rf %[6]s; exit $rc' EXIT
 if [ -f /var/lib/wg-monitor/state.db ]; then cp -p /var/lib/wg-monitor/state.db /var/lib/wg-monitor/state.db.bak.%[1]s; fi
+if [ -f /var/lib/wg-monitor/state.db-wal ]; then cp -p /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-wal.bak.%[1]s; fi
+if [ -f /var/lib/wg-monitor/state.db-shm ]; then cp -p /var/lib/wg-monitor/state.db-shm /var/lib/wg-monitor/state.db-shm.bak.%[1]s; fi
 if [ -f /etc/wg-monitor/backend.yaml ]; then cp -p /etc/wg-monitor/backend.yaml /etc/wg-monitor/backend.yaml.bak.%[1]s; fi
-install -m 600 -o wgmonitor -g wgmonitor /tmp/wg-monitor-restore/state.db /var/lib/wg-monitor/state.db
-install -m 640 -o root -g wgmonitor /tmp/wg-monitor-restore/backend.yaml /etc/wg-monitor/backend.yaml
-systemctl start wg-monitor-backend
+%[4]srm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm
+install -m 600 -o wgmonitor -g wgmonitor %[6]s/state.db /var/lib/wg-monitor/state.db
+install -m 640 -o root -g wgmonitor %[6]s/backend.yaml /etc/wg-monitor/backend.yaml
+%[5]ssystemctl start wg-monitor-backend
 trap - EXIT
-`, stamp)
+rm -rf %[6]s
+`, stamp, preflight.String(), rollback.String(), backupOld.String(), install.String(), staging)
 }
 
 func verifyRestoredBackend(s *SSH, domain string) error {

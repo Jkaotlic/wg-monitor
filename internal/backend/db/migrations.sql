@@ -265,8 +265,8 @@ CREATE TABLE IF NOT EXISTS revive_intents (
 CREATE INDEX IF NOT EXISTS idx_revive_intents_status ON revive_intents(status);
 
 -- Секрет оживления: AES-256-GCM от JSON с паролями, AAD = user_id. Ключ лежит
--- в файле revive.key_file, а не в базе и не в бэкапе: утёкшая база без ключа
--- не расшифровывается. Строка стирается при done|failed|cancelled|expired.
+-- в файле revive.key_file, а не в базе: утёкшая база без ключа не
+-- расшифровывается (в зашифрованный ночной архив ключ едет с v0.53). Строка стирается при done|failed|cancelled|expired.
 CREATE TABLE IF NOT EXISTS revive_secrets (
     user_id    INTEGER PRIMARY KEY REFERENCES revive_intents(user_id) ON DELETE CASCADE,
     nonce      BLOB    NOT NULL,

@@ -28,6 +28,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/updatespoll"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
+	"github.com/Jkaotlic/wg-monitor/internal/backup"
 )
 
 var Version = "0.8.0-tunnel-import"
@@ -258,10 +259,12 @@ func main() {
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		HeartbeatStats: watcher.Snapshot,
-		DB:             d,
-		Dispatcher:     disp,
-		Resumer:        watcher,
-		CommandSink:    cmdQueue,
+		// Состояние ночного бэкапа: файл рядом с базой, читается по требованию.
+		BackupStatus: backend.NewBackupStatusSource(backup.StatusPath(cfg.DBPath), nil),
+		DB:           d,
+		Dispatcher:   disp,
+		Resumer:      watcher,
+		CommandSink:  cmdQueue,
 		// Кэш релизов апстрима: второй поход в GitHub сжёг бы лимит анонимного API.
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
@@ -418,6 +421,17 @@ func main() {
 		go dp.Run(ctx)
 		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
 	}
+
+	// Тревога админу в личку о бэкапе: давно не делался, прогон кончился
+	// ошибкой, проверка восстановления не прошла; не чаще раза в сутки на
+	// причину и одно «снова в порядке». Состояние -- в tg_state.
+	go backend.NewBackupAlerter(backend.BackupAlertConfig{
+		StatusPath:  backup.StatusPath(cfg.DBPath),
+		KV:          d.KV(),
+		Sender:      tgClient,
+		AdminUserID: cfg.Telegram.AdminUserID,
+		StartedAt:   time.Now(),
+	}).Run(ctx)
 
 	// Суточный опрос версий. Обычный отчёт приносит панель, прошивку,
 	// KeeneticOS и модуль ядра бесплатно, но про версию HydraRoute Neo и про

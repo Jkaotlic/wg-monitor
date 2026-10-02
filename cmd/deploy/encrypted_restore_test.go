@@ -131,7 +131,7 @@ func TestExtractTarMemberRejectsNestedTargetMember(t *testing.T) {
 		"nested/operator-secrets.tgz.enc": "vault",
 	})
 
-	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	_, err := extractTarMember(bytes.NewReader(plain), "operator-secrets.tgz.enc")
 	if err == nil || !strings.Contains(err.Error(), "unexpected member path") {
 		t.Fatalf("want nested member error, got %v", err)
 	}
@@ -143,7 +143,7 @@ func TestExtractTarMemberRejectsDuplicateTargetMember(t *testing.T) {
 		{name: "operator-secrets.tgz.enc", body: "replacement"},
 	})
 
-	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	_, err := extractTarMember(bytes.NewReader(plain), "operator-secrets.tgz.enc")
 	if err == nil || !strings.Contains(err.Error(), "duplicate member") {
 		t.Fatalf("want duplicate member error, got %v", err)
 	}
@@ -154,7 +154,7 @@ func TestExtractTarMemberRejectsOversizeTargetMember(t *testing.T) {
 		"operator-secrets.tgz.enc": strings.Repeat("A", (4<<20)+1),
 	})
 
-	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	_, err := extractTarMember(bytes.NewReader(plain), "operator-secrets.tgz.enc")
 	if err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("want oversize member error, got %v", err)
 	}

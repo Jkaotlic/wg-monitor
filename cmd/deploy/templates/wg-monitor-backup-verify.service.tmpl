@@ -1,0 +1,35 @@
+[Unit]
+Description=wg-monitor weekly backup restore check
+Documentation=https://github.com/Jkaotlic/wg-monitor
+
+[Service]
+Type=oneshot
+{{if not .OmitUserGroup}}
+User={{.User}}
+Group={{.Group}}
+{{end}}
+# Разворачивает последний малый архив во временный каталог и сверяет базу из
+# него со счётчиками, записанными в манифест при бэкапе: целостность, число
+# роутеров, владельцев и операторов, хранилища из строки stores=. Ключа
+# оживления в бэкапе нет по правилу. Итог -- в секции verify файла
+# backup-status.json.
+ExecStart={{.BinaryPath}} backup verify --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}}
+
+{{if not .OmitHardening}}
+# Hardening mirrors the backend service; the check needs no network.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome={{.ProtectHomeMode}}
+ReadWritePaths={{.ReadWritePath}}
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+{{end}}

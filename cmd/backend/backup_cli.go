@@ -1,20 +1,24 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
@@ -23,6 +27,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// backupCommandOptions -- флаги `wg-monitor-backend backup`.
 type backupCommandOptions struct {
 	ConfigPath     string
 	PassphraseFile string
@@ -32,9 +37,57 @@ type backupCommandOptions struct {
 	SendTelegram   bool
 	LimitBytes     int64
 	TestKDF        bool
+
+	// Kind -- какой архив делать: small, full или both.
+	Kind string
+	// OffsiteSCP -- куда копировать полный архив (user@host:path); пусто --
+	// внешняя цель не настроена. OffsiteKey -- файл ключа SSH для неё.
+	OffsiteSCP string
+	OffsiteKey string
+	// Хранение. -1 -- значение не задано: берётся более общее, затем
+	// умолчание вида (малый 7/4, полный 3/0).
+	KeepDaily       int
+	KeepWeekly      int
+	SmallKeepDaily  int
+	SmallKeepWeekly int
+	FullKeepDaily   int
+	FullKeepWeekly  int
+
+	// Швы для тестов; nil -- настоящие часы, Telegram и запуск команд.
+	now          func() time.Time
+	sendDocument func(ctx context.Context, token string, chatID int64, path, caption string) error
+	runCommand   backupExecFunc
+	stdout       io.Writer
 }
 
+// backupExecFunc запускает внешнюю команду и возвращает её общий вывод.
+type backupExecFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+const (
+	backupKindSmall = "small"
+	backupKindFull  = "full"
+	backupKindBoth  = "both"
+
+	// Временные каталоги и недописанные архивы живут в --out-dir: тот же
+	// том, что и готовые архивы, и никогда не /tmp (он бывает в памяти).
+	backupTempPrefix    = ".tmp-wg-monitor-backup."
+	backupPartialSuffix = ".partial"
+	// Старше этого возраста временные файлы считаются брошенными убитым
+	// прогоном и убираются на старте следующего.
+	backupStaleAfter = 6 * time.Hour
+	// Сколько ждём scp: 2 ГБ по медленному каналу -- это десятки минут.
+	backupOffsiteTimeout = time.Hour
+)
+
 func runBackupCommand(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "verify":
+			return runBackupVerifyCommand(args[1:])
+		case "extract":
+			return runBackupExtractCommand(args[1:])
+		}
+	}
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	opts := backupCommandOptions{}
@@ -43,142 +96,583 @@ func runBackupCommand(args []string) error {
 	fs.StringVar(&opts.OperatorVault, "operator-vault", "", "optional encrypted operator secrets vault")
 	fs.StringVar(&opts.OutDir, "out-dir", "/var/lib/wg-monitor/backups", "backup output directory")
 	fs.StringVar(&opts.LayoutRoot, "layout-root", "", "host root for container-style /data and /secrets paths")
-	fs.BoolVar(&opts.SendTelegram, "send-telegram", false, "send encrypted backup to Telegram")
-	fs.Int64Var(&opts.LimitBytes, "limit-bytes", 47185920, "Telegram document size limit")
+	fs.StringVar(&opts.Kind, "kind", backupKindBoth, "which archive to make: small, full or both")
+	fs.BoolVar(&opts.SendTelegram, "send-telegram", false, "send the small encrypted backup to Telegram")
+	fs.Int64Var(&opts.LimitBytes, "limit-bytes", 47185920, "Telegram document size limit (small archive)")
+	fs.StringVar(&opts.OffsiteSCP, "offsite-scp", "", "copy the full archive to user@host:path with scp")
+	fs.StringVar(&opts.OffsiteKey, "offsite-key", "", "SSH private key file for --offsite-scp")
+	fs.IntVar(&opts.KeepDaily, "keep-daily", -1, "daily archives to keep, for every kind in this run")
+	fs.IntVar(&opts.KeepWeekly, "keep-weekly", -1, "weekly archives to keep, for every kind in this run")
+	fs.IntVar(&opts.SmallKeepDaily, "small-keep-daily", -1, "daily small archives to keep (default 7)")
+	fs.IntVar(&opts.SmallKeepWeekly, "small-keep-weekly", -1, "weekly small archives to keep (default 4)")
+	fs.IntVar(&opts.FullKeepDaily, "full-keep-daily", -1, "daily full archives to keep (default 3)")
+	fs.IntVar(&opts.FullKeepWeekly, "full-keep-weekly", -1, "weekly full archives to keep (default 0)")
 	fs.BoolVar(&opts.TestKDF, "test-kdf", false, "use lightweight KDF params for tests")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return runBackup(opts)
+	if fs.NArg() > 0 {
+		return fmt.Errorf("backup: unexpected argument %q", fs.Arg(0))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runBackup(ctx, opts)
 }
 
-func runBackup(opts backupCommandOptions) error {
+// retentionFor -- правило хранения вида: свой флаг, затем общий, затем умолчание.
+func (o backupCommandOptions) retentionFor(kind backup.Kind) backup.Retention {
+	r := backup.DefaultRetention(kind)
+	daily, weekly := o.SmallKeepDaily, o.SmallKeepWeekly
+	if kind == backup.KindFull {
+		daily, weekly = o.FullKeepDaily, o.FullKeepWeekly
+	}
+	for _, v := range []int{o.KeepDaily, daily} {
+		if v >= 0 {
+			r.KeepDaily = v
+		}
+	}
+	for _, v := range []int{o.KeepWeekly, weekly} {
+		if v >= 0 {
+			r.KeepWeekly = v
+		}
+	}
+	return r
+}
+
+// backupEnv -- всё, что нужно прогону одного вида.
+type backupEnv struct {
+	opts       backupCommandOptions
+	cfg        *backend.Config
+	pass       []byte
+	params     backup.Params
+	dbPath     string
+	botToken   string // для вычистки из текстов ошибок; читается лениво
+	statusPath string
+	now        time.Time
+}
+
+// kindResult -- итог прогона одного вида; из него пишется секция состояния.
+type kindResult struct {
+	file     string
+	size     int64
+	telegram string
+	offsite  string
+	err      error
+}
+
+// runBackup делает архивы запрошенных видов. Провал одного вида не отменяет
+// другой; ошибка возвращается, если не удался хотя бы один. После каждого
+// вида его итог сразу уходит в backup-status.json: если следующий вид
+// убьют по памяти, про первый уже записано.
+func runBackup(ctx context.Context, opts backupCommandOptions) error {
 	if opts.PassphraseFile == "" {
 		return fmt.Errorf("--passphrase-file is required")
 	}
 	if opts.OutDir == "" {
 		return fmt.Errorf("--out-dir is required")
 	}
+	if opts.Kind == "" {
+		opts.Kind = backupKindBoth
+	}
+	kinds, kindErr := kindsFor(opts.Kind)
+	if opts.now == nil {
+		opts.now = time.Now
+	}
+	if opts.sendDocument == nil {
+		opts.sendDocument = sendTelegramDocument
+	}
+	if opts.runCommand == nil {
+		opts.runCommand = runExternalCommand
+	}
+	if opts.stdout == nil {
+		opts.stdout = os.Stdout
+	}
 	cfg, err := loadBackupConfig(opts.ConfigPath)
 	if err != nil {
+		// Конфиг не годится, но db_path читается -- провал виден в Парке, а не
+		// только в журнале службы.
+		writeEarlyFailure(opts, kinds, peekDBPath(opts.ConfigPath), "конфигурация бэкенда не читается или неполна")
 		return err
 	}
-	pass, err := readTrimmedFile(opts.PassphraseFile)
-	if err != nil {
-		return fmt.Errorf("read passphrase: %w", err)
+	if kindErr != nil {
+		writeEarlyFailure(opts, kinds, cfg.DBPath, "неверный --kind: нужно small, full или both")
+		return kindErr
 	}
-	if pass == "" {
-		return fmt.Errorf("backup passphrase is empty")
+	env := &backupEnv{
+		opts:   opts,
+		cfg:    cfg,
+		params: backup.DefaultParams(),
+		dbPath: resolveLayoutPath(cfg.DBPath, opts.LayoutRoot),
+		now:    opts.now().UTC(),
 	}
-	dbPath := resolveLayoutPath(cfg.DBPath, opts.LayoutRoot)
-	botTokenPath := resolveLayoutPath(cfg.Telegram.BotTokenFile, opts.LayoutRoot)
-	wizardTokenPath := resolveLayoutPath(cfg.Wizard.TokenFile, opts.LayoutRoot)
+	if opts.TestKDF {
+		env.params = backup.TestParams()
+	}
+	env.statusPath = backup.StatusPath(env.dbPath)
+	if token, err := readTrimmedFile(resolveLayoutPath(cfg.Telegram.BotTokenFile, opts.LayoutRoot)); err == nil {
+		env.botToken = token
+	}
 
-	tmpDir, err := os.MkdirTemp(filepath.Dir(opts.OutDir), "wg-monitor-backup.")
-	if err != nil {
-		tmpDir, err = os.MkdirTemp("", "wg-monitor-backup.")
+	// Общая подготовка. Её провал -- провал каждого запрошенного вида.
+	prepErr := func() error {
+		pass, err := readTrimmedFile(opts.PassphraseFile)
+		if err != nil {
+			return fmt.Errorf("read passphrase: %w", err)
+		}
+		if pass == "" {
+			return fmt.Errorf("backup passphrase is empty")
+		}
+		env.pass = []byte(pass)
+		if err := os.MkdirAll(opts.OutDir, 0o700); err != nil {
+			return err
+		}
+		removeStaleBackupTemps(opts.OutDir, env.now)
+		return nil
+	}()
+
+	var errs []error
+	for _, kind := range kinds {
+		var res kindResult
+		if prepErr != nil {
+			tg, off := env.deliveryIfNotDone(kind)
+			res = kindResult{telegram: tg, offsite: off, err: prepErr}
+		} else {
+			// Отметка «начат»: убитый на полпути прогон (память, SIGKILL)
+			// остаётся в файле как «не завершён», а не как вчерашний успех.
+			if err := env.writeStartedMarker(kind); err != nil {
+				slog.Error("backup status marker not written", "err", err.Error())
+			}
+			res = env.runKind(ctx, kind)
+		}
+		if res.err != nil {
+			res.err = errors.New(env.redact(res.err.Error()))
+			errs = append(errs, fmt.Errorf("%s backup: %w", kind, res.err))
+			slog.Error("backup failed", "kind", string(kind), "err", res.err.Error())
+		} else {
+			slog.Info("backup done", "kind", string(kind), "file", res.file, "size_bytes", res.size,
+				"telegram", res.telegram, "offsite", res.offsite)
+		}
+		if err := env.writeKindStatus(kind, res); err != nil {
+			// Архив важнее файла состояния, но молчать нельзя: без него
+			// бэкенд покажет вчерашний день.
+			slog.Error("backup status not written", "err", err.Error())
+			errs = append(errs, fmt.Errorf("write %s: %w", backup.StatusFileName, err))
+		}
 	}
+	return errors.Join(errs...)
+}
+
+// kindsFor -- какие виды архива запрошены флагом --kind. При неверном
+// значении возвращает оба вида (провал касается и того, и другого) и ошибку.
+func kindsFor(kind string) ([]backup.Kind, error) {
+	switch kind {
+	case "", backupKindBoth:
+		return []backup.Kind{backup.KindSmall, backup.KindFull}, nil
+	case backupKindSmall:
+		return []backup.Kind{backup.KindSmall}, nil
+	case backupKindFull:
+		return []backup.Kind{backup.KindFull}, nil
+	}
+	return []backup.Kind{backup.KindSmall, backup.KindFull}, fmt.Errorf("--kind must be small, full or both, got %q", kind)
+}
+
+// peekDBPath достаёт db_path из конфига, даже если конфиг не прошёл
+// проверку целиком. Пусто -- путь неизвестен.
+func peekDBPath(configPath string) string {
+	body, err := os.ReadFile(configPath) // #nosec G304 -- путь из флага --config
 	if err != nil {
-		return err
+		return ""
+	}
+	var c struct {
+		DBPath string `yaml:"db_path"`
+	}
+	if yaml.Unmarshal(body, &c) != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.DBPath)
+}
+
+// writeEarlyFailure пишет провал запрошенных видов в файл состояния, когда
+// прогон не смог даже начаться (плохой конфиг, неверный --kind). Путь к
+// базе неизвестен -- писать некуда, остаётся ошибка команды.
+func writeEarlyFailure(opts backupCommandOptions, kinds []backup.Kind, dbPath, why string) {
+	if dbPath == "" {
+		return
+	}
+	path := backup.StatusPath(resolveLayoutPath(dbPath, opts.LayoutRoot))
+	at := opts.now().UTC().Format(time.RFC3339)
+	err := backup.UpdateStatus(path, func(s *backup.Status) {
+		for _, kind := range kinds {
+			section := &s.Small
+			if kind == backup.KindFull {
+				section = &s.Full
+			}
+			tg, off := deliveryDefaults(opts, kind)
+			*section = backup.KindStatus{
+				LastOKAt: section.LastOKAt, LastRunAt: at, Telegram: tg, Offsite: off,
+				Error: backup.StatusErrorText(why),
+			}
+		}
+	})
+	if err != nil {
+		slog.Error("backup status not written", "err", err.Error())
+	}
+}
+
+// deliveryDefaults -- что писать в telegram и offsite, если прогон вида
+// не дошёл до доставки: error там, где доставку просили, иначе off.
+func deliveryDefaults(opts backupCommandOptions, kind backup.Kind) (telegram, offsite string) {
+	telegram = backup.DeliveryOff
+	if kind == backup.KindSmall {
+		if opts.SendTelegram {
+			telegram = backup.DeliveryError
+		}
+		return telegram, ""
+	}
+	offsite = backup.DeliveryOff
+	if strings.TrimSpace(opts.OffsiteSCP) != "" {
+		offsite = backup.DeliveryError
+	}
+	return telegram, offsite
+}
+
+func (e *backupEnv) deliveryIfNotDone(kind backup.Kind) (telegram, offsite string) {
+	return deliveryDefaults(e.opts, kind)
+}
+
+// writeStartedMarker пишет отметку «прогон начат»: last_run_at сейчас,
+// ok=false, ошибка «прогон не завершён». Итог прогона её перезапишет.
+func (e *backupEnv) writeStartedMarker(kind backup.Kind) error {
+	at := e.opts.now().UTC().Format(time.RFC3339)
+	tg, off := e.deliveryIfNotDone(kind)
+	return backup.UpdateStatus(e.statusPath, func(s *backup.Status) {
+		section := &s.Small
+		if kind == backup.KindFull {
+			section = &s.Full
+		}
+		*section = backup.KindStatus{
+			LastOKAt: section.LastOKAt, LastRunAt: at, Telegram: tg, Offsite: off,
+			Error: backup.RunUnfinishedText,
+		}
+	})
+}
+
+func (e *backupEnv) writeKindStatus(kind backup.Kind, res kindResult) error {
+	at := e.opts.now().UTC().Format(time.RFC3339)
+	return backup.UpdateStatus(e.statusPath, func(s *backup.Status) {
+		section := &s.Small
+		if kind == backup.KindFull {
+			section = &s.Full
+		}
+		lastOK := section.LastOKAt
+		*section = backup.KindStatus{
+			LastOKAt:  lastOK,
+			LastRunAt: at,
+			OK:        res.err == nil,
+			SizeBytes: res.size,
+			File:      res.file,
+			Telegram:  res.telegram,
+		}
+		if kind == backup.KindFull {
+			section.Offsite = res.offsite
+		}
+		if res.err == nil {
+			section.LastOKAt = at
+		} else {
+			section.Error = backup.StatusErrorText(res.err.Error())
+		}
+	})
+}
+
+// redact вычищает из текста секреты, которые могли попасть в него из чужих
+// ошибок: токен бота (он часть адреса Telegram API) и парольную фразу.
+func (e *backupEnv) redact(msg string) string {
+	msg = redactTelegramBotToken(msg, e.botToken)
+	for _, secret := range []string{e.botToken, string(e.pass)} {
+		if len(secret) >= 6 {
+			msg = strings.ReplaceAll(msg, secret, "<redacted>")
+		}
+	}
+	return msg
+}
+
+// runKind делает один архив: база и побочные файлы -> поток tar+gzip+шифр
+// прямо в файл -> доставка -> чистка старых.
+func (e *backupEnv) runKind(ctx context.Context, kind backup.Kind) (res kindResult) {
+	opts := e.opts
+	// До доставки поля говорят «не дошло»: error там, где её просили.
+	res.telegram, res.offsite = e.deliveryIfNotDone(kind)
+
+	tmpDir, err := os.MkdirTemp(opts.OutDir, backupTempPrefix)
+	if err != nil {
+		res.err = fmt.Errorf("не удалось создать временный каталог: %w", err)
+		return res
 	}
 	defer os.RemoveAll(tmpDir)
 
-	dbCopy := filepath.Join(tmpDir, "state.db")
-	if err := vacuumSQLite(dbPath, dbCopy); err != nil {
-		return err
+	members, err := e.stageMembers(ctx, kind, tmpDir)
+	if err != nil {
+		res.err = fmt.Errorf("архив не собран: %w", err)
+		return res
 	}
-	if err := copyFile(opts.ConfigPath, filepath.Join(tmpDir, "backend.yaml"), 0o600); err != nil {
-		return err
+	name := backup.ArchiveName(kind, e.now)
+	outPath := filepath.Join(opts.OutDir, name)
+	partial := outPath + backupPartialSuffix
+	if err := writeEncryptedArchive(ctx, partial, members, e.pass, e.params); err != nil {
+		// Чужой .partial (другой запуск ещё пишет) не трогаем: убрать можно
+		// только то, что создал этот прогон.
+		if !errors.Is(err, errPartialInUse) {
+			_ = os.Remove(partial)
+		}
+		res.err = fmt.Errorf("архив не записан: %w", err)
+		return res
 	}
-	if botTokenPath != "" {
-		if err := copyFile(botTokenPath, filepath.Join(tmpDir, "bot-token.txt"), 0o600); err != nil {
-			return err
+	if err := os.Rename(partial, outPath); err != nil {
+		_ = os.Remove(partial)
+		res.err = fmt.Errorf("архив не записан: %w", err)
+		return res
+	}
+	info, err := os.Stat(outPath)
+	if err != nil {
+		res.err = fmt.Errorf("архив не записан: %w", err)
+		return res
+	}
+	res.file, res.size = name, info.Size()
+	fmt.Fprintln(opts.stdout, outPath)
+
+	// Старые архивы убираем только теперь, когда новый уже лежит на диске.
+	e.applyRetention(kind)
+
+	switch kind {
+	case backup.KindSmall:
+		if opts.SendTelegram {
+			if err := e.sendSmall(ctx, outPath, res.size); err != nil {
+				res.telegram = backup.DeliveryError
+				res.err = err
+				return res
+			}
+			res.telegram = backup.DeliveryOK
+		}
+	case backup.KindFull:
+		if strings.TrimSpace(opts.OffsiteSCP) != "" {
+			if err := e.copyOffsite(ctx, outPath); err != nil {
+				res.offsite = backup.DeliveryError
+				res.err = err
+				return res
+			}
+			res.offsite = backup.DeliveryOK
 		}
 	}
-	if wizardTokenPath != "" {
-		if err := copyFile(wizardTokenPath, filepath.Join(tmpDir, "wizard-token.txt"), 0o600); err != nil {
-			return err
-		}
+	return res
+}
+
+// sendSmall отправляет малый архив админу. Превышение лимита -- ошибка
+// прогона, а не тихий пропуск: иначе копий вне сервера не будет месяцами.
+func (e *backupEnv) sendSmall(ctx context.Context, path string, size int64) error {
+	opts := e.opts
+	chatID := e.cfg.Telegram.AdminUserID
+	if chatID == 0 {
+		chatID = e.cfg.Telegram.ChatID
 	}
-	if opts.OperatorVault != "" {
-		if _, err := os.Stat(opts.OperatorVault); err == nil {
-			if err := copyFile(opts.OperatorVault, filepath.Join(tmpDir, "operator-secrets.tgz.enc"), 0o600); err != nil {
-				return err
+	if chatID == 0 {
+		return fmt.Errorf("архив не ушёл в Telegram: в конфиге нет admin_user_id")
+	}
+	if opts.LimitBytes > 0 && size > opts.LimitBytes {
+		return fmt.Errorf("архив не ушёл в Telegram: он %s, а Telegram принимает до %s", humanBytes(size), humanBytes(opts.LimitBytes))
+	}
+	token, err := readTrimmedFile(resolveLayoutPath(e.cfg.Telegram.BotTokenFile, opts.LayoutRoot))
+	if err != nil {
+		return fmt.Errorf("архив не ушёл в Telegram: токен бота не прочитан: %w", err)
+	}
+	e.botToken = token
+	caption := fmt.Sprintf("Малый бэкап wg-monitor %s · %s. Зашифрован паролем восстановления.",
+		e.now.Format("02.01.2006 15:04 UTC"), humanBytes(size))
+	if err := opts.sendDocument(ctx, token, chatID, path, caption); err != nil {
+		return fmt.Errorf("архив не ушёл в Telegram: %w", err)
+	}
+	return nil
+}
+
+// copyOffsite копирует полный архив на внешний сервер через scp. Ключ
+// передаётся путём к файлу; его содержимое процесс не читает и не печатает.
+func (e *backupEnv) copyOffsite(ctx context.Context, path string) error {
+	target := strings.TrimSpace(e.opts.OffsiteSCP)
+	key := strings.TrimSpace(e.opts.OffsiteKey)
+	if err := validateOffsiteTarget(target); err != nil {
+		return fmt.Errorf("архив не скопирован на внешний сервер: %w", err)
+	}
+	if key == "" || strings.HasPrefix(key, "-") {
+		return fmt.Errorf("архив не скопирован на внешний сервер: нужен --offsite-key с файлом ключа SSH")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("архив не скопирован на внешний сервер: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, backupOffsiteTimeout)
+	defer cancel()
+	// known_hosts лежит рядом с базой: служба под ProtectHome не видит
+	// домашний каталог, а запиненный файл делает сказанное в DEPLOY.md
+	// правдой -- сменившийся ключ сервера ломает копирование.
+	knownHosts := filepath.Join(filepath.Dir(e.dbPath), offsiteKnownHostsFile)
+	out, err := e.opts.runCommand(ctx, "scp",
+		"-B",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile="+knownHosts,
+		"-o", "IdentitiesOnly=yes",
+		"-o", "ConnectTimeout=20",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=4",
+		"-i", key,
+		abs, target)
+	if err != nil {
+		// Сырой вывод scp (хост, пути) в состояние не идёт: только причина
+		// словами. Подробности -- в журнале службы.
+		slog.Warn("backup offsite copy failed", "output", e.redact(lastLine(string(out))), "err", e.redact(err.Error()))
+		return fmt.Errorf("архив не скопирован на внешний сервер: %s", offsiteFailureReason(string(out), err))
+	}
+	return nil
+}
+
+// offsiteKnownHostsFile -- файл известных серверов внешней цели; лежит
+// рядом с базой, на томе.
+const offsiteKnownHostsFile = "backup-known_hosts"
+
+// offsiteTargetRe -- строгий вид цели, тот же, что мастер проверяет перед
+// записью юнита (cmd/deploy/templates.go, backupOffsiteTargetRe): ни пробела,
+// ни `;`, `$()`, обратной кавычки. Менять только вместе с ним.
+var offsiteTargetRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9._\[\]:-]+:[A-Za-z0-9._~/+-]+$`)
+
+// validateOffsiteTarget принимает только user@host:path по строгому
+// шаблону. Строка уходит аргументом в scp: начинающаяся с дефиса стала бы
+// его ключом, а метасимволы -- командой на удалённой стороне.
+func validateOffsiteTarget(target string) error {
+	if strings.HasPrefix(target, "-") || !offsiteTargetRe.MatchString(target) {
+		return fmt.Errorf("--offsite-scp должен быть вида user@host:path без пробелов и спецсимволов")
+	}
+	return nil
+}
+
+// offsiteFailureReason превращает вывод scp в причину словами без хостов и
+// путей: она идёт в файл состояния и в Парк.
+func offsiteFailureReason(output string, err error) string {
+	text := strings.ToLower(output)
+	if err != nil {
+		text += " " + strings.ToLower(err.Error())
+	}
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(text, w) {
+				return true
 			}
 		}
+		return false
 	}
-	// JSON-хранилища вне базы: панели, свои серверы, ключи кабинетов, коды
-	// HideMy. Без них бэкап не восстанавливал то, что стёрло пересоздание
-	// контейнера 02.10.2026. Файла нет -- не ошибка: хранилище ещё не заводили.
-	var stores []string
-	for _, st := range cfg.StoreFiles() {
-		src := resolveLayoutPath(st.Path, opts.LayoutRoot)
-		if info, err := os.Stat(src); err != nil || !info.Mode().IsRegular() {
-			if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("stat store %s: %w", st.Name, err)
-			}
+	switch {
+	case has("host key verification failed", "remote host identification has changed"):
+		return "ключ сервера изменился"
+	case has("permission denied", "publickey", "authentication"):
+		return "отказ в доступе"
+	case has("no space left", "quota exceeded", "disk quota"):
+		return "нет места"
+	case has("timed out", "connection refused", "no route to host", "could not resolve", "network is unreachable",
+		"connection closed", "connection reset", "deadline exceeded", "signal: killed"):
+		return "сервер недоступен"
+	}
+	return "ошибка копирования"
+}
+
+func runExternalCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	// #nosec G204 -- имя команды постоянное (scp), аргументы собраны кодом и проверены.
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// humanBytes -- размер словами для человека: «4,1 МБ».
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return strings.Replace(fmt.Sprintf("%.1f ГБ", float64(n)/(1<<30)), ".", ",", 1)
+	case n >= 1<<20:
+		return strings.Replace(fmt.Sprintf("%.1f МБ", float64(n)/(1<<20)), ".", ",", 1)
+	case n >= 1<<10:
+		return fmt.Sprintf("%d КБ", n>>10)
+	default:
+		return fmt.Sprintf("%d Б", n)
+	}
+}
+
+// applyRetention удаляет лишние архивы вида kind из --out-dir. Сбой удаления
+// прогон не валит: новый архив уже сделан.
+func (e *backupEnv) applyRetention(kind backup.Kind) {
+	entries, err := os.ReadDir(e.opts.OutDir)
+	if err != nil {
+		slog.Warn("backup retention: list failed", "err", err.Error())
+		return
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			names = append(names, entry.Name())
+		}
+	}
+	removed := 0
+	for _, name := range backup.SelectForDeletion(kind, names, e.now, e.opts.retentionFor(kind)) {
+		if err := os.Remove(filepath.Join(e.opts.OutDir, name)); err != nil {
+			slog.Warn("backup retention: remove failed", "file", name, "err", err.Error())
 			continue
 		}
-		if err := copyFile(src, filepath.Join(tmpDir, st.Name), 0o600); err != nil {
-			return err
-		}
-		stores = append(stores, st.Name)
+		removed++
 	}
-	if err := writeAgentsCSV(dbCopy, filepath.Join(tmpDir, "agents.csv")); err != nil {
-		return err
+	if removed > 0 {
+		slog.Info("backup retention: old archives removed", "kind", string(kind), "count", removed)
 	}
-	stamp := time.Now().UTC().Format("20060102T150405Z")
-	if err := writeManifest(filepath.Join(tmpDir, "manifest.txt"), stamp, cfg.DBPath, opts.ConfigPath, stores); err != nil {
-		return err
+}
+
+var legacyBackupTempRe = regexp.MustCompile(`^wg-monitor-backup\.\d+$`)
+
+// removeStaleBackupTemps убирает то, что бросил убитый прогон (нехватка
+// памяти, перезагрузка): временные каталоги с копией базы и недописанные
+// архивы старше backupStaleAfter. Свежие не трогает -- это может быть
+// соседний живой прогон. Заодно убирает каталоги прежних версий, которые
+// создавались рядом с --out-dir (wg-monitor-backup.<цифры>).
+func removeStaleBackupTemps(outDir string, now time.Time) {
+	stale := func(path string) bool {
+		info, err := os.Lstat(path)
+		return err == nil && now.Sub(info.ModTime()) > backupStaleAfter
 	}
-	plainTGZ, err := makeTGZ(tmpDir, append([]string{
-		"state.db",
-		"backend.yaml",
-		"bot-token.txt",
-		"wizard-token.txt",
-		"agents.csv",
-		"manifest.txt",
-		"operator-secrets.tgz.enc",
-	}, stores...))
-	if err != nil {
-		return err
-	}
-	params := backup.DefaultParams()
-	if opts.TestKDF {
-		params = backup.TestParams()
-	}
-	encrypted, err := backup.Encrypt(plainTGZ, []byte(pass), params)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(opts.OutDir, 0o700); err != nil {
-		return err
-	}
-	outPath := filepath.Join(opts.OutDir, "wg-monitor-full-backup-"+stamp+".tgz.enc")
-	if err := os.WriteFile(outPath, encrypted, 0o600); err != nil {
-		return err
-	}
-	if opts.SendTelegram {
-		chatID := cfg.Telegram.AdminUserID
-		if chatID == 0 {
-			chatID = cfg.Telegram.ChatID
-		}
-		if chatID == 0 {
-			return fmt.Errorf("telegram chat_id/admin_user_id is not configured")
-		}
-		if opts.LimitBytes > 0 && int64(len(encrypted)) > opts.LimitBytes {
-			return fmt.Errorf("encrypted backup too large for Telegram: %d bytes", len(encrypted))
-		}
-		token, err := readTrimmedFile(botTokenPath)
-		if err != nil {
-			return fmt.Errorf("read bot token: %w", err)
-		}
-		if err := sendTelegramDocument(context.Background(), token, chatID, outPath, fmt.Sprintf("wg-monitor encrypted full backup %s (%d bytes)", stamp, len(encrypted))); err != nil {
-			return err
+	if entries, err := os.ReadDir(outDir); err == nil {
+		for _, entry := range entries {
+			name, path := entry.Name(), filepath.Join(outDir, entry.Name())
+			switch {
+			case entry.IsDir() && (strings.HasPrefix(name, backupTempPrefix) || strings.HasPrefix(name, verifyTempPrefix)):
+			case entry.Type().IsRegular() && strings.HasSuffix(name, backupPartialSuffix):
+				if _, _, ok := backup.ParseArchiveName(strings.TrimSuffix(name, backupPartialSuffix)); !ok {
+					continue
+				}
+			default:
+				continue
+			}
+			if stale(path) {
+				_ = os.RemoveAll(path)
+			}
 		}
 	}
-	fmt.Println(outPath)
-	return nil
+	parent := filepath.Dir(filepath.Clean(outDir))
+	if entries, err := os.ReadDir(parent); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || !legacyBackupTempRe.MatchString(entry.Name()) {
+				continue
+			}
+			if path := filepath.Join(parent, entry.Name()); stale(path) {
+				_ = os.RemoveAll(path)
+			}
+		}
+	}
 }
 
 func resolveLayoutPath(path, root string) string {
@@ -226,36 +720,6 @@ func loadBackupConfig(path string) (*backend.Config, error) {
 	return &cfg, nil
 }
 
-func vacuumSQLite(src, dst string) error {
-	db, err := sql.Open("sqlite", src)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	escaped := strings.ReplaceAll(dst, "'", "''")
-	if _, err := db.Exec("VACUUM INTO '" + escaped + "'"); err != nil {
-		return fmt.Errorf("vacuum sqlite: %w", err)
-	}
-	return nil
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", src, err)
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
 func writeAgentsCSV(dbPath, dst string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -287,61 +751,6 @@ func csvCell(s string) string {
 		return s
 	}
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-// writeManifest пишет паспорт архива. stores -- имена JSON-хранилищ, попавших
-// в архив (только имена: содержимое -- секреты).
-func writeManifest(path, stamp, dbPath, configPath string, stores []string) error {
-	body := fmt.Sprintf("name=wg-monitor-full-backup\ncreated_utc=%s\nbackend_version=%s\ndb_path=%s\nconfig_path=%s\nhost=%s\nformat=encrypted-full-v1\nstores=%s\n",
-		stamp, Version, dbPath, configPath, hostname(), strings.Join(stores, ","))
-	return os.WriteFile(path, []byte(body), 0o600)
-}
-
-func hostname() string {
-	h, _ := os.Hostname()
-	return h
-}
-
-func makeTGZ(dir string, names []string) ([]byte, error) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	for _, name := range names {
-		path := filepath.Join(dir, name)
-		info, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			tw.Close()
-			gz.Close()
-			return nil, err
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			tw.Close()
-			gz.Close()
-			return nil, err
-		}
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: info.Size(), ModTime: info.ModTime()}); err != nil {
-			tw.Close()
-			gz.Close()
-			return nil, err
-		}
-		if _, err := tw.Write(body); err != nil {
-			tw.Close()
-			gz.Close()
-			return nil, err
-		}
-	}
-	if err := tw.Close(); err != nil {
-		gz.Close()
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 func readTrimmedFile(path string) (string, error) {

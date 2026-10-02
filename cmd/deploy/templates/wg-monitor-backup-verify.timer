@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly wg-monitor backup restore check
+Documentation=https://github.com/Jkaotlic/wg-monitor
+
+[Timer]
+# Через полтора часа после ночного бэкапа (05:00): проверяется свежий малый
+# архив, а живая база за это время почти не меняется.
+OnCalendar=Sun *-*-* 06:30:00 Europe/Moscow
+# Catch up after downtime.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

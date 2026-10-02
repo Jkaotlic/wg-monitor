@@ -22,13 +22,18 @@
 
 After install, the wizard records backend version and deploy time in `wizard.toml`.
 
-The backend install also enables `wg-monitor-backup.timer`. Every night it sends
-the admin user a private Telegram document with an encrypted full backup
-(`.tgz.enc`). The encrypted archive contains SQLite `state.db`, rendered
-`backend.yaml`, bot and wizard token files, agent inventory CSV, a manifest, and
-an encrypted operator vault when the wizard has pushed one. Raw deploy secrets
-are not stored on the backend in plaintext; the vault is encrypted with the same
-backup password.
+The backend install also enables `wg-monitor-backup.timer` and
+`wg-monitor-backup-verify.timer`. Every night the backend makes two encrypted
+archives (`.tgz.enc`): a **small** one (everything needed to restore the system
+except the event history) that is sent to the admin user as a private Telegram
+document, and a **full** one (with the history) that stays on disk and is copied
+to an off-site server when one is configured. Both contain SQLite `state.db`,
+`backend.yaml`, bot, wizard and dashboard token files, the JSON stores (VPN
+panels, own servers, cabinet keys), agent inventory CSV, a
+manifest, and an encrypted operator vault when the wizard has pushed one. The agent revive key (`revive.key`) is deliberately **not** in the backups. Raw
+deploy secrets are not stored on the backend in plaintext; the vault is
+encrypted with the same backup password. Details: [Encrypted Nightly
+Backups](#encrypted-nightly-backups).
 
 The wizard generates `WG_BACKUP_PASSPHRASE`, saves it in the local secret store,
 uploads it to the backend as `backup-passphrase.txt` with strict permissions, and
@@ -132,9 +137,16 @@ head -c 32 /dev/urandom | base64 | sudo tee /etc/wg-monitor/revive.key >/dev/nul
 `key_file: /etc/wg-monitor/revive.key`, `sudo systemctl restart wg-monitor-backend`,
 проверка — `sudo journalctl -u wg-monitor-backend -n 200 | grep -i оживлен`.
 
-Ключ **не входит** в ночной зашифрованный бэкап (это проверяет тест
-`TestRunBackupCommandDoesNotCarryReviveKey`). Копировать ключ рядом с бэкапом базы
-нельзя — это сводит шифрование на нет.
+Ключ **не входит** в ночные архивы (малый и полный) — ни отдельным файлом, ни
+внутри другого (это проверяют тесты `TestRunBackupCommandDoesNotCarryReviveKey` и
+`TestBackupReviveKeyFollowsSwitch`). Иначе утёкший бэкап расшифровывал бы
+сохранённые пароли роутеров. Цена: после восстановления из бэкапа
+сохранённых паролей роутеров не расшифровать — их нужно ввести заново
+(ожидающие оживления закроются, как при потере ключа). Манифест архива и вывод
+`backup verify` говорят об этом прямо. Ключ надо хранить отдельно и самому;
+положить его рядом с копией базы — значит свести шифрование на нет. Решение
+обратимо одним выключателем `includeReviveKey` в `cmd/backend/backup_archive.go`
+(тесты параметризованы по нему), но по умолчанию он выключен.
 
 **Ключ потерян или испорчен** (файла нет, права не те, длина не 32 байта):
 `newReviveService` возвращает `nil`, функция выключена целиком (экран отвечает
@@ -205,16 +217,31 @@ If a raw `WG_AGENT_TOKEN_<NICK>` still exists locally, the wizard can preserve i
 Use `[7] Restore / Disaster Recovery` or:
 
 ```bash
-wg-monitor-deploy restore-backup <archive.tgz> --dry-run
-wg-monitor-deploy restore-backup <archive.tgz> --to-current-vps
-wg-monitor-deploy restore-backup <archive.tgz> --to-new-vps
+wg-monitor-deploy restore-backup <archive.tgz.enc> --dry-run
+wg-monitor-deploy restore-backup <archive.tgz.enc> --to-current-vps
+wg-monitor-deploy restore-backup <archive.tgz.enc> --to-new-vps
 ```
 
+The archive may be a small or a full one, in the old (v1) or the streaming (v2)
+encryption format, or a legacy unencrypted `.tgz`; for encrypted archives the
+wizard takes `WG_BACKUP_PASSPHRASE` from the local secret store or asks for it.
+
 Dry-run extracts the archive locally and shows the manifest, backend version,
-SQLite size, and agent count. Restore mode uploads `state.db` and
-`backend.yaml`, makes timestamped backups of any existing VPS files, checks
-SQLite integrity, restores ownership/modes, starts `wg-monitor-backend`, and
-refreshes the daily Telegram backup timer.
+SQLite size, agent count, which stores are inside, and that `revive.key` is not in the backup.
+Restore mode uploads `state.db` and `backend.yaml`, plus (v0.53+ archives) the
+JSON stores (and `revive.key` if an archive happens to carry one); makes timestamped backups of any existing VPS
+files, checks SQLite integrity, restores ownership/modes, starts
+`wg-monitor-backend`, and refreshes the backup timers. Stores land where the
+backend with the restored `backend.yaml` looks for them (next to `state.db`
+unless a path is set explicitly), a `revive.key` found in an archive at
+`revive.key_file`; all with
+mode `0600`. After a restore the saved router passwords must be entered again
+(the revive key is not part of the backup). Destinations outside `/var/lib/wg-monitor` and `/etc/wg-monitor`
+are refused. The uploaded copies in `/tmp/wg-monitor-restore` are removed
+whether the restore succeeds or not.
+
+This flow is for the VPS (systemd) layout. For the Docker layout see
+[Восстановление из малого архива](#восстановление-из-малого-архива).
 
 `--to-new-vps` bootstraps the new host first: `wgmonitor` user, systemd units,
 backend binary from the current release, Caddy route, bot token from the local
@@ -234,13 +261,209 @@ wg-monitor-deploy backup password
 wg-monitor-deploy backup restore <archive.tgz.enc>
 ```
 
-`backup install` installs or repairs the backend timer/service and makes sure a
-password exists locally and on the backend. `backup run` starts the backup job
-immediately. `backup push-secrets` encrypts local `secrets.env` plus
-`wizard.toml` into `operator-secrets.tgz.enc` and uploads only that encrypted
-vault to the backend.
+`backup install` installs or repairs the backend timers/services (nightly backup
+and weekly restore check) and makes sure a password exists locally and on the
+backend. `backup run` starts the backup job immediately. `backup push-secrets`
+encrypts local `secrets.env` plus `wizard.toml` into `operator-secrets.tgz.enc`
+and uploads only that encrypted vault to the backend. `backup status` also
+prints `backup-status.json`.
 
 Legacy unencrypted `.tgz` archives are still handled by `restore-backup`.
+
+### Что делает ночной бэкап (v0.53)
+
+Служба `wg-monitor-backup.service` (таймер — 05:00 МСК) одним запуском делает два
+архива в каталоге `--out-dir`:
+
+| Архив | Имя | Что внутри | Куда уходит |
+|---|---|---|---|
+| малый | `wg-monitor-small-backup-<время UTC>.tgz.enc` | всё для восстановления системы, **кроме истории**: строки таблиц `events`, `daily_soft_flaps`, `awgm_ping_runs`, `alert_messages` не переносятся (схема остаётся) | админу в личку Telegram |
+| полный | `wg-monitor-full-backup-<время UTC>.tgz.enc` | вся база с историей | остаётся на диске; копируется на внешний сервер, если он настроен. В Telegram не отправляется никогда |
+
+В обоих: `state.db`, `backend.yaml`, токены бота, мастера и дашборда, четыре
+JSON-хранилища (`amnezia-premium.json`, `amnezia-selfhosted.json`,
+`awg3-panels.json`, `hidemyname.json` — те, что есть), `agents.csv`,
+`manifest.txt` (с числом роутеров, владельцев и операторов на момент бэкапа),
+хранилище секретов оператора. **`revive.key` в архивах нет** — по правилу,
+ключ живёт отдельно.
+
+Провал одного вида не отменяет другой; служба завершается с ошибкой, если не
+удался хотя бы один. Малый архив больше лимита Telegram (47 МБ) — это ошибка
+прогона, а не тихий пропуск. Полный архив пишется потоком: память процесса не
+зависит от размера базы (формат шифрования v2, блоками по 1 МиБ).
+
+Запуск руками:
+
+```bash
+wg-monitor-backend backup --config … --passphrase-file … --out-dir … --kind small   # или full, both (по умолчанию)
+```
+
+**Хранение.** После удачной записи нового архива лишние старые удаляются —
+только файлы с именами архивов этого вида, чужие файлы в каталоге не трогаются.
+Малый: по одному архиву за 7 последних дней и за 4 предыдущие недели
+(`--small-keep-daily 7 --small-keep-weekly 4`). Полный: за 3 последних дня
+(`--full-keep-daily 3 --full-keep-weekly 0`) — он большой и лежит на том же
+диске, что и база. `--keep-daily N --keep-weekly M` задают правило сразу для
+всех видов в этом запуске; свой флаг вида сильнее общего. Архивы на внешнем
+сервере не чистятся — пока руками.
+
+### Внешняя цель для полного архива
+
+Полный архив на том же диске, что и база, — не копия на случай смерти диска.
+Чтобы он уходил на другой сервер по `scp`:
+
+1. На бэкенде под пользователем, от которого работает служба бэкапа, создать
+   ключ без пароля: `ssh-keygen -t ed25519 -N '' -f ~/.ssh/wg-monitor-offsite`.
+2. Положить открытый ключ (`~/.ssh/wg-monitor-offsite.pub`) в
+   `~/.ssh/authorized_keys` пользователя на сервере-приёмнике и создать там
+   каталог для архивов.
+3. Один раз проверить руками с бэкенда теми же параметрами, что у службы, —
+   заодно сервер попадёт в `backup-known_hosts` рядом с базой:
+   `scp -B -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=<каталог базы>/backup-known_hosts -o IdentitiesOnly=yes -o ConnectTimeout=20 -i <файл ключа> /etc/hostname user@host:/path/`
+4. В `wizard.toml`, секция `[backend]`:
+
+   ```toml
+   backup_offsite_scp = "user@host:/path/"
+   backup_offsite_key = "/home/<пользователь>/.ssh/wg-monitor-offsite"
+   ```
+
+   и `wg-monitor-deploy backup install` — служба получит флаги
+   `--offsite-scp user@host:/path/ --offsite-key <файл ключа>`. Цель проверяется
+   строго (`user@host:путь`, буквы, цифры и `._~/+-`): пробел, `;`, `$()` и
+   обратная кавычка отвергаются и мастером, и самой командой. Без мастера — дописать эти два флага в `ExecStart`
+   юнита руками и сделать `systemctl daemon-reload`.
+
+Провал копирования — ошибка прогона (`"offsite":"error"` в файле состояния);
+сам архив при этом на диске остаётся. Ключ передаётся `scp` путём к файлу, его
+содержимое служба не читает и не печатает. Служба использует **собственный**
+файл известных серверов `backup-known_hosts` рядом с базой
+(`-o UserKnownHostsFile=…`, `-o IdentitiesOnly=yes`): при первом соединении ключ
+сервера запоминается (`accept-new`); если он потом сменится, копирование начнёт
+падать («ключ сервера изменился» в `error` файла состояния) — это защита, а не
+поломка: проверить сервер и убрать строку из `backup-known_hosts`. Обрыв связи
+ловится `ServerAliveInterval=15` (4 пропуска) и общим сроком в час.
+
+В файле состояния причина провала копирования — только словами («сервер
+недоступен», «отказ в доступе», «нет места», «ключ сервера изменился», «ошибка
+копирования»): сырой вывод `scp` с адресами и путями туда не попадает, он
+остаётся в журнале службы. Копирование идёт прямо в целевое имя, без временного
+файла на приёмнике (цель — Windows-сервер, и переименование по ssh там
+ненадёжно): оборванное копирование оставляет обрезанный файл. Это видно при
+восстановлении — шифрование v2 обнаруживает усечение и отказывается его читать;
+такой файл надо удалить и запустить службу заново.
+
+В VPS-раскладке служба работает под `wgmonitor` с `ProtectHome=true`: ключ и
+`known_hosts` в домашнем каталоге ей не видны (поэтому `backup-known_hosts`
+лежит в `/var/lib/wg-monitor`, где у службы есть запись). Ключ класть в
+`/etc/wg-monitor/` (владелец `wgmonitor`, права `0600`), а шаг 3 выполнять от
+`wgmonitor` — и убедиться по `journalctl -u wg-monitor-backup`, что копирование
+прошло.
+
+### Файл состояния `backup-status.json`
+
+Лежит рядом с базой (`state.db`), переписывается целиком после каждого прогона
+бэкапа и проверки; секретов в нём нет, права `0644` (его читает бэкенд из
+контейнера). Его читает бэкенд, чтобы показать состояние бэкапа в мини-аппе.
+
+```json
+{
+  "version": 1,
+  "small":  {"last_ok_at": "2026-10-02T02:00:41Z", "last_run_at": "2026-10-02T02:00:41Z", "ok": true,
+             "size_bytes": 4193280, "file": "wg-monitor-small-backup-20261002T020003Z.tgz.enc",
+             "telegram": "ok", "error": ""},
+  "full":   {"last_ok_at": "2026-10-01T02:07:10Z", "last_run_at": "2026-10-02T02:06:55Z", "ok": false,
+             "size_bytes": 198246400, "file": "wg-monitor-full-backup-20261002T020003Z.tgz.enc",
+             "telegram": "off", "offsite": "error", "error": "архив не скопирован на внешний сервер: …"},
+  "verify": {"last_run_at": "2026-09-27T03:31:02Z", "ok": true, "error": "", "routers": 14}
+}
+```
+
+- `last_run_at` — когда вид запускался в последний раз (UTC); пусто — ещё ни разу.
+- `ok` — последний прогон прошёл целиком: архив записан и ушёл всюду, куда настроен.
+- `last_ok_at` — последний такой прогон; неудачный его не трогает. По нему видно,
+  сколько времени нет годного бэкапа.
+- `file`, `size_bytes` — архив последнего прогона; пусто и 0 — архив не записан.
+  `ok: false` с непустым `file` значит «архив на диске есть, но не доставлен».
+- `telegram`, `offsite` — `ok`, `error` или `off` (не настроено или не положено
+  этому виду: полный в Telegram не ходит, у малого нет внешней цели).
+- `error` — короткая причина без секретов и без адресов. Перед работой каждого
+  вида служба пишет отметку «начат»: `ok: false`, `error: "прогон не завершён"`,
+  `last_run_at` сейчас; итог прогона её перезаписывает. Убитый по памяти прогон
+  так остаётся в файле, а не выглядит вчерашним успехом. Плохой конфиг или
+  неверный `--kind` тоже пишут ошибку (если `db_path` читается). Поля доставки
+  при провале до доставки — `error` там, где её просили, и `off` где нет.
+- `verify` — итог последней проверки восстановления; `routers` — сколько роутеров
+  в проверенном архиве.
+
+### Проверка восстановления
+
+`wg-monitor-backup-verify.timer` раз в неделю (воскресенье, 06:30 МСК) запускает
+
+```bash
+wg-monitor-backend backup verify --config … --passphrase-file … --out-dir …
+```
+
+Команда берёт самый свежий малый архив, расшифровывает его во временный каталог
+внутри `--out-dir` (каталог убирается при любом исходе) и проверяет: база
+проходит `PRAGMA integrity_check`; число роутеров, владельцев и операторов
+равно записанному в манифест при бэкапе; каждое хранилище из строки `stores=`
+манифеста есть в архиве и разбирается как JSON (сверка с манифестом, а не с
+живыми файлами). Ключа оживления в архиве нет, и
+проверка его не требует; вывод напоминает, что после восстановления пароли
+роутеров вводятся заново. Итог пишется в секцию `verify`
+файла состояния; код выхода не ноль при провале.
+
+Счётчики сверяются с записанными в манифест при сборке архива, а не с живой
+базой: роутер, добавленный между ночным бэкапом и недельной проверкой, проверку
+не валит. Провал «в архиве операторов 1, в манифесте архива 2» значит, что база
+в архиве не та, что была снята.
+
+### Восстановление из малого архива
+
+Малый архив восстанавливается так же, как полный; разница одна — в нём нет
+истории событий, поэтому после восстановления экраны пусты до первого отчёта
+агентов (до минуты), а графики и журнал начинаются заново.
+
+**VPS-раскладка (systemd)** — мастером, архив взять из лички Telegram:
+
+```bash
+wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --dry-run
+wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --to-current-vps   # или --to-new-vps
+```
+
+**Докер-раскладка (Raspberry Pi)** — руками. Пути ниже — от корня раскладки
+(`~/wg-monitor`); парольная фраза лежит в `secrets/backup-passphrase.txt` (на
+пустой машине — создать этот файл с фразой из менеджера паролей, права `0600`).
+Контейнер бэкенда на время замены файлов должен быть остановлен — тем же
+способом, каким он запущен на площадке (`docker compose stop` или
+`docker stop <имя>`).
+
+```bash
+cd ~/wg-monitor
+bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
+  --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
+sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # должно ответить ok
+
+# остановить контейнер бэкенда
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$(date +%Y%m%d)
+rm -f data/state.db-wal data/state.db-shm
+install -m 600 data/restore-tmp/state.db data/state.db
+for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
+  [ -f data/restore-tmp/$f ] && install -m 600 data/restore-tmp/$f data/$f
+done
+# на пустой машине -- ещё конфиг и токены из того же каталога:
+#   backend.yaml -> config/; bot-token.txt, wizard-token.txt, dashboard-token.txt -> secrets/
+# запустить контейнер бэкенда
+rm -rf data/restore-tmp
+```
+
+Хранилища кладутся туда, где их ищет бэкенд: рядом с базой, если в
+`backend.yaml` путь не задан явно. Ключа оживления в архиве нет: свой `revive.key`
+верните вручную из места, где вы его храните (иначе включите оживление заново, а
+сохранённые пароли роутеров введите снова).
+Владелец файлов — тот же, что у остальных файлов в `data/` и `secrets/`.
+`backup extract` читает оба формата шифрования и оба вида архивов; в непустой
+каталог не разворачивает, а при битом архиве не оставляет половины файлов.
 
 ## Update Components
 

@@ -185,6 +185,9 @@ type miniappFleetResp struct {
 	Routers     []miniappFleetRouter  `json:"routers"`
 	Notify      miniappFleetNotify    `json:"notify"`
 	Watchdog    *miniappFleetWatchdog `json:"watchdog,omitempty"`
+	// Backup -- состояние ночного бэкапа (только админу: весь экран админский).
+	// Причины словами, без путей и сырых ошибок; нет поля -- не подключено.
+	Backup *backupSummary `json:"backup,omitempty"`
 	// ReviveEnabled -- сервер умеет оживлять (есть ключ). false -- экран
 	// говорит «не настроено» и кнопку не показывает.
 	ReviveEnabled bool `json:"revive_enabled"`
@@ -411,6 +414,10 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				wd.LastOfflineErrorAt = st.LastOfflineErrorAt.UTC().Format(time.RFC3339)
 			}
 			resp.Watchdog = wd
+		}
+		if d.BackupStatus != nil {
+			b := d.BackupStatus.Summary()
+			resp.Backup = &b
 		}
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

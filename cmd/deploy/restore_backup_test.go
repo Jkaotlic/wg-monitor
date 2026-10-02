@@ -228,14 +228,88 @@ wizard:
 	}
 }
 
+// Каталог выгрузки на сервере -- непредсказуемое имя от mktemp, не общий
+// /tmp/wg-monitor-restore.
+const testStaging = "/tmp/wg-monitor-restore.Ab12Cd34Ef"
+
+// Очистка выгрузки взводится сразу после set -eu: любой ранний провал
+// (integrity_check, проверки токенов, test -s хранилищ) не оставляет на
+// сервере базу и хранилища в /tmp.
+func TestBuildRestoreRemoteScriptArmsCleanupTrapBeforeFirstCheck(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging,
+		RestoreExtraFile{Name: "awg3-panels.json", RemotePath: "/var/lib/wg-monitor/awg3-panels.json"})
+	trap := strings.Index(script, "trap 'rm -rf "+testStaging+"' EXIT")
+	setEU := strings.Index(script, "set -eu")
+	if setEU != 0 || trap < 0 {
+		t.Fatalf("нет ранней ловушки очистки:\n%s", script)
+	}
+	for _, check := range []string{"PRAGMA integrity_check", "test -s /etc/wg-monitor/bot-token.txt", "test -s /etc/wg-monitor/wizard-token.txt", "test -s '" + testStaging + "/awg3-panels.json'"} {
+		at := strings.Index(script, check)
+		if at < 0 {
+			t.Fatalf("в скрипте нет проверки %q", check)
+		}
+		if trap > at {
+			t.Errorf("ловушка очистки взведена после проверки %q:\n%s", check, script)
+		}
+	}
+	if strings.Contains(script, "/tmp/wg-monitor-restore/") || strings.Contains(script, "/tmp/wg-monitor-restore ") {
+		t.Errorf("в скрипте предсказуемый каталог:\n%s", script)
+	}
+}
+
+func TestRestoreStagingNameValidation(t *testing.T) {
+	for _, ok := range []string{"/tmp/wg-monitor-restore.Ab12Cd34Ef", "/tmp/wg-monitor-restore.XXXXXX"} {
+		if !restoreStagingRe.MatchString(ok) {
+			t.Errorf("%q отвергнут", ok)
+		}
+	}
+	for _, bad := range []string{"/tmp/wg-monitor-restore", "/tmp/wg-monitor-restore.a b", "/tmp/wg-monitor-restore.a'b", "/tmp/x", "/tmp/wg-monitor-restore.a;rm", "", "/tmp/wg-monitor-restore./../etc"} {
+		if restoreStagingRe.MatchString(bad) {
+			t.Errorf("%q принят", bad)
+		}
+	}
+}
+
+// Перед записью восстановленной базы старые state.db-wal и state.db-shm
+// убираются (иначе SQLite применил бы чужой журнал к новой базе); копии
+// кладутся рядом, откат возвращает их на место.
+func TestBuildRestoreRemoteScriptRemovesWalAndShmAfterStop(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
+	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
+	install := strings.Index(script, "install -m 600 -o wgmonitor -g wgmonitor "+testStaging+"/state.db")
+	for _, want := range []string{
+		"if [ -f /var/lib/wg-monitor/state.db-wal ]; then cp -p /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-wal.bak.20260522T055443Z; fi",
+		"if [ -f /var/lib/wg-monitor/state.db-shm ]; then cp -p /var/lib/wg-monitor/state.db-shm /var/lib/wg-monitor/state.db-shm.bak.20260522T055443Z; fi",
+		"rm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm",
+		"cp -p /var/lib/wg-monitor/state.db-wal.bak.20260522T055443Z /var/lib/wg-monitor/state.db-wal",
+		"cp -p /var/lib/wg-monitor/state.db-shm.bak.20260522T055443Z /var/lib/wg-monitor/state.db-shm",
+	} {
+		at := strings.Index(script, want)
+		if strings.HasPrefix(want, "rm -f") {
+			at = strings.LastIndex(script, want) // первый -- в откате, нужен рабочий
+		}
+		if at < 0 {
+			t.Fatalf("в скрипте нет %q:\n%s", want, script)
+		}
+		if strings.HasPrefix(want, "rm -f") && (at < stop || at > install) {
+			t.Errorf("rm -f wal/shm должен идти после остановки и до установки базы:\n%s", script)
+		}
+	}
+	rm := strings.LastIndex(script, "rm -f /var/lib/wg-monitor/state.db-wal")
+	bakWal := strings.Index(script, "cp -p /var/lib/wg-monitor/state.db-wal /var/lib/")
+	if bakWal < 0 || bakWal > rm {
+		t.Error("копия wal должна быть сделана до удаления")
+	}
+}
+
 func TestBuildRestoreRemoteScriptSafetySteps(t *testing.T) {
-	script := buildRestoreRemoteScript("20260522T055443Z")
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
 	for _, want := range []string{
 		"systemctl stop wg-monitor-backend",
 		"PRAGMA integrity_check",
 		"cp -p /var/lib/wg-monitor/state.db /var/lib/wg-monitor/state.db.bak.20260522T055443Z",
-		"install -m 640 -o root -g wgmonitor /tmp/wg-monitor-restore/backend.yaml /etc/wg-monitor/backend.yaml",
-		"install -m 600 -o wgmonitor -g wgmonitor /tmp/wg-monitor-restore/state.db /var/lib/wg-monitor/state.db",
+		"install -m 640 -o root -g wgmonitor " + testStaging + "/backend.yaml /etc/wg-monitor/backend.yaml",
+		"install -m 600 -o wgmonitor -g wgmonitor " + testStaging + "/state.db /var/lib/wg-monitor/state.db",
 		"systemctl start wg-monitor-backend",
 	} {
 		if !strings.Contains(script, want) {
@@ -245,7 +319,7 @@ func TestBuildRestoreRemoteScriptSafetySteps(t *testing.T) {
 }
 
 func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
-	script := buildRestoreRemoteScript("20260522T055443Z")
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
 	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
 	bot := strings.Index(script, "test -s /etc/wg-monitor/bot-token.txt")
 	wizard := strings.Index(script, "test -s /etc/wg-monitor/wizard-token.txt")
@@ -258,7 +332,7 @@ func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
 }
 
 func TestBuildRestoreRemoteScriptRollsBackAfterStopOnFailure(t *testing.T) {
-	script := buildRestoreRemoteScript("20260522T055443Z")
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
 	// On any failure after the service is stopped, the script must restore the
 	// pre-restore copies (bak -> live) and bring the old version back, so a
 	// broken install never leaves prod down (DEP-01).
@@ -274,7 +348,7 @@ func TestBuildRestoreRemoteScriptRollsBackAfterStopOnFailure(t *testing.T) {
 	// The rollback trap must be armed only after the service is stopped — a
 	// pre-stop validation failure leaves the running service untouched.
 	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
-	trapIdx := strings.Index(script, "trap '")
+	trapIdx := strings.Index(script, "trap 'rc=$?")
 	if stop < 0 || trapIdx < 0 || trapIdx < stop {
 		t.Fatalf("rollback trap must be armed after systemctl stop:\n%s", script)
 	}
@@ -378,5 +452,21 @@ wizard:
 	}
 	if err := validateRestoreBackendYAML(noAdmin); err == nil {
 		t.Fatal("конфиг без admin_user_id принят: бэкенд с ним не стартует")
+	}
+}
+
+// Откат: сначала убрать журнал восстановленной базы, потом возвращать копии.
+func TestBuildRestoreRemoteScriptRollbackRemovesWalFirst(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
+	start := strings.Index(script, "rollback() {")
+	end := strings.Index(script, "systemctl stop wg-monitor-backend")
+	if start < 0 || end < start {
+		t.Fatalf("нет функции отката:\n%s", script)
+	}
+	body := script[start:end]
+	rm := strings.Index(body, "rm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm")
+	restore := strings.Index(body, "cp -p /var/lib/wg-monitor/state.db.bak.20260522T055443Z")
+	if rm < 0 || restore < 0 || rm > restore {
+		t.Fatalf("в откате rm -f wal/shm должен идти раньше возврата state.db:\n%s", body)
 	}
 }

@@ -71,6 +71,7 @@ import {
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
 import { watchdogLine, routerDelayLines } from '../watchdogLine.js'
+import { backupLine } from '../backupLine.js'
 import {
   canPickVersion,
   otherVersionSheetText,
@@ -491,6 +492,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const rows = fleet ? fleetRouterRows(fleet, routers) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : null
+  const backupRow = fleet ? backupLine(fleet) : null
   const backend = fleet ? backendRow(fleet) : null
   const deployOffer = fleet ? backendDeployOffer(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
@@ -519,6 +521,11 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 <p class="park-watchdog-line">{watchdog.title}: {watchdog.text}</p>
                 {watchdog.alarm && <p class="state state-error">{watchdog.alarm}</p>}
                 {watchdog.sub && <p class="hint">{watchdog.sub}</p>}
+              </div>
+            )}
+            {backupRow && (
+              <div class={`park-backup park-backup-${backupRow.tone}`}>
+                <p class="park-backup-line">{backupRow.text}</p>
               </div>
             )}
             {deployOffer && openLayer && (

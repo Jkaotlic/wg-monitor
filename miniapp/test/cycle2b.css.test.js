@@ -55,6 +55,13 @@ describe('Парк: сторож и отложенное, CSS', () => {
     expect(css.includes('.park-classic')).toBe(false)
   })
 
+  it('строка бэкапа оформлена на любой ширине и теми же токенами', () => {
+    for (const sel of ['.park-backup', '.park-backup-line', '.park-backup-warn .park-backup-line', '.park-backup-danger .park-backup-line']) {
+      expect(rule(outside, `\n${sel}`), sel).not.toBe(null)
+    }
+    expect(rule(outside, '\n.park-backup-line')).toMatch(/font-size:\s*var\(--fs-sm\)/)
+  })
+
   it('строка сторожа оформлена на любой ширине', () => {
     for (const sel of ['.park-watchdog', '.park-watchdog-line', '.park-watchdog-warn .park-watchdog-line', '.park-watchdog-danger .park-watchdog-line']) {
       expect(rule(outside, `\n${sel}`), sel).not.toBe(null)

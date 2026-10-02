@@ -3694,6 +3694,26 @@ body {
   color: var(--danger);
 }
 
+/* Строка «Бэкап» под строкой сторожа: те же отступ и шрифт, свой цвет по тону. */
+.park-backup {
+  padding: var(--sp-3) 14px 0;
+}
+
+.park-backup-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--text);
+}
+
+.park-backup-warn .park-backup-line {
+  color: var(--warn);
+}
+
+.park-backup-danger .park-backup-line {
+  color: var(--danger);
+}
+
 .danger-zone {
   margin-top: var(--sp-5);
   border: 1px solid var(--border);

@@ -74,6 +74,7 @@ func main() {
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
 	awg3P12 := flag.String("awg3-p12-out", "", "куда записать .p12 поддельной панели main (пароль sandbox) для формы «Добавить панель»; рядом -- .json с адресом и паролем")
+	backupMode := flag.String("backup", sandboxBackupGood, "состояние бэкапа в Парке: good | failed | unknown (файла нет) | off (не подключено)")
 	flag.Parse()
 	if *role != "" {
 		if _, ok := sandboxRoles[*role]; !ok {
@@ -111,6 +112,13 @@ func main() {
 		fatal(err)
 	}
 	defer d.Close()
+	if err := seedBackupStatus(path, *backupMode, time.Now()); err != nil {
+		fatal(err)
+	}
+	var backupSource *backend.BackupStatusSource
+	if *backupMode != sandboxBackupOff {
+		backupSource = backend.NewBackupStatusSource(sandboxBackupPath(path), nil)
+	}
 
 	// Файл заявки раскатки бэкенда -- во временном каталоге, как у юнита
 	// обновления в проде; его подбирает watchBackendUpdate.
@@ -259,6 +267,7 @@ func main() {
 		// песочница -- единственное место, где его можно писать в открытую.
 		DashboardToken: sandboxDashboardToken,
 		HeartbeatStats: watcher.Snapshot,
+		BackupStatus:   backupSource,
 		// Не сам адрес песочницы: configuredPublicBackendURL (wizard_handler.go)
 		// отбрасывает loopback/private хосты, и с "http://127.0.0.1:..." любое
 		// обновление агента -- одиночное и массовое -- отвечало бы 503
