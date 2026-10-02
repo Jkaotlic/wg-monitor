@@ -119,6 +119,19 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
         reconcile(next)
         return
       }
+      // «Назад» со слоя с адресом, открытого из слоя без адреса («Маршруты» с
+      // экрана VPN-туннеля): запись под ним -- метка того слоя. Возврат берётся
+      // из самой навигации (returnTo/returnParams) -- тем же back, что кнопка
+      // приложения; в истории по-прежнему только номер метки. После обновления
+      // страницы returnTo нет -- и «назад» ведёт к месту-родителю, как раньше.
+      if (mark > 0 && !LOCAL_LAYERS.includes(cur.overlay) && !cur.sheet) {
+        const back = navReducer(cur, { type: 'back' })
+        if (back !== cur && localLayerDepth(back) === mark && here() === basePath + urlFromNav(back)) {
+          dispatch({ type: 'back' })
+          depth.current = mark
+          return
+        }
+      }
       const state = navFromURL(window.location.search, idsRef.current, { isAdmin: adminRef.current, routers: routersRef.current, lastID: loadLastRouter() })
       const next = basePath + urlFromNav(state)
       if (next !== here()) window.history.replaceState(window.history.state, '', next)

@@ -107,6 +107,84 @@ describe('«назад» браузера закрывает слой вклад
     expect(address()).toBe(START)
   })
 
+  // v0.52.1: «Маршруты», открытые с экрана VPN-туннеля. Кнопка приложения
+  // возвращала на экран VPN-туннеля, а «назад» браузера -- в список: метка под
+  // записью «Маршрутов» отматывалась как «метка без слоя».
+  const FROM_TUNNEL = { rebindFrom: 'awg10', returnTo: 'tunnel', returnParams: { tunnelID: 'awg10' } }
+
+  it('«Маршруты» с экрана VPN-туннеля: «назад» возвращает на экран того же VPN-туннеля, второй -- в список', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'tunnel', params: { tunnelID: 'awg10' } })
+    await d({ type: 'overlay', overlay: 'routes', params: FROM_TUNNEL })
+    expect(api.nav.overlay).toBe('routes')
+    expect(window.location.search).toBe('?router=7&tab=tunnels&open=routes')
+    expect(window.history.state).toBe(null)
+    const len = window.history.length
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe('tunnel')
+    expect(api.nav.overlayParams).toEqual({ tunnelID: 'awg10' })
+    expect(api.nav.tab).toBe('tunnels')
+    expect(address()).toBe('/dashboard/' + urlFromNav(api.nav))
+    expect(address()).toBe(START)
+    expect(window.history.state).toEqual({ wgmLayer: 1 })
+    expect(window.history.length).toBe(len)
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe(null)
+    expect(api.nav.tab).toBe('tunnels')
+    expect(address()).toBe(START)
+    expect(window.history.state).toBe(null)
+  })
+
+  it('«Маршруты» с вкладки (не с экрана VPN-туннеля): «назад» -- в список, как прежде', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'routes' })
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe(null)
+    expect(api.nav.tab).toBe('tunnels')
+    expect(address()).toBe(START)
+    expect(window.history.state).toBe(null)
+  })
+
+  it('экран VPN-туннеля → «Маршруты» → «Добавить сайт»: два «назад» -- «Маршруты», затем экран VPN-туннеля', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'tunnel', params: { tunnelID: 'awg10' } })
+    await d({ type: 'overlay', overlay: 'routes', params: FROM_TUNNEL })
+    await d({ type: 'overlay', overlay: 'routeadd', params: { kind: 'domain' } })
+    expect(window.history.state).toEqual({ wgmLayer: 1 })
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe('routes')
+    expect(api.nav.overlayParams).toEqual(FROM_TUNNEL)
+    expect(address()).toBe('/dashboard/' + urlFromNav(api.nav))
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe('tunnel')
+    expect(api.nav.overlayParams).toEqual({ tunnelID: 'awg10' })
+    expect(address()).toBe('/dashboard/' + urlFromNav(api.nav))
+    expect(window.history.state).toEqual({ wgmLayer: 1 })
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe(null)
+    expect(address()).toBe(START)
+  })
+
+  it('обновление страницы на «Маршрутах»: родителя-экрана уже нет, «назад» уходит с места без петли', async () => {
+    window.history.pushState({ wgmLayer: 1 }, '', START)
+    window.history.pushState(null, '', START + '&open=routes')
+    await mount()
+    await settle()
+    expect(api.nav.overlay).toBe('routes')
+    expect(api.nav.tab).toBe('tunnels')
+    await browserBack()
+    await settle()
+    expect(api.nav.overlay).toBe(null)
+    expect(address()).toBe(START)
+    expect(window.history.state).toBe(null)
+  })
+
   it('«Починить» на «Роутере»: «назад» закрывает ход починки, вкладка остаётся', async () => {
     await mount()
     await d({ type: 'tab', tab: 'router' })

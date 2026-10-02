@@ -11,12 +11,15 @@ const btn = (t, extra = '') => `<button style="min-width:48px;height:48px;${extr
 const chip = (n, extra = '') => `<button class="strip-chip" style="flex:none;height:44px;padding:0 12px;${extra}"><span>${n}</span></button>`
 const STRIP_LEAD = `<div class="strip-lead" style="flex:none;padding-right:8px">${chip('sandbox-broken').replace('strip-chip', 'strip-chip strip-chip-alert')}</div>`
 const gridCard = (name, line, extra = '') => `<div class="card" style="${extra}"><p style="margin:0">${name}</p><p style="margin:0">${line}</p><div class="action-row" style="display:flex;gap:8px">${btn('Открыть')}${btn('Ещё')}</div></div>`
+// Карточка без своей коробки (display: contents): в сетке стоит её верх.
+const splitCard = (name, line) => `<div class="card" style="display:contents"><div><p style="margin:0">${name}</p><p style="margin:0">${line}</p><div class="action-row" style="display:flex;gap:8px">${btn('Открыть')}${btn('Ещё')}</div></div></div>`
 const CLEAN = `${base}<div style="padding:8px"><section><h2 style="margin:0">Группа</h2><section><h3 style="margin:0">Раздел</h3></section></section><button class="btn-primary" style="width:120px;height:48px">Главная</button>
   <div style="display:flex;gap:8px;margin-top:8px">${btn('Раз')}${btn('Два')}</div>
   <div style="width:200px;overflow:hidden;white-space:nowrap"><span>короткий</span></div>
   <label style="display:inline-block;min-width:48px;min-height:48px"><input type="checkbox"> тумблер</label>
   <nav class="router-strip" style="display:flex;width:340px">${STRIP_LEAD}<div class="strip-scroll" style="display:flex;gap:8px;overflow-x:auto;white-space:nowrap;flex:1 1 0;min-width:0">${['router4car4new', 'дача-северная', 'четвёртый-роутер'].map((n) => chip(n)).join('')}</div></nav>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">${gridCard('первая', 'короткая строка')}${gridCard('вторая', 'короткая строка')}</div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">${gridCard('первая', 'короткая строка')}${gridCard('вторая', 'короткая строка')}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">${splitCard('третья', 'короткая строка')}${splitCard('четвёртая', 'короткая строка')}</div></div>
   <script>document.querySelector('.strip-scroll').scrollLeft = 120</script>`
 
 const FIXTURES = [
@@ -35,6 +38,7 @@ const FIXTURES = [
   // Прежнее устройство полосы: красный чип прилип внутри прокрутки, и прокрученный сосед уехал под него.
   [9, 'чип под прилипшим красным', `${base}<nav class="router-strip" style="display:flex;gap:8px;width:340px;overflow-x:auto;white-space:nowrap">${chip('sandbox-broken', 'position:sticky;left:0;z-index:1').replace('strip-chip', 'strip-chip strip-chip-alert')}${['router4car4new', 'дача-северная', 'четвёртый-роутер'].map((n) => chip(n)).join('')}</nav><script>document.querySelector('.router-strip').scrollLeft = 120</script>`],
   [10, 'кнопки карточек одного ряда на разной высоте', `${base}<div style="display:grid;grid-template-columns:150px 150px;gap:8px">${gridCard('первая', 'строка в два ряда строка в два ряда')}${gridCard('вторая', 'коротко')}</div>`],
+  [10, 'то же у карточек без своей коробки (display: contents)', `${base}<div style="display:grid;grid-template-columns:150px 150px;gap:8px">${splitCard('первая', 'строка в два ряда строка в два ряда')}${splitCard('вторая', 'коротко')}</div>`],
   [11, 'h2 в группе с h2', `${base}<section><h2>Интернет и DNS</h2><section><h2>Раздельный DNS</h2><p>текст</p></section></section>`],
   [8, 'кнопка в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><button style="min-width:120px;height:48px">голая кнопка</button>'],
   [8, 'поле ввода в оформлении браузера', '<style>body{margin:0;font:14px sans-serif}</style><input style="width:200px;height:48px" value="поле">'],

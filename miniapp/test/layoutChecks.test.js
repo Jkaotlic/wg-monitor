@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems, neighbourProblems, pairCoverageProblem } from '../layout/checks.js'
 import { SCREENS, ROLES, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
@@ -153,6 +153,39 @@ describe('скрипт раскладки: кнопки карточек одн�
   })
   it('карточки разных рядов и разных сеток не сравниваются', () => {
     expect(gridRowProblems([card('a', 805, 917), card('b', 981, 1094), { ...card('c', 805, 870), sel: 'div.other' }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: сосед раскрытой карточки ряда', () => {
+  const m = (height, btnTop) => ({ name: 'sandbox-bronya', height, btnTop })
+  it('высота и кнопки соседа на месте -- находок нет', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), m(133.4, 917))).toEqual([])
+  })
+  it('сосед вытянулся -- находка', () => {
+    const p = neighbourProblems('sandbox-broken', m(133, 917), m(420, 917))
+    expect(p).toHaveLength(1)
+    expect(p[0]).toContain('сменил высоту: 133 → 420')
+  })
+  it('кнопки соседа уехали -- находка', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), m(133, 896))[0]).toContain('кнопки соседа «sandbox-bronya» уехали: 917 → 896')
+  })
+  it('соседа не стало -- находка', () => {
+    expect(neighbourProblems('sandbox-broken', m(133, 917), undefined)).toHaveLength(1)
+  })
+})
+
+describe('скрипт раскладки: сверка соседа не проходит вхолостую', () => {
+  it('от 1100 px две карточки и ноль сверенных пар -- находка', () => {
+    expect(pairCoverageProblem(1440, 8, 0)).toContain('сосед не сверен')
+    expect(pairCoverageProblem(1100, 2, 0)).toContain('1100')
+  })
+  it('пары сверены -- находки нет', () => {
+    expect(pairCoverageProblem(1440, 8, 8)).toBe(null)
+  })
+  it('уже 1100 px (столбик) и одна карточка -- ноль пар допустим', () => {
+    expect(pairCoverageProblem(1024, 8, 0)).toBe(null)
+    expect(pairCoverageProblem(390, 8, 0)).toBe(null)
+    expect(pairCoverageProblem(1440, 1, 0)).toBe(null)
   })
 })
 

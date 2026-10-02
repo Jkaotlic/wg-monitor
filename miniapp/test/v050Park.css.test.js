@@ -32,7 +32,14 @@ describe('v0.50 Парк и шапка: CSS', () => {
   })
 
   it('карточки Парка -- две колонки от 1100 px', () => {
-    expect(css).toMatch(/@media \(min-width: 1100px\)\s*\{\s*\.park-cards\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)
+    expect(css).toMatch(/@media \(min-width: 1100px\)\s*\{\s*\.park-pair\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/)
+  })
+
+  it('ряд карточек Парка не зависит от subgrid; раскрытое «Ещё» -- во втором ряду пары', () => {
+    const park = css.slice(css.indexOf('.park-pair {'), css.indexOf('.awg3-qr-title'))
+    expect(park).not.toMatch(/subgrid\s*;/)
+    expect(park).toMatch(/\.park-pair > \.park-row > \.park-more-body\s*\{\s*grid-row:\s*2/)
+    expect(park).toMatch(/\.park-card-head > \.park-card-line\s*\{\s*margin-bottom:\s*auto/)
   })
 
   it('поле поиска в листе -- в теме приложения, а не белое системное', () => {
