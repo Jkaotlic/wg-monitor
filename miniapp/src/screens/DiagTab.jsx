@@ -8,7 +8,7 @@ import { humanAge, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount }
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
 import { agoText } from '../when.js'
-import { Section } from '../ui/Section.jsx'
+import { Section, HeadingGroup } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -30,12 +30,13 @@ import { ErrorLine } from '../ui/ErrorLine.jsx'
 // Машинные имена проверок (dns, hydraroute, agent_heartbeat) -- для того, кто
 // полезет в консоль, то есть для админа. Владельцу они ничего не говорят и
 // только теснят вопрос: ему -- без них.
-function DiagGroup({ id, children }) {
+export function DiagGroup({ id, children }) {
   const section = DIAG_SECTIONS.find((s) => s.id === id)
   return (
     <section id={`dg-${id}`} class="diag-group">
       <h2 class="diag-group-title">{section.title}</h2>
-      {children}
+      {/* Заголовок группы -- h2: разделы внутри -- h3 (вид -- по классам). */}
+      <HeadingGroup>{children}</HeadingGroup>
     </section>
   )
 }

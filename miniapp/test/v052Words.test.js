@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import { returnLabel } from '../src/screens/OverlayHost.jsx'
 import { ACTION_LABELS } from '../src/labels.js'
 
-// vitest.config: тесты идут из miniapp/; под jsdom import.meta.url не файловый.
-const SRC = join(process.cwd(), 'src') + '/'
+// От места самого теста, а не от process.cwd(): vitest зовут и из miniapp/, и
+// из корня репозитория. Путь -- строкой: под jsdom глобальный URL не узловой,
+// и fileURLToPath(new URL(...)) падает, а строку import.meta.url принимает.
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src') + '/'
 
 function files(dir) {
   return readdirSync(dir).flatMap((f) => {
@@ -43,11 +46,52 @@ const FORBIDDEN = [
   [/вкладке «Свой сервер» его кабинета/, '«Новый VPN-туннель» → «Откуда взять конфиг»'],
 ]
 
-const ALL = files(SRC).map((p) => [p.slice(SRC.length), code(readFileSync(p, 'utf8'))])
+// Что найдено в исходнике: номера запрещённых подписей.
+// Подпись в JSX часто разбита: перенос посреди текста, текст на своей строке
+// между тегами, склейка строк через + или {' '}. Перед поиском исходник
+// сплющивается -- только для поиска, смысл кода тут не важен.
+function flat(src) {
+  return code(src)
+    .replace(/\{\s*(['"`])(\s*)\1\s*\}/g, ' ')
+    .replace(/(['"`])\s*\+\s*(['"`])/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/>\s+/g, '>')
+    .replace(/\s+</g, '<')
+}
+
+function scan(src) {
+  const text = flat(src)
+  return FORBIDDEN.flatMap(([re], i) => (re.test(text) ? [i] : []))
+}
+
+const ALL = files(SRC).map((p) => [p.slice(SRC.length), readFileSync(p, 'utf8')])
+const at = (label) => FORBIDDEN.findIndex(([re]) => re.source.includes(label))
+
+describe('словарь v0.52: сам сторож ловит подпись, разбитую по строкам', () => {
+  it('исходники найдены от места теста', () => {
+    expect(ALL.length).toBeGreaterThan(100)
+    expect(ALL.map(([f]) => f)).toContain('nav.js')
+  })
+  it('текст JSX с переносом строки посреди подписи', () => {
+    expect(scan('<p class="hint">\n        Повторить\n        проверку можно через минуту\n      </p>')).toEqual([at('Повторить проверку')])
+  })
+  it('подпись между тегами на своей строке', () => {
+    expect(scan('<h1 class="screen-title">\n          Все роутеры\n        </h1>')).toEqual([at('Все роутеры')])
+    expect(scan('<button type="button">\n  Управление\n</button>')).toEqual([at(')Управление(')])
+  })
+  it('подпись, склеенная из строк через + и через {\' \'}', () => {
+    expect(scan("const t = 'Собрать ' +\n  'диагностику'")).toEqual([at('Собрать диагностику')])
+    expect(scan("<p>Опросить{' '}\n  все</p>")).toEqual([at('Опросить все')])
+  })
+  it('комментарий и чистый текст не срабатывают', () => {
+    expect(scan('// Повторить проверку -- старое имя\n{/* Все роутеры */}\nconst a = 1')).toEqual([])
+    expect(scan('<p>\n  Проверить\n  заново\n</p>')).toEqual([])
+  })
+})
 
 describe('словарь v0.52: старых подписей на экране нет', () => {
-  it.each(FORBIDDEN.map(([re, instead]) => [String(re), re, instead]))('%s', (_name, re, instead) => {
-    expect(ALL.filter(([, src]) => re.test(src)).map(([f]) => f), `замена: ${instead}`).toEqual([])
+  it.each(FORBIDDEN.map(([re, instead], i) => [String(re), i, instead]))('%s', (_name, i, instead) => {
+    expect(ALL.filter(([, src]) => scan(src).includes(i)).map(([f]) => f), `замена: ${instead}`).toEqual([])
   })
   it('подписи возврата слоёв -- по словарю', () => {
     expect(['park', 'fleet', 'manage', 'selfhosted', 'awg3panel', null].map((to) => returnLabel(to))).toEqual(['Парк', 'Мои роутеры', 'Настройки', 'Серверы', 'Панель VPN-сервера', 'Роутеры'])

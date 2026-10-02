@@ -36,8 +36,11 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // key -- номер роутера: переход A→B пересоздаёт вкладку, и ни состояние,
   // ни поздний ответ по A не переезжают на экран B (MINI-04).
   const key = nav.routerID
-  switch (nav.tab === PARK_TAB ? 'router' : nav.tab) {
-    case 'router': {
+  // Неизвестная вкладка (старый снимок навигации, опечатка в ссылке) и Парк
+  // не-админа -- «Роутер», а не пустой экран.
+  switch (nav.tab) {
+    case 'router':
+    default: {
       const strip = routerPickMode({ count: routers.length, isAdmin: Boolean(isAdmin) }) === 'strip'
       return (
         <RouterDetail
@@ -107,7 +110,5 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
         />
       )
-    default:
-      return null
   }
 }

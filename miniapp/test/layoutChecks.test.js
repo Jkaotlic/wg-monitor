@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip, stripProblems, gridRowProblems } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
 import { SCREENS, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
@@ -153,5 +153,17 @@ describe('скрипт раскладки: кнопки карточек одн�
   })
   it('карточки разных рядов и разных сеток не сравниваются', () => {
     expect(gridRowProblems([card('a', 805, 917), card('b', 981, 1094), { ...card('c', 805, 870), sel: 'div.other' }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: уровни заголовков (11)', () => {
+  it('h3 в группе с h2 -- находок нет', () => {
+    expect(headingProblems([{ level: 3, text: 'Раздельный DNS', owner: { level: 2, text: 'Интернет и DNS' } }, { level: 2, text: 'Интернет и DNS', owner: null }])).toEqual([])
+  })
+  it('h2 в группе с h2 -- находка', () => {
+    const p = findProblems({ ...clean, headings: [{ level: 2, text: 'Раздельный DNS', owner: { level: 2, text: 'Интернет и DNS' } }] })
+    expect(p.map((x) => x.check)).toEqual([11])
+    expect(p[0].what).toContain('h2 «Раздельный DNS»')
+    expect(p[0].what).toContain('h2 «Интернет и DNS»')
   })
 })

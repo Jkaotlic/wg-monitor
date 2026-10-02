@@ -195,7 +195,21 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
     }
   }
 
-  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua, strip, gridCards }
+  // Уровни заголовков (проверка 11): у заголовка внутри раздела/свёртки, чей
+  // собственный заголовок -- другой, уровень обязан быть глубже.
+  const headings = []
+  const H = 'h1, h2, h3, h4, h5, h6'
+  for (const h of document.querySelectorAll(H)) {
+    if (!visible(h)) continue
+    let owner = null
+    for (let box = h.parentElement?.closest('section, details'); box && !owner; box = box.parentElement?.closest('section, details')) {
+      const own = box.querySelector(H)
+      if (own && own !== h && visible(own)) owner = { level: Number(own.tagName[1]), text: label(own) }
+    }
+    headings.push({ level: Number(h.tagName[1]), text: label(h), owner })
+  }
+
+  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua, strip, gridCards, headings }
 }
 
 // Проверка 9: видимые части двух чипов полосы не пересекаются (допуск 0,5 px),
@@ -213,6 +227,12 @@ export function stripProblems(strip = []) {
   }
   for (const c of strip) if (c.hit === false) out.push(`касание чипа «${c.text}» попадает в другой элемент`)
   return out
+}
+
+// Проверка 11: заголовок внутри раздела с собственным заголовком того же или
+// более глубокого уровня -- у скринридера «h2 в h2».
+export function headingProblems(headings = []) {
+  return headings.filter((h) => h.owner && h.level <= h.owner.level).map((h) => `заголовок h${h.level} «${h.text}» вложен в раздел с заголовком h${h.owner.level} «${h.owner.text}»`)
 }
 
 // Проверка 10: карточки одной сетки с одинаковым верхом -- один ряд; верх
@@ -281,6 +301,7 @@ export function findProblems(d) {
   for (const c of unstyledControls(d)) out.push({ check: 8, what: `элемент в оформлении браузера: «${c.text}» -- ${c.why.join('; ')} (${c.sel})` })
   for (const w of stripProblems(d.strip)) out.push({ check: 9, what: w })
   for (const w of gridRowProblems(d.gridCards)) out.push({ check: 10, what: w })
+  for (const w of headingProblems(d.headings)) out.push({ check: 11, what: w })
   return out
 }
 

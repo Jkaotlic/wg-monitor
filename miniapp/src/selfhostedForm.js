@@ -1,9 +1,9 @@
-import { placeText } from './places.js'
-// Свои VPN-серверы (Amnezia на своём VPS): форма сервера, проверка, тело
+// Свои VPS (Amnezia на своём VPS): форма сервера, проверка, тело
 // запроса и тексты. Только админ. SSH-пароль сюда приходит лишь снимком
 // значений формы -- чтобы положить его в тело, когда он введён. Сервер его
 // наружу не отдаёт: вместо него password_set.
 
+import { placeText } from './places.js'
 import { pluralRu } from './labels.js'
 
 export const INSTANCE_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/

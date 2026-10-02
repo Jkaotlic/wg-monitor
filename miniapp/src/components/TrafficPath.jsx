@@ -22,6 +22,17 @@ const TUNNEL_CAPTION = {
   unknown: 'роутер не сказал',
 }
 
+// Подпись схемы для скринридера -- словами то же состояние, что видно глазами.
+// Прежняя была одна на все случаи («заблокированное идёт через VPN-туннель»)
+// и вместе с role="img" прятала текст веток: упавший VPN-туннель читался как
+// работающий.
+export function pathLabel(s, stale) {
+  const name = s.via ? `VPN-туннель «${s.via}»` : 'VPN-туннель'
+  const tunnel = s.tunnel === 'down' ? `${name} не отвечает` : s.tunnel === 'unknown' ? 'про VPN-туннель роутер не сказал' : `заблокированное идёт через ${name}`
+  const direct = stale ? 'прямой путь — неизвестно, роутер молчит' : 'остальное — напрямую, без VPN-туннеля'
+  return `Путь трафика: ${tunnel}; ${direct}`
+}
+
 export function TrafficPath({ traffic, incidents, tunnels, stale }) {
   const s = pathState({ traffic, incidents, tunnels, stale })
   const viaLabel = s.via || 'VPN-туннель'
@@ -29,8 +40,8 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
   return (
     <div
       class="traffic-path"
-      role="img"
-      aria-label={`Схема: заблокированное идёт через ${s.via ? `VPN-туннель «${s.via}»` : 'VPN-туннель'}, остальное напрямую`}
+      role="group"
+      aria-label={pathLabel(s, stale)}
     >
       <div class="tp-node tp-devices">
         <svg viewBox="0 0 50 18" width="50" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">

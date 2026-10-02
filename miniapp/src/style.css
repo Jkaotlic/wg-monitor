@@ -2847,6 +2847,31 @@ body {
   background: var(--surf);
 }
 
+/* Старые WebView без subgrid: строки веток не делят общие ряды -- без запасного
+   правила grid-template-rows: subgrid отбрасывается, и три строки ветки
+   ложатся в неявные ряды с растяжкой по высоте соседа. Ветка -- колонкой,
+   строки прижаты к верху; на телефоне ярлыку оставлено место под две строки
+   («ЧЕРЕЗ VPN-ТУННЕЛЬ» переносится, «НАПРЯМУЮ» -- нет), чтобы имена веток
+   стояли на одной линии. */
+@supports not (grid-template-rows: subgrid) {
+  .tp-branches {
+    grid-template-rows: auto;
+  }
+
+  .tp-branch {
+    display: flex;
+    flex-direction: column;
+    grid-row: auto;
+    gap: 2px;
+  }
+
+  @media (max-width: 480px) {
+    .tp-kicker {
+      min-height: calc(2em * var(--lh-tight));
+    }
+  }
+}
+
 .tp-kicker {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);

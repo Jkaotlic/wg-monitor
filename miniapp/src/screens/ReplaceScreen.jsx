@@ -19,8 +19,8 @@ import { Q, Quoted } from '../ui/Q.jsx'
 // не после: именно это свойство делает операцию обратимой.
 const POLL_MS = 3000
 
-// onOpenCabinet -- открыть кабинет роутера: там владелец и админ отзывают
-// выпущенную страну, когда в подписке нет мест.
+// onOpenCabinet -- открыть «Откуда взять конфиг»: там админ, владелец и
+// оператор отзывают выпущенную страну, когда в подписке нет мест.
 // onOpenTunnel(tunnelID|null) -- к экрану VPN-туннеля, который мастер оставил на
 // роутере (null -- к списку): разбираться с ним человек будет там.
 // replaceCanRevoke -- кто может отозвать старый конфиг в мастере замены:
@@ -36,7 +36,8 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
   const [pick, setPick] = useState(null)
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
-  // Отзывать может владелец и админ; роль не узнали -- кнопки нет, слова те же.
+  // Отзывать могут админ, владелец и оператор (replaceCanRevoke); роль не
+  // узнали -- кнопки нет, слова те же.
   const [canRevoke, setCanRevoke] = useState(false)
 
   useEffect(() => {
