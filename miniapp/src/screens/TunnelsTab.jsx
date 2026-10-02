@@ -344,7 +344,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
             ) : (
               <StateTag>VPN-туннель поднят</StateTag>
             )}
-            <h2 class="traffic-title" style="margin-top:8px">{view.active.title}</h2>
+            <h3 class="traffic-title" style="margin-top:8px">{view.active.title}</h3>
             {/* Идентификатор и интерфейс -- инженерия: они стоят подписью под
                 именем, а не вместо него. */}
             <p class="data-row-code">
@@ -399,7 +399,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               {tv.invite ? (
                 <p class={tv.error ? 'state state-error traffic-detail' : 'traffic-detail'}>{tv.text}</p>
               ) : (
-                <div class="stat-grid" style="padding:14px">
+                <div class="stat-grid">
                   <Stat label="принято" value={tv.rx} note={tv.note} />
                   <Stat label="отдано" value={tv.tx} />
                 </div>

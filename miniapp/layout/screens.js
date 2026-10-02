@@ -1,12 +1,16 @@
 // Обход приёмки раскладки (спека §9): каждая вкладка и каждый слой × роли.
-// Подписи -- словарь v0.52. Экран обязан открыться: пропуск -- провал прогона
-// (optional -- только там, где кнопки может не быть по данным песочницы, и
-// такой пропуск попадает в отчёт отдельной строкой).
+// Подписи -- словарь v0.52. Экран обязан открыться: пропусков нет, не открылся
+// -- провал прогона. Чего в песочнице «не бывает», то в ней засеяно (роль none,
+// остановленный HydraRoute Neo, версия для раскатки бэкенда).
 //
 // Роутер экрана: router -- для админа (выбирает из парка); остальные роли --
 // свой роутер по DEFAULT_ROUTER, если экран не переопределил его в routers.
 // Какой роутер снят на самом деле, run.mjs пишет в запись; не тот -- провал.
-export const ROLES = ['admin', 'owner1', 'owner3', 'operator', 'issuer']
+export const ROLES = ['admin', 'owner1', 'owner3', 'operator', 'issuer', 'none']
+// «Последний выпуск» песочницы (флаг -latest): Парк предлагает раскатку до него.
+export const SANDBOX_LATEST = 'v0.34.0'
+// Роутер с остановленным HydraRoute Neo: run.mjs передаёт его песочнице флагом -hrneo-stopped.
+export const HRNEO_STOPPED = 'дача-северная'
 export const WIDTHS = [360, 390, 1024, 1440]
 
 export const DEFAULT_ROUTER = {
@@ -17,7 +21,8 @@ export const DEFAULT_ROUTER = {
   issuer: 'sandbox-work',
 }
 
-const ALL = ROLES
+// Все, у кого есть роутер (роль none -- человек без доступа, у него один экран).
+const ALL = ROLES.filter((r) => r !== 'none')
 const OWNERS = ['admin', 'owner1', 'owner3']
 const TUNNELS = { tab: 'VPN-туннели' }
 const NEW = [TUNNELS, { click: 'Новый VPN-туннель' }]
@@ -52,8 +57,10 @@ export const SCREENS = [
   { id: 'routepick', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Перенести' }] },
   { id: 'make-default', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Сделать главным' }] },
   { id: 'hrneo-stop', roles: OWNERS, router: 'sandbox-home', steps: [...ROUTES, { click: 'Остановить' }] },
-  // Запустить -- только когда HydraRoute Neo остановлен; в песочнице он идёт.
-  { id: 'hrneo-start', roles: OWNERS, router: 'sandbox-home', optional: true, steps: [...ROUTES, { click: 'Запустить' }] },
+  // «Запустить» -- только когда HydraRoute Neo остановлен: у админа и владельца
+  // трёх это засеянный роутер. У владельца одного роутер единственный и нужен
+  // запущенным для hrneo-stop -- его экран ниже, последним: он сам останавливает.
+  { id: 'hrneo-start', roles: ['admin', 'owner3'], router: HRNEO_STOPPED, routers: { owner3: HRNEO_STOPPED }, steps: [...ROUTES, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
   { id: 'diag-now', roles: ALL, router: 'sandbox-home', steps: [{ tab: 'Проверки' }] },
   { id: 'diag-history', roles: ALL, router: 'sandbox-home', steps: [{ tab: 'Проверки' }, { segment: 'Что было' }] },
   { id: 'manage', roles: ALL, router: 'sandbox-home', steps: MANAGE },
@@ -89,6 +96,19 @@ export const SCREENS = [
   { id: 'awg3form', roles: ['admin'], steps: [...AWG3, { click: 'Main (Амстердам)' }, { click: 'Настройки панели' }] },
   { id: 'awg3add', roles: ['admin'], steps: [...AWG3, { click: 'Добавить панель' }] },
   { id: 'provision', roles: ['admin'], steps: [PARK, { click: 'Добавить роутер' }] },
+  // Человек без доступа: один экран, до и после «Проверить снова».
+  { id: 'noaccess', roles: ['none'], steps: [{ expect: 'Роутер ещё не привязан' }] },
+  { id: 'noaccess-checked', roles: ['none'], steps: [{ click: 'Проверить снова' }, { waitText: 'Пока ничего не изменилось' }] },
+  // Владелец одного роутера: останавливает HydraRoute Neo настоящей командой и
+  // открывает лист «Запустить». Последним: дальше роутер остаётся с остановленным.
+  { id: 'hrneo-start', roles: ['owner1'], router: 'sandbox-home', steps: [...ROUTES, { waitButton: 'Остановить' }, { click: 'Остановить' }, { click: 'Остановить' }, { waitButton: 'Закрыть' }, { click: 'Закрыть' }, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
+  // «Ход работы»: переустановка агента на настоящем движке заданий песочницы
+  // (подменён только терминал роутера). Пароль -- любое слово: настоящих
+  // секретов в песочнице нет. Снимается итог задания -- он устойчив.
+  { id: 'job', roles: ['admin'], steps: [PARK, { clickAll: 'Ещё' }, { click: 'Переустановить агент' }, { fillSel: '#sheet-field-root_password', value: 'sandbox' }, { fillSel: '#sheet-confirm-input', value: '$confirm' }, { click: 'Переустановить' }, { waitText: 'Агент переустановлен и на связи', ms: 40000 }] },
+  // Ожидание раскатки бэкенда: слой закреплён, песочница заявку принимает и
+  // молчит (-backend-update ignore). После снимка -- перезагрузка страницы.
+  { id: 'backenddeploy', roles: ['admin'], reload: true, steps: [PARK, { click: `Обновить бэкенд до ${SANDBOX_LATEST}` }, { fillSel: '#sheet-confirm-input', value: '$confirm' }, { click: 'Обновить бэкенд' }, { waitText: `Бэкенд обновляется до ${SANDBOX_LATEST}` }, { waitText: 'прежней версией' }] },
 ]
 
 // Что обязан показать шаг expect этой роли: строка -- всем, объект -- по роли.

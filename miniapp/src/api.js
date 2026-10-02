@@ -443,7 +443,7 @@ export function sendVPNConf(routerID, { provider, option = '', instanceID = '' }
   return request(`/routers/${routerID}/vpn/send-conf`, { method: 'POST', body: JSON.stringify(body) })
 }
 
-// Свои VPN-серверы -- только админ. SSH-пароль уходит только телом POST/PUT
+// Свои VPS (серверы Парка) -- только админ. SSH-пароль уходит только телом POST/PUT
 // и только когда введён: пустое поле значит «не менять», и ключа в теле нет.
 export function fetchSelfhosted() {
   return request('/selfhosted')

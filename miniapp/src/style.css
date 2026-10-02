@@ -444,6 +444,13 @@ body {
   margin-top: 0;
 }
 
+/* Строка итога под заголовком вкладки («Проверки»: «7 вопросов роутеру…») и
+   плитки под ней: тот же шаг, что от заголовка группы до её карточки. Без
+   него строка лежала вплотную на плитках. */
+.router-lastseen + .stat-grid {
+  margin-top: var(--sp-3);
+}
+
 /* Vertical stack of standalone .card elements (one per incident).
    .list-reset strips the <ul>'s marker/margin; this adds the
    between-card gap that .row's dividers provide inside a single
@@ -2847,6 +2854,31 @@ body {
   background: var(--surf);
 }
 
+/* Старые WebView без subgrid: строки веток не делят общие ряды -- без запасного
+   правила grid-template-rows: subgrid отбрасывается, и три строки ветки
+   ложатся в неявные ряды с растяжкой по высоте соседа. Ветка -- колонкой,
+   строки прижаты к верху; на телефоне ярлыку оставлено место под две строки
+   («ЧЕРЕЗ VPN-ТУННЕЛЬ» переносится, «НАПРЯМУЮ» -- нет), чтобы имена веток
+   стояли на одной линии. */
+@supports not (grid-template-rows: subgrid) {
+  .tp-branches {
+    grid-template-rows: auto;
+  }
+
+  .tp-branch {
+    display: flex;
+    flex-direction: column;
+    grid-row: auto;
+    gap: 2px;
+  }
+
+  @media (max-width: 480px) {
+    .tp-kicker {
+      min-height: calc(2em * var(--lh-tight));
+    }
+  }
+}
+
 .tp-kicker {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -4542,6 +4574,12 @@ body {
     margin-top: 0 !important;
   }
 
+  /* Строка «На «имя» тревога — открыть» несёт свой нижний отступ для телефона;
+     в колонке он складывался с gap, и под строкой получался двойной зазор. */
+  .now-main > .other-alert {
+    margin-bottom: 0;
+  }
+
   @media (min-width: 1200px) {
     .now-grid {
       grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
@@ -5158,6 +5196,27 @@ body {
   .park-cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  /* Две карточки в ряд: подпись у соседей переносится по-разному, и кнопки
+     «Открыть роутер / Ещё» вставали на разной высоте. Части карточки (имя,
+     подпись, кнопки, «Ещё») садятся на общие ряды сетки -- кнопки соседей на
+     одной линии, а раскрытое «Ещё» растёт вниз, не утягивая кнопки соседа.
+     Промежуток между рядами карточек -- отступом карточки: ряды сетки теперь
+     внутри неё. Без subgrid остаётся прежняя раскладка. */
+  @supports (grid-template-rows: subgrid) {
+    .park-cards {
+      row-gap: 0;
+      margin-bottom: calc(-1 * var(--sp-2));
+    }
+
+    .park-cards > .park-row {
+      display: grid;
+      grid-row: span 4;
+      grid-template-rows: subgrid;
+      align-content: start;
+      margin-bottom: var(--sp-2);
+    }
+  }
 }
 
 /* Заголовок QR -- обычным регистром (спека п. 2.7). */
@@ -5269,7 +5328,10 @@ body {
 
 /* Полоса «Мои роутеры» (2–5 роутеров): чипы «точка + имя» под шапкой на всех
    вкладках роутера. Прокручивается сама, страница -- нет; тревожный чип
-   первый и окрашен. */
+   первый и окрашен.
+   Первый тревожный чип -- в своей ячейке слева (.strip-lead), вне прокрутки
+   (.strip-scroll): прокрученные чипы обрезаются краем прокрутки и под красный
+   не заезжают -- наложение невозможно по построению. */
 :root {
   --strip-h: 53px;
 }
@@ -5279,18 +5341,46 @@ body {
   top: var(--app-header-h);
   z-index: 9;
   display: flex;
-  gap: var(--sp-2);
   box-sizing: border-box;
   height: var(--strip-h);
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Поля по вертикали -- у ячеек, а не у полосы: контур фокуса чипа (2 px с
+   отступом 2 px) должен помещаться внутри прокрутки, она режет по своему краю. */
+.strip-lead {
+  flex: none;
+  display: flex;
+  box-sizing: border-box;
+  /* Длинное имя красного не съедает полосу: остальным остаётся не меньше половины. */
+  max-width: 50%;
+  padding: 6px var(--sp-1) 6px var(--sp-4);
+}
+
+.strip-lead .strip-chip {
+  max-width: 100%;
+}
+
+.strip-scroll {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  gap: var(--sp-2);
+  box-sizing: border-box;
   padding: 6px var(--sp-4);
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  background: var(--page);
-  border-bottom: 1px solid var(--border);
   scrollbar-width: none;
 }
 
-.router-strip::-webkit-scrollbar {
+/* Рядом с красным: вместе с полем ячейки -- те же 8 px, что между чипами. */
+.strip-lead + .strip-scroll {
+  padding-left: var(--sp-1);
+}
+
+.strip-scroll::-webkit-scrollbar {
   display: none;
 }
 
@@ -5341,14 +5431,6 @@ body {
   border-color: color-mix(in srgb, var(--bad) 55%, transparent);
   background: color-mix(in srgb, var(--bad) 12%, var(--surface));
   color: var(--ink);
-}
-
-/* Первый тревожный чип прилипает слева: при прокрутке красное не уезжает за
-   край. Фон непрозрачный (смесь поверх --surface), иначе соседи просвечивали. */
-.strip-chip-alert:first-child {
-  position: sticky;
-  left: 0;
-  z-index: 1;
 }
 
 /* Текущий и с тревогой: цвет остаётся тревожным, «текущий» -- сплошной контур. */

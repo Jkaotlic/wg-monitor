@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, optionalSkip } from '../layout/checks.js'
-import { SCREENS, expectPattern } from '../layout/screens.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems } from '../layout/checks.js'
+import { SCREENS, ROLES, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
 
@@ -107,12 +107,63 @@ describe('скрипт раскладки: оценщики', () => {
     expect(new RegExp(expectPattern(step, 'issuer')).test('Панель сейчас не отвечает — попробуйте позже.')).toBe(false)
   })
 
-  // ---- шаг 0c: пропуск optional -- только когда нет самой цели ----
-  it('optional: пропуск -- лишь при отказе ПОСЛЕДНЕГО шага и выбранном роутере', () => {
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 2, steps: 3 })).toBe(true)
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: 1, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: true, routerOk: false, failedStep: -1, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: false, routerOk: true, failedStep: 2, steps: 3 })).toBe(false)
-    expect(optionalSkip({ optional: true, routerOk: true, failedStep: -1, steps: 3 })).toBe(false)
+  // ---- пропусков нет: ни одного optional-экрана, у каждой роли есть экраны ----
+  it('в обходе нет необязательных экранов; у каждой роли есть свой экран', () => {
+    expect(SCREENS.filter((sc) => 'optional' in sc).map((sc) => sc.id)).toEqual([])
+    for (const role of ROLES) expect(SCREENS.some((sc) => sc.roles.includes(role)), role).toBe(true)
+    for (const id of ['noaccess', 'job', 'backenddeploy', 'hrneo-start']) expect(SCREENS.some((sc) => sc.id === id), id).toBe(true)
+    // «Запустить» снимается у каждого, кто может запускать HydraRoute Neo.
+    expect(SCREENS.filter((sc) => sc.id === 'hrneo-start').flatMap((sc) => sc.roles).sort()).toEqual(['admin', 'owner1', 'owner3'])
+  })
+})
+
+// Проверки 9 и 10 (доводка v0.52): полоса роутеров и ряд карточек Парка.
+describe('скрипт раскладки: полоса роутеров (9)', () => {
+  const chipAt = (text, left, right, extra = {}) => ({ text, left, right, top: 70, bottom: 110, alert: false, hit: true, ...extra })
+  it('чипы рядом, касание попадает в свой чип -- находок нет', () => {
+    expect(stripProblems([chipAt('sandbox-broken', 16, 166, { alert: true }), chipAt('дача-северная', 174, 320), chipAt('router4car4new', 328, 360)])).toEqual([])
+    expect(findProblems({ ...clean, strip: [chipAt('a', 16, 106), chipAt('b', 114, 204)] })).toEqual([])
+  })
+  it('красный закрывает соседа -- находка с числами', () => {
+    const p = findProblems({ ...clean, strip: [chipAt('sandbox-broken', 16, 165.5, { alert: true }), chipAt('дача-северная', 41.5, 186.9, { hit: false })] })
+    expect(p.map((x) => x.check)).toEqual([9, 9])
+    expect(p[0].what).toContain('«sandbox-broken»')
+    expect(p[0].what).toContain('«дача-северная»')
+    expect(p[0].what).toContain('124')
+    expect(p[1].what).toContain('касание')
+  })
+  it('соприкосновение краями и полпикселя -- не наложение', () => {
+    expect(stripProblems([chipAt('a', 16, 106), chipAt('b', 106.4, 200)])).toEqual([])
+  })
+  it('чипы на разных строках не пересекаются', () => {
+    expect(stripProblems([chipAt('a', 16, 106), { ...chipAt('b', 16, 106), top: 120, bottom: 160 }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: кнопки карточек одного ряда сетки (10)', () => {
+  const card = (name, top, btnTop) => ({ sel: 'div.park-cards', name, top, btnTop })
+  it('в одном ряду кнопки на одной высоте -- находок нет', () => {
+    expect(gridRowProblems([card('a', 805, 917), card('b', 805, 917), card('c', 981, 1094), card('d', 981, 1094.4)])).toEqual([])
+  })
+  it('в одном ряду кнопки на разной высоте -- находка', () => {
+    const p = findProblems({ ...clean, gridCards: [card('sandbox-broken', 805, 917), card('sandbox-bronya', 805, 896)] })
+    expect(p.map((x) => x.check)).toEqual([10])
+    expect(p[0].what).toContain('«sandbox-broken» 917')
+    expect(p[0].what).toContain('«sandbox-bronya» 896')
+  })
+  it('карточки разных рядов и разных сеток не сравниваются', () => {
+    expect(gridRowProblems([card('a', 805, 917), card('b', 981, 1094), { ...card('c', 805, 870), sel: 'div.other' }])).toEqual([])
+  })
+})
+
+describe('скрипт раскладки: уровни заголовков (11)', () => {
+  it('h3 в группе с h2 -- находок нет', () => {
+    expect(headingProblems([{ level: 3, text: 'Раздельный DNS', owner: { level: 2, text: 'Интернет и DNS' } }, { level: 2, text: 'Интернет и DNS', owner: null }])).toEqual([])
+  })
+  it('h2 в группе с h2 -- находка', () => {
+    const p = findProblems({ ...clean, headings: [{ level: 2, text: 'Раздельный DNS', owner: { level: 2, text: 'Интернет и DNS' } }] })
+    expect(p.map((x) => x.check)).toEqual([11])
+    expect(p[0].what).toContain('h2 «Раздельный DNS»')
+    expect(p[0].what).toContain('h2 «Интернет и DNS»')
   })
 })

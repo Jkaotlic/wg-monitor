@@ -138,10 +138,9 @@ export function ExitCompareSection({ routerID, traffic, asleep }) {
           <div class="compare-confirm">
             <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>
             <div class="command-actions">
-              {/* Both probes here are read-only (check_via_tunnel/check_direct issue
-                  no mutation) -- this step only ever exists for the asleep gate, never
-                  for a destructive confirm, so it stays primary rather than danger;
-                  same reasoning as CommandButton's confirm button above. */}
+              {/* Оба зонда только читают (check_via_tunnel / check_direct ничего
+                  не меняют): шаг подтверждения есть лишь для спящего роутера, а
+                  не для опасного действия -- поэтому кнопка обычная, не красная. */}
               <button class="btn btn-ghost" onClick={dispatch}>
                 Да, выполнить
               </button>
@@ -152,9 +151,9 @@ export function ExitCompareSection({ routerID, traffic, asleep }) {
           </div>
         ) : (
           <button class="btn btn-ghost compare-run" disabled={busy} onClick={handleClick}>
-            {/* Не "Повторить проверку": так называется опрос роутера в
-                быстрых действиях, а здесь запускаются два зонда наружу.
-                Одинаковые слова на кнопках, делающих разное, -- ловушка. */}
+            {/* Не «Проверить заново»: так называется опрос роутера выше на
+                «Проверках», а здесь запускаются два зонда наружу. Одинаковые
+                слова на кнопках, делающих разное, -- ловушка. */}
             {busy ? 'Сравниваю…' : 'Сравнить адреса выхода'}
           </button>
         )}

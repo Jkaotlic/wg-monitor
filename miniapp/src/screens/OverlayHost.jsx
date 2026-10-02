@@ -121,7 +121,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             onOpenRouter={(id) => reloadRouters().then(() => dispatch({ type: 'router', id }))}
           />
         )
-      // Свои VPN-серверы: список знает, откуда его открыли; экран сервера
+      // «Серверы» Парка: список знает, откуда его открыли; экран сервера
       // возвращает на список вместе с этим возвратом (returnParams).
       // SSH-пароля в параметрах нет -- только id сервера.
       case 'selfhosted':

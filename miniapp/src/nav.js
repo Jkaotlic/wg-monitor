@@ -87,7 +87,8 @@ export const OPEN_OVERLAYS = ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'pa
 // которое через 30 минут исчезнет, а ожидание раскатки после перезагрузки
 // бессмысленно. Параметры слоя -- nav.overlayParams; returnTo -- слой, куда
 // вернуть «назад». Паролей в параметрах не бывает никогда.
-// «Свои VPN-серверы» (selfhosted) и экран одного сервера (selfhostedinst) --
+// «Серверы» Парка (selfhosted: «Свои VPS» и «Панели VPN-серверов») и экран
+// одного сервера (selfhostedinst) --
 // тоже слои парка: серверы общие для всех роутеров. Параметры экрана
 // сервера -- id сервера и returnParams (куда вернуть сам список); SSH-пароля
 // в параметрах не бывает никогда.
@@ -114,6 +115,22 @@ export const CHILD_LAYERS = { routeadd: 'routes', routepick: 'routes', cabinetis
 // Слой роутера без адреса: починка идёт заданием, экран лишь смотрит.
 export const ROUTER_LAYERS = ['repair']
 export const LOCAL_LAYERS = [...Object.keys(TAB_LAYERS), ...Object.keys(CHILD_LAYERS), ...ROUTER_LAYERS]
+
+// localLayerDepth -- сколько слоёв без адреса открыто подряд, считая от
+// верхнего: VPN-туннель → «Заменить конфиг» -- два, «Маршруты» → «Добавить
+// сайт» -- один (у «Маршрутов» адрес свой). Столько записей-меток держит в
+// истории браузера веб-управление (useNavURL): «назад» закрывает по слою.
+export function localLayerDepth(state) {
+  let depth = 0
+  let overlay = state?.overlay ?? null
+  let params = state?.overlayParams
+  while (overlay && LOCAL_LAYERS.includes(overlay) && depth < 4) {
+    depth++
+    overlay = normalizeReturn(params?.returnTo ?? null)
+    params = params?.returnParams
+  }
+  return depth
+}
 
 // Слои, которые закрепляются на время отправки: мастер «Добавить роутер» и
 // выпуск конфига (уход посреди выпуска -- второй выпуск и занятое место).
@@ -368,7 +385,7 @@ export function escapeAction(state, opts) {
   return overlay && !navPinned(state) && !fleetIsHome(state) ? { type: 'back' } : null
 }
 
-// awg3ListParams -- параметры списка «Свои VPN-серверы» для экрана или формы
+// awg3ListParams -- параметры списка «Серверы» (selfhosted) для экрана или формы
 // панели: цепочка returnParams до слоя selfhosted. Нужна после удаления
 // панели -- возвращаться на её экран уже некуда.
 export function awg3ListParams(params) {

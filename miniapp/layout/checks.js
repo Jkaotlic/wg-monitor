@@ -11,7 +11,8 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
   // Что видит человек: открыт лист -- только он; открыт слой -- верхний слой
   // (и колонка широкой раскладки); иначе -- вся страница.
   const sheet = document.querySelector('.sheet')
-  const overlays = [...document.querySelectorAll('.overlay')]
+  // .deploy-wait -- закреплённое ожидание раскатки бэкенда: закрывает страницу целиком.
+  const overlays = [...document.querySelectorAll('.overlay, .deploy-wait')]
   const roots = sheet ? [sheet] : overlays.length ? [overlays[overlays.length - 1], ...document.querySelectorAll('.side')] : [document.body]
   const inScope = (el) => roots.some((r) => r.contains(el))
   const visible = (el) => {
@@ -155,7 +156,103 @@ export function collectLayout({ smallOk = [], skip = '' } = {}) {
     return { tag: el.tagName.toLowerCase(), text: label(el), sel: sel(el), bg: cs.backgroundColor, border: cs.borderTopStyle, font: cs.fontFamily, color: cs.color }
   })
 
-  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua }
+  // Полоса «Мои роутеры» (проверка 9): видимая часть каждого чипа -- его
+  // прямоугольник, обрезанный ближайшим предком с прокруткой или обрезкой
+  // внутри полосы. hit -- что получит палец в середине видимой части.
+  const strip = []
+  const stripEl = document.querySelector('.router-strip')
+  if (stripEl && visible(stripEl)) {
+    const clipBox = (el) => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        if (getComputedStyle(p).overflowX !== 'visible') return p.getBoundingClientRect()
+        if (p === stripEl) break
+      }
+      return null
+    }
+    for (const chip of stripEl.querySelectorAll('.strip-chip')) {
+      const r = chip.getBoundingClientRect()
+      const box = clipBox(chip)
+      const left = box ? Math.max(r.left, box.left) : r.left
+      const right = box ? Math.min(r.right, box.right) : r.right
+      if (right - left <= 0 || r.height === 0) continue
+      const x = (left + right) / 2
+      const y = (r.top + r.bottom) / 2
+      const inView = x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight
+      strip.push({ text: label(chip), alert: chip.classList.contains('strip-chip-alert'), left, right, top: r.top, bottom: r.bottom, hit: inView ? chip.contains(document.elementFromPoint(x, y)) : true })
+    }
+  }
+
+  // Карточки одного ряда сетки (проверка 10): у карточек с рядом кнопок этот
+  // ряд обязан стоять на одной высоте -- иначе кнопки соседей «пляшут».
+  const gridCards = []
+  for (const grid of document.querySelectorAll('body *')) {
+    if (!visible(grid) || !/grid/.test(getComputedStyle(grid).display)) continue
+    const cards = [...grid.children].filter((c) => c.classList.contains('card') && visible(c))
+    if (cards.length < 2) continue
+    for (const c of cards) {
+      const btn = [...c.querySelectorAll('.action-row button, .action-row a.btn')].find(visible)
+      if (!btn) continue
+      gridCards.push({ sel: sel(grid), name: (c.innerText || '').trim().split('\n')[0].trim().slice(0, 40), top: c.getBoundingClientRect().top, btnTop: btn.getBoundingClientRect().top })
+    }
+  }
+
+  // Уровни заголовков (проверка 11): у заголовка внутри раздела/свёртки, чей
+  // собственный заголовок -- другой, уровень обязан быть глубже.
+  const headings = []
+  const H = 'h1, h2, h3, h4, h5, h6'
+  for (const h of document.querySelectorAll(H)) {
+    if (!visible(h)) continue
+    let owner = null
+    for (let box = h.parentElement?.closest('section, details'); box && !owner; box = box.parentElement?.closest('section, details')) {
+      const own = box.querySelector(H)
+      if (own && own !== h && visible(own)) owner = { level: Number(own.tagName[1]), text: label(own) }
+    }
+    headings.push({ level: Number(h.tagName[1]), text: label(h), owner })
+  }
+
+  return { scrollWidth: document.scrollingElement.scrollWidth, innerWidth: window.innerWidth, targets, limes, smallText, clipped, rows, controls, fonts, ua, strip, gridCards, headings }
+}
+
+// Проверка 9: видимые части двух чипов полосы не пересекаются (допуск 0,5 px),
+// и касание в середину видимой части чипа попадает в него самого.
+export function stripProblems(strip = []) {
+  const out = []
+  for (let i = 0; i < strip.length; i++) {
+    for (let j = i + 1; j < strip.length; j++) {
+      const a = strip[i]
+      const b = strip[j]
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      if (w > 0.5 && h > 0.5) out.push(`чипы полосы перекрываются на ${Math.round(w)} px: «${a.text}» ${Math.round(a.left)}–${Math.round(a.right)} и «${b.text}» ${Math.round(b.left)}–${Math.round(b.right)}`)
+    }
+  }
+  for (const c of strip) if (c.hit === false) out.push(`касание чипа «${c.text}» попадает в другой элемент`)
+  return out
+}
+
+// Проверка 11: заголовок внутри раздела с собственным заголовком того же или
+// более глубокого уровня -- у скринридера «h2 в h2».
+export function headingProblems(headings = []) {
+  return headings.filter((h) => h.owner && h.level <= h.owner.level).map((h) => `заголовок h${h.level} «${h.text}» вложен в раздел с заголовком h${h.owner.level} «${h.owner.text}»`)
+}
+
+// Проверка 10: карточки одной сетки с одинаковым верхом -- один ряд; верх
+// первой кнопки у них обязан совпадать (допуск 1 px).
+export function gridRowProblems(cards = []) {
+  const out = []
+  const rows = new Map()
+  for (const c of cards) {
+    const key = `${c.sel}|${Math.round(c.top)}`
+    if (!rows.has(key)) rows.set(key, [])
+    rows.get(key).push(c)
+  }
+  for (const row of rows.values()) {
+    const tops = row.map((c) => c.btnTop)
+    if (row.length > 1 && Math.max(...tops) - Math.min(...tops) > 1) {
+      out.push(`кнопки карточек одного ряда на разной высоте: ${row.map((c) => `«${c.name}» ${Math.round(c.btnTop)}`).join(', ')} (${row[0].sel})`)
+    }
+  }
+  return out
 }
 
 // Проверка 8: кнопка, поле, список или раскрывашка в оформлении браузера --
@@ -181,12 +278,6 @@ export function unstyledControls({ controls = [], fonts = [], ua = {} } = {}) {
   return out
 }
 
-// Пропуск optional-экрана -- только когда нет самой цели (последний шаг): отказ
-// выбора роутера или шага-подхода -- провал, а не пропуск.
-export function optionalSkip({ optional, routerOk, failedStep, steps }) {
-  return Boolean(optional) && Boolean(routerOk) && failedStep >= 0 && failedStep === steps - 1
-}
-
 export function rowMismatches(rows = []) {
   return rows.filter((r) => {
     const hs = r.items.map((i) => i.h)
@@ -203,6 +294,9 @@ export function findProblems(d) {
   for (const c of d.clipped) out.push({ check: 5, what: `текст обрезан: «${c.text}» ${c.sw} > ${c.cw} (${c.sel})` })
   for (const r of rowMismatches(d.rows)) out.push({ check: 6, what: `кнопки одного ряда разной высоты: ${r.items.map((i) => `«${i.text}» ${i.h}`).join(', ')} (${r.sel})` })
   for (const c of unstyledControls(d)) out.push({ check: 8, what: `элемент в оформлении браузера: «${c.text}» -- ${c.why.join('; ')} (${c.sel})` })
+  for (const w of stripProblems(d.strip)) out.push({ check: 9, what: w })
+  for (const w of gridRowProblems(d.gridCards)) out.push({ check: 10, what: w })
+  for (const w of headingProblems(d.headings)) out.push({ check: 11, what: w })
   return out
 }
 

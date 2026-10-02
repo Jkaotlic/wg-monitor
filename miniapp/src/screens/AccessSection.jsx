@@ -3,6 +3,7 @@ import { fetchAccess, addOperator, removeOperator, unbindOwner, setOwner } from 
 import { localSheet } from '../sheet.js'
 import { errorText } from '../errorText.js'
 import { placeText } from '../places.js'
+import { SectionHeading } from '../ui/Section.jsx'
 
 // Admin-only "Доступ" block on RouterDetail. Backend enforces admin
 // independently (see miniappRequireAdmin) -- this component is only ever
@@ -113,14 +114,14 @@ export function AccessSection({ routerID, openSheet }) {
 
   return (
     <section class="section">
-      <h2 class="section-title">Доступ</h2>
+      <SectionHeading>Доступ</SectionHeading>
       <p class="admin-note">
         Кто видит этот роутер в приложении и получает уведомления о нём. Уведомления приходят
         каждому в личку; выключить их каждый может себе сам: {placeText('notifyMe')}.
       </p>
 
       <div class="access-group">
-        <h3 class="access-subtitle">Владелец</h3>
+        <SectionHeading class="access-subtitle" deeper>Владелец</SectionHeading>
         <ul class="card list-reset">
           <li class="row">
             {access.owner ? (
@@ -168,7 +169,7 @@ export function AccessSection({ routerID, openSheet }) {
       </div>
 
       <div class="access-group">
-        <h3 class="access-subtitle">Кому ещё открыт доступ</h3>
+        <SectionHeading class="access-subtitle" deeper>Кому ещё открыт доступ</SectionHeading>
         {operators.length === 0 ? (
           <p class="muted">Кроме владельца, доступа ни у кого нет.</p>
         ) : (

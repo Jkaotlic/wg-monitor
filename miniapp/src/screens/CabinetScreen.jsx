@@ -10,7 +10,7 @@ import { CabinetAwg3 } from './CabinetAwg3.jsx'
 import { CabinetSelfhosted } from './CabinetSelfhosted.jsx'
 import { CabinetIssue } from './CabinetIssue.jsx'
 
-// Кабинеты VPN роутера: Amnezia · HideMy · Свой сервер (админ). Ключи и коды
+// «Откуда взять конфиг»: Amnezia · HideMy · Свой сервер (админ). Ключи и коды
 // вводятся здесь (цикл 3 «бот без слеш-команд») -- на листе, полем-паролем;
 // экран видит только маску. Выпуск -- как раньше: клиент передаёт выбор,
 // конфиг сервер кладёт в команду агенту сам.
