@@ -216,3 +216,175 @@ func TestMigrateLegacyStoresIgnoresNonRegular(t *testing.T) {
 		t.Fatalf("каталог перенесён как файл: %v", err)
 	}
 }
+
+func skipIfRootOrWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("права каталога не ограничивают root и Windows")
+	}
+}
+
+// Новый каталог не принимает запись: перенос не удался -- предупреждение,
+// старый файл цел, старт продолжается.
+func TestMigrateLegacyStoresFailureKeepsOldFile(t *testing.T) {
+	skipIfRootOrWindows(t)
+	legacy, data, stores, logs, logger := migrateEnv(t)
+	if err := os.WriteFile(filepath.Join(legacy, "hidemyname.json"), []byte(`{"code":"SECRET-CODE"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(data, 0o500); err != nil { // #nosec G302 -- тест: каталог без права записи
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(data, 0o700) }) // #nosec G302 -- вернуть права, чтобы TempDir убрался
+	if moved := MigrateLegacyStores(legacy, stores, logger); len(moved) != 0 {
+		t.Fatalf("moved = %v", moved)
+	}
+	if body, err := os.ReadFile(filepath.Join(legacy, "hidemyname.json")); err != nil || !strings.Contains(string(body), "SECRET-CODE") {
+		t.Fatalf("старый файл пострадал: %q %v", body, err)
+	}
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "хранилище не перенесено") || !strings.Contains(out, "hidemyname.json") {
+		t.Fatalf("журнал: %s", out)
+	}
+	if strings.Contains(out, "level=INFO") || strings.Contains(out, "SECRET-CODE") {
+		t.Fatalf("журнал: %s", out)
+	}
+}
+
+// Файл переехал, а старую копию убрать не дали: это «перенесено» плюс
+// отдельное предупреждение, а не «не перенесено».
+func TestMigrateLegacyStoresOldCopyNotRemoved(t *testing.T) {
+	skipIfRootOrWindows(t)
+	legacy, data, stores, logs, logger := migrateEnv(t)
+	if err := os.WriteFile(filepath.Join(legacy, "hidemyname.json"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(legacy, 0o500); err != nil { // #nosec G302 -- тест: из каталога нельзя удалять
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(legacy, 0o700) }) // #nosec G302 -- вернуть права, чтобы TempDir убрался
+	moved := MigrateLegacyStores(legacy, stores, logger)
+	if len(moved) != 1 || moved[0] != "hidemyname.json" {
+		t.Fatalf("moved = %v", moved)
+	}
+	if body, _ := os.ReadFile(filepath.Join(data, "hidemyname.json")); string(body) != "old" {
+		t.Fatalf("новый файл: %q", body)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=INFO") || !strings.Contains(out, "хранилище перенесено") {
+		t.Fatalf("нет записи о переносе: %s", out)
+	}
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "старая копия не удалена") {
+		t.Fatalf("нет предупреждения о старой копии: %s", out)
+	}
+	if strings.Contains(out, "не перенесено") {
+		t.Fatalf("удавшийся перенос назван неудачей: %s", out)
+	}
+	// Следующий старт: новый файл на месте, старый не трогаем и не шумим.
+	logs.Reset()
+	if again := MigrateLegacyStores(legacy, stores, logger); len(again) != 0 || logs.Len() != 0 {
+		t.Fatalf("повтор: %v %s", again, logs.String())
+	}
+}
+
+// Падение посреди переноса оставляет <имя>.migrate-* с секретами.
+func TestMigrateLegacyStoresRemovesStaleTemps(t *testing.T) {
+	legacy, data, stores, logs, logger := migrateEnv(t)
+	stale := []string{"amnezia-premium.json.migrate-123456", "awg3-panels.json.migrate-9"}
+	for _, n := range stale {
+		if err := os.WriteFile(filepath.Join(data, n), []byte("vpn://LEFTOVER"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := []string{"state.db", "amnezia-premium.json", "other.json.migrate-1", "amnezia-premium.json.tmp"}
+	for _, n := range keep {
+		if err := os.WriteFile(filepath.Join(data, n), []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(data, "hidemyname.json.migrate-dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	MigrateLegacyStores(legacy, stores, logger)
+	for _, n := range stale {
+		if _, err := os.Lstat(filepath.Join(data, n)); !os.IsNotExist(err) {
+			t.Fatalf("остаток %s не убран: %v", n, err)
+		}
+	}
+	for _, n := range append(keep, "hidemyname.json.migrate-dir") {
+		if _, err := os.Lstat(filepath.Join(data, n)); err != nil {
+			t.Fatalf("%s тронут: %v", n, err)
+		}
+	}
+	if strings.Contains(logs.String(), "LEFTOVER") {
+		t.Fatalf("содержимое в журнале: %s", logs.String())
+	}
+}
+
+func TestStoreDefaultsWithRelativeDBPath(t *testing.T) {
+	for db, dir := range map[string]string{"state.db": ".", "data/state.db": "data", "./data/state.db": "data"} {
+		cfg := &Config{DBPath: db}
+		ApplyStoreDefaults(cfg)
+		for _, s := range cfg.StoreFiles() {
+			if want := filepath.Join(dir, s.Name); s.Path != want || !s.Defaulted {
+				t.Fatalf("db_path %q: %+v, ждали %q", db, s, want)
+			}
+		}
+		logs := &bytes.Buffer{}
+		WarnStoresOutsideDBDir(cfg, slog.New(slog.NewTextHandler(logs, nil)))
+		if logs.Len() != 0 {
+			t.Fatalf("db_path %q: лишнее предупреждение: %s", db, logs.String())
+		}
+	}
+}
+
+func TestMigrateLegacyStoresWithRelativeDBPath(t *testing.T) {
+	root := t.TempDir()
+	legacy := filepath.Join(root, "var-lib")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "hidemyname.json"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	cfg := &Config{DBPath: "data/state.db"} // каталога data ещё нет
+	ApplyStoreDefaults(cfg)
+	moved := MigrateLegacyStores(legacy, cfg.StoreFiles(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	if len(moved) != 1 {
+		t.Fatalf("moved = %v", moved)
+	}
+	if body, err := os.ReadFile(filepath.Join(root, "data", "hidemyname.json")); err != nil || string(body) != "old" {
+		t.Fatalf("%q %v", body, err)
+	}
+}
+
+func TestWarnStoresOutsideDBDir(t *testing.T) {
+	cfg := loadStoreCfg(t, "amnezia_premium:\n  secrets_path: /data/keys.json\namnezia_selfhosted:\n  store_path: /var/lib/wg-monitor/amnezia-selfhosted.json\n")
+	logs := &bytes.Buffer{}
+	WarnStoresOutsideDBDir(cfg, slog.New(slog.NewTextHandler(logs, nil)))
+	out := logs.String()
+	// Свои серверы и панели (едут за ними) -- вне /data; ключи Amnezia заданы
+	// явно, но внутри /data; HideMy -- по умолчанию.
+	if strings.Count(out, "level=WARN") != 2 {
+		t.Fatalf("журнал: %s", out)
+	}
+	for _, want := range []string{
+		"хранилище вне каталога базы — при пересоздании контейнера оно пропадёт",
+		"path=/var/lib/wg-monitor/amnezia-selfhosted.json",
+		"path=/var/lib/wg-monitor/awg3-panels.json",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("нет %q в журнале: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "keys.json") || strings.Contains(out, "hidemyname") {
+		t.Fatalf("лишнее предупреждение: %s", out)
+	}
+
+	logs.Reset()
+	WarnStoresOutsideDBDir(loadStoreCfg(t, ""), slog.New(slog.NewTextHandler(logs, nil)))
+	if logs.Len() != 0 {
+		t.Fatalf("умолчания не должны предупреждать: %s", logs.String())
+	}
+}

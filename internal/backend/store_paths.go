@@ -89,11 +89,15 @@ func (c *Config) StoreFiles() []StoreFile {
 // перенесённых файлов; в журнал идут только имена, не содержимое.
 //
 // Сбой переноса -- предупреждение, а не отказ старта: старый файл остаётся
-// на месте нетронутым.
+// на месте нетронутым. Заодно убираются временные файлы прерванного переноса.
 func MigrateLegacyStores(legacyDir string, stores []StoreFile, logger *slog.Logger) []string {
 	var moved []string
 	for _, st := range stores {
-		if !st.Defaulted || strings.TrimSpace(st.Path) == "" {
+		if strings.TrimSpace(st.Path) == "" {
+			continue
+		}
+		removeStaleMigrateTemps(st.Path)
+		if !st.Defaulted {
 			continue
 		}
 		old := filepath.Join(legacyDir, st.Name)
@@ -101,23 +105,71 @@ func MigrateLegacyStores(legacyDir string, stores []StoreFile, logger *slog.Logg
 			continue
 		}
 		ok, err := moveStoreFile(old, st.Path)
-		if err != nil {
-			logger.Warn("хранилище не перенесено в каталог базы — при пересоздании контейнера оно пропадёт",
-				"store", st.Name, "err", err)
-			continue
-		}
 		if ok {
 			logger.Info("хранилище перенесено в каталог базы", "store", st.Name)
 			moved = append(moved, st.Name)
+			if err != nil {
+				// Данные уже на новом месте; старая копия с секретами осталась.
+				logger.Warn("хранилище перенесено, но старая копия не удалена — удалите её вручную",
+					"store", st.Name, "err", err)
+			}
+			continue
+		}
+		if err != nil {
+			logger.Warn("хранилище не перенесено в каталог базы — при пересоздании контейнера оно пропадёт",
+				"store", st.Name, "err", err)
 		}
 	}
 	return moved
 }
 
+// removeStaleMigrateTemps убирает <имя>.migrate-*, оставшиеся рядом с
+// хранилищем после падения посреди переноса: в них секреты, а читать их
+// некому. Только обычные файлы; перенос идёт в один поток на старте, так
+// что живого временного файла здесь быть не может.
+func removeStaleMigrateTemps(storePath string) {
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(storePath), globEscape(filepath.Base(storePath))+migrateTempSuffix+"*"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() {
+			_ = os.Remove(m)
+		}
+	}
+}
+
+const migrateTempSuffix = ".migrate-"
+
+// globEscape экранирует знаки шаблона в имени файла из конфига.
+func globEscape(name string) string {
+	return strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`).Replace(name)
+}
+
+// WarnStoresOutsideDBDir пишет по строке на каждое хранилище, чей явно
+// заданный путь лежит вне каталога базы: db_path всегда на томе, а про
+// чужой каталог этого никто не обещал. Пути по умолчанию сюда не попадают.
+func WarnStoresOutsideDBDir(cfg *Config, logger *slog.Logger) {
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		return
+	}
+	dbDir := filepath.Clean(filepath.Dir(cfg.DBPath))
+	for _, st := range cfg.StoreFiles() {
+		if st.Defaulted || strings.TrimSpace(st.Path) == "" {
+			continue
+		}
+		if filepath.Clean(filepath.Dir(st.Path)) != dbDir {
+			logger.Warn("хранилище вне каталога базы — при пересоздании контейнера оно пропадёт",
+				"store", st.Name, "path", st.Path)
+		}
+	}
+}
+
 // moveStoreFile переносит src в dst: копия во временный файл рядом с dst
 // (0600), fsync, затем жёсткая ссылка на имя dst -- она, в отличие от
 // rename, не затирает существующий файл (rename -- лишь там, где ссылок нет). moved=false без ошибки -- переносить
-// нечего или новый файл уже есть.
+// нечего или новый файл уже есть. moved=true с ошибкой -- файл на новом
+// месте, но старую копию убрать не удалось.
 func moveStoreFile(src, dst string) (moved bool, err error) {
 	if _, err := os.Lstat(dst); err == nil {
 		return false, nil
@@ -142,7 +194,7 @@ func moveStoreFile(src, dst string) (moved bool, err error) {
 		return false, fmt.Errorf("open old store: %w", err)
 	}
 	defer in.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".migrate-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+migrateTempSuffix+"*")
 	if err != nil {
 		return false, fmt.Errorf("create temp store: %w", err)
 	}
