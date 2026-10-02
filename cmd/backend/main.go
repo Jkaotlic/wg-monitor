@@ -422,6 +422,17 @@ func main() {
 		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
 	}
 
+	// Тревога админу в личку о бэкапе: давно не делался, прогон кончился
+	// ошибкой, проверка восстановления не прошла; не чаще раза в сутки на
+	// причину и одно «снова в порядке». Состояние -- в tg_state.
+	go backend.NewBackupAlerter(backend.BackupAlertConfig{
+		StatusPath:  backup.StatusPath(cfg.DBPath),
+		KV:          d.KV(),
+		Sender:      tgClient,
+		AdminUserID: cfg.Telegram.AdminUserID,
+		StartedAt:   time.Now(),
+	}).Run(ctx)
+
 	// Суточный опрос версий. Обычный отчёт приносит панель, прошивку,
 	// KeeneticOS и модуль ядра бесплатно, но про версию HydraRoute Neo и про
 	// ДОСТУПНУЮ прошивку не знает вовсе -- их знает только version_audit.
