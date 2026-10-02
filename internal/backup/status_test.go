@@ -133,3 +133,42 @@ func TestStatusErrorTextIsShortAndSingleLine(t *testing.T) {
 		t.Fatalf("короткий текст испорчен: %q", StatusErrorText("  обычная ошибка \n"))
 	}
 }
+
+// Ошибка чтения (не «нет файла» и не «битый JSON») не стирает секции:
+// иначе временный отказ доступа обнулил бы историю последних успехов.
+func TestUpdateStatusKeepsSectionsOnReadError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root читает любые файлы")
+	}
+	path := filepath.Join(t.TempDir(), StatusFileName)
+	if err := UpdateStatus(path, func(s *Status) { s.Small = KindStatus{LastOKAt: "2026-10-06T02:00:00Z", OK: true} }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	if err := UpdateStatus(path, func(s *Status) { s.Verify = VerifyStatus{LastRunAt: "x"} }); err == nil {
+		t.Fatal("ошибка чтения проглочена и файл переписан с нуля")
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadStatus(path)
+	if err != nil || s.Small.LastOKAt != "2026-10-06T02:00:00Z" || s.Verify.LastRunAt != "" {
+		t.Fatalf("файл тронут: %+v %v", s, err)
+	}
+}
+
+func TestUpdateStatusStartsFreshOnMissingOrGarbledFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StatusFileName)
+	if err := os.WriteFile(path, []byte("{не json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateStatus(path, func(s *Status) { s.Small.OK = true }); err != nil {
+		t.Fatalf("битый файл должен начинаться с чистого листа: %v", err)
+	}
+	if s, err := LoadStatus(path); err != nil || !s.Small.OK {
+		t.Fatalf("%+v %v", s, err)
+	}
+}

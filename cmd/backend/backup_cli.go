@@ -174,17 +174,7 @@ func runBackup(ctx context.Context, opts backupCommandOptions) error {
 	if opts.Kind == "" {
 		opts.Kind = backupKindBoth
 	}
-	var kinds []backup.Kind
-	switch opts.Kind {
-	case backupKindSmall:
-		kinds = []backup.Kind{backup.KindSmall}
-	case backupKindFull:
-		kinds = []backup.Kind{backup.KindFull}
-	case backupKindBoth:
-		kinds = []backup.Kind{backup.KindSmall, backup.KindFull}
-	default:
-		return fmt.Errorf("--kind must be small, full or both, got %q", opts.Kind)
-	}
+	kinds, kindErr := kindsFor(opts.Kind)
 	if opts.now == nil {
 		opts.now = time.Now
 	}
@@ -199,7 +189,14 @@ func runBackup(ctx context.Context, opts backupCommandOptions) error {
 	}
 	cfg, err := loadBackupConfig(opts.ConfigPath)
 	if err != nil {
+		// Конфиг не годится, но db_path читается -- провал виден в Парке, а не
+		// только в журнале службы.
+		writeEarlyFailure(opts, kinds, peekDBPath(opts.ConfigPath), "конфигурация бэкенда не читается или неполна")
 		return err
+	}
+	if kindErr != nil {
+		writeEarlyFailure(opts, kinds, cfg.DBPath, "неверный --kind: нужно small, full или both")
+		return kindErr
 	}
 	env := &backupEnv{
 		opts:   opts,
@@ -237,8 +234,14 @@ func runBackup(ctx context.Context, opts backupCommandOptions) error {
 	for _, kind := range kinds {
 		var res kindResult
 		if prepErr != nil {
-			res = kindResult{telegram: backup.DeliveryOff, err: prepErr}
+			tg, off := env.deliveryIfNotDone(kind)
+			res = kindResult{telegram: tg, offsite: off, err: prepErr}
 		} else {
+			// Отметка «начат»: убитый на полпути прогон (память, SIGKILL)
+			// остаётся в файле как «не завершён», а не как вчерашний успех.
+			if err := env.writeStartedMarker(kind); err != nil {
+				slog.Error("backup status marker not written", "err", err.Error())
+			}
 			res = env.runKind(ctx, kind)
 		}
 		if res.err != nil {
@@ -257,6 +260,101 @@ func runBackup(ctx context.Context, opts backupCommandOptions) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// kindsFor -- какие виды архива запрошены флагом --kind. При неверном
+// значении возвращает оба вида (провал касается и того, и другого) и ошибку.
+func kindsFor(kind string) ([]backup.Kind, error) {
+	switch kind {
+	case "", backupKindBoth:
+		return []backup.Kind{backup.KindSmall, backup.KindFull}, nil
+	case backupKindSmall:
+		return []backup.Kind{backup.KindSmall}, nil
+	case backupKindFull:
+		return []backup.Kind{backup.KindFull}, nil
+	}
+	return []backup.Kind{backup.KindSmall, backup.KindFull}, fmt.Errorf("--kind must be small, full or both, got %q", kind)
+}
+
+// peekDBPath достаёт db_path из конфига, даже если конфиг не прошёл
+// проверку целиком. Пусто -- путь неизвестен.
+func peekDBPath(configPath string) string {
+	body, err := os.ReadFile(configPath) // #nosec G304 -- путь из флага --config
+	if err != nil {
+		return ""
+	}
+	var c struct {
+		DBPath string `yaml:"db_path"`
+	}
+	if yaml.Unmarshal(body, &c) != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.DBPath)
+}
+
+// writeEarlyFailure пишет провал запрошенных видов в файл состояния, когда
+// прогон не смог даже начаться (плохой конфиг, неверный --kind). Путь к
+// базе неизвестен -- писать некуда, остаётся ошибка команды.
+func writeEarlyFailure(opts backupCommandOptions, kinds []backup.Kind, dbPath, why string) {
+	if dbPath == "" {
+		return
+	}
+	path := backup.StatusPath(resolveLayoutPath(dbPath, opts.LayoutRoot))
+	at := opts.now().UTC().Format(time.RFC3339)
+	err := backup.UpdateStatus(path, func(s *backup.Status) {
+		for _, kind := range kinds {
+			section := &s.Small
+			if kind == backup.KindFull {
+				section = &s.Full
+			}
+			tg, off := deliveryDefaults(opts, kind)
+			*section = backup.KindStatus{
+				LastOKAt: section.LastOKAt, LastRunAt: at, Telegram: tg, Offsite: off,
+				Error: backup.StatusErrorText(why),
+			}
+		}
+	})
+	if err != nil {
+		slog.Error("backup status not written", "err", err.Error())
+	}
+}
+
+// deliveryDefaults -- что писать в telegram и offsite, если прогон вида
+// не дошёл до доставки: error там, где доставку просили, иначе off.
+func deliveryDefaults(opts backupCommandOptions, kind backup.Kind) (telegram, offsite string) {
+	telegram = backup.DeliveryOff
+	if kind == backup.KindSmall {
+		if opts.SendTelegram {
+			telegram = backup.DeliveryError
+		}
+		return telegram, ""
+	}
+	offsite = backup.DeliveryOff
+	if strings.TrimSpace(opts.OffsiteSCP) != "" {
+		offsite = backup.DeliveryError
+	}
+	return telegram, offsite
+}
+
+func (e *backupEnv) deliveryIfNotDone(kind backup.Kind) (telegram, offsite string) {
+	return deliveryDefaults(e.opts, kind)
+}
+
+// writeStartedMarker пишет отметку «прогон начат»: last_run_at сейчас,
+// ok=false, ошибка «прогон не завершён». Итог прогона её перезапишет.
+func (e *backupEnv) writeStartedMarker(kind backup.Kind) error {
+	at := e.opts.now().UTC().Format(time.RFC3339)
+	tg, off := e.deliveryIfNotDone(kind)
+	return backup.UpdateStatus(e.statusPath, func(s *backup.Status) {
+		section := &s.Small
+		if kind == backup.KindFull {
+			section = &s.Full
+		}
+		*section = backup.KindStatus{
+			LastOKAt: section.LastOKAt, LastRunAt: at, Telegram: tg, Offsite: off,
+			Error: backup.RunUnfinishedText,
+		}
+	})
 }
 
 func (e *backupEnv) writeKindStatus(kind backup.Kind, res kindResult) error {
@@ -302,10 +400,8 @@ func (e *backupEnv) redact(msg string) string {
 // прямо в файл -> доставка -> чистка старых.
 func (e *backupEnv) runKind(ctx context.Context, kind backup.Kind) (res kindResult) {
 	opts := e.opts
-	res.telegram = backup.DeliveryOff
-	if kind == backup.KindFull {
-		res.offsite = backup.DeliveryOff
-	}
+	// До доставки поля говорят «не дошло»: error там, где её просили.
+	res.telegram, res.offsite = e.deliveryIfNotDone(kind)
 
 	tmpDir, err := os.MkdirTemp(opts.OutDir, backupTempPrefix)
 	if err != nil {
@@ -323,7 +419,11 @@ func (e *backupEnv) runKind(ctx context.Context, kind backup.Kind) (res kindResu
 	outPath := filepath.Join(opts.OutDir, name)
 	partial := outPath + backupPartialSuffix
 	if err := writeEncryptedArchive(ctx, partial, members, e.pass, e.params); err != nil {
-		_ = os.Remove(partial)
+		// Чужой .partial (другой запуск ещё пишет) не трогаем: убрать можно
+		// только то, что создал этот прогон.
+		if !errors.Is(err, errPartialInUse) {
+			_ = os.Remove(partial)
+		}
 		res.err = fmt.Errorf("архив не записан: %w", err)
 		return res
 	}
@@ -410,33 +510,76 @@ func (e *backupEnv) copyOffsite(ctx context.Context, path string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, backupOffsiteTimeout)
 	defer cancel()
+	// known_hosts лежит рядом с базой: служба под ProtectHome не видит
+	// домашний каталог, а запиненный файл делает сказанное в DEPLOY.md
+	// правдой -- сменившийся ключ сервера ломает копирование.
+	knownHosts := filepath.Join(filepath.Dir(e.dbPath), offsiteKnownHostsFile)
 	out, err := e.opts.runCommand(ctx, "scp",
 		"-B",
 		"-o", "BatchMode=yes",
 		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile="+knownHosts,
+		"-o", "IdentitiesOnly=yes",
 		"-o", "ConnectTimeout=20",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=4",
 		"-i", key,
 		abs, target)
 	if err != nil {
-		detail := lastLine(string(out))
-		if detail == "" {
-			detail = err.Error()
-		}
-		return fmt.Errorf("архив не скопирован на внешний сервер: %s", detail)
+		// Сырой вывод scp (хост, пути) в состояние не идёт: только причина
+		// словами. Подробности -- в журнале службы.
+		slog.Warn("backup offsite copy failed", "output", e.redact(lastLine(string(out))), "err", e.redact(err.Error()))
+		return fmt.Errorf("архив не скопирован на внешний сервер: %s", offsiteFailureReason(string(out), err))
 	}
 	return nil
 }
 
-// validateOffsiteTarget принимает только user@host:path. Строка уходит
-// аргументом в scp: начинающаяся с дефиса стала бы его ключом.
+// offsiteKnownHostsFile -- файл известных серверов внешней цели; лежит
+// рядом с базой, на томе.
+const offsiteKnownHostsFile = "backup-known_hosts"
+
+// offsiteTargetRe -- строгий вид цели, тот же, что мастер проверяет перед
+// записью юнита (cmd/deploy/templates.go, backupOffsiteTargetRe): ни пробела,
+// ни `;`, `$()`, обратной кавычки. Менять только вместе с ним.
+var offsiteTargetRe = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9._\[\]:-]+:[A-Za-z0-9._~/+-]+$`)
+
+// validateOffsiteTarget принимает только user@host:path по строгому
+// шаблону. Строка уходит аргументом в scp: начинающаяся с дефиса стала бы
+// его ключом, а метасимволы -- командой на удалённой стороне.
 func validateOffsiteTarget(target string) error {
-	host, path, ok := strings.Cut(target, ":")
-	user, hostname, hasUser := strings.Cut(host, "@")
-	if !ok || !hasUser || user == "" || hostname == "" || path == "" ||
-		strings.HasPrefix(target, "-") || strings.ContainsAny(target, " \t\r\n") {
-		return fmt.Errorf("--offsite-scp должен быть вида user@host:path")
+	if strings.HasPrefix(target, "-") || !offsiteTargetRe.MatchString(target) {
+		return fmt.Errorf("--offsite-scp должен быть вида user@host:path без пробелов и спецсимволов")
 	}
 	return nil
+}
+
+// offsiteFailureReason превращает вывод scp в причину словами без хостов и
+// путей: она идёт в файл состояния и в Парк.
+func offsiteFailureReason(output string, err error) string {
+	text := strings.ToLower(output)
+	if err != nil {
+		text += " " + strings.ToLower(err.Error())
+	}
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(text, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("host key verification failed", "remote host identification has changed"):
+		return "ключ сервера изменился"
+	case has("permission denied", "publickey", "authentication"):
+		return "отказ в доступе"
+	case has("no space left", "quota exceeded", "disk quota"):
+		return "нет места"
+	case has("timed out", "connection refused", "no route to host", "could not resolve", "network is unreachable",
+		"connection closed", "connection reset", "deadline exceeded", "signal: killed"):
+		return "сервер недоступен"
+	}
+	return "ошибка копирования"
 }
 
 func runExternalCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

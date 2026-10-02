@@ -2,6 +2,7 @@ package backup
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,10 @@ const (
 	DeliveryError = "error"
 	DeliveryOff   = "off" // не настроено или не положено этому виду
 )
+
+// RunUnfinishedText -- текст ошибки в отметке «прогон начат»: она стоит в
+// файле, пока прогон идёт, и остаётся, если его убили (память, SIGKILL).
+const RunUnfinishedText = "прогон не завершён"
 
 // MaxStatusErrorRunes -- предел длины текста ошибки в файле состояния.
 const MaxStatusErrorRunes = 300
@@ -74,20 +79,31 @@ func LoadStatus(path string) (Status, error) {
 	}
 	var s Status
 	if err := json.Unmarshal(body, &s); err != nil {
-		return Status{}, fmt.Errorf("parse %s: %w", StatusFileName, err)
+		return Status{}, fmt.Errorf("%w: %s: %v", errStatusGarbled, StatusFileName, err)
 	}
 	return s, nil
 }
 
+// errStatusGarbled -- файл есть, но не разбирается как JSON.
+var errStatusGarbled = errors.New("parse status file")
+
 // UpdateStatus читает файл, даёт mutate поправить свою секцию и атомарно
 // записывает обратно (временный файл рядом + rename): остальные секции
 // сохраняются, читатель никогда не видит половину файла. Отсутствующий или
-// битый файл -- не помеха: состояние начинается с чистого листа.
+// битый файл -- не помеха: состояние начинается с чистого листа. Любая другая
+// ошибка чтения (права, ввод-вывод) -- ошибка: перезапись с нуля стёрла бы
+// историю последних успехов.
 //
 // Права 0644: файл читает бэкенд из контейнера под другим пользователем;
 // секретов в нём нет по построению.
 func UpdateStatus(path string, mutate func(*Status)) error {
-	s, _ := LoadStatus(path)
+	s, err := LoadStatus(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errStatusGarbled) {
+		return fmt.Errorf("read status file: %w", err)
+	}
+	if err != nil {
+		s = Status{}
+	}
 	mutate(&s)
 	s.Version = 1
 	body, err := json.MarshalIndent(s, "", "  ")

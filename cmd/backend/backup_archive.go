@@ -266,12 +266,19 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+// errPartialInUse -- файл .partial уже есть: его пишет другой запуск (или
+// остался от убитого, пока не прошло 6 часов уборки). Не наш -- не трогаем.
+var errPartialInUse = errors.New("временный файл архива уже занят другим запуском")
+
 // writeEncryptedArchive пишет архив потоком: файл -> tar -> gzip -> шифр v2
 // -> диск. В памяти одновременно живут только буферы потока (единицы МБ),
 // сколько бы ни весила база. dst не должен существовать; при ошибке
 // недописанный файл удаляет вызывающий.
 func writeEncryptedArchive(ctx context.Context, dst string, members []archiveMember, pass []byte, params backup.Params) (err error) {
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- путь в --out-dir
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%w: %s", errPartialInUse, filepath.Base(dst))
+	}
 	if err != nil {
 		return err
 	}

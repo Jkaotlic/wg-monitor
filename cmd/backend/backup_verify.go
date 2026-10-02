@@ -127,9 +127,12 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 }
 
 func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backend.Config, dbPath string, pass []byte) (archive string, counts verifyCounts, err error) {
-	archive, err = latestArchive(opts.OutDir, backup.KindSmall)
+	archive, err = latestArchive(opts.OutDir, backup.KindSmall, opts.now())
 	if err != nil {
 		return "", counts, err
+	}
+	if _, at, ok := backup.ParseArchiveName(archive); ok && opts.now().Sub(at) > verifyMaxArchiveAge {
+		return archive, counts, fmt.Errorf("последний малый архив %s старше 48 часов: ночной бэкап не идёт, проверять нечего", archive)
 	}
 	// Временный каталог -- в --out-dir: тот же том и не /tmp в памяти.
 	tmpDir, err := os.MkdirTemp(opts.OutDir, verifyTempPrefix)
@@ -349,9 +352,14 @@ func readVerifyCounts(ctx context.Context, db *sql.DB) (verifyCounts, error) {
 	return c, nil
 }
 
-// latestArchive -- имя самого свежего архива вида kind в каталоге dir.
-// Время берётся из имени; архивы «из будущего» тоже годятся.
-func latestArchive(dir string, kind backup.Kind) (string, error) {
+// verifyMaxArchiveAge -- насколько старым может быть последний малый архив:
+// проверка устаревшего архива доказывала бы вчерашнее, а не сегодняшнее.
+const verifyMaxArchiveAge = 48 * time.Hour
+
+// latestArchive -- имя самого свежего архива вида kind в каталоге dir,
+// не позже now. Время берётся из имени; архив «из будущего» (часы сбились
+// или имя подложено) не выбирается.
+func latestArchive(dir string, kind backup.Kind, now time.Time) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", fmt.Errorf("каталог архивов не читается: %w", err)
@@ -362,7 +370,7 @@ func latestArchive(dir string, kind backup.Kind) (string, error) {
 	)
 	for _, entry := range entries {
 		k, at, ok := backup.ParseArchiveName(entry.Name())
-		if !ok || k != kind || !entry.Type().IsRegular() {
+		if !ok || k != kind || !entry.Type().IsRegular() || at.After(now) {
 			continue
 		}
 		if best == "" || at.After(bestAt) {

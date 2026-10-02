@@ -469,7 +469,7 @@ func TestBackupErrorsNeverLeakSecrets(t *testing.T) {
 	if s.Small.OK || s.Small.Telegram != "error" || !strings.Contains(s.Small.Error, "bot<redacted>/sendDocument") {
 		t.Fatalf("состояние малого: %+v", s.Small)
 	}
-	if s.Full.OK || s.Full.Offsite != "error" || !strings.Contains(s.Full.Error, "Connection timed out") {
+	if s.Full.OK || s.Full.Offsite != "error" || !strings.Contains(s.Full.Error, "сервер недоступен") {
 		t.Fatalf("состояние полного: %+v", s.Full)
 	}
 	// Оба архива при этом записаны: провал доставки -- не провал записи.
@@ -491,7 +491,9 @@ func TestBackupOffsiteCopiesOnlyFullWithExactScpCommand(t *testing.T) {
 	if err := runBackup(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"scp", "-B", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20",
+	want := []string{"scp", "-B", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile=" + filepath.Join(filepath.Dir(f.dbPath), "backup-known_hosts"), "-o", "IdentitiesOnly=yes",
+		"-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 		"-i", "/etc/wg-monitor/offsite_ed25519", filepath.Join(f.outDir, fixtureFullName), "backup@198.51.100.20:/srv/backups/"}
 	if len(calls) != 1 || !slices.Equal(calls[0], want) {
 		t.Fatalf("команды: %v\nждали одну: %v", calls, want)

@@ -99,7 +99,7 @@ func TestBackupVerifyUsesLatestSmallArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// А если свежий малый битый -- провал, старый целый не подменяет его.
-	mustWrite(t, filepath.Join(f.outDir, "wg-monitor-small-backup-20261008T020000Z.tgz.enc"), "garbage")
+	mustWrite(t, filepath.Join(f.outDir, "wg-monitor-small-backup-20261007T030000Z.tgz.enc"), "garbage")
 	f.verifyFails(t, "архив не разворачивается")
 }
 
@@ -149,7 +149,7 @@ func (f *backupFixture) rewriteLatestSmall(t *testing.T, mutate func(dir string)
 	for _, e := range entries {
 		members = append(members, archiveMember{e.Name(), filepath.Join(dir, e.Name())})
 	}
-	dst := filepath.Join(f.outDir, "wg-monitor-small-backup-20261008T020000Z.tgz.enc")
+	dst := filepath.Join(f.outDir, "wg-monitor-small-backup-20261007T030000Z.tgz.enc")
 	if err := writeEncryptedArchive(context.Background(), dst, members, []byte(fixturePassphrase), backup.TestParams()); err != nil {
 		t.Fatal(err)
 	}
@@ -374,6 +374,7 @@ func TestBackupExtractCommand(t *testing.T) {
 
 func TestBackupVerifyCommandFlags(t *testing.T) {
 	f := newBackupFixture(t)
+	f.now = time.Now().UTC() // командная строка идёт по настоящим часам
 	f.backupSmall(t)
 	if err := runBackupCommand([]string{"verify", "--config", f.cfgPath, "--passphrase-file", f.passPath, "--out-dir", f.outDir}); err != nil {
 		t.Fatal(err)
