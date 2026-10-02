@@ -50,13 +50,18 @@ export function mayControlHrneo(role) {
 }
 
 export function hrneoActions(state, role) {
-  if (!state?.known || !state.installed) return []
+  // Не установлен (известно точно) -- действий нет. Состояние неизвестно или
+  // остановлен -- «Перезапустить» остаётся (до переезда кнопка в «Настройках»
+  // была безусловной; функции не отнимаем). Пуск и остановка -- как были.
+  if (state?.known && !state.installed) return []
   const out = []
-  if (state.running) {
-    if (mayMaintain({ role })) out.push({ name: 'hrneo', label: 'Перезапустить', danger: false })
-    if (mayControlHrneo(role)) out.push({ name: 'hrneo_stop', label: 'Остановить', danger: true })
-  } else if (mayControlHrneo(role)) {
-    out.push({ name: 'hrneo_start', label: 'Запустить', danger: false })
+  if (mayMaintain({ role })) out.push({ name: 'hrneo', label: 'Перезапустить', danger: false })
+  if (state?.known && state.installed) {
+    if (state.running) {
+      if (mayControlHrneo(role)) out.push({ name: 'hrneo_stop', label: 'Остановить', danger: true })
+    } else if (mayControlHrneo(role)) {
+      out.push({ name: 'hrneo_start', label: 'Запустить', danger: false })
+    }
   }
   return out
 }

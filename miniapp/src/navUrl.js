@@ -1,4 +1,4 @@
-import { initialNav, normalizeTab, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS, MANAGE_FOCUS } from './nav.js'
+import { initialNav, normalizeTab, diagViewFor, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAYS, URL_FLEET_OVERLAYS, OVERLAY_TABS, MANAGE_FOCUS } from './nav.js'
 
 // Адрес веб-управления -- то же, что deep-link из тревоги, плюс вкладка:
 // ?router=<id>&tab=<tab>&open=<overlay>. Лист подтверждения в адрес не
@@ -6,12 +6,13 @@ import { initialNav, normalizeTab, deepLinkOverlay, TABS, PARK_TAB, OPEN_OVERLAY
 // перезагрузить?» -- и тем более не должно выглядеть так, будто спрашивает.
 // isAdmin -- слои парка с адресом (свои серверы) открываются только админу:
 // остальным сервер ответит 404, и адрес ведёт на обычный экран.
-export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
+export function navFromURL(search, routerIDs = [], { isAdmin = false, routers = null, lastID = null } = {}) {
   const params = new URLSearchParams(search ?? '')
   const raw = params.get('router')
   const id = raw ? Number(raw) : NaN
-  const state = initialNav({ routerIDs, deepLinkID: Number.isFinite(id) ? id : null })
-  const tab = normalizeTab(params.get('tab'))
+  const state = initialNav({ routerIDs, deepLinkID: Number.isFinite(id) ? id : null, isAdmin, routers, lastID })
+  const rawTab = params.get('tab')
+  const tab = normalizeTab(rawTab)
   const open = params.get('open')
   // Вкладка «Парк» (?tab=park, v0.48) -- только админу, с роутером и без:
   // Парк от роутера не зависит. Остальным адрес ведёт на обычный экран.
@@ -21,9 +22,12 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
   // роутеров, если роутер выбран, иначе к сводке.
   if (isAdmin && URL_FLEET_OVERLAYS.includes(open)) {
     if (park) state.tab = PARK_TAB
-    else if (state.routerID != null && TABS.includes(tab)) state.tab = tab
+    else if (state.routerID != null && TABS.includes(tab)) {
+      state.tab = tab
+      if (diagViewFor(rawTab)) state.diagView = 'history'
+    }
     state.overlay = open
-    state.overlayParams = { returnTo: park ? PARK_TAB : state.routerID != null ? 'fleet' : null }
+    state.overlayParams = { returnTo: park || state.tab === PARK_TAB ? PARK_TAB : state.routerID != null ? 'fleet' : null }
     return state
   }
   if (park) {
@@ -32,7 +36,10 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
     return state
   }
   if (state.routerID == null) return state
-  if (TABS.includes(tab)) state.tab = tab
+  if (TABS.includes(tab)) {
+    state.tab = tab
+    if (diagViewFor(rawTab)) state.diagView = 'history'
+  }
   // Настройки и «Обслуживание» стали вкладкой «Управление»: старая ссылка из
   // уведомления открывает её, а не пустой экран.
   if (OVERLAY_TABS[open]) {
@@ -41,6 +48,10 @@ export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
     return state
   }
   state.overlay = deepLinkOverlay(search ?? '', state)
+  // «Маршруты» -- слой вкладки «VPN-туннели» (подпись «назад» -- она): ссылка
+  // без вкладки, а равно и со «Роутером», встаёт на неё, иначе «назад» вёл бы
+  // на другую вкладку, чем обещает подпись.
+  if (state.overlay === 'routes') state.tab = 'tunnels'
   return state
 }
 
@@ -65,7 +76,7 @@ export function urlFromNav(nav) {
   }
   const params = new URLSearchParams()
   params.set('router', String(nav.routerID))
-  if (nav.tab && nav.tab !== 'router') params.set('tab', nav.tab)
+  if (nav.tab && nav.tab !== 'router') params.set('tab', nav.tab === 'diag' && nav.diagView === 'history' ? 'events' : nav.tab)
   if (open) params.set('open', open)
   return '?' + params.toString()
 }

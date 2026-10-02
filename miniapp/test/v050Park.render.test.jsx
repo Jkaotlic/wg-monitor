@@ -100,49 +100,46 @@ describe('лист выбора: пилюли и поиск', () => {
   })
 })
 
-describe('шапка: переключатель роутера (спека п. 2.6)', () => {
-  it('имя роутера -- кнопка, лист с пилюлями, смена сохраняет вкладку', async () => {
+describe('шапка: выбор роутера (v0.52, спека §3–4)', () => {
+  it('2–5 роутеров: имя в шапке текстом, выбирает полоса «Мои роутеры», смена сохраняет вкладку', async () => {
     const root = await mountAt('/miniapp/?router=2&tab=diag')
-    const sw = root.querySelector('.router-switch')
-    expect(sw.textContent.trim()).toBe('Дача')
-    expect(sw.getAttribute('aria-label')).toBe('Сменить роутер: Дача')
-    expect(root.querySelector('.app-header-fleet').textContent.trim()).toBe('Все роутеры')
-    await act(async () => sw.click())
-    await flush()
-    const items = [...root.querySelectorAll('.sheet-choice')]
-    expect(items.map((b) => b.querySelector('.sheet-choice-label').textContent)).toEqual(['Дом', 'Офис', 'Дача'])
-    expect(items[1].querySelector('.badge').textContent).toBe('молчит 2 ч')
-    expect(root.querySelector('input.sheet-search')).toBe(null)
-    await act(async () => items[1].click())
+    expect(root.querySelector('.router-switch')).toBe(null)
+    expect(root.querySelector('.app-header-fleet')).toBe(null)
+    expect(root.querySelector('.app-header-title').textContent).toBe('Дача')
+    const chips = [...root.querySelectorAll('.router-strip .strip-chip')]
+    expect(chips.map((c) => c.getAttribute('aria-label'))).toEqual(['Дом: тревога', 'Дача: в порядке', 'Офис: молчит'])
+    await act(async () => chips[2].click())
     await flush()
     expect(root.querySelector('.stub-diag').textContent).toBe('проверки 3')
-    expect(root.querySelector('.router-switch').textContent.trim()).toBe('Офис')
-    expect(root.querySelector('.sheet-layer')).toBe(null)
+    expect(root.querySelector('.app-header-title').textContent).toBe('Офис')
     cleanup(root)
   })
 
-  it('1 роутер у владельца -- переключателя нет, бренд на месте (Review Focus 2)', async () => {
+  it('1 роутер у владельца -- ни кнопки, ни полосы: имя текстом', async () => {
     mocks.routers = { routers: [R(2, 'Дача')] }
     const root = await mountAt('/miniapp/')
     expect(root.querySelector('.router-switch')).toBe(null)
-    expect(root.querySelector('.app-header-brand')).toBeTruthy()
+    expect(root.querySelector('.router-strip')).toBe(null)
+    expect(root.querySelector('.app-header-title').textContent).toBe('Дача')
     cleanup(root)
   })
 
-  it('12 роутеров -- в листе есть поиск (Review Focus 2)', async () => {
+  it('12 роутеров -- имя открывает список «Мои роутеры» с поиском', async () => {
     mocks.routers = { routers: Array.from({ length: 12 }, (_, i) => R(i + 1, `r-${i + 1}`)) }
     const root = await mountAt('/miniapp/?router=1')
     await act(async () => root.querySelector('.router-switch').click())
     await flush()
-    expect(root.querySelector('input.sheet-search')).toBeTruthy()
-    expect(root.querySelectorAll('.sheet-choice')).toHaveLength(12)
+    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Мои роутеры')
+    expect(root.querySelector('.overlay input[type=search]')).toBeTruthy()
+    expect(root.querySelectorAll('.overlay .fleet-row')).toHaveLength(12)
     cleanup(root)
   })
 
-  it('на вкладке «Парк» у админа переключателя нет', async () => {
+  it('на вкладке «Парк» у админа полосы нет, выбор роутера -- в шапке', async () => {
     mocks.session = { ok: true, is_admin: true, via: 'telegram' }
     const root = await mountAt('/miniapp/?router=2&tab=park')
-    expect(root.querySelector('.router-switch')).toBe(null)
+    expect(root.querySelector('.router-strip')).toBe(null)
+    expect(root.querySelector('.router-switch')).toBeTruthy()
     cleanup(root)
   })
 })

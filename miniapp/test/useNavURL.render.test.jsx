@@ -119,3 +119,26 @@ describe('useNavURL', () => {
     render(null, root)
   })
 })
+
+describe('useNavURL: главный экран при «назад» (N1)', () => {
+  const ROUTERS = [
+    { id: 3, nickname: 'a', status: 'online', reach: 'online', last_seen_age_sec: 30 },
+    { id: 7, nickname: 'b', status: 'alert', reach: 'online', last_seen_age_sec: 30 },
+  ]
+  let probe = null
+  function ProbeR() {
+    const [nav, dispatch] = useReducer(navReducer, navFromURL('?router=3', IDS))
+    useNavURL({ enabled: true, nav, dispatch, routerIDs: IDS, routers: ROUTERS })
+    probe = { nav }
+    return null
+  }
+  it('«назад» на голый адрес открывает роутер в тревоге, а не первый', async () => {
+    window.history.replaceState(null, '', '/dashboard/?router=3')
+    const root = document.createElement('div')
+    await act(async () => render(<ProbeR />, root))
+    window.history.replaceState(null, '', '/dashboard/')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(probe.nav.routerID).toBe(7)
+    render(null, root)
+  })
+})

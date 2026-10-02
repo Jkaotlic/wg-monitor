@@ -2,10 +2,13 @@
 // компонентам. Причина: слоёв стало четыре (таб, оверлей, шит и выбранный
 // роутер), а кнопка "назад" у Telegram одна, и решать, что она закрывает,
 // должно одно место.
-// «Управление» (v0.41) -- пятая вкладка вместо шестерёнки в шапке и строки
-// «Администрирование» внизу «Сейчас»: настройки роутера и его обслуживание
-// стали функцией для всех, а не спрятанным входом.
-export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
+// v0.52: вкладки названы задачей человека -- «Роутер», «VPN-туннели»,
+// «Проверки», «Настройки» (+ «Парк» админу). «Что было» стало видом
+// «Проверок»: ключ events остаётся псевдонимом -- ссылки из отправленных
+// тревог живут месяцами.
+import { STRIP_MAX, landingRouterID } from './routerPick.js'
+
+export const TABS = ['router', 'tunnels', 'diag', 'manage']
 
 // «Парк» (v0.48) -- вкладка админа, первая в панели: весь парк, от
 // выбранного роутера не зависит и открывается без него. Раньше он жил хвостом
@@ -14,24 +17,32 @@ export const TABS = ['router', 'tunnels', 'diag', 'events', 'manage']
 // Парк показывался под списком; редьюсер вкладку не прячет.
 export const PARK_TAB = 'park'
 
-// barTabs -- что в нижней панели. Админу с роутером -- Парк и пять вкладок
-// роутера. Без роутера (главный экран -- список) вкладкам роутера показывать
-// нечего: панель -- Парк и сам список ('fleet' -- не вкладка, а слой; его
-// открывает оболочка). Остальным -- прежние пять, как было.
+// barTabs -- что в нижней панели. Админу с роутером -- Парк и вкладки
+// роутера; без роутера -- только Парк (выбор роутера -- имя в шапке).
+// Нижней «Роутеры» больше нет: у выбора роутера один вход (v0.52).
 export function barTabs({ isAdmin = false, routerID = null } = {}) {
   if (!isAdmin) return TABS
-  return routerID != null ? [PARK_TAB, ...TABS] : [PARK_TAB, 'fleet']
+  return routerID != null ? [PARK_TAB, ...TABS] : [PARK_TAB]
 }
 
-// Таб "Маршруты" стал табом "Туннели": маршруты уехали внутрь туннеля, потому
-// что оператор сначала спрашивает "какой VPN-туннель поднят", и только потом --
-// "что через него идёт". Прежнее имя остаётся псевдонимом не из вежливости:
-// deep-link из уже отправленных тревог живёт в переписке Telegram месяцами,
-// и открыть по нему не тот экран молча было бы хуже, чем не открыть вовсе.
-const TAB_ALIASES = { routes: 'tunnels' }
+const TAB_ALIASES = { routes: 'tunnels', events: 'diag' }
 
 export function normalizeTab(tab) {
   return TAB_ALIASES[tab] ?? tab
+}
+
+// Вид «Проверок» по сырому ключу вкладки: прежняя вкладка events -- «Что было».
+export function diagViewFor(rawTab) {
+  return rawTab === 'events' ? 'history' : null
+}
+
+// Вид -- как фокус: ключ есть только со значением «Что было», чтобы прежние
+// снимки навигации не меняли форму.
+function withDiagView(state, view) {
+  if (view === 'history') return { ...state, diagView: 'history' }
+  if (!('diagView' in state)) return state
+  const { diagView: _drop, ...rest } = state
+  return rest
 }
 
 // Слои, ставшие вкладкой. Настройки (?open=settings) и «Обслуживание и
@@ -40,10 +51,9 @@ export function normalizeTab(tab) {
 // 'manage' -- возврат слоя («Ход работы» перенаправления) во вкладку.
 export const OVERLAY_TABS = { settings: 'manage', admin: 'manage', manage: 'manage' }
 
-// Группа «Управления», которую раскрыть, когда туда ведёт старая ссылка
-// (?open=settings / ?open=admin) или возврат из слоя глубже вкладки (v0.50):
-// группы свёрнуты, и без этого человек приходил бы в стену заголовков.
-export const MANAGE_FOCUS = { settings: 'router', admin: 'repair', packages: 'repair', dnsreset: 'repair', agentcfg: 'settings', agentconn: 'settings' }
+// Раздел «Настроек», который раскрыть по старой ссылке или при возврате из
+// слоя (v0.52: Обслуживание · Люди и уведомления · Роутер и агент · Опасное).
+export const MANAGE_FOCUS = { settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', agentcfg: 'agent', agentconn: 'agent' }
 
 // Фокус -- как параметры слоя: ключ есть только когда он задан, чтобы
 // прежние снимки навигации не меняли форму.
@@ -90,6 +100,37 @@ export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy', 'selfhosted'
 // выбранного роутера (?open=selfhosted).
 export const URL_FLEET_OVERLAYS = ['selfhosted']
 
+// v0.52: бывшие локальные слои (useState внутри вкладок) -- оверлеи. «Назад»
+// Telegram закрывает любой из них, а в адрес пишется только место-родитель:
+// у каждого состояние, не переживающее перезагрузку (шаг мастера, выбранный
+// файл, ход починки, карточка из снимка роутера).
+//
+// Слой вкладки: рисует сама вкладка -- ему нужен её снимок; открытие ставит
+// вкладку, уход с вкладки слой закрывает.
+export const TAB_LAYERS = { tunnel: 'tunnels', replace: 'tunnels', confimport: 'tunnels' }
+// Слой в слое: рисует слой-родитель (снимок «Маршрутов», данные кабинета);
+// «назад» возвращает в родителя с его параметрами.
+export const CHILD_LAYERS = { routeadd: 'routes', routepick: 'routes', cabinetissue: 'cabinet' }
+// Слой роутера без адреса: починка идёт заданием, экран лишь смотрит.
+export const ROUTER_LAYERS = ['repair']
+export const LOCAL_LAYERS = [...Object.keys(TAB_LAYERS), ...Object.keys(CHILD_LAYERS), ...ROUTER_LAYERS]
+
+// Слои, которые закрепляются на время отправки: мастер «Добавить роутер» и
+// выпуск конфига (уход посреди выпуска -- второй выпуск и занятое место).
+export const PINNABLE_OVERLAYS = ['provision', 'cabinetissue']
+
+// layerFamily -- слой верхнего уровня, к которому относится оверлей: сам слой
+// или родитель слоя в слое. Вкладка, перечитывающая данные при закрытии слоя,
+// не должна считать закрытием переход из родителя в его дочерний слой.
+export function layerFamily(overlay) {
+  return CHILD_LAYERS[overlay] ?? overlay ?? null
+}
+
+export function tabOwnsLayer(state) {
+  const tab = TAB_LAYERS[state?.overlay]
+  return tab != null && tab === state.tab
+}
+
 // Слои, которые «назад» и Esc не закрывают: во время раскатки бэкенда уходить
 // некуда -- приложение без сервера не работает, а экран сам перезагрузит
 // страницу или предложит «Вернуться» после таймаута.
@@ -110,7 +151,7 @@ export function navPinned(state) {
 // роутера и слоям парка это не мешает: в отличие от navPinned, признак
 // касается только ухода «назад».
 export function fleetIsHome(state) {
-  return state?.overlay === 'fleet' && state?.routerID == null
+  return state?.overlay === 'fleet' && state?.routerID == null && state?.tab !== PARK_TAB
 }
 
 // Параметры принадлежат слою: вместе с ним они уходят целиком (ключа нет),
@@ -127,20 +168,13 @@ function withoutSheetBusy(state) {
   return rest
 }
 
-// Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
-// приложение приходят deep-link'и из тревог, отправленных месяцы назад;
-// подпись -- слова для человека. Менять их вместе значило бы ломать ссылки
-// ради текста.
-//
-// Слова выбраны по вопросу, на который отвечает вкладка: «что сейчас», «через
-// что ходит трафик», «что проверено», «что было». Прежние «Роутер», «Туннели»,
-// «Диагностика» называли устройство и инструмент, а не ответ.
+// Подписи отделены от ключей намеренно: ключ -- адрес deep-link из тревог,
+// подпись -- слова для человека (v0.52: по задаче, а не по инструменту).
 const TAB_LABELS = {
-  router: 'Сейчас',
+  router: 'Роутер',
   tunnels: 'VPN-туннели',
   diag: 'Проверки',
-  events: 'Что было',
-  manage: 'Управление',
+  manage: 'Настройки',
   park: 'Парк',
 }
 
@@ -148,15 +182,13 @@ export function tabLabel(tab) {
   return TAB_LABELS[tab] ?? tab
 }
 
-// Подпись в нижней панели. Шесть вкладок на 360 px: «VPN-туннели» там --
-// «Туннели», заголовок экрана и шапка широкого экрана остаются полными.
-const BAR_LABELS = { tunnels: 'Туннели', fleet: 'Роутеры' }
-
+// Подпись в нижней панели -- та же: вкладок не больше пяти, «VPN-туннель»
+// пишется полностью (словарь).
 export function barLabel(tab) {
-  return BAR_LABELS[tab] ?? tabLabel(tab)
+  return tabLabel(tab)
 }
 
-export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
+export function initialNav({ routerIDs = [], deepLinkID = null, isAdmin = false, routers = null, lastID = null } = {}) {
   const state = { routerID: null, tab: 'router', overlay: null, sheet: null }
   // Deep-link с тревоги ведёт на конкретный роутер, но не обходит доступ:
   // сервер отдаст 404, а клиент не должен делать вид, что чужой роутер открыт.
@@ -164,12 +196,24 @@ export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
     state.routerID = deepLinkID
     return state
   }
+  // Пустой доступ -- отдельный экран, а не список из нуля строк.
+  if (routerIDs.length === 0) return state
   if (routerIDs.length === 1) {
     state.routerID = routerIDs[0]
     return state
   }
-  // Пустой доступ -- отдельный экран, а не список из нуля строк.
-  if (routerIDs.length > 1) state.overlay = 'fleet'
+  // Главный экран (спека §3): админ -- Парк; 2–5 -- роутер в беде, иначе
+  // последний открытый; 6+ -- список. Ссылка на роутер, доступа к которому
+  // нет, не подменяется молча другим роутером -- список честнее.
+  if (isAdmin) {
+    state.tab = PARK_TAB
+    return state
+  }
+  if (deepLinkID == null && routerIDs.length <= STRIP_MAX) {
+    state.routerID = landingRouterID({ routerIDs, routers, lastID })
+    return state
+  }
+  state.overlay = 'fleet'
   return state
 }
 
@@ -194,10 +238,14 @@ export function navReducer(state, action) {
     case 'tab': {
       const tab = normalizeTab(action.tab)
       if (!(TABS.includes(tab) || tab === PARK_TAB) || navPinned(state)) return state
+      const view = diagViewFor(action.tab)
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
-      if (action.closeOverlay) return withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null })
-      return withoutFocus({ ...state, tab })
+      if (action.closeOverlay) return withDiagView(withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null }), view)
+      // Слой вкладки принадлежит ей: уход на другую вкладку его закрывает.
+      const layerTab = TAB_LAYERS[state.overlay]
+      if (layerTab && layerTab !== tab) return withDiagView(withoutFocus({ ...withoutParams(state), tab, overlay: null, sheet: null }), view)
+      return withDiagView(withoutFocus({ ...state, tab }), view)
     }
     case 'router': {
       if (navPinned(state)) return state
@@ -206,7 +254,9 @@ export function navReducer(state, action) {
       const wanted = action.tab ? normalizeTab(action.tab) : null
       const kept = action.keepTab && TABS.includes(state.tab) ? state.tab : null
       const tab = wanted && TABS.includes(wanted) ? wanted : kept ?? 'router'
-      return withoutFocus({ ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null })
+      // Смена роутера из шапки держит и вкладку, и её вид («Что было»).
+      const view = tab !== 'diag' ? null : wanted ? diagViewFor(action.tab) : state.diagView ?? null
+      return withDiagView(withoutFocus({ ...withoutParams(state), routerID: action.id, tab, overlay: null, sheet: null }), view)
     }
     case 'overlay': {
       if (navPinned(state) && !action.unpin) return state
@@ -219,10 +269,28 @@ export function navReducer(state, action) {
           MANAGE_FOCUS[overlay] ?? MANAGE_FOCUS[state.overlay] ?? null,
         )
       }
+      if (TAB_LAYERS[overlay] || ROUTER_LAYERS.includes(overlay)) {
+        if (state.routerID == null) return state
+        const tab = TAB_LAYERS[overlay] ?? state.tab
+        const next = { ...withoutParams(withoutFocus(state)), tab, overlay, sheet: null }
+        return action.params ? { ...next, overlayParams: action.params } : next
+      }
+      const parent = CHILD_LAYERS[overlay]
+      if (parent) {
+        if (state.overlay !== parent) return state
+        return { ...withoutParams(state), overlay, overlayParams: { ...(action.params ?? {}), returnTo: parent, returnParams: state.overlayParams ?? null } }
+      }
       const next = { ...withoutParams(state), overlay }
       if (!overlay && state.routerID != null && state.tab === 'manage') return withFocus(next, MANAGE_FOCUS[state.overlay] ?? null)
       return overlay && action.params ? { ...next, overlayParams: action.params } : next
     }
+    // Сегмент «Сейчас | Что было» на «Проверках».
+    case 'diagView':
+      return state.tab === 'diag' ? withDiagView(state, action.view) : state
+    // Переход в раздел «Настроек» (плашка «Есть обновления» на «Роутере»).
+    case 'manage':
+      if (state.routerID == null || navPinned(state)) return state
+      return withFocus({ ...withoutParams(withoutFocus(state)), tab: 'manage', overlay: null, sheet: null }, action.section ?? null)
     case 'sheet': {
       // sheetSeq -- номер экземпляра листа, ключ его компонента. Новый лист
       // поверх открытого (без закрытия) обязан смонтироваться заново:
@@ -242,7 +310,7 @@ export function navReducer(state, action) {
     // Закрепить мастер на время отправки. Флаг живёт в параметрах слоя и
     // уходит вместе с ним; паролей там по-прежнему нет.
     case 'pin': {
-      if (state.overlay !== 'provision') return state
+      if (!PINNABLE_OVERLAYS.includes(state.overlay)) return state
       const { pinned: _drop, ...params } = state.overlayParams ?? {}
       return { ...state, overlayParams: action.pinned ? { ...params, pinned: true } : params }
     }
@@ -255,6 +323,12 @@ export function navReducer(state, action) {
       // возвращает на список, и списку нужен его собственный returnTo.
       const params = state.overlayParams
       const target = normalizeReturn(params?.returnTo ?? null)
+      // Возврат на слой вкладки (из «Маршрутов» -- на экран VPN-туннеля):
+      // слой рисует его вкладка, поэтому вкладка встаёт вместе с ним.
+      if (TAB_LAYERS[target]) {
+        const back = { ...withoutParams(state), tab: TAB_LAYERS[target], overlay: target }
+        return params?.returnParams ? { ...back, overlayParams: params.returnParams } : back
+      }
       if (target === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null }
       // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
       // есть вкладка -- иначе «назад» оставил бы пустую основную область.

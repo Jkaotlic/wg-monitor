@@ -66,12 +66,19 @@ func main() {
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
 	noAccess := flag.Bool("no-access", false, "открыть мини-апп человеком без доступа: парк принадлежит другому, экран «Роутер ещё не привязан» с Telegram ID")
+	role := flag.String("role", "", "роль зрителя для приёмки раскладки: admin | owner1 | owner3 | operator | issuer; пусто -- как раньше (-admin)")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
 	awg3P12 := flag.String("awg3-p12-out", "", "куда записать .p12 поддельной панели main (пароль sandbox) для формы «Добавить панель»; рядом -- .json с адресом и паролем")
 	flag.Parse()
+	if *role != "" {
+		if _, ok := sandboxRoles[*role]; !ok {
+			fatal(fmt.Errorf("неизвестная роль %q", *role))
+		}
+		*asAdmin = *role == "admin"
+	}
 	setSandboxEgress(*egress)
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
@@ -133,13 +140,23 @@ func main() {
 	// Без доступа парк принадлежит другому человеку: так открывается экран
 	// пустого доступа, и он единственный, который иначе нечем посмотреть.
 	seedOwner := *tgUser
-	if *noAccess {
+	viewerRole := *role != "" && *role != "admin"
+	if *noAccess || viewerRole {
+		// Без доступа или в роли -- парк принадлежит другому человеку; в роли
+		// зритель затем привязывается к своим роутерам.
 		seedOwner = *tgUser + 1000
-		*asAdmin = false
+		if *noAccess {
+			*asAdmin = false
+		}
 	}
 	ids, err := seed(d, seedOwner)
 	if err != nil {
 		fatal(err)
+	}
+	if viewerRole {
+		if err := attachViewer(d, ids, *tgUser, *role); err != nil {
+			fatal(err)
+		}
 	}
 	if *homeAgent != "" {
 		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-home"], *homeAgent); err != nil {
@@ -257,6 +274,7 @@ func main() {
 	fmt.Printf("\nпесочница мини-аппа\n")
 	fmt.Printf("  база:   %s\n", path)
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
+	fmt.Printf("  роль зрителя: %q (-role)\n", *role)
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
 	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), аварийная страница: /dashboard/rescue/\n", *addr, sandboxDashboardToken)
 	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n", *backendUpdate, updatePath)

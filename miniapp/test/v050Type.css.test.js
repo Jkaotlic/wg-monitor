@@ -20,9 +20,9 @@ function px(value) {
   return null
 }
 
-// Машинные коды (11 px) и подписи нижней панели (шесть вкладок на 360 px,
-// см. отклонение в плане) -- единственные исключения.
-const CODE_OK = ['.data-row-code', '.tunnel-id', '.ev-code', '.raw-dump', '.tabbar-item']
+// Машинные коды (11 px) -- единственное исключение. Подписи нижней панели с
+// v0.52 -- 12 px: вкладок не больше пяти.
+const CODE_OK = ['.data-row-code', '.tunnel-id', '.ev-code', '.raw-dump']
 
 function rules(text) {
   return [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, sel, body]) => ({ sel: sel.trim(), body }))

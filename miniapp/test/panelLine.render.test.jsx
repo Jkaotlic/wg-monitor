@@ -98,19 +98,20 @@ describe('адрес панели под именем роутера', () => {
 })
 
 describe('пятая вкладка', () => {
-  it('нижняя панель: «Управление» последней', async () => {
+  it('нижняя панель: «Настройки» последней', async () => {
     const root = await mount(<TabBar tabs={TABS} tab="manage" onTab={() => {}} />)
     const items = [...root.querySelectorAll('.tabbar-item')].map((b) => b.textContent)
-    // В панели «Туннели» (v0.48: шесть вкладок у админа на 360 px).
-    expect(items).toEqual(['Сейчас', 'Туннели', 'Проверки', 'Что было', 'Управление'])
-    expect(root.querySelector('.tabbar-item-active').textContent).toBe('Управление')
+    // v0.52: четыре вкладки по задаче, подписи полностью.
+    expect(items).toEqual(['Роутер', 'VPN-туннели', 'Проверки', 'Настройки'])
+    expect(root.querySelector('.tabbar-item-active').textContent).toBe('Настройки')
     cleanup(root)
   })
 
   it('шапка телефона без шестерёнки', async () => {
-    const root = await mount(<Header fleetVisible onFleet={() => {}} />)
+    const root = await mount(<Header title="Дача" onPick={() => {}} />)
     expect(root.querySelector('.app-header-gear')).toBe(null)
-    expect(root.textContent).toContain('Все роутеры')
+    expect(root.textContent).not.toContain('Все роутеры')
+    expect(root.querySelector('.router-switch').textContent.trim()).toBe('Дача')
     cleanup(root)
   })
 })

@@ -17,6 +17,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
 })
 
 const { NoAccess } = await import('../src/screens/NoAccess.jsx')
+const { placeText } = await import('../src/places.js')
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
@@ -36,6 +37,7 @@ describe('NoAccess', () => {
     expect(root.querySelector('.noaccess-id-value').textContent).toBe('777001')
     expect(root.querySelector('.copy button').textContent).toBe('Скопировать')
     // Темы группы больше нет -- и звать в неё нельзя.
+    expect(text).toContain(placeText('access'))
     expect(text).not.toContain('теме')
     expect(text).not.toContain('бота')
     cleanup(root)

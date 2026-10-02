@@ -53,7 +53,7 @@ export function ExitIPSection({ routerID, tunnels = [], deadline }) {
     })
   }
   return (
-    <Section title="Каким адресом видно каждый VPN-туннель">
+    <Section title="Каждый VPN-туннель">
       <div class="card card-rows">
         {list.map((t) => {
           const running = t.run_state === 'running'
@@ -66,7 +66,7 @@ export function ExitIPSection({ routerID, tunnels = [], deadline }) {
                 <DataRow title={`«${t.name || t.tunnel_id}»`} value={line.value} valueSub={line.sub} valueTone={line.tone} />
                 {running && (
                   <button type="button" class="btn btn-ghost btn-row settings-row-btn" disabled={probe.busy} onClick={() => run(t.tunnel_id)}>
-                    {probing === t.tunnel_id ? 'Меряем…' : 'Проверить сейчас'}
+                    {probing === t.tunnel_id ? 'Меряем…' : 'Измерить'}
                   </button>
                 )}
               </div>
@@ -111,8 +111,8 @@ const LOG_LEVELS = [
   ['info', 'всё'],
 ]
 
-// «Управление» → «Проверить»: журнал awg-manager по кнопке. Круг -- владелец и
-// админ; решает SettingsSections (сервер отказывает оператору сам).
+// «Проверки» → «Осмотр изнутри»: журнал awg-manager по кнопке. Круг -- владелец и
+// админ (сервер отказывает оператору сам).
 export function AwgmLogsSection({ routerID, deadline }) {
   const logs = useCommand(routerID)
   const [level, setLevel] = useState('')

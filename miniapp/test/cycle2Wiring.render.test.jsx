@@ -48,8 +48,8 @@ vi.mock('../src/screens/ParkSection.jsx', () => ({
 vi.mock('../src/screens/AccessSection.jsx', () => ({ AccessSection: () => <div class="stub stub-access">доступ</div> }))
 // С v0.47 админские куски -- слоты SettingsSections: заглушка их рисует.
 vi.mock('../src/screens/SettingsScreen.jsx', () => ({
-  SettingsSections: ({ repairSlot, settingsSlot, dangerSlot }) => (
-    <div class="stub stub-settings">настройки{repairSlot}{settingsSlot}{dangerSlot}</div>
+  SettingsSections: ({ serviceSlot, peopleSlot, agentSlot, dangerSlot }) => (
+    <div class="stub stub-settings">настройки{serviceSlot}{peopleSlot}{agentSlot}{dangerSlot}</div>
   ),
 }))
 vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: ({ id }) => <div class="stub stub-router">Сейчас {id}</div> }))
@@ -111,10 +111,13 @@ afterEach(() => {
 
 describe('OverlayHost: слои парка', () => {
   it('подпись возврата', () => {
-    expect(returnLabel('fleet')).toBe('Все роутеры')
+    expect(returnLabel('fleet')).toBe('Мои роутеры')
+    expect(returnLabel('fleet', true)).toBe('Выбрать роутер')
     // Старый возврат «в Обслуживание» ведёт к списку: Парк теперь там.
-    expect(returnLabel('admin')).toBe('Все роутеры')
-    expect(returnLabel('manage')).toBe('Управление')
+    expect(returnLabel('admin')).toBe('Мои роутеры')
+    expect(returnLabel('manage')).toBe('Настройки')
+    expect(returnLabel('park')).toBe('Парк')
+    expect(returnLabel('awg3panel')).toBe('Панель VPN-сервера')
     expect(returnLabel(null)).toBe('Роутеры')
   })
 
@@ -123,7 +126,7 @@ describe('OverlayHost: слои парка', () => {
     const root = await mount(h.node)
     expect(root.querySelector('.stub-provision')).toBeTruthy()
     const p = mocks.props.provision
-    expect(p.backLabel).toBe('Все роутеры')
+    expect(p.backLabel).toBe('Выбрать роутер')
     p.onStarted({ jobId: 'j1', nickname: 'dacha-1' })
     expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'fleet' }, unpin: true })
     p.onBusy(true)
@@ -270,7 +273,8 @@ describe('раскладки', () => {
 
   it('заглушка «Пакеты» не-админу не подсвечивает Парк', async () => {
     const root = await mount(<WideLayout mode="web" nav={nav({ routerID: 1, overlay: 'packages' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
-    expect(root.querySelector('.side-link-active')).toBe(null)
+    // Вкладки колонки подсвечены (v0.52), но Парка у не-админа нет вовсе.
+    expect([...root.querySelectorAll('.side-link-active')].map((b) => b.textContent.trim())).not.toContain('Парк')
     cleanup(root)
   })
 

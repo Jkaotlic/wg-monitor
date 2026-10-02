@@ -186,6 +186,16 @@ import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 import { agoText, whenText } from './when.js'
 
+// Разделы вкладки «Проверки» → «Сейчас» (v0.52, спека §2): заголовки -- одни и
+// те же для экрана и для указателей places.js.
+export const DIAG_SECTIONS = [
+  { id: 'answers', title: 'Что спросили и что ответили' },
+  { id: 'exit', title: 'Адрес выхода' },
+  { id: 'net', title: 'Интернет и DNS' },
+  { id: 'ping', title: 'Проверка связи VPN-туннелей' },
+  { id: 'inspect', title: 'Осмотр изнутри' },
+]
+
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
 // роутер, отчитывающийся о себе.
@@ -400,53 +410,4 @@ const GUARD_ROW = {
 
 export function guardRow(check) {
   return GUARD_ROW[guardVerdict(check)]
-}
-
-// --- Два адреса выхода ----------------------------------------------------
-//
-// check_direct и check_via_tunnel отвечают текстом агента, а не JSON: адрес
-// вынимается из строки "Exit IP: ...". Сравнение двух адресов -- это и есть
-// ответ на вопрос "подмена работает?": один и тот же адрес с обеих сторон
-// значит, что снаружи человека видно ровно так же, как без VPN.
-const EXIT_IP = /Exit IP:\s*([0-9a-f.:]+)/i
-
-export function exitAddress(output) {
-  if (typeof output !== 'string') return ''
-  const m = EXIT_IP.exec(output)
-  return m ? m[1] : ''
-}
-
-export function exitCompare(directOutput, tunnelOutput) {
-  const direct = exitAddress(directOutput)
-  const viaTunnel = exitAddress(tunnelOutput)
-  if (!direct && !viaTunnel) {
-    return {
-      direct,
-      viaTunnel,
-      works: null,
-      verdict: 'Адреса ещё не измерены — нажмите «Сравнить адреса».',
-    }
-  }
-  if (!direct || !viaTunnel) {
-    return {
-      direct,
-      viaTunnel,
-      works: null,
-      verdict: 'Пока измерен только один адрес — сравнивать не с чем.',
-    }
-  }
-  if (direct === viaTunnel) {
-    return {
-      direct,
-      viaTunnel,
-      works: false,
-      verdict: 'Снаружи виден тот же адрес, что и без VPN-туннеля: подмены нет, трафик идёт мимо VPN.',
-    }
-  }
-  return {
-    direct,
-    viaTunnel,
-    works: true,
-    verdict: 'Адреса разные — обход работает: через VPN-туннель наружу виден адрес VPN-сервера.',
-  }
 }

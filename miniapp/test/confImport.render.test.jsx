@@ -104,23 +104,15 @@ const routeStatusCalls = () => mocks.calls.filter((c) => c.action === 'route_sta
 async function mount(extra = {}) {
   const root = document.createElement('div')
   document.body.appendChild(root)
-  await act(async () => render(<TunnelsTab routerID={7} openSheet={() => {}} onOpenRoutes={() => {}} {...extra} />, root))
+  await act(async () =>
+    render(<TunnelsTab routerID={7} openSheet={() => {}} onOpenRoutes={() => {}} layer="confimport" layerParams={{}} openLayer={() => {}} closeLayer={() => {}} {...extra} />, root),
+  )
   await flushMany(2)
   return root
 }
 
-// С v0.41 вход в загрузку -- обычная строка списка под «VPN-туннелями», а не
-// карточка-переход (акцентная там одна -- «Новый VPN-туннель из кабинета»).
-function importCard(root) {
-  return [...root.querySelectorAll('.list-row-btn')].find((c) => c.querySelector('.row-title')?.textContent === 'Загрузить конфиг .conf')
-}
-
-async function openImport(root) {
-  const card = importCard(root)
-  expect(card, 'карточки «Загрузить конфиг .conf» нет').toBeTruthy()
-  await act(async () => card.click())
-}
-
+// v0.52: экран загрузки -- слой навигации (layer=confimport); вход в него -- из
+// «Откуда взять конфиг» (задача 10), здесь монтируется сразу.
 async function pickFile(root, file) {
   const input = root.querySelector('.conf-pick-input')
   Object.defineProperty(input, 'files', { value: [file], configurable: true })
@@ -156,19 +148,8 @@ beforeEach(() => {
 })
 
 describe('загрузка .conf', () => {
-  it('вход -- только у владельца и админа', async () => {
-    let root = await mount()
-    expect(importCard(root)).toBeTruthy()
-    render(null, root)
-    mocks.role = 'operator'
-    root = await mount()
-    expect(importCard(root)).toBeFalsy()
-    render(null, root)
-  })
-
   it('не .conf и слишком большой -- отказ до чтения и без запроса', async () => {
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File(['x'], 'notes.txt'))
     expect(root.textContent).toContain('Нужен файл с расширением .conf — конфиг WireGuard или AmneziaWG.')
     expect(byText(root, 'Проверить конфиг').disabled).toBe(true)
@@ -180,8 +161,8 @@ describe('загрузка .conf', () => {
   })
 
   it('весь путь: файл → имя → предпросмотр → «Добавить как новый»', async () => {
-    const root = await mount()
-    await openImport(root)
+    let closed = 0
+    const root = await mount({ closeLayer: () => closed++ })
     await pickFile(root, new File([CONF], 'Amsterdam NL.conf'))
     expect(root.querySelector('.conf-pick-input').value).toBe('')
     expect(root.querySelector('#conf-import-name').value).toBe('amsterdam-nl')
@@ -212,7 +193,7 @@ describe('загрузка .conf', () => {
     expect(mocks.api.filter((c) => c[0] === 'preview')).toHaveLength(1)
 
     await click(root, 'К списку VPN-туннелей')
-    expect(root.querySelector('.conf-import')).toBe(null)
+    expect(closed).toBe(1)
     render(null, root)
   })
 
@@ -220,7 +201,6 @@ describe('загрузка .conf', () => {
     mocks.previewReply = { ...structuredClone(PREVIEW), state: 'analyzing', analyzed: false, can_confirm: false, preview: { endpoint: '203.0.113.7:51820', problems: [] } }
     mocks.pollReplies = [structuredClone(mocks.previewReply), structuredClone(PREVIEW)]
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(mocks.api.map((c) => c[0])).toEqual(['preview', 'poll', 'poll'])
@@ -235,7 +215,6 @@ describe('загрузка .conf', () => {
     mocks.previewReply = analyzing
     mocks.pollReplies = Array.from({ length: 40 }, () => structuredClone(analyzing))
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.textContent).toContain('Проверка ещё идёт: роутер пока не закончил её')
@@ -250,7 +229,6 @@ describe('загрузка .conf', () => {
   it('проверка пропущена -- слова сервера, а без них -- свои', async () => {
     mocks.previewReply = { ...structuredClone(PREVIEW), analyzed: false, note: 'Агент на роутере старше v0.28 — проверка пропущена.', preview: { endpoint: '203.0.113.7:51820' } }
     let root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.textContent).toContain('Агент на роутере старше v0.28 — проверка пропущена.')
@@ -258,7 +236,6 @@ describe('загрузка .conf', () => {
     render(null, root)
     mocks.previewReply = { ...structuredClone(PREVIEW), analyzed: false, preview: { endpoint: '203.0.113.7:51820' } }
     root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.textContent).toContain('агент на нём старше v0.28')
@@ -270,7 +247,6 @@ describe('загрузка .conf', () => {
     mocks.previewReply.preview.problems = [{ code: 'bad_key', message: 'Ключ пира повреждён', severity: 'error' }]
     mocks.previewReply.can_confirm = false
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.querySelector('.conf-problem-error').textContent).toBe('Ключ пира повреждён')
@@ -282,7 +258,6 @@ describe('загрузка .conf', () => {
   it('сервер отверг конфиг -- файл выбирается заново', async () => {
     mocks.previewReply = new ApiError(400, 'invalid_conf', 'x')
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.textContent).toContain('Это не похоже на конфиг WireGuard или AmneziaWG')
@@ -296,7 +271,6 @@ describe('загрузка .conf', () => {
   it('предпросмотр устарел -- назад к выбору файла', async () => {
     mocks.confirmReply = new ApiError(410, 'preview_expired', 'x')
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     await click(root, 'Добавить как новый')
@@ -310,7 +284,6 @@ describe('загрузка .conf', () => {
   it('роутер отверг конфиг при подтверждении -- назад к выбору файла', async () => {
     mocks.confirmReply = new ApiError(409, 'conf_rejected', 'x', 'Роутер не примет этот конфиг: ключ пира повреждён.')
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     await click(root, 'Добавить как новый')
@@ -326,7 +299,6 @@ describe('загрузка .conf', () => {
 describe('загрузка .conf: ревью', () => {
   it('поле файла без фильтра accept: Telegram на телефоне иначе не даёт выбрать .conf', async () => {
     const root = await mount()
-    await openImport(root)
     expect(root.querySelector('.conf-pick-input').hasAttribute('accept')).toBe(false)
     render(null, root)
   })
@@ -334,7 +306,6 @@ describe('загрузка .conf: ревью', () => {
   it('команда ушла, а ожидание сорвалось -- итог «ушла на роутер», а не «попробуйте ещё»', async () => {
     mocks.result = new Error('502')
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     const before = routeStatusCalls()
@@ -348,7 +319,6 @@ describe('загрузка .conf: ревью', () => {
 
   it('двойное касание «Добавить» -- одна команда', async () => {
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     const b = byText(root, 'Добавить как новый')
@@ -366,7 +336,6 @@ describe('загрузка .conf: ревью', () => {
     mocks.reader = (file) =>
       file.name === 'first.conf' ? new Promise((resolve) => (releaseFirst = () => resolve(btoa('first')))) : Promise.resolve(btoa('second'))
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'first.conf'))
     await pickFile(root, new File([CONF], 'second.conf'))
     await act(async () => releaseFirst())
@@ -379,7 +348,6 @@ describe('загрузка .conf: ревью', () => {
   it('отказ проверки -- имя файла стёрто, сказано выбрать заново', async () => {
     mocks.previewReply = new ApiError(500, 'unknown', 'x')
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.querySelector('.conf-file-name')).toBe(null)
@@ -392,7 +360,6 @@ describe('загрузка .conf: ревью', () => {
     mocks.confirmReply = new ApiError(409, 'analysis_pending', 'x')
     mocks.pollReplies = [{ ...structuredClone(PREVIEW), state: 'analyzing', can_confirm: false }, structuredClone(PREVIEW)]
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     await click(root, 'Добавить как новый')
@@ -408,29 +375,10 @@ describe('загрузка .conf: ревью', () => {
     mocks.previewReply = { ...structuredClone(PREVIEW), state: 'analyzing', can_confirm: false }
     mocks.pollReplies = [new ApiError(409, 'analysis_pending', 'x'), structuredClone(PREVIEW)]
     const root = await mount()
-    await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.querySelector('[role="alert"]')).toBe(null)
     expect(byText(root, 'Добавить как новый').disabled).toBe(false)
-    render(null, root)
-  })
-})
-
-describe('низ «VPN-туннелей» (v0.41, спека C4)', () => {
-  it('акцентный переход один -- кабинет; загрузка -- обычная строка списка', async () => {
-    const root = await mount({ onOpenCabinet: () => {} })
-    const cards = [...root.querySelectorAll('.nav-card')].map((c) => c.querySelector('.nav-card-title').textContent)
-    expect(cards).toEqual(['Новый VPN-туннель из кабинета'])
-    expect(importCard(root)).toBeTruthy()
-    render(null, root)
-  })
-})
-
-describe('приёмка: вход в загрузку', () => {
-  it('подпись карточки -- какие конфиги подходят', async () => {
-    const root = await mount()
-    expect(importCard(root).querySelector('.list-row-sub').textContent).toBe('WireGuard · AmneziaWG')
     render(null, root)
   })
 })

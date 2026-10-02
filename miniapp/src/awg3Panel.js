@@ -8,13 +8,13 @@ import { agoText } from './when.js'
 export const PANEL_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/
 
 export const AWG3_TEXTS = {
-  group: 'Панели awg3',
+  group: 'Панели VPN-серверов',
   groupIntro: 'Панели выпуска конфигов на ваших VPS: устройства, «Конфиг на устройство» и «Выпустить на роутер».',
   empty: 'Панелей пока нет.',
   add: 'Добавить панель',
   loading: 'Читаем панели…',
   loadError: 'Не удалось прочитать список панелей.',
-  notConfigured: 'Панели awg3 на этом сервере не настроены.',
+  notConfigured: 'Панели VPN-серверов на этом сервере не настроены.',
   notFound: 'Такой панели больше нет — вернитесь к списку.',
   newTitle: 'Новая панель',
   saveNew: 'Сохранить и проверить',
@@ -162,7 +162,7 @@ const ERROR_TEXTS = {
   awg3_readonly: 'Панель только для просмотра: выпускать с неё нельзя.',
   awg3_disabled: 'Панель выключена.',
   awg3_not_found: 'Такой панели больше нет — вернитесь к списку.',
-  awg3_not_configured: 'Панели awg3 на этом сервере не настроены.',
+  awg3_not_configured: 'Панели VPN-серверов на этом сервере не настроены.',
   confirm_mismatch: 'Название панели набрано не так.',
 }
 
@@ -179,6 +179,17 @@ export function awg3ErrorText(err) {
     return err.serverMessage
   }
   return 'Не получилось. Попробуйте ещё раз.'
+}
+
+// Допущенный к панели (не админ) чинить её не может: пароль, сертификат,
+// выключатель -- в настройках панели у администратора. Ему -- одна фраза
+// без подробностей (хвост v0.51); админу -- прежние тексты.
+export const ISSUER_PANEL_DOWN = 'Панель VPN-сервера сейчас недоступна, сообщите администратору.'
+const ADMIN_FIX_CODES = new Set(['awg3_bad_password', 'awg3_cert_rejected', 'awg3_server_cert_rejected', 'awg3_disabled', 'awg3_unreachable', 'awg3_bad_response', 'awg3_paused', 'awg3_not_configured'])
+
+export function awg3IssueErrorText(err, { admin = false } = {}) {
+  if (admin) return awg3ErrorText(err)
+  return ADMIN_FIX_CODES.has(err?.code) ? ISSUER_PANEL_DOWN : awg3ErrorText(err)
 }
 
 const FORM_KEYS = ['id', 'label', 'base_url', 'user', 'password', 'p12', 'p12_password']

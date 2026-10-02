@@ -48,12 +48,10 @@ describe('обслуживание на экране настроек', () => {
 
   it('службы, HydraRoute Neo и пакеты открывают свои листы', async () => {
     const { root, sheets, unmount } = await mount()
-    await click(button(root, 'Перезапустить HydraRoute'))
     await click(button(root, 'Перезапустить awg-manager'))
     await click(button(root, 'Проверить и обновить HydraRoute Neo'))
     await click(button(root, 'Обновить пакеты Entware'))
     expect(sheets.map((s) => [s.action, s.args])).toEqual([
-      ['service_restart', { name: 'hrneo' }],
       ['service_restart', { name: 'awgmgr' }],
       ['hrneo_update', {}],
       ['opkg_upgrade', {}],
@@ -66,7 +64,7 @@ describe('обслуживание на экране настроек', () => {
     expect(button(root, 'Обновить awg-manager')).toBeUndefined()
     expect(button(root, 'Проверить и обновить HydraRoute Neo')).toBeUndefined()
     expect(root.textContent).toContain(MAINT_TEXTS.tooOld)
-    expect(button(root, 'Перезапустить HydraRoute')).toBeDefined()
+    expect(button(root, 'Перезапустить awg-manager')).toBeDefined()
     unmount()
   })
 

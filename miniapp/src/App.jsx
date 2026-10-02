@@ -2,7 +2,7 @@ import { useEffect, useReducer, useState } from 'preact/hooks'
 import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { setUnauthorizedHandler } from './api.js'
-import { initialNav, navReducer, backButtonVisible, escapeAction } from './nav.js'
+import { initialNav, navReducer, backButtonVisible, escapeAction, navPinned } from './nav.js'
 import { navFromURL } from './navUrl.js'
 import { useNavURL } from './useNavURL.js'
 import { appMode } from './mode.js'
@@ -15,6 +15,7 @@ import { LoginScreen } from './screens/LoginScreen.jsx'
 import { ServerDown } from './ui/ServerDown.jsx'
 import { PhoneLayout } from './ui/PhoneLayout.jsx'
 import { WideLayout } from './ui/WideLayout.jsx'
+import { loadLastRouter, saveLastRouter } from './routerPick.js'
 import { PULSE_MS, syncLostText } from './pulse.js'
 
 // Поле ввода -- не место для Esc-закрытия слоя: человек набирает маршрут или
@@ -33,7 +34,7 @@ export function App() {
   const [linkToken, setLinkToken] = useState(() => (mode === 'web' ? takeHashToken() : ''))
   const [nav, dispatch] = useReducer(navReducer, initialNav())
   const boot = useBoot(mode, {
-    onReady: (list, info) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: info?.isAdmin === true }) }),
+    onReady: (list, info) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: info?.isAdmin === true, routers: list, lastID: loadLastRouter() }) }),
   })
   const routerIDs = boot.routers.map((r) => r.id)
 
@@ -46,7 +47,12 @@ export function App() {
     boot.start()
   }, [])
 
-  useNavURL({ enabled: mode === 'web' && boot.status === 'ready', nav, dispatch, routerIDs, isAdmin: boot.isAdmin })
+  useNavURL({ enabled: mode === 'web' && boot.status === 'ready', nav, dispatch, routerIDs, routers: boot.routers, isAdmin: boot.isAdmin })
+
+  // Последний открытый роутер -- для главного экрана при 2–5 роутерах.
+  useEffect(() => {
+    if (nav.routerID != null) saveLastRouter(nav.routerID)
+  }, [nav.routerID])
 
   // 401 посреди работы в браузере -- истекла кука: на экран входа, место в
   // адресе остаётся, после входа useBoot откроет его снова.
@@ -70,12 +76,16 @@ export function App() {
     return () => clearInterval(timer)
   }, [boot.status])
 
+  // Закрепление слоя (мастер во время отправки) меняет только overlayParams:
+  // без него в зависимостях кнопка Telegram и Esc остались бы с прежним решением.
+  const pinned = navPinned(nav)
+
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
   useEffect(() => {
     setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
-  }, [nav.overlay, nav.sheet, wide])
+  }, [nav.overlay, nav.sheet, wide, pinned])
 
   useEffect(() => {
     const onKey = (e) => {
@@ -85,7 +95,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [nav.overlay, nav.sheet, wide])
+  }, [nav.overlay, nav.sheet, wide, pinned])
 
   let body
   if (boot.status === 'loading') {
@@ -110,7 +120,7 @@ export function App() {
       <NoAccess
         telegramUserID={boot.telegramUserID}
         onRetry={(list) => {
-          dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: boot.isAdmin }) })
+          dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: boot.isAdmin, routers: list, lastID: loadLastRouter() }) })
           boot.setRouters(list)
         }}
       />

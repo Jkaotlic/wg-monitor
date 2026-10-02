@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useOnClose } from '../useOnClose.js'
 import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted, fetchAwg3Issuable } from '../api.js'
 import { cabinetTabs, pickTab, cabinetPerms, secretRows, VPN_PROVIDER, CABINET_TEXTS } from '../cabinetKeys.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -15,7 +16,7 @@ import { CabinetIssue } from './CabinetIssue.jsx'
 // конфиг сервер кладёт в команду агенту сам.
 //
 // Кнопки рисуются по роли из настроек роутера; граница доступа -- сервер.
-export function CabinetScreen({ routerID, routerName = '', asleep = false, openSheet, onClose, onIssued }) {
+export function CabinetScreen({ routerID, routerName = '', asleep = false, openSheet, onClose, onIssued, layer = 'cabinet', layerParams = {}, initialTab = 'amnezia', openLayer, closeLayer, onPin, pinned = false }) {
   const [cabinets, setCabinets] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [accounts, setAccounts] = useState(null)
@@ -24,13 +25,15 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [instancesError, setInstancesError] = useState('')
   // Панели awg3, с которых можно выпустить на этот роутер (null -- грузятся).
   const [awg3Panels, setAwg3Panels] = useState(null)
-  const [tab, setTab] = useState('amnezia')
-  const [pending, setPending] = useState(null)
+  const [awg3Failed, setAwg3Failed] = useState(false)
+  const [tab, setTab] = useState(initialTab || 'amnezia')
+  // Выпуск -- слой навигации (cabinetissue): «назад» Telegram закрывает его,
+  // а выбранный вариант живёт в параметрах слоя (v0.52).
+  const pending = layer === 'cabinetissue' ? layerParams.pending ?? null : null
+  const pick = (p) => openLayer?.('cabinetissue', { pending: p })
   const [notice, setNotice] = useState('')
   // Права не прочитались: без роли экран молча стал бы «только чтение».
   const [roleError, setRoleError] = useState(false)
-  // Выпуск идёт: «назад» гаснет, чтобы не бросить его на полпути.
-  const [issuing, setIssuing] = useState(false)
 
   const alive = useRef(true)
   useEffect(
@@ -62,15 +65,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         // Кабинеты не настроены -- состояние сервера, и он сам его называет.
         setLoadError(err?.code === 'cabinets_not_configured' && err.serverMessage ? err.serverMessage : CABINET_TEXTS.loadError)
       })
-    // Ошибка списка = «панелей нет»: у кого нет допуска, тот вкладку и не
-    // должен видеть.
-    fetchAwg3Issuable(routerID)
-      .then((resp) => {
-        if (alive.current) setAwg3Panels(resp?.panels ?? [])
-      })
-      .catch(() => {
-        if (alive.current) setAwg3Panels([])
-      })
+    loadAwg3()
     fetchVPNAccounts(routerID)
       .then((resp) => {
         if (!alive.current) return
@@ -83,15 +78,29 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
       })
   }
 
+  // Ошибка списка панелей -- вкладка «Панель VPN-сервера» с «Повторить», а не
+  // тишина (хвост v0.51): иначе владелец с допуском решил бы, что панелей нет.
+  function loadAwg3() {
+    setAwg3Failed(false)
+    setAwg3Panels(null)
+    fetchAwg3Issuable(routerID)
+      .then((resp) => {
+        if (alive.current) setAwg3Panels(resp?.panels ?? [])
+      })
+      .catch(() => {
+        if (!alive.current) return
+        setAwg3Panels([])
+        setAwg3Failed(true)
+      })
+  }
+
   useEffect(() => {
     setCabinets(null)
     setAccounts(null)
     setInstances(null)
     setAwg3Panels(null)
-    setPending(null)
     setNotice('')
     setRole('')
-    setIssuing(false)
     loadRole()
     load()
   }, [routerID])
@@ -109,12 +118,19 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
 
   // Уход с экрана выпуска: подписка могла измениться (занятые места,
   // выпущенные страны) -- кабинет перечитывается.
+  // Закрепление снимает сам CabinetIssue (onBusy(false)), поэтому здесь его не
+  // трогаем: иначе своя «назад» отпускала бы слой посреди выпуска.
   function leaveIssue() {
-    setPending(null)
-    setIssuing(false)
+    closeLayer?.()
+  }
+
+  // «Назад» Telegram и кнопка слоя закрывают выпуск одинаково: перечитать
+  // подписку (занятые места) здесь, а не в leaveIssue, который «назад»
+  // Telegram обходит.
+  useOnClose(layer === 'cabinetissue', () => {
     setAccounts(null)
     load()
-  }
+  })
 
   function issued() {
     onIssued?.()
@@ -129,7 +145,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     load()
   }
 
-  const tabs = cabinetTabs(cabinets, awg3Panels)
+  const tabs = cabinetTabs(cabinets, awg3Panels, { awg3Failed })
   const current = pickTab(tabs, tab)
   const perms = cabinetPerms(role)
   const title = routerName ? `${CABINET_TEXTS.title} «${routerName}»` : CABINET_TEXTS.title
@@ -140,8 +156,6 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   function body() {
-    if (loadError) return <p class="state state-error">{loadError}</p>
-    if (!cabinets) return <p class="state">{CABINET_TEXTS.loading}</p>
     if (pending) {
       return (
         <CabinetIssue
@@ -152,16 +166,17 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           perms={perms}
           openSheet={openSheet}
           onIssued={issued}
-          onBusy={setIssuing}
+          onBusy={(busy) => onPin?.(busy)}
           onBackToList={leaveIssue}
         />
       )
     }
-    const rows = current === 'selfhosted' || current === 'awg3' ? [] : secretRows(cabinets, current)
+    if (!cabinets && !loadError) return <p class="state">{CABINET_TEXTS.loading}</p>
+    const rows = cabinets && current !== 'selfhosted' && current !== 'awg3' ? secretRows(cabinets, current) : []
     return (
       <>
         <SegmentTabs
-          label="Кабинеты"
+          label={CABINET_TEXTS.title}
           tabs={tabs}
           value={current}
           onChange={(id) => {
@@ -175,9 +190,11 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           </p>
         )}
         {current === 'awg3' ? (
-          <CabinetAwg3 panels={awg3Panels} onPick={setPending} />
+          <CabinetAwg3 panels={awg3Panels} error={awg3Failed ? CABINET_TEXTS.awg3LoadError : ''} onRetry={loadAwg3} onPick={pick} admin={perms.admin} />
+        ) : loadError ? (
+          <p class="state state-error">{loadError}</p>
         ) : current === 'selfhosted' ? (
-          <CabinetSelfhosted instances={instances} error={instancesError} onPick={setPending} />
+          <CabinetSelfhosted instances={instances} error={instancesError} onPick={pick} />
         ) : (
           <>
             <CabinetSecrets key={current} routerID={routerID} kind={current} rows={rows} perms={perms} openSheet={openSheet} onChanged={changed} />
@@ -189,7 +206,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
                 account={accountFor(current)}
                 perms={perms}
                 openSheet={openSheet}
-                onPick={setPending}
+                onPick={pick}
                 onChanged={changed}
               />
             )}
@@ -200,7 +217,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   return (
-    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={issuing ? undefined : pending ? leaveIssue : onClose}>
+    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={pinned ? undefined : pending ? leaveIssue : onClose}>
       <div class="screen cabinet">
         {roleError && (
           <div class="card cabinet-role-error">

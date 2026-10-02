@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDiag, checkRows, exitCompare, guardRow } from '../src/diag.js'
+import { parseDiag, checkRows, guardRow } from '../src/diag.js'
 
 // Форма ответа -- /api/diagnostics/result awg-manager, проверенная на живом
 // 2.18.2 (10.09.2026): проверки лежат плоским списком tests[], у проверок
@@ -286,43 +286,6 @@ describe('checkRows', () => {
     const row = rowsByKey(rows).resolver_guard
     expect(row.answer).toBe('не знаем')
     expect(row.tone).toBe('muted')
-  })
-})
-
-// --- Два адреса выхода ----------------------------------------------------
-describe('exitCompare', () => {
-  const DIRECT = '🇷🇺 Напрямую (через системный маршрут):\nExit IP: 203.0.113.7\n\n✅ ya.ru'
-  const VIA = '🌍 Через туннель (awg12):\nExit IP: 203.0.113.19\n\n✅ google.com'
-
-  it('разные адреса — подмена работает', () => {
-    const c = exitCompare(DIRECT, VIA)
-    expect(c.direct).toBe('203.0.113.7')
-    expect(c.viaTunnel).toBe('203.0.113.19')
-    expect(c.works).toBe(true)
-    expect(c.verdict).toContain('обход работает')
-  })
-
-  // Один и тот же адрес с обеих сторон -- туннель не несёт трафик, и молчать
-  // об этом нельзя: снаружи человека видно тем же адресом, что и без VPN.
-  it('одинаковые адреса — подмены нет', () => {
-    const c = exitCompare(DIRECT, DIRECT)
-    expect(c.works).toBe(false)
-    expect(c.verdict).toContain('тот же адрес')
-  })
-
-  it('пока ответа нет — честное «неизвестно», а не догадка', () => {
-    const c = exitCompare(DIRECT, null)
-    expect(c.viaTunnel).toBe('')
-    expect(c.works).toBe(null)
-    expect(c.verdict).toContain('только один')
-  })
-
-  // Ни одного замера -- это не «измерен один»: до нажатия кнопки на экране
-  // не измерено ничего, и звать это половиной ответа неправда.
-  it('до первого замера так и говорит', () => {
-    const c = exitCompare(null, null)
-    expect(c.works).toBe(null)
-    expect(c.verdict).toBe('Адреса ещё не измерены — нажмите «Сравнить адреса».')
   })
 })
 

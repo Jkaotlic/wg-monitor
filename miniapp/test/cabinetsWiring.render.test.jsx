@@ -89,8 +89,8 @@ describe('кабинет роутера -- слой навигации', () => {
     const actions = []
     let root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'tunnels' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin={false} />)
     expect(mocks.props.tunnels.cabinetOpen).toBe(false)
-    mocks.props.tunnels.onOpenCabinet()
-    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'cabinet' })
+    mocks.props.tunnels.openLayer('cabinet', { tab: 'hidemy' })
+    expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'cabinet', params: { tab: 'hidemy' } })
     cleanup(root)
 
     root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'tunnels', overlay: 'cabinet' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
@@ -101,8 +101,8 @@ describe('кабинет роутера -- слой навигации', () => {
 
 describe('свои серверы -- слои парка', () => {
   it('подпись возврата на список', () => {
-    expect(returnLabel('selfhosted')).toBe('Свои серверы')
-    expect(returnLabel('fleet')).toBe('Все роутеры')
+    expect(returnLabel('selfhosted')).toBe('Серверы')
+    expect(returnLabel('fleet')).toBe('Мои роутеры')
     expect(returnLabel(null)).toBe('Роутеры')
   })
 
@@ -110,7 +110,7 @@ describe('свои серверы -- слои парка', () => {
     const h = host(nav({ routerID: 1, overlay: 'selfhosted', overlayParams: { returnTo: 'fleet' } }))
     const root = await mount(h.node)
     const p = mocks.props.list
-    expect(p.backLabel).toBe('Все роутеры')
+    expect(p.backLabel).toBe('Выбрать роутер')
     p.onOpenInstance('ams')
     expect(h.actions.pop()).toEqual({
       type: 'overlay',
@@ -124,12 +124,24 @@ describe('свои серверы -- слои парка', () => {
     cleanup(root)
   })
 
+  it.each([['vps', 'Свои VPS'], ['awg3', 'Панели VPN-серверов'], ['all', 'Серверы']])('путь из Парка, часть %s: «назад» с экрана сервера = заголовок списка «%s»', async (part, title) => {
+    let h = host(nav({ overlay: 'selfhosted', overlayParams: { returnTo: 'park', part } }))
+    let root = await mount(h.node)
+    mocks.props.list.onOpenInstance('ams')
+    const open = h.actions.pop()
+    cleanup(root)
+    h = host(nav({ overlay: open.overlay, overlayParams: open.params }))
+    root = await mount(h.node)
+    expect(mocks.props.inst.backLabel).toBe(title)
+    cleanup(root)
+  })
+
   it('экран сервера: id, подпись, лист; «назад» -- на список с прежним возвратом', async () => {
     const h = host(nav({ overlay: 'selfhostedinst', overlayParams: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: null } } }))
     const root = await mount(h.node)
     const p = mocks.props.inst
     expect(p.instanceId).toBe('ams')
-    expect(p.backLabel).toBe('Свои серверы')
+    expect(p.backLabel).toBe('Серверы')
     p.openSheet({ title: 'Удалить?' })
     expect(h.actions.pop()).toEqual({ type: 'sheet', sheet: { title: 'Удалить?' } })
     p.onClose()

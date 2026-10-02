@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "layout": "node layout/run.mjs",
+    "layout:selftest": "node layout/selftest.mjs"
   },
   "dependencies": {
     "preact": "^10.24.3"

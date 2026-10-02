@@ -68,14 +68,19 @@ describe('MINI-02: проверки молчащего роутера', () => {
 
   it('offline без тревоги -- то же самое', async () => {
     const root = await mount({ id: 32, nickname: 'tihaya-dacha', kind: 'static', status: 'offline', last_seen_age_sec: 3 * 3600 })
-    expect(rowText(root, 'Отчёты от роутера')).not.toContain('работает')
+    // Строка про «Отчёты» на «Роутере» может не рисоваться; но всё, что
+    // нарисовано, -- не в настоящем времени (проверка не пустая).
+    const rows = [...root.querySelectorAll('.checks-row')]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(r.textContent).not.toMatch(/·\s*работает/)
     render(null, root)
     root.remove()
   })
 
-  it('живой роутер -- прежнее «работает»', async () => {
+  it('живой роутер -- исправные проверки на «Роутере» не рисуются (их дом -- «Проверки»)', async () => {
     const root = await mount({ id: 33, nickname: 'zhivaya-dacha', kind: 'static', status: 'online', stale: false, last_seen_age_sec: 30 })
-    expect(rowText(root, 'Отчёты от роутера')).toContain('работает')
+    expect(root.querySelectorAll('.checks-row')).toHaveLength(0)
+    expect(root.querySelector('.checks-failing')).toBe(null)
     render(null, root)
     root.remove()
   })

@@ -28,7 +28,7 @@ import { ManageGroup } from '../ui/ManageGroup.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { HooksRow } from './SignalSections.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
-import { manageAnchors, manageSummaries, manageTones, versionsKnown } from '../manage.js'
+import { manageAnchors, manageSection, manageSummaries, manageTones, versionsKnown } from '../manage.js'
 
 // Настройки роутера и обслуживание -- то, за чем оператор раньше шёл в бота.
 //
@@ -40,11 +40,11 @@ import { manageAnchors, manageSummaries, manageTones, versionsKnown } from '../m
 // С v0.41 это не слой за шестерёнкой, а содержимое вкладки «Управление»
 // (ManageTab): разделы без своей крышки, первым -- адрес панели.
 //
-// С v0.47 разделы сведены в группы по тому, зачем пришли: Роутер · Версии ·
-// Проверить · Починить · Настройки и доступ. Админские разделы вкладка
-// вставляет слотами (repairSlot, settingsSlot, dangerSlot) -- так они стоят
-// рядом с родственными, а не отдельным хвостом после справки.
-export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, focusNonce = 0, repairSlot = null, settingsSlot = null, dangerSlot = null }) {
+// С v0.52 это вкладка «Настройки»: четыре раздела по задаче человека --
+// Обслуживание · Люди и уведомления · Роутер и агент · Опасное. Админские
+// куски вкладка вставляет слотами (serviceSlot, peopleSlot, agentSlot,
+// dangerSlot) -- так они стоят рядом с родственными, а не хвостом после справки.
+export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, focusNonce = 0, serviceSlot = null, peopleSlot = null, agentSlot = null, dangerSlot = null }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState(null)
@@ -179,9 +179,9 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
     )
   }
 
-  // Какие группы раскрыты (v0.50, спека п. 3.1): «Роутер» -- всегда при
-  // входе; группа по старой ссылке или возврату из слоя -- тоже.
-  const [openGroups, setOpenGroups] = useState(() => new Set(['router', focusGroup].filter(Boolean)))
+  // Какие разделы раскрыты (v0.52): по умолчанию свёрнуто всё; раздел по
+  // старой ссылке или возврату из слоя -- раскрыт, раздел с заботой -- сам.
+  const [openGroups, setOpenGroups] = useState(() => new Set([focusGroup].filter(Boolean)))
   const setGroup = (group, on) =>
     setOpenGroups((prev) => {
       if (prev.has(group) === on) return prev
@@ -198,11 +198,15 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
     scrollToAnchor(`mg-${focusGroup}`)
   }, [focusGroup, focusNonce])
 
+
   const known = versionsKnown(versions)
-  const canRepair = Boolean((maintain && openSheet) || repairSlot)
-  const anchors = manageAnchors({ canRepair, isAdmin })
+  // «Роутер и агент» без настроек и без админского слота пуст (раздел не
+  // рисуется) -- чип к нему тоже не нужен.
+  const agentEmpty = !settings && !agentSlot
+  const anchors = manageAnchors({ isAdmin }).filter((a) => !(a.group === 'agent' && agentEmpty))
   const notes = manageSummaries({ settings, versions, showReboot, agentReady: settings ? agentReady : true, isAdmin })
   const tones = manageTones({ versions, showReboot, agentReady: settings ? agentReady : true })
+  const group = (id) => ({ id: `mg-${id}`, title: manageSection(id).title, note: notes[id], noteTone: tones[id], open: openGroups.has(id), onToggle: (o) => setGroup(id, o) })
   // Группа с заботой раскрывается сама -- один раз, когда забота появилась;
   // закрытую человеком обратно не открываем.
   const autoOpened = useRef(new Set())
@@ -213,12 +217,12 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
         setGroup(group, true)
       }
     }
-  }, [tones.versions, tones.repair, tones.settings])
+  }, [tones.service])
   const runAudit = () => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })
   const auditBlock = (
     <>
       <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={runAudit}>
-        {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
+        {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии'}
       </button>
       <ErrorLine text={audit.error} busy={audit.busy} onRetry={runAudit} />
       {audit.result && audit.result.status !== 'ok' && <p class="state state-error">Роутер не ответил на сверку версий — попробуйте ещё раз.</p>}
@@ -231,10 +235,26 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
       )}
     </>
   )
+  // «Перезагрузить роутер» -- постоянная кнопка (v0.52): раньше она появлялась
+  // только вместе с плашкой «нужна перезагрузка», а перезагрузить роутер
+  // можно и без неё. Права -- maintain: админ, владелец, оператор.
+  // Пустой блок не рисуем: без имени роутера (подтверждение набором) кнопки нет.
+  const rebootBlock = maintain && openSheet && (showReboot || refusals.reboot || routerName) && (
+    <Section title="Перезагрузка роутера">
+      {showReboot && <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>}
+      {refusals.reboot ? (
+        <p class="hint">{refusals.reboot}</p>
+      ) : routerName ? (
+        <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
+          Перезагрузить роутер
+        </button>
+      ) : null}
+    </Section>
+  )
 
   return (
     <>
-      <nav class="manage-anchors" aria-label="Разделы «Управления»">
+      <nav class="manage-anchors" aria-label="Разделы «Настроек»">
         {anchors.map((a) => (
           <button
             key={a.id}
@@ -251,63 +271,18 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
       </nav>
       <ErrorLine text={error} onRetry={load} />
 
-      <ManageGroup id="mg-router" title="Роутер" open={openGroups.has('router')} onToggle={(o) => setGroup('router', o)}>
-        {/* Панель роутера -- первой: за ней чаще всего и приходят. Владельцу
-            и админу; оператору роутера сервер адреса не отдаёт, и секции нет
-            вовсе. Адрес открывается напрямую во внешнем браузере. */}
-        {settings && (settings.role === 'owner' || settings.role === 'admin') && (() => {
-          const panel = panelRow(settings)
-          return (
-            <Section title="Панель роутера">
-              <div class="card settings-card">
-                {panel.known ? (
-                  <button type="button" class="panel-open" onClick={() => openExternal(panel.url)}>
-                    <span class="panel-open-host">{panel.host}</span>
-                    <span class="panel-open-go">открыть ↗</span>
-                  </button>
-                ) : (
-                  <DataRow title="Панель роутера" value="адрес не сохранён" valueTone="muted" />
-                )}
-              </div>
-              {panel.known ? (
-                <p class="hint">
-                  {panel.hint ? `Адрес частный: ${panel.hint}. ` : ''}Панель спросит свой логин и пароль — мы их не знаем и не храним.
-                </p>
-              ) : (
-                <p class="hint">{panel.hint}</p>
-              )}
-            </Section>
-          )
-        })()}
-
-        <Section title="Уведомления">
-          <div class="card card-rows settings-card">
-            <DataRow
-              title="Писать мне об этом роутере"
-              value={settings?.notify_muted ? 'выключено' : 'включено'}
-              valueTone={settings?.notify_muted ? 'warn' : 'ok'}
-            />
-            <p class="card-foot">
-              {settings?.notify_muted
-                ? 'Бот молчит об этом роутере. О поломке вы узнаете, только сами открыв приложение.'
-                : 'Бот напишет вам в личку, когда с роутером что-то случится.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            class={settings?.notify_muted ? 'btn btn-ghost btn-wide' : 'btn btn-danger btn-wide'}
-            disabled={notifyBusy}
-            onClick={toggleNotify}
-          >
-            {notifyBusy ? 'Сохраняем…' : settings?.notify_muted ? 'Снова уведомлять' : 'Выключить уведомления'}
-          </button>
-          {notifyError && <p class="state state-error">{notifyError}</p>}
-        </Section>
-      </ManageGroup>
-
-      <ManageGroup id="mg-versions" title="Версии" note={notes.versions} noteTone={tones.versions} open={openGroups.has('versions')} onToggle={(o) => setGroup('versions', o)}>
+      <ManageGroup {...group('service')}>
         {known || newsRows.length > 0 ? (
           <>
+            <Section title="Что стоит на роутере">
+              {agentRow(settings) && (
+                <div class="card card-rows settings-card">
+                  <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
+                </div>
+              )}
+              {auditBlock}
+            </Section>
+
             <Section title="Обновления">
               {newsRows.length > 0 && (
                 <div class="card card-rows settings-card">
@@ -366,15 +341,6 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
               )}
               <ErrorLine text={versionsError} onRetry={loadVersions} />
             </Section>
-
-            <Section title="Что стоит на роутере">
-              {agentRow(settings) && (
-                <div class="card card-rows settings-card">
-                  <DataRow title={agentRow(settings).title} value={agentRow(settings).value} />
-                </div>
-              )}
-              {auditBlock}
-            </Section>
           </>
         ) : (
           // Ничего не известно -- один блок, а не три «сведений нет» (п. 3.7).
@@ -423,23 +389,9 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
           )}
           {fw?.known && fw.updateAvailable && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
         </Section>
-      </ManageGroup>
-
-      <ManageGroup id="mg-repair" title="Починить" note={notes.repair} noteTone={tones.repair} open={openGroups.has('repair')} onToggle={(o) => setGroup('repair', o)}>
+        {rebootBlock}
         {maintain && openSheet && (
-          <Section title="Обслуживание">
-            {showReboot && (
-              <div class="card settings-card">
-                <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>
-                {refusals.reboot ? (
-                  <p class="hint">{refusals.reboot}</p>
-                ) : routerName ? (
-                  <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
-                    Перезагрузить роутер
-                  </button>
-                ) : null}
-              </div>
-            )}
+          <Section title="Службы и пакеты">
             {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
             {agentReady && hrneoButtonVisible(versions) && (
               <button
@@ -451,14 +403,9 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
               </button>
             )}
             {!hrneoButtonVisible(versions) && <p class="hint">{MAINT_TEXTS.hrneoMissing}</p>}
-            <div class="action-row">
-              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'hrneo', asleep }))}>
-                Перезапустить HydraRoute
-              </button>
-              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
-                Перезапустить awg-manager
-              </button>
-            </div>
+            <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
+              Перезапустить awg-manager
+            </button>
             <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>
               Обновить пакеты Entware
             </button>
@@ -481,11 +428,62 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
             )}
           </Section>
         )}
-
-        {repairSlot}
+        {serviceSlot}
       </ManageGroup>
 
-      <ManageGroup id="mg-settings" title="Настройки и доступ" note={notes.settings} open={openGroups.has('settings')} onToggle={(o) => setGroup('settings', o)}>
+      <ManageGroup {...group('people')}>
+        <Section title="Уведомления">
+          <div class="card card-rows settings-card">
+            <DataRow
+              title="Писать мне об этом роутере"
+              value={settings?.notify_muted ? 'выключено' : 'включено'}
+              valueTone={settings?.notify_muted ? 'warn' : 'ok'}
+            />
+            <p class="card-foot">
+              {settings?.notify_muted
+                ? 'Бот молчит об этом роутере. О поломке вы узнаете, только сами открыв приложение.'
+                : 'Бот напишет вам в личку, когда с роутером что-то случится.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            class={settings?.notify_muted ? 'btn btn-ghost btn-wide' : 'btn btn-danger btn-wide'}
+            disabled={notifyBusy}
+            onClick={toggleNotify}
+          >
+            {notifyBusy ? 'Сохраняем…' : settings?.notify_muted ? 'Снова уведомлять' : 'Выключить уведомления'}
+          </button>
+          {notifyError && <p class="state state-error">{notifyError}</p>}
+        </Section>
+        {peopleSlot}
+      </ManageGroup>
+
+      <ManageGroup {...group('agent')}>
+        {settings && (settings.role === 'owner' || settings.role === 'admin') && (() => {
+          const panel = panelRow(settings)
+          return (
+            <Section title="Панель роутера">
+              <div class="card settings-card">
+                {panel.known ? (
+                  <button type="button" class="panel-open" onClick={() => openExternal(panel.url)}>
+                    <span class="panel-open-host">{panel.host}</span>
+                    <span class="panel-open-go">открыть ↗</span>
+                  </button>
+                ) : (
+                  <DataRow title="Панель роутера" value="адрес не сохранён" valueTone="muted" />
+                )}
+              </div>
+              {panel.known ? (
+                <p class="hint">
+                  {panel.hint ? `Адрес частный: ${panel.hint}. ` : ''}Панель спросит свой логин и пароль — мы их не знаем и не храним.
+                </p>
+              ) : (
+                <p class="hint">{panel.hint}</p>
+              )}
+            </Section>
+          )
+        })()}
+
         {settings && (
           <Section title="Опрос и тревоги">
             <div class="card card-rows">
@@ -494,26 +492,30 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
               ))}
               <HooksRow routerID={routerID} />
               <p class="card-foot">
-                Эти числа живут в настройках бота, а не роутера: поменять их можно там, где он
-                запущен. Здесь они показаны, чтобы было видно, через сколько придёт тревога.
+                {isAdmin
+                  ? 'Эти числа живут в настройках сервера и меняются там, в приложении их не поменять. Здесь они показаны, чтобы было видно, через сколько придёт тревога.'
+                  : 'Эти числа меняет администратор. Здесь они показаны, чтобы было видно, через сколько придёт тревога.'}
               </p>
             </div>
           </Section>
         )}
-
-        {settingsSlot}
+        {agentSlot}
       </ManageGroup>
 
-      {dangerSlot}
+      {dangerSlot && <ManageGroup {...group('danger')}>{dangerSlot}</ManageGroup>}
 
       <Section title="Что умеет приложение">
         <div class="card card-rows">
           <p class="card-foot">
-            <b>Сейчас</b> — работает ли обход прямо сейчас и что с ним не так.{' '}
-            <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит и что через него уходит.{' '}
-            <b>Проверки</b> — те же вопросы, заданные роутеру заново, проверка связи, осмотр
-            роутера и адрес, которым вас видно снаружи. <b>Что было</b> — что происходило за неделю.{' '}
-            <b>Управление</b> — панель роутера, обновления, перезапуск служб и перезагрузка роутера.
+            <b>Роутер</b> — работает ли обход прямо сейчас и что с ним не так; при тревоге здесь же «Починить».{' '}
+            <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит, «Новый VPN-туннель» и маршруты.{' '}
+            <b>Проверки</b> — спросить роутер заново, адрес выхода, проверка связи, осмотр изнутри; «Что было» — происшествия за неделю.{' '}
+            <b>Настройки</b> — обслуживание и перезагрузка, уведомления и доступ, панель роутера и агент.
+            {isAdmin && (
+              <>
+                {' '}<b>Парк</b> — все роутеры сразу: обновления агентов, новый роутер, свои серверы и бэкенд.
+              </>
+            )}
           </p>
           <p class="card-foot">
             Уведомления остаются у бота: приложение не может разбудить того, кто его не открыл.

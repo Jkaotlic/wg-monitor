@@ -13,6 +13,9 @@ describe('keepTogether', () => {
     expect(keepTogether('через VPN-туннель')).toBe(`через VPN${NBH}туннель`)
     expect(keepTogether('Напрямую, мимо VPN-туннеля')).toBe(`Напрямую, мимо VPN${NBH}туннеля`)
     expect(keepTogether('VPN-туннели и VPN-туннелей')).toBe(`VPN${NBH}туннели и VPN${NBH}туннелей`)
+    // v0.52: «Панель VPN-сервера» -- тот же термин через дефис; имя в «ёлочках» не трогается.
+    expect(keepTogether('Панель VPN-сервера «vpn-сервер-1»')).toBe(`Панель VPN${NBH}сервера «vpn-сервер-1»`)
+    expect(keepTogether('Панели VPN-серверов')).toBe(`Панели VPN${NBH}серверов`)
   })
 
   it('внутри «ёлочек» не меняет ничего -- это имя, а не термин', () => {

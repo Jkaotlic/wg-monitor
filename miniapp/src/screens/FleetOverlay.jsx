@@ -14,13 +14,13 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 // Пять точек и легенда под ними удалены: строка обязана отвечать сама, а не
 // отправлять человека к расшифровке цветов внизу экрана.
 //
-// Поиск и фильтры сужают только список; заголовок и «Опросить все» говорят
+// Поиск и фильтры сужают только список; заголовок и «Проверить заново все» говорят
 // про весь парк -- иначе «все в порядке» читалось бы про отфильтрованных.
 //
 // Парк -- своя вкладка админа (v0.48), а не хвост под списком: здесь только
-// список. «Опросить все» у админа тоже переехал в Парк; владелец нескольких
+// список. «Проверить заново все» у админа тоже переехал в Парк; владелец нескольких
 // роутеров видит его здесь, как и раньше. Список открывается админу и при
-// одном роутере: из него есть путь в Парк (нижняя панель).
+// одном роутере: из него есть путь во вкладку «Парк» (нижняя панель).
 export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = true, isAdmin = false }) {
   const all = sortByUrgency(routers).map(fleetRow)
   const f = useFleetFilter(routers)
@@ -28,9 +28,9 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
   const { batch, recheckAll } = useFleetRecheck(routers)
 
   return (
-    <Overlay title="Все роутеры" onBack={onClose} showBack={Boolean(onClose)}>
+    <Overlay title={isAdmin ? 'Выбрать роутер' : 'Мои роутеры'} onBack={onClose} showBack={Boolean(onClose)}>
       <div class="screen">
-        <h1 class="screen-title">Все роутеры</h1>
+        <h1 class="screen-title">{isAdmin ? 'Выбрать роутер' : 'Мои роутеры'}</h1>
         <p class="router-lastseen">{fleetSummaryLine(fleetSummary(routers))}</p>
 
         {all.length > 1 && (
@@ -81,7 +81,7 @@ export function FleetOverlay({ routers, currentID, onPick, onClose, shortcut = t
         {all.length > 1 && !isAdmin && (
           <>
             <button type="button" class="btn btn-ghost btn-wide" disabled={batch?.running} onClick={recheckAll}>
-              {batch?.running ? 'Опрашиваем…' : 'Опросить все'}
+              {batch?.running ? 'Проверяем…' : 'Проверить заново все'}
             </button>
             <p class="hint">
               {batchProgress(batch) ||

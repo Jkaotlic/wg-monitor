@@ -2,7 +2,7 @@ import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
-import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
+import { DIAG_SECTIONS, parseDiag, checkRows, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount } from '../labels.js'
 import { isStale } from '../staleness.js'
@@ -13,7 +13,8 @@ import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { ExitIPSection, WANSection } from './SignalSections.jsx'
-import { CheckToolsSections } from './CheckToolsSections.jsx'
+import { PingCheckSection, InspectSection } from './CheckToolsSections.jsx'
+import { ExitCompareSection } from './ExitCompare.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
@@ -29,6 +30,16 @@ import { ErrorLine } from '../ui/ErrorLine.jsx'
 // Машинные имена проверок (dns, hydraroute, agent_heartbeat) -- для того, кто
 // полезет в консоль, то есть для админа. Владельцу они ничего не говорят и
 // только теснят вопрос: ему -- без них.
+function DiagGroup({ id, children }) {
+  const section = DIAG_SECTIONS.find((s) => s.id === id)
+  return (
+    <section id={`dg-${id}`} class="diag-group">
+      <h2 class="diag-group-title">{section.title}</h2>
+      {children}
+    </section>
+  )
+}
+
 export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [data, setData] = useState(null)
@@ -37,8 +48,6 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
 
   const recheck = useCommand(routerID)
   const report = useCommand(routerID)
-  const direct = useCommand(routerID)
-  const viaTunnel = useCommand(routerID)
 
   function load() {
     return Promise.all([fetchRouter(routerID), fetchRouterChecks(routerID)])
@@ -50,6 +59,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           incidents: r.incidents ?? [],
           // Сдвиг часов телефона снимается в момент ответа (MINI-10).
           clockOffsetMs: serverClockOffset(r.router),
+          traffic: c.traffic ?? null,
         })
         setError(null)
       })
@@ -72,11 +82,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const tunnelsAlive = workingTunnelCount(data.tunnels, data.incidents)
   const tunnelsUnchecked = uncheckedTunnelCount(data.tunnels)
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
-  const exits = exitCompare(
-    direct.result?.status === 'ok' ? direct.result.output : null,
-    viaTunnel.result?.status === 'ok' ? viaTunnel.result.output : null,
-  )
-  const measuring = direct.busy || viaTunnel.busy
+  const runRecheck = () => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })
   const split = dnsSplitView(data.checks, { silent })
 
   return (
@@ -114,7 +120,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         />
       </div>
 
-      <Section title="Что спросили и что ответили">
+      <DiagGroup id="answers">
         <div class="card card-rows">
           {rows.map((r) => (
             <div key={r.key} class="data-row-group">
@@ -137,33 +143,28 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           <p class="card-foot">
             {silent
               ? 'Пока роутер молчит, всё выше — данные на момент последнего отчёта, а не на сейчас.'
-              : 'Ответы собраны роутером при последнем отчёте. «Проверить сейчас» просит его спросить заново.'}
+              : 'Ответы собраны роутером при последнем отчёте. «Проверить заново» просит его спросить заново.'}
           </p>
         </div>
-      </Section>
+        <button type="button" class="btn btn-primary btn-wide" disabled={recheck.busy} onClick={runRecheck}>
+          {recheck.busy ? 'Спрашиваем роутер…' : 'Проверить заново'}
+        </button>
+        <p class="hint">
+          Проверка ничего не меняет на роутере: он заново спрашивает те же вещи и присылает ответ.
+        </p>
+        <ErrorLine text={recheck.error} busy={recheck.busy} onRetry={runRecheck} />
+        {recheck.result && recheck.result.status !== 'ok' && (
+          <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
+        )}
+      </DiagGroup>
 
-      <button
-        type="button"
-        class="btn btn-primary btn-wide"
-        disabled={recheck.busy}
-        onClick={() => recheck.run('force_recheck', {}, deadline).then((res) => {
-          if (res?.status === 'ok') load()
-        })}
-      >
-        {recheck.busy ? 'Спрашиваем роутер…' : 'Проверить сейчас'}
-      </button>
-      <p class="hint">
-        Проверка ничего не меняет на роутере: он заново спрашивает те же вещи и присылает ответ.
-      </p>
-      <ErrorLine
-        text={recheck.error}
-        busy={recheck.busy}
-        onRetry={() => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })}
-      />
-      {recheck.result && recheck.result.status !== 'ok' && (
-        <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
-      )}
+      <DiagGroup id="exit">
+        <ExitCompareSection routerID={routerID} traffic={data.traffic} asleep={asleep} />
+        <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
+      </DiagGroup>
 
+      <DiagGroup id="net">
+        <WANSection routerID={routerID} />
       {/* Кому роутер отдал русские зоны и как идут запросы к Яндексу. Ответ --
           по настройкам роутера, а не замер, и оговорка стоит здесь же. */}
       <Section title="Раздельный DNS">
@@ -191,49 +192,14 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           ))}
         </div>
       </Section>
+      </DiagGroup>
 
-      <Section title="Каким адресом видно снаружи">
-        <div class="card card-rows">
-          <DataRow
-            title="Напрямую, мимо VPN-туннеля"
-            code={isAdmin ? 'check_direct' : undefined}
-            value={exits.direct || (direct.busy ? 'меряем…' : 'не измерен')}
-            valueTone={exits.direct ? undefined : 'muted'}
-          />
-          <DataRow
-            title="Через VPN-туннель"
-            code={isAdmin ? 'check_via_tunnel' : undefined}
-            value={exits.viaTunnel || (viaTunnel.busy ? 'меряем…' : 'не измерен')}
-            valueTone={exits.viaTunnel ? undefined : 'muted'}
-          />
-          <p class={`card-foot${exits.works === false ? ' card-foot-bad' : ''}`}>{exits.verdict}</p>
-        </div>
-        <button
-          type="button"
-          class="btn btn-ghost btn-wide"
-          disabled={measuring}
-          onClick={() => {
-            direct.run('check_direct', {}, deadline)
-            viaTunnel.run('check_via_tunnel', {}, deadline)
-          }}
-        >
-          {measuring ? 'Меряем оба адреса…' : 'Сравнить адреса'}
-        </button>
-        <ErrorLine
-          text={direct.error || viaTunnel.error}
-          busy={measuring}
-          onRetry={() => {
-            direct.run('check_direct', {}, deadline)
-            viaTunnel.run('check_via_tunnel', {}, deadline)
-          }}
-        />
-      </Section>
+      <DiagGroup id="ping">
+        <PingCheckSection routerID={routerID} asleep={asleep} openSheet={openSheet} tunnels={data.tunnels} onChanged={load} />
+      </DiagGroup>
 
-      <ExitIPSection routerID={routerID} tunnels={data.tunnels} deadline={deadline} />
-      <WANSection routerID={routerID} />
-      <CheckToolsSections routerID={routerID} asleep={asleep} openSheet={openSheet} tunnels={data.tunnels} onChanged={load} />
-
-      <Section title="Отчёт роутера о себе">
+      <DiagGroup id="inspect">
+        <InspectSection routerID={routerID} asleep={asleep}>
         <button
           type="button"
           class="btn btn-ghost btn-wide"
@@ -289,7 +255,8 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
             {showRaw && <pre class="raw-dump">{parsedReport.raw}</pre>}
           </>
         )}
-      </Section>
+        </InspectSection>
+      </DiagGroup>
     </div>
   )
 }

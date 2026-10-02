@@ -20,7 +20,7 @@ vi.mock('../src/useCommand.js', () => ({
 }))
 
 const { CabinetIssue } = await import('../src/screens/CabinetIssue.jsx')
-const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
+const { ExitCompareSection } = await import('../src/screens/ExitCompare.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
@@ -63,11 +63,9 @@ describe('CabinetIssue: отказ роутера', () => {
 })
 
 async function detail() {
-  mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
-  mocks.checks = structuredClone(SNAP.events)
   const root = document.createElement('div')
   document.body.appendChild(root)
-  await act(async () => render(<AppContext.Provider value={{ mode: 'miniapp', wide: false }}><RouterDetail id={56} openSheet={() => {}} onTab={() => {}} /></AppContext.Provider>, root))
+  await act(async () => render(<AppContext.Provider value={{ mode: 'miniapp', wide: false }}><ExitCompareSection routerID={56} traffic={null} asleep={false} /></AppContext.Provider>, root))
   await flush()
   return root
 }

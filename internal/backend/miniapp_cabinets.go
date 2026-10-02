@@ -339,11 +339,12 @@ func miniappCabinetSecretResult(d Deps, w http.ResponseWriter, routerID int64, p
 // (callbackCodeRe), в нижнем регистре.
 var miniappCountryRe = regexp.MustCompile(`^[a-z0-9_-]{2,16}$`)
 
-// miniappCabinetRevokeHandler освобождает слот подписки Amnezia (решение 7):
-// админ и владелец, подтверждение набором имени роутера.
+// miniappCabinetRevokeHandler освобождает слот подписки Amnezia: админ,
+// владелец и оператор (v0.52, спека §7: оператору всё, кроме админского;
+// отзыв обратим перевыпуском), подтверждение набором имени роутера.
 func miniappCabinetRevokeHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
 			return
 		}

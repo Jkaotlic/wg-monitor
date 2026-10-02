@@ -19,13 +19,14 @@ vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: () => <div class="stub">
 vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: () => <div class="stub">события</div> }))
 // С v0.47 админские куски -- слоты SettingsSections: заглушка их рисует.
 vi.mock('../src/screens/SettingsScreen.jsx', () => ({
-  SettingsSections: ({ repairSlot, settingsSlot, dangerSlot }) => (
-    <div class="stub stub-settings">настройки{repairSlot}{settingsSlot}{dangerSlot}</div>
+  SettingsSections: ({ serviceSlot, peopleSlot, agentSlot, dangerSlot }) => (
+    <div class="stub stub-settings">настройки{serviceSlot}{peopleSlot}{agentSlot}{dangerSlot}</div>
   ),
 }))
 vi.mock('../src/screens/RouterAdminSections.jsx', () => ({
   AdminRepairSections: () => <div class="stub stub-admin">обслуживание</div>,
   AdminSettingsSections: () => null,
+  AdminAccessSection: () => null,
   AdminDangerZone: () => null,
 }))
 vi.mock('../src/screens/AgentConfigScreen.jsx', () => ({ AgentConfigScreen: () => <div class="stub stub-agentcfg">настройки агента</div> }))
@@ -40,6 +41,7 @@ const ROUTERS = [
   { id: 1, nickname: 'Дом', status: 'alert', last_seen_age_sec: 12, active_incidents: [{ check_name: 'hydraroute' }] },
 ]
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+const sideTabs = (root) => [...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())
 const button = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 
 function setWide(wide) {
@@ -68,7 +70,7 @@ beforeEach(() => {
 })
 
 describe('широкая раскладка в браузере', () => {
-  it('боковая колонка и сводка вместо нижних вкладок', async () => {
+  it('боковая колонка у админа: вкладки и роутеры, вместо сводки -- Парк', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/')
     expect(root.querySelector('.wide-shell')).toBeTruthy()
@@ -77,41 +79,41 @@ describe('широкая раскладка в браузере', () => {
     const side = root.querySelector('aside.side')
     expect(side.textContent).toContain('веб-управление')
     expect(button(side, 'Выйти')).toBeTruthy()
-    expect(button(side, 'Парк')).toBeTruthy()
+    // v0.52: Парк -- вкладка колонки, и без роутера она одна.
+    expect(sideTabs(root)).toEqual(['Парк'])
     // Порядок -- сломанное сверху, как в FleetOverlay.
     expect([...side.querySelectorAll('.side-row-name')].map((n) => n.textContent)).toEqual(['Дом', 'Офис', 'Дача'])
-    // Роутер не выбран -- сводка.
-    expect([...root.querySelectorAll('.fleet-count-value')].map((n) => n.textContent)).toEqual(['1', '1', '1'])
-    expect(root.querySelectorAll('.fleet-card')).toHaveLength(2)
-    // v0.48: Парк -- своя вкладка, под сводкой его больше нет.
-    expect(root.querySelector('.fleet-home .stub-park')).toBe(null)
+    // Роутер не выбран, админ -- Парк, а не сводка.
+    expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
+    expect(root.querySelector('.fleet-home')).toBe(null)
     cleanup(root)
   })
 
-  it('«Парк» без выбранного роутера не погашен и открывает вкладку Парка', async () => {
+  it('«Парк» -- вкладка колонки: открывается и при выбранном роутере', async () => {
     setWide(true)
-    const root = await mountAt('/dashboard/')
-    const park = button(root.querySelector('aside.side'), 'Парк')
+    const root = await mountAt('/dashboard/?router=2')
+    const park = [...root.querySelectorAll('.side-tabs .side-link')].find((b) => b.textContent.trim() === 'Парк')
     expect(park.disabled).toBe(false)
     await act(async () => park.click())
     await flush()
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
     expect(root.querySelector('.fleet-home')).toBe(null)
     expect(root.querySelector('.stub-admin')).toBe(null)
-    expect(window.location.search).toBe('?tab=park')
+    expect(window.location.search).toBe('?router=2&tab=park')
     cleanup(root)
   })
 
-  it('выбор роутера в колонке -- шапка с вкладками сверху', async () => {
+  it('выбор роутера в колонке -- шапка без вкладок, вкладки в колонке', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/')
     const row = [...root.querySelectorAll('.side-row')].find((b) => b.textContent.includes('Дача'))
     await act(async () => row.click())
     await flush()
     expect(root.querySelector('.main-head-name').textContent).toBe('Дача')
-    // Админу первой -- «Парк» (v0.48); в шапке «VPN-туннели» полностью.
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).toEqual(['Парк', 'Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
-    expect(root.querySelector('.main-tab-active').textContent).toBe('Сейчас')
+    expect(root.querySelector('.main-tabs')).toBe(null)
+    // Админу первой -- «Парк»; подписи по задаче, «VPN-туннели» полностью.
+    expect(sideTabs(root)).toEqual(['Парк', 'Роутер', 'VPN-туннели', 'Проверки', 'Настройки'])
+    expect(root.querySelector('.side-tabs .side-link-active').textContent.trim()).toBe('Роутер')
     expect(row.getAttribute('aria-current')).toBe('page')
     expect(root.textContent).toContain('Сейчас 2')
     expect(window.location.search).toBe('?router=2')
@@ -123,36 +125,36 @@ describe('широкая раскладка в браузере', () => {
     const root = await mountAt('/dashboard/?router=2&open=agentcfg')
     expect(root.querySelector('main .stub-agentcfg')).toBeTruthy()
     expect(root.querySelector('aside.side')).toBeTruthy()
-    await act(async () => button(root.querySelector('.main-tabs'), 'Что было').click())
+    await act(async () => button(root.querySelector('.side-tabs'), 'Проверки').click())
     await flush()
     expect(root.querySelector('.stub-agentcfg')).toBe(null)
-    expect(window.location.search).toBe('?router=2&tab=events')
+    expect(window.location.search).toBe('?router=2&tab=diag')
     cleanup(root)
   })
 
-  it('шестерёнки нет: «Управление» -- вкладка; «Парк» -- вкладка Парка, подсвечивается', async () => {
+  it('шестерёнки нет: «Настройки» -- вкладка; «Парк» -- вкладка Парка, подсвечивается', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/?router=2')
     expect(root.querySelector('.main-gear')).toBe(null)
-    await act(async () => button(root.querySelector('.main-tabs'), 'Управление').click())
+    await act(async () => button(root.querySelector('.side-tabs'), 'Настройки').click())
     await flush()
     expect(root.querySelector('.stub-settings')).toBeTruthy()
     expect(root.querySelector('.stub-admin')).toBeTruthy()
     expect(window.location.search).toBe('?router=2&tab=manage')
-    await act(async () => button(root.querySelector('aside.side'), 'Парк').click())
+    await act(async () => button(root.querySelector('.side-tabs'), 'Парк').click())
     await flush()
-    // Роутер остаётся выбранным: Парк открывается под его шапкой.
+    // Парк -- вкладка колонки: роутер остаётся выбранным в адресе.
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
-    expect(root.querySelector('.main-tab-active').textContent).toBe('Парк')
     expect(window.location.search).toBe('?router=2&tab=park')
-    expect(button(root.querySelector('aside.side'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(button(root.querySelector('.side-tabs'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(root.querySelector('.side-foot')?.textContent ?? '').not.toContain('Парк')
     cleanup(root)
   })
 
-  it('старая ссылка ?open=settings открывает вкладку «Управление»', async () => {
+  it('старая ссылка ?open=settings открывает вкладку «Настройки»', async () => {
     setWide(true)
     const root = await mountAt('/dashboard/?router=2&open=settings')
-    expect(root.querySelector('.main-tab-active').textContent).toBe('Управление')
+    expect(root.querySelector('.side-tabs .side-link-active').textContent.trim()).toBe('Настройки')
     expect(root.querySelector('main .stub-settings')).toBeTruthy()
     cleanup(root)
   })
@@ -174,6 +176,7 @@ describe('широкая раскладка в Telegram Desktop', () => {
   it('не админ: сводка без Парка', async () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: false, via: 'telegram' }
+    mocks.routers = { routers: [1, 2, 3, 4, 5, 6].map((i) => ({ id: i, nickname: `r${i}`, status: 'online', last_seen_age_sec: 30 })) }
     const root = await mountAt('/miniapp/')
     expect(root.querySelector('.fleet-home')).toBeTruthy()
     expect(root.querySelector('.stub-park')).toBe(null)
@@ -193,17 +196,18 @@ describe('телефонная раскладка', () => {
 })
 
 describe('Sidebar', () => {
-  it('«Парк» без выбранного роутера не погашен и зовёт onPark', async () => {
+  it('«Парк» -- вкладка колонки и зовёт onTab; в подвале Парка нет', async () => {
     const root = document.createElement('div')
-    const onPark = vi.fn()
+    const onTab = vi.fn()
     await act(async () =>
-      render(<Sidebar mode="web" routers={ROUTERS} currentID={null} isAdmin parkActive={false} onPick={() => {}} onPark={onPark} onLogout={() => {}} />, root),
+      render(<Sidebar mode="web" routers={ROUTERS} currentID={null} isAdmin tabs={['park']} tab="park" onTab={onTab} onPick={() => {}} onLogout={() => {}} />, root),
     )
-    const park = button(root, 'Парк')
+    const park = button(root.querySelector('.side-tabs'), 'Парк')
     expect(park.disabled).toBe(false)
-    expect(park.getAttribute('title')).toBe(null)
+    expect(park.getAttribute('aria-current')).toBe('page')
     await act(async () => park.click())
-    expect(onPark).toHaveBeenCalledTimes(1)
+    expect(onTab).toHaveBeenCalledWith('park')
+    expect(root.querySelector('.side-foot').textContent).not.toContain('Парк')
     render(null, root)
   })
 })

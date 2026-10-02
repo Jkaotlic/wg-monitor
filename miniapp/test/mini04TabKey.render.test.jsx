@@ -16,8 +16,7 @@ function Stateful({ id, routerID }) {
 }
 vi.mock('../src/screens/RouterDetail.jsx', () => ({ RouterDetail: Stateful }))
 vi.mock('../src/screens/TunnelsTab.jsx', () => ({ TunnelsTab: Stateful }))
-vi.mock('../src/screens/DiagTab.jsx', () => ({ DiagTab: Stateful }))
-vi.mock('../src/screens/EventsTab.jsx', () => ({ EventsTab: Stateful }))
+vi.mock('../src/screens/ChecksTab.jsx', () => ({ ChecksTab: Stateful }))
 vi.mock('../src/screens/ManageTab.jsx', () => ({ ManageTab: Stateful }))
 
 const { TabBody } = await import('../src/screens/TabBody.jsx')
@@ -28,7 +27,7 @@ const ROUTERS = [
 ]
 
 describe('MINI-04: вкладка пересоздаётся при смене роутера', () => {
-  for (const tab of ['router', 'tunnels', 'diag', 'events', 'manage']) {
+  for (const tab of ['router', 'tunnels', 'diag', 'manage']) {
     it(tab, async () => {
       const root = document.createElement('div')
       await act(async () => render(<TabBody nav={{ routerID: 1, tab }} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />, root))

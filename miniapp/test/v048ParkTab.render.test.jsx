@@ -62,27 +62,6 @@ beforeEach(() => {
 })
 
 describe('v0.48: вкладка «Парк» на телефоне', () => {
-  it('админу -- первой в панели роутера; «VPN-туннели» в панели -- «Туннели»', async () => {
-    mocks.session = { ok: true, is_admin: true, via: 'telegram' }
-    const root = await mountAt('/miniapp/?router=2')
-    expect(barLabels(root)).toEqual(['Парк', 'Сейчас', 'Туннели', 'Проверки', 'Что было', 'Управление'])
-    await act(async () => button(root.querySelector('.tabbar'), 'Парк').click())
-    await flush()
-    expect(root.querySelector('.park-tab .stub-park')).toBeTruthy()
-    expect(root.querySelector('.park-tab .screen-title').textContent).toBe('Парк')
-    expect(root.querySelector('.tabbar-item-active').textContent.trim()).toBe('Парк')
-    cleanup(root)
-  })
-
-  it('владельцу -- нет, панель прежняя', async () => {
-    mocks.session = { ok: true, is_admin: false, via: 'telegram' }
-    mocks.routers = { routers: [ROUTERS[0]] }
-    const root = await mountAt('/miniapp/')
-    expect(barLabels(root)).toEqual(['Сейчас', 'Туннели', 'Проверки', 'Что было', 'Управление'])
-    expect(root.querySelector('.stub-park')).toBe(null)
-    cleanup(root)
-  })
-
   it('оператору -- нет', async () => {
     mocks.session = { ok: true, is_admin: false, via: 'telegram' }
     mocks.routers = { routers: [ROUTERS[1]] }
@@ -91,42 +70,6 @@ describe('v0.48: вкладка «Парк» на телефоне', () => {
     expect(root.querySelector('.stub-park')).toBe(null)
     cleanup(root)
   })
-
-  it('с главного экрана («Мои роутеры» без роутера) Парк достижим админу', async () => {
-    mocks.session = { ok: true, is_admin: true, via: 'telegram' }
-    const root = await mountAt('/miniapp/')
-    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Все роутеры')
-    const park = button(root.querySelector('.tabbar'), 'Парк')
-    expect(park).toBeTruthy()
-    await act(async () => park.click())
-    await flush()
-    expect(root.querySelector('.overlay')).toBe(null)
-    expect(root.querySelector('.park-tab .stub-park')).toBeTruthy()
-    cleanup(root)
-  })
-
-  it('«Мои роутеры» админу -- чистый список: ни Парка, ни массовых кнопок', async () => {
-    mocks.session = { ok: true, is_admin: true, via: 'telegram' }
-    const root = await mountAt('/miniapp/')
-    const list = root.querySelector('.overlay')
-    expect(list.querySelector('.stub-park')).toBe(null)
-    expect(list.querySelectorAll('.fleet-row')).toHaveLength(3)
-    for (const text of [...PARK_BUTTONS, 'Опросить все']) expect(button(list, text)).toBeUndefined()
-    cleanup(root)
-  })
-
-  it('«Мои роутеры» не-админу с несколькими роутерами -- «Опросить все» на месте', async () => {
-    mocks.session = { ok: true, is_admin: false, via: 'telegram' }
-    const root = await mountAt('/miniapp/')
-    const list = root.querySelector('.overlay')
-    expect(button(list, 'Опросить все')).toBeTruthy()
-    expect(list.querySelector('.stub-park')).toBe(null)
-    expect(root.querySelector('.tabbar-over')).toBe(null)
-    cleanup(root)
-  })
-
-  // «Опросить все» во вкладке -- park.render.test.jsx: здесь ParkSection
-  // заглушка.
 })
 
 describe('v0.48: ссылка на Парк', () => {
@@ -138,37 +81,35 @@ describe('v0.48: ссылка на Парк', () => {
     cleanup(root)
   })
 
-  it('?tab=park не-админу -- обычный список роутеров', async () => {
+  it('?tab=park не-админу не значит ничего: открывается роутер, Парка нет', async () => {
     mocks.session = { ok: true, is_admin: false, via: 'telegram' }
     const root = await mountAt('/miniapp/?tab=park')
     expect(root.querySelector('.stub-park')).toBe(null)
-    expect(root.querySelector('.overlay .screen-title').textContent).toBe('Все роутеры')
+    expect(barLabels(root)).not.toContain('Парк')
     cleanup(root)
   })
 })
 
 describe('v0.48: «Парк» на широком экране', () => {
-  it('админу -- первой вкладкой в шапке роутера; экран Парка в основной области', async () => {
+  it('админу -- первой вкладкой в колонке; экран Парка в основной области', async () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: true, via: 'web' }
     const root = await mountAt('/dashboard/?router=2')
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).toEqual(['Парк', 'Сейчас', 'VPN-туннели', 'Проверки', 'Что было', 'Управление'])
-    await act(async () => button(root.querySelector('.main-tabs'), 'Парк').click())
+    expect([...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())).toEqual(['Парк', 'Роутер', 'VPN-туннели', 'Проверки', 'Настройки'])
+    await act(async () => button(root.querySelector('.side-tabs'), 'Парк').click())
     await flush()
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
     expect(window.location.search).toBe('?router=2&tab=park')
     cleanup(root)
   })
 
-  it('«Парк» в боковой колонке открывает вкладку Парка, сводка -- без Парка', async () => {
+  it('«Парк» в колонке подсвечивается; пункта «Парк» в подвале нет', async () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: true, via: 'web' }
     const root = await mountAt('/dashboard/')
-    expect(root.querySelector('.fleet-home .stub-park')).toBe(null)
-    await act(async () => button(root.querySelector('aside.side'), 'Парк').click())
-    await flush()
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
-    expect(button(root.querySelector('aside.side'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(button(root.querySelector('.side-tabs'), 'Парк').classList.contains('side-link-active')).toBe(true)
+    expect(root.querySelector('.side-foot').textContent).not.toContain('Парк')
     expect(window.location.search).toBe('?tab=park')
     cleanup(root)
   })
@@ -177,7 +118,7 @@ describe('v0.48: «Парк» на широком экране', () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: false, via: 'web' }
     const root = await mountAt('/dashboard/?router=2')
-    expect([...root.querySelectorAll('.main-tab')].map((b) => b.textContent)).not.toContain('Парк')
+    expect([...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())).not.toContain('Парк')
     cleanup(root)
   })
 })

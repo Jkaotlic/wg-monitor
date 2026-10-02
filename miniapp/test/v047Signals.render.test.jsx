@@ -19,7 +19,7 @@ vi.mock('../src/api.js', async (importOriginal) => ({
 }))
 
 const { ExitRow, ExitIPSection, WANSection, HooksRow, AwgmLogsSection, NativeDNSSection } = await import('../src/screens/SignalSections.jsx')
-const { CheckToolsSections } = await import('../src/screens/CheckToolsSections.jsx')
+const { InspectSection } = await import('../src/screens/CheckToolsSections.jsx')
 
 const FACTS = {
   supported: true,
@@ -55,7 +55,7 @@ describe('секции v0.47', () => {
     mocks.result = { status: 'ok', output: '{}' }
     const { root, unmount } = await mount(<ExitIPSection routerID={2} tunnels={[{ tunnel_id: 'awg11', name: 'NL', run_state: 'running' }]} deadline={{ deadlineMs: 1000 }} />)
     expect(root.textContent).toContain('через VPN-туннель 203.0.113.7, напрямую 198.51.100.4')
-    await act(async () => button(root, 'Проверить сейчас').click())
+    await act(async () => button(root, 'Измерить').click())
     expect(mocks.sent[0]).toEqual({ routerID: 2, action: 'exit_ip_probe', args: { tunnel_id: 'awg11' } })
     unmount()
   })
@@ -116,7 +116,7 @@ describe('секции v0.47', () => {
     mocks.facts = FACTS
     for (const [role, visible] of [['owner', true], ['operator', false]]) {
       mocks.settings = { role, agent_version: 'v0.47.0' }
-      const { root, unmount } = await mount(<CheckToolsSections routerID={2} asleep={false} openSheet={() => {}} />)
+      const { root, unmount } = await mount(<InspectSection routerID={2} asleep={false} />)
       expect(root.textContent.includes('Журнал awg-manager')).toBe(visible)
       unmount()
     }
@@ -125,7 +125,7 @@ describe('секции v0.47', () => {
   it('владелец со старым агентом -- секции журнала нет', async () => {
     mocks.facts = FACTS
     mocks.settings = { role: 'owner', agent_version: 'v0.46.0' }
-    const { root, unmount } = await mount(<CheckToolsSections routerID={2} asleep={false} openSheet={() => {}} />)
+    const { root, unmount } = await mount(<InspectSection routerID={2} asleep={false} />)
     expect(root.textContent.includes('Журнал awg-manager')).toBe(false)
     unmount()
   })

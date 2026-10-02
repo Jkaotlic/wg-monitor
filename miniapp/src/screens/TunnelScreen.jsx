@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { deleteTunnel } from '../api.js'
 import { waitCommand, waitDeadlineMs, repeatWhilePending } from '../commandWait.js'
-import { localSheet } from '../sheet.js'
+import { localSheet, confirmSheet } from '../sheet.js'
 import {
   tunnelCard,
   deleteBlock,
@@ -27,7 +27,7 @@ import { ExitRow } from './SignalSections.jsx'
 // Удаление необратимо, поэтому подтверждается набором имени, а сервер сам
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
-export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind }) {
+export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
   const fresh = tunnelCard(snapshot, tunnelID)
   // После удаления снимок уже не знает VPN-туннель: экран держит последнее,
   // что видел, чтобы договорить итог.
@@ -134,6 +134,44 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
     </button>
   ) : null
 
+  // Замена конфига -- у работающего VPN-туннеля (смысл операции -- заменить
+  // то, чем сейчас ходит трафик, не потеряв прежний). Раньше -- строка
+  // вкладки; v0.52: дом действия -- экран самого VPN-туннеля.
+  const replaceBtn = canReplace && onReplace ? (
+    <button type="button" class="btn btn-ghost btn-wide" onClick={onReplace}>
+      Заменить конфиг
+    </button>
+  ) : null
+
+  // Перезапуск здорового VPN-туннеля: дом действия -- этот экран (карточка
+  // тревоги держит его только на время инцидента). Без ролевого условия: у
+  // прежних «Быстрых действий» его не было, и оператор не должен его терять
+  // (удаление и прочее управление -- по-прежнему mayManageTunnels). Не лаймовая: главная кнопка
+  // экрана -- своя или никакая.
+  const restartBtn =
+    typeof openSheet === 'function' && fresh ? (
+      <button
+        type="button"
+        class="btn btn-ghost btn-wide tunnel-restart"
+        onClick={() =>
+          openSheet(
+            confirmSheet({
+              routerID,
+              title: `Перезапустить «${card.name}»?`,
+              body: 'Роутер опустит и снова поднимет VPN-туннель. Связь через него на несколько секунд прервётся.',
+              action: 'tunnel_restart',
+              args: { tunnel_id: card.id },
+              buttonLabel: 'Перезапустить',
+              asleep,
+              onDone: onRestart ?? onChanged,
+            }),
+          )
+        }
+      >
+        Перезапустить VPN-туннель
+      </button>
+    ) : null
+
   const meta = (snapshot?.tunnels ?? []).find((x) => x.id === card?.id)
   const tunnelRunning = meta ? Boolean(meta.enabled) && (!meta.status || meta.status === 'running') : true
 
@@ -152,6 +190,9 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
           {fresh && <ExitRow routerID={routerID} tunnelID={card.id} running={tunnelRunning} />}
           {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
+
+        {replaceBtn}
+        {restartBtn}
 
         <Section title="Удалить VPN-туннель">
           {/* Роль ещё не пришла -- молчать: слова о правах были бы догадкой. */}

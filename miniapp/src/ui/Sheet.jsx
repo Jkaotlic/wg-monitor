@@ -261,7 +261,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
                     type="button"
                     class={`btn btn-wide sheet-choice ${c.danger ? 'btn-danger' : 'btn-ghost'}${c.current ? ' sheet-choice-current' : ''}`}
                     aria-current={c.current ? 'true' : undefined}
-                    disabled={localBusy}
+                    disabled={localBusy || c.disabled === true}
                     onClick={() => start(c.value)}
                   >
                     <span class="sheet-choice-label">{c.label}</span>

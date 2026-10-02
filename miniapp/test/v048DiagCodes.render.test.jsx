@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // v0.48: машинные имена проверок на «Проверках» (dns, hydraroute,
-// agent_heartbeat, check_direct) -- только админу. Владельцу и оператору
+// agent_heartbeat) -- только админу. Владельцу и оператору
 // они ничего не говорят и теснят вопрос. Строка с ошибкой -- одна группа со
 // своей строкой, без черты между ними.
 import { describe, it, expect, vi } from 'vitest'
@@ -49,9 +49,9 @@ describe('v0.48: машинные имена на «Проверках»', () =>
     root.remove()
   })
 
-  it('админу -- под вопросами и у адресов выхода', async () => {
+  it('админу -- под вопросами', async () => {
     const root = await mount({ isAdmin: true })
-    expect(codes(root)).toEqual(expect.arrayContaining(['dns', 'hydraroute', 'agent_heartbeat', 'check_direct', 'check_via_tunnel']))
+    expect(codes(root)).toEqual(expect.arrayContaining(['dns', 'hydraroute', 'agent_heartbeat']))
     render(null, root)
     root.remove()
   })

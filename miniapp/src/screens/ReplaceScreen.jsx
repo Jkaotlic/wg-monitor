@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
+import { cabinetPerms } from '../cabinetKeys.js'
 import { accountSummary, optionRows } from '../cabinet.js'
 import { replaceView, startErrorText, stepValue, replaceLeftover } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -22,6 +23,13 @@ const POLL_MS = 3000
 // выпущенную страну, когда в подписке нет мест.
 // onOpenTunnel(tunnelID|null) -- к экрану VPN-туннеля, который мастер оставил на
 // роутере (null -- к списку): разбираться с ним человек будет там.
+// replaceCanRevoke -- кто может отозвать старый конфиг в мастере замены:
+// админ, владелец и оператор (решение оператора 01.10).
+// Правило роли -- одно, в cabinetPerms (cabinetKeys.js).
+export function replaceCanRevoke(role) {
+  return cabinetPerms(role).revoke
+}
+
 export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
@@ -44,7 +52,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
     setCanRevoke(false)
     fetchRouterSettings(routerID)
       .then((st) => {
-        if (alive) setCanRevoke(st?.role === 'admin' || st?.role === 'owner')
+        if (alive) setCanRevoke(replaceCanRevoke(st?.role))
       })
       .catch(() => {})
     const timer = setInterval(poll, POLL_MS)

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   result: null,
   sendReply: null,
   awg3: [],
+  awg3Fail: false,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -65,6 +66,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     fetchAwg3Issuable: (id) => {
       log('awg3list', id)
+      if (mocks.awg3Fail) return Promise.reject(new Error('502'))
       return Promise.resolve({ panels: structuredClone(mocks.awg3) })
     },
     issueAwg3ToRouter: (id, panel, iface) => {
@@ -80,6 +82,8 @@ vi.mock('../src/api.js', async (importOriginal) => {
 })
 
 const { CabinetScreen } = await import('../src/screens/CabinetScreen.jsx')
+const { navReducer, navPinned } = await import('../src/nav.js')
+const { useReducer } = await import('preact/hooks')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { ApiError } = await import('../src/api.js')
 
@@ -120,6 +124,24 @@ const button = (root, text) => buttons(root, text)[0]
 const cleanup = (root) => { render(null, root); root.remove() }
 const calls = (name) => mocks.calls.filter((c) => c[0] === name)
 
+// v0.52: выпуск -- слой навигации (cabinetissue); хозяин -- настоящий редьюсер
+// nav.js, как в OverlayHost, включая закрепление на время выпуска.
+function Host(props) {
+  const [nav, dispatch] = useReducer(navReducer, { routerID: 7, tab: 'tunnels', overlay: 'cabinet', sheet: null })
+  const p = nav.overlayParams ?? {}
+  return (
+    <CabinetScreen
+      {...props}
+      layer={nav.overlay}
+      layerParams={p}
+      openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+      closeLayer={() => dispatch({ type: 'overlay', overlay: p.returnTo, params: p.returnParams ?? undefined })}
+      onPin={(on) => dispatch({ type: 'pin', pinned: on })}
+      pinned={navPinned(nav)}
+    />
+  )
+}
+
 async function mount() {
   const sheets = []
   const seen = { closed: 0, issued: 0 }
@@ -127,7 +149,7 @@ async function mount() {
   document.body.appendChild(root)
   await act(async () => {
     render(
-      <CabinetScreen
+      <Host
         routerID={7}
         routerName="dacha-1"
         asleep={false}
@@ -191,12 +213,13 @@ beforeEach(() => {
   mocks.result = null
   mocks.sendReply = null
   mocks.awg3 = []
+  mocks.awg3Fail = false
 })
 
 describe('кабинет роутера: вкладки и ключи', () => {
   it('вкладки Amnezia и HideMy; своего сервера нет, список серверов не спрашивается', async () => {
     const { root } = await mount()
-    expect(root.querySelector('.overlay-title').textContent).toBe('Кабинеты VPN «dacha-1»')
+    expect(root.querySelector('.overlay-title').textContent).toBe('Откуда взять конфиг «dacha-1»')
     const tabs = [...root.querySelectorAll('.segment-tab')]
     expect(tabs.map((t) => t.textContent)).toEqual(['Amnezia', 'HideMy'])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
@@ -227,13 +250,13 @@ describe('кабинет роутера: вкладки и ключи', () => {
     cleanup(root)
   })
 
-  it('оператор: добавить и сделать активным -- да; удалить, отозвать -- нет', async () => {
+  it('оператор: добавить, сделать активным, отозвать -- да; удалить ключ -- нет (v0.52, §7)', async () => {
     mocks.role = 'operator'
     const { root } = await mount()
     expect(button(root, 'Добавить ключ')).toBeTruthy()
     expect(buttons(root, 'Сделать активным')).toHaveLength(1)
     expect(buttons(root, 'Удалить')).toHaveLength(0)
-    expect(buttons(root, 'Отозвать')).toHaveLength(0)
+    expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })
 
@@ -353,9 +376,11 @@ describe('кабинет роутера: страны и отзыв', () => {
     expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBe(null)
     cleanup(root)
 
+    // Оператор отзывает, как владелец: у выпущенной страны стрелки нет, рядом «Отозвать».
     mocks.role = 'operator'
     root = (await mount()).root
-    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBeTruthy()
+    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBe(null)
+    expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })
 
@@ -404,23 +429,25 @@ describe('кабинет роутера: выпуск', () => {
     expect(button(root, 'Попробовать ещё раз')).toBeTruthy()
     expect(button(root, 'Выпустить ещё раз')).toBeFalsy()
     await act(async () => button(root, 'Выбрать, что отозвать').click())
+    // Подписка перечитывается эффектом закрытия слоя выпуска: один такт.
+    await flush()
     expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)
   })
 
-  it('slot_busy у оператора -- кто может, без кнопки', async () => {
+  it('slot_busy у оператора -- как у владельца: отозвать можно (v0.52, §7)', async () => {
     mocks.role = 'operator'
     mocks.issueReply = new ApiError(409, 'slot_busy', 'x')
     const { root } = await mount()
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
     await flush()
-    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.')
-    expect(button(root, 'Выбрать, что отозвать')).toBeFalsy()
+    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.')
+    expect(button(root, 'Выбрать, что отозвать')).toBeTruthy()
     cleanup(root)
   })
 
-  it('.conf в личку: лист с приватным ключом; успех -- итог; оператору кнопки нет', async () => {
+  it('.conf в личку: лист с приватным ключом; успех -- итог; оператору кнопка есть (v0.52, §7)', async () => {
     const { root, sheets } = await mount()
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Прислать .conf в личку').click())
@@ -437,7 +464,7 @@ describe('кабинет роутера: выпуск', () => {
     mocks.role = 'operator'
     const again = await mount()
     await pickOption(again.root, 'Германия')
-    expect(button(again.root, 'Прислать .conf в личку')).toBeFalsy()
+    expect(button(again.root, 'Прислать .conf в личку')).toBeTruthy()
     cleanup(again.root)
   })
 
@@ -529,10 +556,10 @@ describe('кабинет роутера: права, загрузка, пере�
   })
 })
 
-describe('кабинет роутера: вкладка «Панели» (v0.51)', () => {
-  it('вкладки «Панели» нет, когда сервер не дал панелей', async () => {
+describe('кабинет роутера: вкладка «Панель VPN-сервера» (v0.51, v0.52)', () => {
+  it('вкладки «Панель VPN-сервера» нет, когда сервер не дал панелей', async () => {
     const { root } = await mount()
-    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).not.toContain('Панели')
+    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).not.toContain('Панель VPN-сервера')
     cleanup(root)
   })
 
@@ -540,7 +567,7 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     mocks.role = 'operator'
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
     const { root } = await mount()
-    await tab(root, 'Панели')
+    await tab(root, 'Панель VPN-сервера')
     await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
     await flush()
     expect(button(root, 'Прислать .conf в личку')).toBeUndefined()
@@ -556,7 +583,7 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     mocks.role = 'owner'
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
     const { root } = await mount()
-    await tab(root, 'Панели')
+    await tab(root, 'Панель VPN-сервера')
     await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent.includes('Нидерланды')).click())
     await flush()
     expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
@@ -564,11 +591,33 @@ describe('кабинет роутера: вкладка «Панели» (v0.51)
     cleanup(root)
   })
 
-  it('недоступная панель -- словами, без интерфейсов', async () => {
+  it('недоступная панель -- словами, без интерфейсов: админу «попробуйте позже», остальным «сообщите администратору»', async () => {
     mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: true, ifaces: [] }]
-    const { root } = await mount()
-    await tab(root, 'Панели')
+    mocks.role = 'admin'
+    let { root } = await mount()
+    await tab(root, 'Панель VPN-сервера')
     expect(root.textContent).toContain('Панель сейчас не отвечает')
+    cleanup(root)
+    mocks.role = 'operator'
+    ;({ root } = await mount())
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('сообщите администратору')
+    expect(root.textContent).not.toContain('Панель сейчас не отвечает')
+    cleanup(root)
+  })
+  // v0.52 (хвост v0.51): ошибка списка панелей не прячет вкладку -- внутри
+  // слово и «Повторить», а повтор перечитывает список.
+  it('ошибка списка панелей -- вкладка с «Повторить», а не тишина', async () => {
+    mocks.awg3Fail = true
+    const { root } = await mount()
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('Список панелей VPN-серверов не загрузился.')
+    mocks.awg3Fail = false
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    await act(async () => button(root, 'Повторить').click())
+    await flush()
+    expect(root.textContent).toContain('Нидерланды')
+    expect(root.textContent).not.toContain('не загрузился')
     cleanup(root)
   })
 })

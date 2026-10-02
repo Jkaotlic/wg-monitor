@@ -1,6 +1,7 @@
 // Кабинеты роутера: вкладки, ключи Amnezia Premium и коды HideMy.name, права,
 // тексты листов и отказов. Секрет здесь не хранится: значение поля живёт в
 // Sheet.jsx, а сюда приходит снимок -- только чтобы собрать тело запроса.
+import { awg3IssueErrorText } from './awg3Panel.js'
 
 export const CABINET_KINDS = ['amnezia', 'hidemy']
 
@@ -9,7 +10,7 @@ export const CABINET_KINDS = ['amnezia', 'hidemy']
 // сломало бы уже открытые у людей приложения.
 export const VPN_PROVIDER = { amnezia: 'amnezia', hidemy: 'hidemyname', selfhosted: 'selfhosted' }
 
-export function cabinetTabs(cabinets, awg3Panels = []) {
+export function cabinetTabs(cabinets, awg3Panels = [], { awg3Failed = false } = {}) {
   const tabs = [
     { id: 'amnezia', title: 'Amnezia' },
     { id: 'hidemy', title: 'HideMy' },
@@ -17,8 +18,9 @@ export function cabinetTabs(cabinets, awg3Panels = []) {
   // Свой сервер -- только админу, и решает это сервер: available приходит
   // true только ему. Любое другое значение -- вкладки нет.
   if (cabinets?.selfhosted?.available === true) tabs.push({ id: 'selfhosted', title: 'Свой сервер' })
-  // Панели -- тем, кому сервер их отдал (админ или допущенный, v0.51).
-  if ((awg3Panels ?? []).length > 0) tabs.push({ id: 'awg3', title: 'Панели' })
+  // Панель VPN-сервера -- тем, кому сервер её отдал (админ или допущенный);
+  // список не загрузился -- вкладка с повтором, а не тишина (хвост v0.51).
+  if ((awg3Panels ?? []).length > 0 || awg3Failed) tabs.push({ id: 'awg3', title: 'Панель VPN-сервера' })
   return tabs
 }
 
@@ -29,12 +31,13 @@ export function pickTab(tabs, want) {
 const FULL = new Set(['admin', 'owner'])
 const MANAGE = new Set(['admin', 'owner', 'operator'])
 
-// Права по спеке (решение 1): смотреть, добавить, выбрать активный -- все
-// трое; удалить, отозвать, прислать .conf -- админ и владелец. Граница
+// Права (v0.52, спека §7): смотреть, добавить, выбрать активный, отозвать
+// страну, прислать .conf -- все трое; удалить ключ -- админ и владелец.
+// admin -- какие тексты ошибок панели показывать (задача 16). Граница
 // доступа -- сервер; здесь только то, какие кнопки рисовать.
 export function cabinetPerms(role) {
-  const full = FULL.has(role)
-  return { manage: MANAGE.has(role), remove: full, revoke: full, sendConf: full }
+  const any = MANAGE.has(role)
+  return { manage: any, remove: FULL.has(role), revoke: any, sendConf: any, admin: role === 'admin' }
 }
 
 const KIND = {
@@ -44,7 +47,7 @@ const KIND = {
     sectionTitle: 'Ключи кабинета',
     addButton: 'Добавить ключ',
     addTitle: 'Добавить ключ Amnezia Premium',
-    addBody: 'Скопируйте ключ из кабинета Amnezia Premium (строка начинается с vpn://) и вставьте сюда. Сервер проверит его входом в кабинет и сохранит только при успехе.',
+    addBody: 'Скопируйте ключ Amnezia Premium (строка начинается с vpn://) и вставьте сюда. Сервер проверит его входом в аккаунт Amnezia и сохранит только при успехе.',
     fieldLabel: 'Ключ vpn://',
     placeholder: 'vpn://…',
     empty: 'Ключ кабинета Amnezia Premium ещё не добавлен. Добавьте его — и здесь появятся страны, которые можно выпустить.',
@@ -120,7 +123,7 @@ const GENERIC = 'Не получилось. Попробуйте ещё раз.'
 
 const SECRET_ERRORS = {
   amnezia: {
-    invalid_key: 'Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется из кабинета целиком.',
+    invalid_key: 'Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется целиком.',
     cabinet_rejected: 'Кабинет Amnezia Premium не принял ключ. Проверьте, что он скопирован целиком и подписка активна.',
   },
   hidemy: {
@@ -152,7 +155,7 @@ export function deleteSecretSheetText(kind, row) {
   return {
     title: `Удалить ${k.noun} «${row.title}»?`,
     body: row.active
-      ? `Это активный ${k.noun}: пока не выберете другой, выпускать VPN-туннели из кабинета не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.`
+      ? `Это активный ${k.noun}: пока не выберете другой, выпускать новые VPN-туннели не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.`
       : `${capital(k.noun)} удалится с сервера. Уже выпущенные VPN-туннели на роутере продолжат работать.`,
   }
 }
@@ -213,13 +216,16 @@ function issueCodeSpeaksRussian(code) {
 
 // provider -- откуда выпуск: отзыв страны есть только у Amnezia.
 export function issueFailure(err, perms, provider = 'amnezia') {
+  if (provider === 'awg3panel' && typeof err?.code === 'string' && err.code.startsWith('awg3_')) {
+    return { text: awg3IssueErrorText(err, { admin: Boolean(perms?.admin) }), offerRevoke: false }
+  }
   if (err?.code === 'slot_busy') {
     if (provider !== 'amnezia') return { text: 'Свободных мест в подписке нет.', offerRevoke: false }
     const canRevoke = Boolean(perms?.revoke) && provider === 'amnezia'
     return {
       text: canRevoke
         ? 'Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.'
-        : 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.',
+        : 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера, оператор или администратор.',
       offerRevoke: canRevoke,
     }
   }
@@ -244,7 +250,7 @@ export function sendConfErrorText(err) {
 }
 
 export const CABINET_TEXTS = {
-  title: 'Кабинеты VPN',
+  title: 'Откуда взять конфиг',
   loading: 'Читаем кабинеты…',
   loadError: 'Не удалось прочитать кабинеты. Откройте экран заново.',
   accountLoading: 'Спрашиваем кабинет…',
@@ -254,4 +260,5 @@ export const CABINET_TEXTS = {
   backToList: 'Выбрать, что отозвать',
   issueRunning: 'Выпускаем конфиг, роутер его принимает…',
   roleError: 'Не удалось узнать ваши права.',
+  awg3LoadError: 'Список панелей VPN-серверов не загрузился.',
 }

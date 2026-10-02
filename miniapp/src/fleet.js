@@ -10,7 +10,6 @@
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
 import { agoText } from './when.js'
 import { isStale, reachStatus } from './staleness.js'
-import { localSheet } from './sheet.js'
 
 // Порядок -- по срочности, а не по id.
 const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
@@ -23,6 +22,13 @@ export function sortByUrgency(routers = []) {
     if (ua !== ub) return ua - ub
     return (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru')
   })
+}
+
+// Красная тревога -- единственный предикат для Парка, полосы выбора и
+// главного экрана: тревога есть, не только по запасному VPN-туннелю
+// (reserve_only_alert) и роутер не молчит -- у молчащего чинить нечем.
+export function redAlert(router) {
+  return reachStatus(router) === 'alert' && !router?.reserve_only_alert
 }
 
 export function fleetRow(router) {
@@ -129,18 +135,4 @@ export function routerSwitchChoices(routers = [], currentID = null) {
     return { value: r.id, label: row.nickname, pill: row.pill, current: r.id === currentID }
   })
   return { choices, search: routers.length > 6 }
-}
-
-export function routerSwitchSheet(routers, currentID, onPick) {
-  const { choices, search } = routerSwitchChoices(routers, currentID)
-  return localSheet({
-    title: 'Какой роутер открыть',
-    body: 'Откроется на той же вкладке.',
-    choices,
-    search,
-    perform: (_typed, _values, id) => {
-      onPick(id)
-      return null
-    },
-  })
 }

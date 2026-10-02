@@ -10,13 +10,14 @@
 import { isAway } from './agentUpdate.js'
 import { normalizeAgentVersion } from './formRules.js'
 import { jobTitle } from './jobSteps.js'
+import { placeText } from './places.js'
 
 export const JOB_SECRET_NOTE = 'Пароли уходят на сервер один раз и не сохраняются.'
 
 // Переустановка сохраняет пароль root для авто-оживления (v0.45, решение
 // оператора 18.09) -- если на сервере есть ключ оживления; без него хранить
 // нечем. Перенаправление не сохраняет: агент уходит на другой сервер.
-export const REINSTALL_SECRET_NOTE = 'Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — «Забыть пароль» в Парке.'
+export const REINSTALL_SECRET_NOTE = `Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — ${placeText('forgetPassword')}.`
 
 const VERSION_EXAMPLE = 'v0.36.0'
 const URL_HINT = 'Нужен адрес с https://, например https://wg.example.com.'

@@ -1,12 +1,13 @@
 import { agentReplyText } from '../errorText.js'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable } from '../api.js'
 import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
-import { confirmSheet } from '../sheet.js'
+import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
-import { IMPORT_TEXTS } from '../confImport.js'
+import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { cabinetPerms } from '../cabinetKeys.js'
+import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -15,7 +16,6 @@ import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
-import { NavCard } from '../ui/NavCard.jsx'
 import { useOnClose } from '../useOnClose.js'
 import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
@@ -43,21 +43,20 @@ const CHAIN_TITLE = {
   checkUnknown: 'Проверка неизвестна',
 }
 
+const SOURCES_WAIT_MS = 8000
+
 // Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
 // его адрес переживает обновление страницы, и «назад» Telegram закрывает его.
 // onOpenRebind(tunnelID) -- «Маршруты» с выбором цели переноса для этого
 // VPN-туннеля. routesOpen -- слой «Маршрутов» открыт поверх вкладки: после его
 // закрытия снимок перечитывается, правила могли уехать.
-export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, onOpenCabinet, cabinetOpen = false, routesOpen = false }) {
-  const [replacing, setReplacing] = useState(null)
-  // Экран VPN-туннеля -- локальный слой, как мастер замены: в адрес не пишется.
-  const [inspecting, setInspecting] = useState(null)
+export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, isAdmin = false, layer = null, layerParams = {}, openLayer, closeLayer, cabinetOpen = false, routesOpen = false }) {
   // Роль решает, рисовать ли удаление и загрузку конфига; не узнали -- кнопок
   // нет, граница всё равно на сервере.
+  // roleStatus: loading | ok | error -- сбой чтения роли не должен молча
+  // убирать «Загрузить .conf» из листа (финальное ревью v0.52, п. 4).
   const [role, setRole] = useState('')
-  // Загрузка .conf -- тоже локальный слой: содержимое конфига не должно
-  // оказаться в навигации даже случайно.
-  const [importing, setImporting] = useState(false)
+  const [roleStatus, setRoleStatus] = useState('loading')
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
   // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
@@ -66,25 +65,114 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
 
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
 
+  // «Новый VPN-туннель» (v0.52): лист «Откуда взять конфиг». Панели VPN-сервера
+  // грузятся заранее; сбой списка -- пункт с повтором, а не тишина.
+  const [awg3, setAwg3] = useState({ status: 'loading', panels: [] })
+  // Ответ чтения, пришедший после смены роутера, ничего не пишет: иначе роль
+  // и панели прежнего роутера переехали бы на новый (финальное ревью, п. 6).
+  const routerRef = useRef(routerID)
+  routerRef.current = routerID
+  const loads = useRef({ awg3: null, role: null })
+  const loadAwg3 = () => {
+    const rid = routerID
+    const p = fetchAwg3Issuable(rid)
+      .then((r) => ({ status: 'ok', panels: r?.panels ?? [] }))
+      .catch(() => ({ status: 'error', panels: [] }))
+      .then((next) => {
+        if (routerRef.current === rid) setAwg3(next)
+        return next
+      })
+    loads.current.awg3 = p
+    return p
+  }
+  useEffect(() => {
+    setAwg3({ status: 'loading', panels: [] })
+    loadAwg3()
+  }, [routerID])
+
+  const loadRole = () => {
+    const rid = routerID
+    const p = fetchRouterSettings(rid)
+      .then((st) => ({ status: 'ok', role: st?.role ?? '' }))
+      .catch(() => ({ status: 'error', role: '' }))
+      .then((next) => {
+        if (routerRef.current === rid) {
+          setRole(next.role)
+          setRoleStatus(next.status)
+        }
+        return next
+      })
+    loads.current.role = p
+    return p
+  }
+
+  // Лист закрывается после onDone, поэтому повторное открытие -- следующим
+  // тиком, с уже перечитанным. Загрузка .conf -- всем, кто управляет
+  // туннелями (админ, владелец, оператор: решение 01.10). Последнее известное
+  // читается через ref: onDone приходит из замыкания старого рендера.
+  const latest = useRef({})
+  latest.current = { awg3, role, roleStatus }
+  const askSource = (over = {}) => {
+    const cur = { ...latest.current, ...over }
+    const rid = routerID
+    openSheet(
+      localSheet({
+        title: CONFIG_SOURCES_TITLE,
+        body: 'Конфиг встанет на роутер новым VPN-туннелем рядом с остальными.',
+        choices: configSourceChoices({ isAdmin, canImport: cabinetPerms(cur.role).manage, roleStatus: cur.roleStatus, awg3: cur.awg3 }),
+        perform: (_typed, _values, value) => {
+          if (value === 'awg3-retry') return loadAwg3().then((next) => ({ retried: true, rid, over: { awg3: next } }))
+          if (value === 'conf-retry') return loadRole().then((next) => ({ retried: true, rid, over: { role: next.role, roleStatus: next.status } }))
+          const target = configSourceTarget(value)
+          if (target) openLayer?.(target.overlay, target.params)
+          return null
+        },
+        onDone: (resp) => {
+          if (resp?.retried && routerRef.current === resp.rid) setTimeout(() => askSource(resp.over), 0)
+        },
+      }),
+    )
+  }
+
+  // Лист считает варианты при открытии и сам уже не обновится, поэтому кнопка
+  // дожидается чтения панелей и роли (занятая, пока ждёт) и открывает лист с
+  // итоговыми вариантами. Зависшее чтение -- через SOURCES_WAIT_MS как сбой:
+  // пункт с повтором, а не вечная «загрузка» (финальное ревью, п. 5).
+  const [opening, setOpening] = useState(false)
+  const openSources = async () => {
+    if (opening) return
+    const cur = latest.current
+    if (cur.awg3.status !== 'loading' && cur.roleStatus !== 'loading') return askSource()
+    const rid = routerID
+    setOpening(true)
+    let timer
+    const gave = await Promise.race([
+      Promise.all([loads.current.awg3, loads.current.role]),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), SOURCES_WAIT_MS)
+      }),
+    ])
+    clearTimeout(timer)
+    setOpening(false)
+    if (routerRef.current !== rid) return
+    const now = latest.current
+    if (gave) return askSource({ awg3: gave[0], role: gave[1].role, roleStatus: gave[1].status })
+    askSource({
+      awg3: now.awg3.status === 'loading' ? { status: 'error', panels: [] } : now.awg3,
+      roleStatus: now.roleStatus === 'loading' ? 'error' : now.roleStatus,
+    })
+  }
+
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
   useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
   useOnClose(routesOpen, () => run('route_status', {}, deadline))
 
   useEffect(() => {
     setSnapshot(null)
-    setInspecting(null)
-    setImporting(false)
     setRole('')
+    setRoleStatus('loading')
     run('route_status', {}, deadline)
-    let alive = true
-    fetchRouterSettings(routerID)
-      .then((s) => {
-        if (alive) setRole(s?.role ?? '')
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
+    loadRole()
   }, [routerID])
 
   useEffect(() => {
@@ -121,6 +209,14 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // кнопка осталась способом пересчитать принудительно.
   const traffic = useCommand(routerID)
   const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
+
+  // Заменить можно только то, что сервер найдёт: старт замены сверяет
+  // old_tunnel_id с событиями tunnel_<id> этого роутера
+  // (miniappResolveTunnelArgs), а агент пишет их лишь для типов awg/wg
+  // (checks/tunnels.go). Доказательство -- то же событие в checks.tunnels:
+  // нет его -- кнопка вела бы в гарантированный отказ unknown_tunnel.
+  const resolvable = Boolean(view.active && (checks?.tunnels ?? []).some((c) => c.tunnel_id === view.active.id))
+  const replaceFromHero = Boolean(openLayer && resolvable && view.policyName && !list.some((t) => t.id === view.active.id))
 
   const activeTunnelID = view.active?.id
   useEffect(() => {
@@ -211,6 +307,15 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </button>
       </div>
 
+      {/* Кнопка не ждёт снимка: «Откуда взять конфиг» от него не зависит. Без
+          снимка экран загрузки .conf не сверяет имя с уже занятыми
+          (tunnelNameProblem пропускает проверку) -- дубль отклонит сервер. */}
+      {openLayer && openSheet && (
+        <button type="button" class="btn btn-primary btn-wide new-tunnel" disabled={opening} onClick={openSources}>
+          {opening ? 'Читаю…' : 'Новый VPN-туннель'}
+        </button>
+      )}
+
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}
       {phase === 'refused' && (
@@ -262,6 +367,13 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               />
               <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
             </div>
+            {/* Несущий VPN-туннель не managed-типа не попадает в «Все VPN-туннели»,
+                а значит и на свой экран: замена конфига -- здесь (финал п. 1). */}
+            {replaceFromHero && (
+              <button type="button" class="btn btn-ghost btn-wide hero-replace" onClick={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName })}>
+                Заменить конфиг
+              </button>
+            )}
           </Hero>
         </Section>
       )}
@@ -351,86 +463,54 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 key={t.id}
                 title={t.name}
                 sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
-                onClick={() => setInspecting(t.id)}
+                onClick={() => openLayer?.('tunnel', { tunnelID: t.id })}
               />
             ))}
           </ul>
         </Section>
       )}
 
-      {/* Внизу акцентный переход один -- «Новый VPN-туннель из кабинета»
-          (спека C4): ради него сюда чаще всего и приходят. Маршруты, загрузка
-          .conf и замена конфига -- обычные строки списка: четыре одинаково
-          ярких карточки подряд спорили друг с другом. */}
-      {snapshot && onOpenCabinet && (
-        <div style="margin-top:24px">
-          <NavCard
-            title="Новый VPN-туннель из кабинета"
-            note="Amnezia · HideMy"
-            onClick={onOpenCabinet}
-          />
-        </div>
-      )}
+      {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
+          единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
+      <ul class="card list-reset tunnels-more" style="margin-top:12px">
+        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? `${view.active.rules} назн.` : undefined} onClick={onOpenRoutes} />
+      </ul>
 
-      {(view.active || (snapshot && mayManageTunnels(role))) && (
-        <ul class="card list-reset tunnels-more" style="margin-top:12px">
-          {view.active && (
-            <ListRow title="Маршруты" sub={`${view.active.rules} назн.`} onClick={onOpenRoutes} />
-          )}
-          {snapshot && mayManageTunnels(role) && (
-            <ListRow title={IMPORT_TEXTS.title} sub={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
-          )}
-          {/* Замена конфига предлагается для работающего VPN-туннеля: смысл
-              операции -- заменить то, чем сейчас ходит трафик, не потеряв
-              прежний туннель. */}
-          {view.active && view.policyName && (
-            <ListRow title="Заменить конфиг VPN-туннеля" sub={view.active.title} onClick={() => setReplacing(view.active)} />
-          )}
-        </ul>
-      )}
-
-      {replacing && (
-        <ReplaceScreen
-          routerID={routerID}
-          tunnel={replacing}
-          policyName={view.policyName}
-          onClose={() => setReplacing(null)}
-          onDone={() => run('route_status', {}, deadline)}
-          onOpenCabinet={
-            onOpenCabinet
-              ? () => {
-                  setReplacing(null)
-                  onOpenCabinet()
-                }
-              : undefined
-          }
-          onOpenTunnel={(tunnelID) => {
-            setReplacing(null)
-            if (tunnelID) setInspecting(tunnelID)
-          }}
-        />
-      )}
-
-      {inspecting && (
+      {layer === 'tunnel' && (
         <TunnelScreen
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
-          tunnelID={inspecting}
+          tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}
-          onClose={() => setInspecting(null)}
+          onClose={closeLayer}
           onChanged={() => run('route_status', {}, deadline)}
           onOpenRebind={onOpenRebind}
+          onRestart={() => run('route_status', {}, deadline)}
+          canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
+          onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName, returnTo: 'tunnel', returnParams: { tunnelID: layerParams.tunnelID } })}
         />
       )}
 
-      {importing && (
+      {layer === 'replace' && layerParams.tunnel && (
+        <ReplaceScreen
+          routerID={routerID}
+          tunnel={layerParams.tunnel}
+          policyName={layerParams.policyName}
+          onClose={closeLayer}
+          onDone={() => run('route_status', {}, deadline)}
+          onOpenCabinet={() => openLayer('cabinet', {})}
+          onOpenTunnel={(tunnelID) => (tunnelID ? openLayer('tunnel', { tunnelID }) : closeLayer())}
+        />
+      )}
+
+      {layer === 'confimport' && (
         <ConfImportScreen
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
-          onClose={() => setImporting(false)}
+          onClose={closeLayer}
           onImported={() => run('route_status', {}, deadline)}
         />
       )}

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { placeText } from '../src/places.js'
 import {
   PROVISION_PATHS,
   AGENT_KINDS,
@@ -44,7 +45,7 @@ describe('варианты', () => {
       ['mobile', 'В машине'],
     ])
     expect(AWGM_AUTH_OPTIONS.map((o) => o.value)).toEqual(['web', 'api-key', 'none'])
-    expect(PROVISION_SECRET_NOTE).toBe('Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — «Забыть пароль» в Парке.')
+    expect(PROVISION_SECRET_NOTE).toBe(`Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — ${placeText('forgetPassword')}.`)
   })
 
   it('начальные значения: путь не выбран, дома, вход в веб, версия -- последняя', () => {
@@ -208,7 +209,7 @@ describe('экран токена', () => {
 
   it('слова', () => {
     expect(TOKEN_TEXTS.once).toBe('Токен показывается один раз: закроете экран — увидеть его снова будет нельзя.')
-    expect(TOKEN_TEXTS.after).toBe('Владельца роутеру назначают потом — во вкладке «Управление» → «Доступ».')
+    expect(TOKEN_TEXTS.after).toBe(`Владельца роутеру назначает администратор потом: ${placeText('access')}.`)
   })
 })
 

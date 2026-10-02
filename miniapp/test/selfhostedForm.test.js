@@ -241,8 +241,8 @@ describe('тексты экрана сервера', () => {
     expect(selfhostedErrorText(new Error('net'))).toBe('Не получилось. Попробуйте ещё раз.')
   })
 
-  it('словарь: «Свои VPN-серверы», без self-hosted и без бота', () => {
-    expect(SELFHOSTED_TEXTS.title).toBe('Свои VPN-серверы')
+  it('словарь: «Серверы», без self-hosted и без бота', () => {
+    expect(SELFHOSTED_TEXTS.title).toBe('Серверы')
     const all = Object.values(SELFHOSTED_TEXTS).join(' ')
     expect(all).not.toMatch(/self-?hosted|боту|в боте/i)
   })

@@ -38,14 +38,14 @@ async function mount(wide) {
 }
 
 describe('«Сейчас» на широком экране', () => {
-  it('две колонки: слева схема и плитки, справа тревоги и действия', async () => {
+  it('две колонки: слева схема и плитки, справа тревоги', async () => {
     const root = await mount(true)
     const main = root.querySelector('.now-grid > .now-main')
     const side = root.querySelector('.now-grid > .now-side')
     expect(main.querySelector('.hero')).toBeTruthy()
     expect(main.querySelector('.stat-grid')).toBeTruthy()
     expect(side.textContent).toContain('Активные тревоги')
-    expect(side.textContent).toContain('Быстрые действия')
+    expect(side.textContent).not.toContain('Быстрые действия')
     // «Администрирование» уехало во вкладку «Управление» (v0.41).
     expect(root.textContent).not.toContain('Администрирование')
     expect(main.textContent).not.toContain('Быстрые действия')
@@ -60,7 +60,8 @@ describe('«Сейчас» на широком экране', () => {
     expect(root.querySelector('.now-grid')).toBe(null)
     expect(root.querySelector('.hero h1').textContent).toBe(mocks.router.router.nickname)
     const titles = [...root.querySelectorAll('.section-title')].map((n) => n.textContent)
-    expect(titles.indexOf('Активные тревоги')).toBeLessThan(titles.indexOf('Быстрые действия'))
+    expect(titles).toContain('Активные тревоги')
+    expect(titles).not.toContain('Быстрые действия')
     render(null, root)
     root.remove()
   })

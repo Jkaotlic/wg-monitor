@@ -6,9 +6,9 @@ import { useFleetRecheck } from '../useFleetRecheck.js'
 // Роутер не выбран на широком экране: сводка вместо пустоты. Три числа --
 // ответ на «всё ли в порядке», карточки -- куда идти, если нет.
 //
-// Парк здесь больше не живёт (v0.48): у админа это своя вкладка, в боковой
-// колонке -- «Парк». Туда же уехал его «Опросить все»; не-админу с
-// несколькими роутерами кнопка остаётся здесь.
+// Парк здесь не живёт (v0.48): у админа это своя вкладка «Парк» -- в боковой
+// колонке и в нижней панели. Туда же уехал его «Проверить заново все»;
+// не-админу с несколькими роутерами кнопка остаётся здесь.
 export function FleetHome({ routers, onPick, isAdmin = false }) {
   const s = fleetSummary(routers)
   const { batch, recheckAll } = useFleetRecheck(routers)
@@ -39,7 +39,7 @@ export function FleetHome({ routers, onPick, isAdmin = false }) {
       {s.total > 1 && !isAdmin && (
         <section class="section fleet-home-recheck">
           <button type="button" class="btn btn-ghost" disabled={batch?.running} onClick={recheckAll}>
-            {batch?.running ? 'Опрашиваем…' : 'Опросить все'}
+            {batch?.running ? 'Проверяем…' : 'Проверить заново все'}
           </button>
           <p class="hint">
             {batchProgress(batch) || 'Каждый роутер переспросит себя сам. Ничего не меняет; спящие ответят, когда проснутся.'}

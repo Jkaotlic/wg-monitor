@@ -107,7 +107,8 @@ export async function fill(root, selector, value) {
 }
 
 export const primary = (root) => [...root.querySelectorAll('.sheet-actions button')].pop()
-export const buttons = (root, label) => [...root.querySelectorAll('button')].filter((b) => b.textContent === label)
+export const buttons = (root, label) =>
+  [...root.querySelectorAll('button')].filter((b) => (label === 'Открыть в браузере' ? b.classList.contains('list-row-btn') && b.textContent.includes(label) : b.textContent === label))
 export const rowOf = (root, name) => [...root.querySelectorAll('.park-row')].find((r) => r.querySelector('.data-row-main')?.textContent === name)
 export const cleanup = (root) => { render(null, root); root.remove() }
 
@@ -152,15 +153,15 @@ describe('Парк: сторож и отложенное', () => {
 })
 
 describe('Парк: ссылка на аварийную страницу вместо мостика на классическое', () => {
-  it('web: ни «Открыть в браузере», ни /dashboard/classic/, есть «Аварийная страница» в карточке бэкенда', async () => {
+  it('web: ни «Открыть в браузере», ни /dashboard/classic/, есть «Аварийная страница» в разделе «Серверы»', async () => {
     const { root } = await mountPark({ mode: 'web' })
     expect(buttons(root, 'Открыть в браузере')).toEqual([])
     expect(root.querySelector('a[href^="/dashboard/classic"]')).toBe(null)
     expect(root.textContent).not.toContain('классическом')
-    const link = root.querySelector('.park-backend a.park-rescue')
+    const link = root.querySelector('.section a[href="/dashboard/rescue/"]')
     expect(link).not.toBe(null)
-    expect(link.getAttribute('href')).toBe('/dashboard/rescue/')
     expect(link.textContent).toBe('Аварийная страница')
+    expect(root.querySelector('.park-backend a[href="/dashboard/rescue/"]')).toBe(null)
     cleanup(root)
   })
 
@@ -312,12 +313,11 @@ async function mountAdmin(openLayer, onOpenAgentConnection) {
 
 describe('Управление: перенаправить агента', () => {
 
-  it('свёрнуто под «Опасное»; адрес без https не пускает; запуск открывает «Ход работы»', async () => {
+  it('адрес без https не пускает; запуск открывает «Ход работы» (v0.52: раздел «Опасное» сворачивает вкладка)', async () => {
     const opened = []
     const { root, sheets } = await mountAdmin((overlay, params) => opened.push([overlay, params]))
-    const zone = root.querySelector('details.danger-zone')
-    expect(zone.open).toBe(false)
-    expect(zone.querySelector('summary').textContent).toBe('Опасное')
+    const zone = root
+    expect(root.querySelector('details.danger-zone')).toBe(null)
     expect(zone.textContent).toContain('Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.')
     await act(async () => buttons(zone, 'Перенаправить агента')[0].click())
     const s = await mountSheet(sheets[0])
@@ -369,7 +369,7 @@ describe('без адреса панели awg-manager', () => {
     mocks.conn = { awgm_url: '' }
     let openedConn = 0
     const { root } = await mountAdmin(() => {}, () => openedConn++)
-    const zone = root.querySelector('details.danger-zone')
+    const zone = root
     expect(buttons(zone, 'Перенаправить агента')).toHaveLength(0)
     expect(zone.textContent).toContain('Сначала задайте адрес панели в «Подключении агента».')
     await act(async () => buttons(zone, 'Подключение агента')[0].click())

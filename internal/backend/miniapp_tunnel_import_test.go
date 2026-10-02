@@ -147,13 +147,14 @@ func confirmImport(t *testing.T, env *cabinetEnv, tgUser int64, token string) *h
 	return env.do(t, tgUser, http.MethodPost, "/v1/miniapp/routers/{id}/tunnels/import/confirm", `{"token":`+strconv.Quote(token)+`}`)
 }
 
-// Решение 1: импорт -- админ и владелец; оператору и постороннему 404, и
-// роутеру ничего не уходит.
+// Решение 1 (с 01.10 и оператору: «оператору всё, кроме админского»):
+// импорт -- админ, владелец и оператор; постороннему 404, и роутеру
+// ничего не уходит.
 func TestMiniappTunnelImportGateByRole(t *testing.T) {
 	for _, tc := range []struct {
 		user    int64
 		allowed bool
-	}{{cabOwner, true}, {cabAdmin, true}, {cabOperator, false}, {777, false}} {
+	}{{cabOwner, true}, {cabAdmin, true}, {cabOperator, true}, {777, false}} {
 		env, sink := newTunnelEnv(t, analyzeAnswer("ok", `{"supported":true,"version":"2.0","errors":[],"warnings":[]}`))
 		rec := postImport(t, env, tc.user, importBody("vpn-new", importConfFixture))
 		if !tc.allowed {
@@ -468,5 +469,31 @@ func TestMiniappTunnelImportConfirmRechecksName(t *testing.T) {
 		if a == "tunnel_import" {
 			t.Fatal("импорт ушёл роутеру")
 		}
+	}
+}
+
+// Финальное ревью v0.52: бывший оператор (строка снята) -- 404 и на загрузку,
+// и на подтверждение, и на чтение разбора; роутеру ничего не уходит.
+func TestMiniappTunnelImportFormerOperatorGets404(t *testing.T) {
+	env, sink := newTunnelEnv(t, analyzeAnswer("ok", `{"supported":true,"version":"2.0","errors":[],"warnings":[]}`))
+	if rec := postImport(t, env, cabOperator, importBody("vpn-new", importConfFixture)); rec.Code != http.StatusOK {
+		t.Fatalf("действующему оператору: %d %s", rec.Code, rec.Body.String())
+	}
+	queued := len(sink.enqueued)
+	if err := env.d.RouterOperators().Remove(env.ownedID, cabOperator); err != nil {
+		t.Fatal(err)
+	}
+	rec := postImport(t, env, cabOperator, importBody("vpn-two", importConfFixture))
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Fatalf("загрузка: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/tunnels/import/confirm", `{"token":"x"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("подтверждение: %d", rec.Code)
+	}
+	if rec := env.do(t, cabOperator, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/import/x", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("чтение: %d", rec.Code)
+	}
+	if len(sink.enqueued) != queued {
+		t.Fatalf("бывшему оператору поставлена команда: %v", sink.actions())
 	}
 }

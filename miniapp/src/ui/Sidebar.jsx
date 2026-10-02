@@ -3,17 +3,15 @@ import { emptyFilterText } from '../fleetFilter.js'
 import { useFleetFilter } from '../useFleetFilter.js'
 import { FleetFilterBar } from './FleetFilterBar.jsx'
 import { PanelLine } from './PanelLine.jsx'
+import { tabLabel } from '../nav.js'
+import { TAB_ICONS } from './TabBar.jsx'
 
-// Боковая колонка широкой раскладки: бренд, поиск и список роутеров (тот же
-// порядок и те же слова, что в «Моих роутерах»), внизу Парк и выход. Колонка
-// нужна и при одном роутере: Парк и «Выйти» живут здесь.
-//
-// «Парк» не гаснет никогда: Парк -- про весь флот и от выбранного роутера не
-// зависит. Ведёт он во вкладку «Парк» (v0.48), как -- решает оболочка
-// (WideLayout).
+// Боковая колонка широкой раскладки (v0.52): бренд, вкладки, поиск и список
+// роутеров (тот же порядок и те же слова, что в «Моих роутерах»), внизу выход.
+// У Парка один вход -- вкладка (пункта «Парк» в подвале больше нет).
 //
 // Поиск -- только когда искать есть в чём (два роутера и больше).
-export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick, onPark, onLogout, shortcut = true }) {
+export function Sidebar({ mode, routers, currentID, isAdmin, tabs = [], tab, onTab, onPick, onLogout, shortcut = true }) {
   const f = useFleetFilter(routers)
   const rows = f.view.visible.map(fleetRow)
   const searchable = (routers?.length ?? 0) > 1
@@ -24,8 +22,25 @@ export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick,
         {mode === 'web' && <span class="side-brand-mode">веб-управление</span>}
       </div>
 
+      {/* v0.52: колонка = те же вкладки + список роутеров; у Парка один вход
+          -- вкладка (пункта «Парк» в подвале больше нет). */}
+      <nav class="side-tabs" aria-label="Вкладки">
+        {tabs.map((key) => (
+          <button
+            key={key}
+            type="button"
+            class={`side-link${key === tab ? ' side-link-active' : ''}`}
+            aria-current={key === tab ? 'page' : undefined}
+            onClick={() => onTab(key)}
+          >
+            {TAB_ICONS[key]}
+            <span>{tabLabel(key)}</span>
+          </button>
+        ))}
+      </nav>
+
       <div class="side-head">
-        <span>Роутеры</span>
+        <span>{isAdmin ? 'Роутеры парка' : 'Мои роутеры'}</span>
         <span class="side-count">{routers?.length ?? 0}</span>
       </div>
       {searchable && (
@@ -67,30 +82,15 @@ export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick,
         )}
       </nav>
 
-      {(isAdmin || mode === 'web') && (
+      {mode === 'web' && (
         <div class="side-foot">
-          {isAdmin && (
-            <button
-              type="button"
-              class={`side-link${parkActive ? ' side-link-active' : ''}`}
-              onClick={onPark}
-            >
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="2" y="2.5" width="12" height="4" rx="1.2" />
-                <rect x="2" y="9.5" width="12" height="4" rx="1.2" />
-              </svg>
-              <span>Парк</span>
-            </button>
-          )}
-          {mode === 'web' && (
-            <button type="button" class="side-link" onClick={onLogout}>
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M 6 2.5 H 3.5 a 1 1 0 0 0 -1 1 v 9 a 1 1 0 0 0 1 1 H 6" />
-                <path d="M 10 5 L 13 8 L 10 11 M 13 8 H 6.5" />
-              </svg>
-              <span>Выйти</span>
-            </button>
-          )}
+          <button type="button" class="side-link" onClick={onLogout}>
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M 6 2.5 H 3.5 a 1 1 0 0 0 -1 1 v 9 a 1 1 0 0 0 1 1 H 6" />
+              <path d="M 10 5 L 13 8 L 10 11 M 13 8 H 6.5" />
+            </svg>
+            <span>Выйти</span>
+          </button>
         </div>
       )}
     </aside>

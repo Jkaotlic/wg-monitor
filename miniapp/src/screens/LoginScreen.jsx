@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { dashboardLogin, redeemWebLink } from '../api.js'
 import { loginErrorText } from '../login.js'
+import { placeText } from '../places.js'
 
 // Вход в веб-управление. Два пути: личная ссылка из мини-аппа (токен в
 // хэше, обмен без участия человека) и токен доступа руками. Ссылка, которая
@@ -62,7 +63,7 @@ export function LoginScreen({ notice = '', linkToken = '', onLinkUsed, onSuccess
         <h1 class="login-title">Веб-управление</h1>
         <p class="login-lead">
           Вход для администратора: токен доступа или личная ссылка из мини-аппа
-          (Парк → «Открыть в браузере»).
+          ({placeText('browser')}).
         </p>
         {notice && <p class="login-notice">{notice}</p>}
         {redeeming ? (

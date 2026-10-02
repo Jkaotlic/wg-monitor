@@ -11,6 +11,7 @@
 import { doctorRows, auditRows } from './settings.js'
 import { pluralRu } from './labels.js'
 import { isAway } from './agentUpdate.js'
+import { placeText } from './places.js'
 
 export const BATCH = {
   doctor: { action: 'router_doctor', idle: 'Осмотреть все', busy: 'Осматриваем…' },
@@ -226,7 +227,7 @@ export function batchSummary(state) {
     }))
   if (skipped.length) lines.push({ id: 'skipped', text: skippedLine(skipped) })
   if (kind === 'doctor' && withProblems) {
-    lines.push({ id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Управление» → «Осмотр роутера».' })
+    lines.push({ id: 'doctor-note', text: `Что именно не так — на экране роутера: ${placeText('inspect')}.` })
   }
   return { headline, lines }
 }

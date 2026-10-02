@@ -53,18 +53,18 @@ describe('вкладки кабинета', () => {
   })
 })
 
-describe('права (спека, решение 1)', () => {
+describe('права (спека §7, v0.52)', () => {
   it('админ и владелец -- всё', () => {
     for (const role of ['admin', 'owner']) {
-      expect(cabinetPerms(role)).toEqual({ manage: true, remove: true, revoke: true, sendConf: true })
+      expect(cabinetPerms(role)).toEqual({ manage: true, remove: true, revoke: true, sendConf: true, admin: role === 'admin' })
     }
   })
-  it('оператор -- смотреть, добавить, выбрать активный', () => {
-    expect(cabinetPerms('operator')).toEqual({ manage: true, remove: false, revoke: false, sendConf: false })
+  it('оператор -- всё, кроме удаления ключа и админского', () => {
+    expect(cabinetPerms('operator')).toEqual({ manage: true, remove: false, revoke: true, sendConf: true, admin: false })
   })
   it('неизвестная роль и пусто -- ничего', () => {
-    for (const role of ['', undefined, 'guest']) {
-      expect(cabinetPerms(role)).toEqual({ manage: false, remove: false, revoke: false, sendConf: false })
+    for (const role of ['', 'stranger', undefined, 'guest']) {
+      expect(cabinetPerms(role)).toEqual({ manage: false, remove: false, revoke: false, sendConf: false, admin: false })
     }
   })
 })
@@ -140,7 +140,7 @@ describe('ключи и коды', () => {
 
   it('ошибки: фраза сервера, затем своя по коду, затем общая', () => {
     expect(cabinetErrorText('amnezia', new ApiError(422, 'cabinet_rejected', 'x', 'Подписка истекла'))).toBe('Подписка истекла')
-    expect(cabinetErrorText('amnezia', new ApiError(400, 'invalid_key', 'x'))).toBe('Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется из кабинета целиком.')
+    expect(cabinetErrorText('amnezia', new ApiError(400, 'invalid_key', 'x'))).toBe('Это не ключ Amnezia Premium: ключ начинается с vpn:// и копируется целиком.')
     expect(cabinetErrorText('amnezia', new ApiError(422, 'cabinet_rejected', 'x'))).toBe('Кабинет Amnezia Premium не принял ключ. Проверьте, что он скопирован целиком и подписка активна.')
     expect(cabinetErrorText('hidemy', new ApiError(422, 'cabinet_rejected', 'x'))).toBe('HideMy.name не принял код. Проверьте, что он скопирован целиком и подписка не закончилась.')
     expect(cabinetErrorText('hidemy', new ApiError(400, 'invalid_code', 'x'))).toBe('Это не похоже на код доступа HideMy.name.')
@@ -155,7 +155,7 @@ describe('ключи и коды', () => {
     expect(activeDoneText('amnezia', { title: 'основной' })).toBe('Активный ключ — «основной».')
     expect(deleteSecretSheetText('amnezia', { title: 'основной', active: true })).toEqual({
       title: 'Удалить ключ «основной»?',
-      body: 'Это активный ключ: пока не выберете другой, выпускать VPN-туннели из кабинета не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.',
+      body: 'Это активный ключ: пока не выберете другой, выпускать новые VPN-туннели не получится. Уже выпущенные VPN-туннели на роутере продолжат работать.',
     })
     expect(deleteSecretSheetText('hidemy', { title: 'дача', active: false })).toEqual({
       title: 'Удалить код «дача»?',
@@ -204,7 +204,7 @@ describe('выпуск', () => {
     expect(issueFailure(busy, { revoke: true }, 'hidemyname')).toEqual({ text: 'Свободных мест в подписке нет.', offerRevoke: false })
     expect(issueFailure(busy, { revoke: true }, 'amnezia').offerRevoke).toBe(true)
     expect(issueFailure(busy, { revoke: false })).toEqual({
-      text: 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.',
+      text: 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера, оператор или администратор.',
       offerRevoke: false,
     })
   })
@@ -257,10 +257,12 @@ describe('тексты не отправляют в бота', () => {
 })
 
 describe('панели awg3 (v0.51)', () => {
-  it('вкладка «Панели» -- только когда сервер дал хоть одну панель', () => {
+  it('вкладка «Панель VPN-сервера» -- когда сервер дал хоть одну панель или список не загрузился', () => {
     expect(cabinetTabs({}, []).map((t) => t.id)).toEqual(['amnezia', 'hidemy'])
     expect(cabinetTabs({}, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'awg3'])
     expect(cabinetTabs({ selfhosted: { available: true } }, [{ id: 'main' }]).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'selfhosted', 'awg3'])
+    expect(cabinetTabs({}, [], { awg3Failed: true }).map((t) => t.id)).toEqual(['amnezia', 'hidemy', 'awg3'])
+    expect(cabinetTabs({}, [{ id: 'main' }]).find((t) => t.id === 'awg3').title).toBe('Панель VPN-сервера')
   })
 
   it('выпуск с панели: аргументы и объяснение', () => {

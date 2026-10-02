@@ -5,7 +5,7 @@ import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
 import { whenText, sinceText, untilText } from '../when.js'
-import { errorText, isRussianText } from '../errorText.js'
+import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { routerHeadline } from '../routerHeadline.js'
 import { isStale } from '../staleness.js'
@@ -14,11 +14,9 @@ import { Quoted } from '../ui/Q.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
-import { Section } from '../ui/Section.jsx'
-import { ActionTile } from '../ui/ActionTile.jsx'
 import { PanelLine } from '../ui/PanelLine.jsx'
 import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
-import { RepairScreen } from './RepairScreen.jsx'
+import { useOnClose } from '../useOnClose.js'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { AppContext } from '../appContext.js'
@@ -36,6 +34,7 @@ import {
   pingLabel,
   statusLabel,
 } from '../labels.js'
+import { placeText } from '../places.js'
 
 // TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
 // button text itself comes from ACTION_LABELS so this card and any other
@@ -136,8 +135,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 // Повторять её объяснение слово в слово двумя блоками ниже -- это не
 // «подчеркнуть», а заставить прочитать одно и то же дважды и потерять время
 // в тот момент, когда его меньше всего.
-function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false, tunnels = [], primary = false }) {
-  const [repairOpen, setRepairOpen] = useState(false)
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false, tunnels = [], primary = false, onRepair }) {
   const [expanded, setExpanded] = useState(false)
   const [history, setHistory] = useState(null)
   const [historyTruncated, setHistoryTruncated] = useState(false)
@@ -211,7 +209,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           она контурная -- лайм на экране один. Перезапуск и «Не
           беспокоить…» -- пара ниже, одной высоты. */}
       {tunnelID && (
-        <button type="button" class={`btn ${primary ? 'btn-primary' : 'btn-ghost'} btn-wide repair-open`} onClick={() => setRepairOpen(true)}>
+        <button type="button" class={`btn ${primary ? 'btn-primary' : 'btn-ghost'} btn-wide repair-open`} onClick={() => onRepair?.({ checkName: incident.check_name, lineName: lineName || tunnelID })}>
           Починить
         </button>
       )}
@@ -239,17 +237,6 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
             </button>
           )}
         </div>
-      )}
-      {repairOpen && (
-        <RepairScreen
-          routerID={routerID}
-          checkName={incident.check_name}
-          lineName={lineName || tunnelID}
-          onClose={() => {
-            setRepairOpen(false)
-            onDone?.()
-          }}
-        />
       )}
 
       {/* Wording mirrors the backend's own confirmation lines (alertaction.go's
@@ -291,259 +278,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
   )
 }
 
-// Быстрые действия по макету: плитки вместо разрозненных кнопок внутри
-// карточек. Набор -- ровно то, что мини-аппу разрешено (allowlist в
-// miniapp_commands.go). "Сбросить DNS", "Обслужить пакеты" и "Перезагрузить
-// роутер" из макета здесь сознательно отсутствуют: этих команд у мини-аппа
-// нет, они админские и живут в дашборде.
-function QuickActions({ routerID, tunnels, traffic, asleep, onDone, openSheet, onTab }) {
-  // Перезапускать предлагаем тот туннель, которым сейчас идёт трафик: если
-  // трафик идёт мимо туннелей, предлагать нечего -- плитка не рисуется.
-  const egressID = traffic?.mode === 'vpn' ? traffic.egress_tunnel_id : null
-  const egress = tunnels.find((t) => t.tunnel_id === egressID)
-
-  return (
-    <Section title="Быстрые действия">
-      <div class="action-grid">
-        {egress && (
-          <ActionTile
-            title={ACTION_LABELS.restartTunnel}
-            hint={`${egress.tunnel_id} · связь прервётся на несколько секунд`}
-            danger
-            onClick={() =>
-              openSheet(
-                confirmSheet({
-                  routerID,
-                  title: ACTION_LABELS.restartTunnel,
-                  body: `Перезапустить VPN-туннель «${egress.name || egress.tunnel_id}»? Связь через него на несколько секунд прервётся.`,
-                  action: 'tunnel_restart',
-                  args: { tunnel_id: egress.tunnel_id },
-                  buttonLabel: 'Да, выполнить',
-                  danger: true,
-                  asleep,
-                  onDone,
-                }),
-              )
-            }
-          />
-        )}
-        <ActionTile
-          title="Собрать диагностику"
-          hint="полный отчёт от агента"
-          onClick={() => onTab('diag')}
-        />
-        {/* Прежде эта кнопка жила в блоке "Куда идёт трафик" вместе с
-            вердиктом. Вердикт уехал в шапку экрана, и держать ради одной
-            кнопки целый раздел, повторяющий шапку словами, незачем. */}
-        <ActionTile
-          title={ACTION_LABELS.recheck}
-          hint="роутер опросит себя заново"
-          onClick={() =>
-            openSheet(
-              confirmSheet({
-                routerID,
-                title: ACTION_LABELS.recheck,
-                body: 'Роутер прогонит свои проверки заново и пришлёт свежий отчёт.',
-                action: 'force_recheck',
-                buttonLabel: 'Проверить',
-                asleep,
-                onDone,
-              }),
-            )
-          }
-        />
-      </div>
-    </Section>
-  )
-}
-
-// The agent's two connectivity probes return prose written for a chat message
-// (actions/connectivity.go:47-104: "🌍 Через туннель (%s):" / "🇷🇺 Напрямую
-// (через системный маршрут):", then an "Exit IP: %s" line, then a blank line,
-// then one ✅/❌ line per site), not structured data. The exit IP is the only
-// piece worth lifting out for the side-by-side compare below; everything else
-// is shown verbatim in ExitProbeBlock rather than re-parsed, which would just
-// fight a format this file doesn't own.
-//
-// The character class covers both IPv4 and IPv6 literals. It deliberately
-// will NOT match connectivity.go's own "❓ не удалось определить (<reason>)"
-// placeholder (printed when its internal cdn-cgi/trace lookup itself failed)
-// -- that placeholder starts with an emoji, not a hex digit, so a failed
-// trace correctly falls through to "no IP" instead of capturing the
-// placeholder text as if it were an address.
-function extractExitIP(output) {
-  return output?.match(/Exit IP:\s*([0-9a-fA-F.:]+)/)?.[1] ?? null
-}
-
-// Only what the compare above needs: the parsed IP, or null. Pulled out so
-// ExitCompareSection (comparing the two) and ExitProbeBlock (displaying one)
-// can't disagree on what counts as "found an IP" -- both call this, neither
-// re-derives it.
-function probeIP(state) {
-  return state.result ? extractExitIP(state.result.output) : null
-}
-
-// The honest reason a settled probe has no IP to show. Deliberately NOT keyed
-// off `result.status` the way commandOutcomeLabel is elsewhere on this
-// screen: classifyConnectivityStatus (connectivity.go:450-460) returns "err"
-// merely because one of three site checks failed, while the exit-IP trace
-// underneath it -- and the "Exit IP:" line in `output` -- can still have
-// succeeded. So every settled result, "ok" or "err" alike, is searched for an
-// IP first; only "locked"/"timeout" (the action never actually ran) skip
-// straight to commandOutcomeLabel's existing fixed phrasing. A genuine parse
-// miss gets one short, honest line of its own rather than echoing the full
-// report a second time -- the raw report is already rendered verbatim right
-// below by ExitProbeBlock.
-function probeNote(action, state) {
-  if (state.error) return state.error
-  if (!state.result) return null
-  if (extractExitIP(state.result.output)) return null
-  if (state.result.status === 'locked' || state.result.status === 'timeout') {
-    return commandOutcomeLabel(action, state.result)
-  }
-  return 'Не удалось определить адрес'
-}
-
-// One side of the comparison: a label, the parsed IP (or the honest reason
-// there isn't one), and the agent's own report verbatim underneath --
-// `white-space: pre-line` (see .compare-probe-detail) is what lets that text
-// keep connectivity.go's own line breaks without this file re-splitting them.
-function ExitProbeBlock({ label, action, state }) {
-  const ip = probeIP(state)
-  const note = state.busy ? null : probeNote(action, state)
-  return (
-    <div class="compare-probe">
-      <p class="compare-probe-label">{label}</p>
-      {state.busy && <p class="compare-probe-ip compare-probe-pending">Проверяю…</p>}
-      {!state.busy && ip && <p class="compare-probe-ip">{ip}</p>}
-      {!state.busy && !ip && note && <p class="compare-probe-ip compare-probe-unknown">{note}</p>}
-      {isRussianText(state.result?.output) && <p class="compare-probe-detail">{String(state.result.output).trim()}</p>}
-    </div>
-  )
-}
-
-// Task 13: the one comparison the bot has never made. check_via_tunnel and
-// check_direct have each been their own button in the bot for as long as
-// those checks have existed (actions/connectivity.go) -- nothing has ever put
-// their two answers next to each other, and the difference (or lack of one)
-// between them IS the answer to "does traffic actually go through the VPN".
-// Two different exit IPs prove the tunnel carries traffic; the same IP twice
-// proves it doesn't, which no per-site checkmark elsewhere on this screen
-// could ever say on its own.
-//
-// Both actions are read-only and take no args (miniapp_commands.go's
-// allowlist comment; connectivity.go does nothing but issue outbound HTTP
-// HEAD/GETs). So this reuses CommandButton's asleep confirm gate -- queuing a
-// command on a sleeping router is exactly as confusing here as anywhere else
-// on this screen -- but not its mutatingText path, since neither probe
-// changes anything on the router. It needs its own component rather than two
-// CommandButtons because the two dispatches must fire from one click and the
-// result has to render as a single comparison, not two independent cards.
-function ExitCompareSection({ routerID, traffic, asleep }) {
-  const viaTunnel = useCommand(routerID)
-  const direct = useCommand(routerID)
-  const [confirming, setConfirming] = useState(false)
-
-  const busy = viaTunnel.busy || direct.busy
-  const attempted = busy || !!(viaTunnel.result || viaTunnel.error || direct.result || direct.error)
-
-  function dispatch() {
-    setConfirming(false)
-    const opts = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
-    // Independent probes: both fire from this one click, and neither awaits
-    // or is cancelled by the other -- a slow or failed side must never block
-    // the other side's answer from showing up.
-    viaTunnel.run('check_via_tunnel', {}, opts)
-    direct.run('check_direct', {}, opts)
-  }
-
-  function handleClick() {
-    if (asleep && !confirming) {
-      setConfirming(true)
-      return
-    }
-    dispatch()
-  }
-
-  const viaIP = probeIP(viaTunnel)
-  const directIP = probeIP(direct)
-  const bothIPs = !!(viaIP && directIP)
-  const sameIP = bothIPs && viaIP === directIP
-  // traffic.mode is Task 3's own derivation. On a sing-box router, the route is chosen per destination, so
-  // these two probes -- hitting different sites for the via-tunnel and direct
-  // checks -- were never guaranteed to take the same path in the first place.
-  // Equal or different, neither answer generalizes to "all traffic", so this
-  // mode gets a caveat instead of either verdict below, and gets it up front
-  // (before the button, not just after a run) so the reader isn't primed to
-  // expect a confident answer.
-  const singboxMode = traffic?.mode === 'singbox'
-
-  return (
-    <section class="section">
-      <h2 class="section-title">Проверить сейчас</h2>
-      <div class="card">
-        {singboxMode && (
-          <p class="compare-note compare-note-caution">
-            На этом роутере маршрут выбирается для каждого сайта отдельно (sing-box) — два адреса ниже не складываются в
-            общий ответ <Quoted text="«весь трафик идёт туда-то»" />.
-          </p>
-        )}
-
-        {confirming ? (
-          <div class="compare-confirm">
-            <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>
-            <div class="command-actions">
-              {/* Both probes here are read-only (check_via_tunnel/check_direct issue
-                  no mutation) -- this step only ever exists for the asleep gate, never
-                  for a destructive confirm, so it stays primary rather than danger;
-                  same reasoning as CommandButton's confirm button above. */}
-              <button class="btn btn-ghost" onClick={dispatch}>
-                Да, выполнить
-              </button>
-              <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
-                Отмена
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button class="btn btn-ghost compare-run" disabled={busy} onClick={handleClick}>
-            {/* Не "Повторить проверку": так называется опрос роутера в
-                быстрых действиях, а здесь запускаются два зонда наружу.
-                Одинаковые слова на кнопках, делающих разное, -- ловушка. */}
-            {busy ? 'Сравниваю…' : 'Сравнить адреса выхода'}
-          </button>
-        )}
-
-        {attempted && (
-          <div class="compare-probes">
-            <ExitProbeBlock label="Через VPN" action="check_via_tunnel" state={viaTunnel} />
-            <ExitProbeBlock label="Напрямую" action="check_direct" state={direct} />
-          </div>
-        )}
-
-        {!busy && !singboxMode && sameIP && (
-          <p class="compare-note compare-note-alert">Адреса совпадают — трафик идёт мимо VPN-туннеля.</p>
-        )}
-        {!busy && !singboxMode && bothIPs && !sameIP && (
-          <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через VPN-туннель.</p>
-        )}
-
-        {/* Меньше текста до кнопки (спека C3): как устроена проверка --
-            для того, кто спросит, а не для каждого, кто пришёл нажать. */}
-        <details class="compare-how">
-          <summary>Как это работает</summary>
-          <p class="traffic-detail">
-            Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через VPN-туннель обхода и напрямую.
-            Разные адреса — трафик идёт через VPN-туннель; одинаковые — мимо него. Ничего на роутере не меняет.
-          </p>
-        </details>
-      </div>
-    </section>
-  )
-}
-
-
-export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab, openLayer, repairOpen = false, otherAlert = null, onOpenRouter, onOpenService }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -602,6 +337,9 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
       })
   }
 
+  // Починка -- слой навигации: после её закрытия тревоги читаются заново.
+  useOnClose(repairOpen, () => loadData())
+
   // Экран живёт сам. Раньше данные грузились ровно один раз при входе, и
   // строка «41 сек назад» через пять минут врала: человек смотрел на прошлое,
   // поданное как настоящее. Опрос идёт только пока вкладка открыта -- Telegram
@@ -650,8 +388,6 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // Над спойлером -- только красное и жёлтое. Серое («сторож не следит»,
   // незнакомый статус) -- не поломка и остаётся внутри вместе с исправным.
   const isFailing = (c) => ['danger', 'warn'].includes(checkState(c).tone)
-  const okChecks = otherChecks.filter((c) => !isFailing(c))
-  const okCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
   const failingChecks = otherChecks.filter(isFailing)
 
   if (router == null) {
@@ -792,7 +528,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   // 18.09), а не только дошедшему до «Управления». Нажатие ведёт туда.
   const notice = maintenanceNotice(versions)
   const maintBlock = notice && (
-    <button type="button" class={`card maint-notice maint-notice-${notice.tone}`} onClick={() => onTab?.('manage')}>
+    <button type="button" class={`card maint-notice maint-notice-${notice.tone}`} onClick={() => onOpenService?.()}>
       <span class="maint-notice-title">{notice.title}</span>
       {notice.note && <span class="maint-notice-note">{notice.note}</span>}
       {notice.lines.map((l) => (
@@ -800,7 +536,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
           {l}
         </span>
       ))}
-      <span class="maint-notice-go">Открыть «Управление»</span>
+      <span class="maint-notice-go">Открыть {placeText('service')}</span>
     </button>
   )
 
@@ -819,6 +555,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
+              onRepair={(p) => openLayer?.('repair', p)}
               openSheet={openSheet}
               tunnels={tunnels}
               primary={inc.check_name === primaryCheck}
@@ -834,24 +571,11 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     </div>
   )
 
-  // Блоки -- общие для обеих раскладок, но стоят в разных родителях (одна
-  // колонка на телефоне, .now-main/.now-side на широком). Смена ширины окна
-  // через порог 1024 px пересоздаёт их: ход быстрой команды и сравнения
-  // выходов на экране теряется. Сама команда уже ушла на роутер и
-  // выполнится; её итог виден по следующему опросу экрана и в «Что было».
-  const quickBlock = (
-    <QuickActions
-      routerID={id}
-      tunnels={tunnels}
-      traffic={traffic}
-      asleep={asleep}
-      onDone={loadData}
-      openSheet={openSheet}
-      onTab={onTab}
-    />
-  )
-
-  const compareBlock = <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
+  const otherAlertBlock = otherAlert ? (
+    <button type="button" class="card other-alert" onClick={() => onOpenRouter?.(otherAlert.id)}>
+      {`На «${otherAlert.nickname}» тревога — открыть`}
+    </button>
+  ) : null
 
   const checkRow = (c) => {
     const st = checkState(c)
@@ -865,23 +589,13 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     )
   }
 
+  // Спойлер «Проверки» ушёл (v0.52): он дублировал вкладку «Проверки». Здесь
+  // остаётся только сломанное -- оно часть ответа «что не так».
   const checksBlock =
-    otherChecks.length > 0 ? (
+    failingChecks.length > 0 ? (
       <section class="section">
-        {failingChecks.length > 0 && (
-          <>
-            <h2 class="section-title">Проверки не в порядке</h2>
-            <ul class="card list-reset checks-failing">{failingChecks.map(checkRow)}</ul>
-          </>
-        )}
-        {okChecks.length > 0 && (
-          <details class="checks-spoiler">
-            <summary class="section-title checks-spoiler-summary">
-              {failingChecks.length > 0 ? 'Прочие проверки' : 'Проверки'} — {checksStale ? 'на момент последнего отчёта' : `${okCount} в норме`}
-            </summary>
-            <ul class="card list-reset">{okChecks.map(checkRow)}</ul>
-          </details>
-        )}
+        <h2 class="section-title">Проверки не в порядке</h2>
+        <ul class="card list-reset checks-failing">{failingChecks.map(checkRow)}</ul>
       </section>
     ) : null
 
@@ -895,14 +609,13 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
     // вообще открывают в плохой день, поэтому она выше прибора.
     return (
       <div class="screen">
+        {otherAlertBlock}
         {heroBlock}
         {incidentsBlock}
         {maintBlock}
         {statsBlock}
         {backupBlock}
         {tunnelsNavBlock}
-        {quickBlock}
-        {compareBlock}
         {checksBlock}
       </div>
     )
@@ -914,17 +627,16 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab 
   return (
     <div class="screen now-grid">
       <div class="now-main">
+        {otherAlertBlock}
         {heroBlock}
         {maintBlock}
         {statsBlock}
         {backupBlock}
         {tunnelsNavBlock}
-        {compareBlock}
         {checksBlock}
       </div>
       <div class="now-side">
         {incidentsBlock}
-        {quickBlock}
       </div>
     </div>
   )
