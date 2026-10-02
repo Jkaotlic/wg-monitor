@@ -4,7 +4,7 @@ import { render } from 'preact'
 import { useReducer } from 'preact/hooks'
 import { act } from 'preact/test-utils'
 import { navReducer, localLayerDepth } from '../src/nav.js'
-import { navFromURL } from '../src/navUrl.js'
+import { navFromURL, urlFromNav } from '../src/navUrl.js'
 import { useNavURL } from '../src/useNavURL.js'
 
 // «Назад» браузера в веб-управлении закрывает слои вкладок (v0.52, доводка).
@@ -134,6 +134,23 @@ describe('«назад» браузера закрывает слой вклад
     await d({ type: 'pin', pinned: false })
     await browserBack()
     expect(api.nav.overlay).toBe('cabinet')
+  })
+
+  it('закреплённый слой, «назад» через несколько записей: после открепления и закрытия адрес совпадает с местом', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'cabinet' })
+    await d({ type: 'overlay', overlay: 'cabinetissue', params: { optionId: 'nl' } })
+    await d({ type: 'pin', pinned: true })
+    const pinned = api.nav
+    // Chrome пропускает записи, созданные без жеста, и есть меню истории: назад сразу на две.
+    await go(() => window.history.go(-2))
+    expect(api.nav).toBe(pinned)
+    await d({ type: 'pin', pinned: false })
+    await d({ type: 'back' })
+    await settle()
+    expect(api.nav.overlay).toBe('cabinet')
+    expect(address()).toBe('/dashboard/' + urlFromNav(api.nav))
+    expect(window.location.search).toBe('?router=7&tab=tunnels&open=cabinet')
   })
 
   it('лист поверх слоя: «назад» закрывает лист, слой и его запись остаются', async () => {

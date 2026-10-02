@@ -14,7 +14,7 @@ import { chromium } from 'playwright'
 import { collectLayout, findProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
 import { killChild, stopChild } from './proc.mjs'
-import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, SANDBOX_LATEST, expectPattern } from './screens.js'
+import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, SANDBOX_LATEST, HRNEO_STOPPED, expectPattern } from './screens.js'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1]] : null)).filter(Boolean))
@@ -384,8 +384,9 @@ async function runPass(bin, role, width, port) {
   // -latest: Парк без похода на GitHub (одна и та же «доступная версия» на
   // каждом прогоне); -backend-update ignore: раскатка бэкенда остаётся в
   // ожидании -- экран снимается в устойчивом состоянии, а не за секунду до
-  // перезагрузки страницы.
-  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore'], {
+  // перезагрузки страницы; -hrneo-stopped: роутер с остановленным HydraRoute
+  // Neo (по умолчанию песочница никого не останавливает).
+  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore', '-hrneo-stopped', HRNEO_STOPPED], {
     cwd: REPO,
     detached: true,
     stdio: ['ignore', logFd, logFd],

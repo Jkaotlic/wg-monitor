@@ -68,7 +68,7 @@ func main() {
 	noAccess := flag.Bool("no-access", false, "открыть мини-апп человеком без доступа: парк принадлежит другому, экран «Роутер ещё не привязан» с Telegram ID")
 	role := flag.String("role", "", "роль зрителя для приёмки раскладки: admin | owner1 | owner3 | operator | issuer | none (без доступа); пусто -- как раньше (-admin)")
 	latest := flag.String("latest", "", "последний выпуск, который «видит» бэкенд: пусто -- настоящий поход на GitHub; версия (v0.34.0) -- без сети: Парк предлагает раскатку бэкенда до неё, переустановка агента ставит её")
-	hrneoStopped := flag.String("hrneo-stopped", "дача-северная", "роутер, на котором HydraRoute Neo засеян остановленным (лист «Запустить»); пусто -- запущен на всех")
+	hrneoStopped := flag.String("hrneo-stopped", "", "роутер, на котором HydraRoute Neo засеян остановленным (лист «Запустить»), например дача-северная; пусто -- запущен на всех")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")

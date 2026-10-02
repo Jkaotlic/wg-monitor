@@ -85,6 +85,12 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
     const onPop = () => {
       if (selfGo.current.n > 0 && Date.now() <= selfGo.current.until) {
         selfGo.current = { ...selfGo.current, n: selfGo.current.n - 1 }
+        // Свой переход мог приземлиться на запись другого места: закреплённый
+        // слой возвращает метку поверх той записи, куда ушёл «назад» (Chrome
+        // пропускает записи без жеста, есть и меню истории). Экран уже верный --
+        // адрес приводится к нему заменой, без новой записи.
+        const url = basePath + urlFromNav(navRef.current)
+        if (url !== here()) window.history.replaceState(window.history.state, '', url)
         return
       }
       selfGo.current = { n: 0, until: 0 }

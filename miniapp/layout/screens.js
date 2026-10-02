@@ -9,8 +9,8 @@
 export const ROLES = ['admin', 'owner1', 'owner3', 'operator', 'issuer', 'none']
 // «Последний выпуск» песочницы (флаг -latest): Парк предлагает раскатку до него.
 export const SANDBOX_LATEST = 'v0.34.0'
-// Роутер с остановленным HydraRoute Neo (флаг песочницы -hrneo-stopped, он же по умолчанию).
-const HRNEO_STOPPED = 'дача-северная'
+// Роутер с остановленным HydraRoute Neo: run.mjs передаёт его песочнице флагом -hrneo-stopped.
+export const HRNEO_STOPPED = 'дача-северная'
 export const WIDTHS = [360, 390, 1024, 1440]
 
 export const DEFAULT_ROUTER = {
