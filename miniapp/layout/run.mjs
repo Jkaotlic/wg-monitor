@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { collectLayout, findProblems, neighbourProblems, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
+import { collectLayout, findProblems, neighbourProblems, pairCoverageProblem, netProblems, SMALL_OK, SKIP_TARGETS } from './checks.js'
 import { watchNet } from './net.mjs'
 import { killChild, stopChild } from './proc.mjs'
 import { ROLES, WIDTHS, SCREENS, DEFAULT_ROUTER, SANDBOX_LATEST, HRNEO_STOPPED, expectPattern } from './screens.js'
@@ -195,9 +195,11 @@ async function runStep(page, step, routerName, role) {
     for (const c of cards) await toggle(c.i, 'false')
     cards = await measure()
     const bad = []
+    let compared = 0
     for (const c of cards) {
       const mate = cards.find((o) => o.i !== c.i && Math.abs(o.top - c.top) <= 1)
       if (!mate) continue
+      compared++
       await toggle(c.i, 'true')
       const after = (await measure()).find((o) => o.i === mate.i)
       console.log(`  [парк, раскрыта «${c.name}» ${role} ${page.viewportSize().width}] сосед «${mate.name}»: высота ${mate.height} → ${after?.height}, кнопки ${mate.btnTop} → ${after?.btnTop}`)
@@ -205,6 +207,9 @@ async function runStep(page, step, routerName, role) {
       await toggle(c.i, 'false')
     }
     await toggle(cards[0].i, 'true')
+    const idle = pairCoverageProblem(page.viewportSize().width, cards.length, compared)
+    if (idle) bad.push(idle)
+    console.log(`  [парк ${role} ${page.viewportSize().width}] карточек ${cards.length}, сверено соседей: ${compared}`)
     for (const b of bad) console.log(`  [парк] ${b}`)
     return bad.length === 0
   }

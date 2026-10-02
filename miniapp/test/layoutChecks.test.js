@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems, neighbourProblems } from '../layout/checks.js'
+import { findProblems, rowMismatches, netProblems, isKnownNoise, SMALL_OK, unstyledControls, stripProblems, gridRowProblems, headingProblems, neighbourProblems, pairCoverageProblem } from '../layout/checks.js'
 import { SCREENS, ROLES, expectPattern } from '../layout/screens.js'
 
 const clean = { scrollWidth: 360, innerWidth: 360, targets: [{ text: 'Роутер', sel: 'button.tabbar-item', w: 72, h: 56 }], limes: ['Починить'], smallText: [], clipped: [], rows: [] }
@@ -171,6 +171,21 @@ describe('скрипт раскладки: сосед раскрытой кар�
   })
   it('соседа не стало -- находка', () => {
     expect(neighbourProblems('sandbox-broken', m(133, 917), undefined)).toHaveLength(1)
+  })
+})
+
+describe('скрипт раскладки: сверка соседа не проходит вхолостую', () => {
+  it('от 1100 px две карточки и ноль сверенных пар -- находка', () => {
+    expect(pairCoverageProblem(1440, 8, 0)).toContain('сосед не сверен')
+    expect(pairCoverageProblem(1100, 2, 0)).toContain('1100')
+  })
+  it('пары сверены -- находки нет', () => {
+    expect(pairCoverageProblem(1440, 8, 8)).toBe(null)
+  })
+  it('уже 1100 px (столбик) и одна карточка -- ноль пар допустим', () => {
+    expect(pairCoverageProblem(1024, 8, 0)).toBe(null)
+    expect(pairCoverageProblem(390, 8, 0)).toBe(null)
+    expect(pairCoverageProblem(1440, 1, 0)).toBe(null)
   })
 })
 

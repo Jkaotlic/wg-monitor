@@ -250,6 +250,15 @@ export function neighbourProblems(opened, before, after) {
   return out
 }
 
+// Сверка соседа обязана состояться: от 1100 px карточки Парка стоят по две, и
+// при двух карточках и больше ноль сверенных пар -- не «всё хорошо», а сверка,
+// прошедшая вхолостую (ряды не нашлись). Уже 1100 px -- столбик, пар нет.
+export const PAIR_MIN_WIDTH = 1100
+export function pairCoverageProblem(width, cards, compared) {
+  if (width >= PAIR_MIN_WIDTH && cards >= 2 && compared === 0) return `на ширине ${width} у ${cards} карточек не найдено ни одного ряда из двух -- сосед не сверен`
+  return null
+}
+
 // Проверка 10: карточки одной сетки с одинаковым верхом -- один ряд; верх
 // первой кнопки у них обязан совпадать (допуск 1 px).
 export function gridRowProblems(cards = []) {
