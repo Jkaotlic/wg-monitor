@@ -37,6 +37,7 @@ const (
 
 	backupAlertKeyPrefix = "backup_alert."
 	backupAlertActiveKey = backupAlertKeyPrefix + "active"
+	backupAlertWatchKey  = backupAlertKeyPrefix + "watch_since"
 
 	backupRecoveredText = "Бэкап снова в порядке."
 	backupAlertFooter   = "Подробности — в приложении, в «Парке», карточка «Бэкенд»."
@@ -68,6 +69,9 @@ type BackupAlertConfig struct {
 type BackupAlerter struct {
 	cfg BackupAlertConfig
 	mu  sync.Mutex
+	// lastSent -- нижняя планка в памяти рядом с хранилищем: если tg_state не
+	// пишется, тревога всё равно не повторяется каждый тик.
+	lastSent map[string]time.Time
 }
 
 func NewBackupAlerter(cfg BackupAlertConfig) *BackupAlerter {
@@ -80,7 +84,7 @@ func NewBackupAlerter(cfg BackupAlertConfig) *BackupAlerter {
 	if cfg.StartedAt.IsZero() {
 		cfg.StartedAt = cfg.Now()
 	}
-	return &BackupAlerter{cfg: cfg}
+	return &BackupAlerter{cfg: cfg, lastSent: map[string]time.Time{}}
 }
 
 // Run крутит Tick, пока жив ctx.
@@ -112,9 +116,15 @@ func (a *BackupAlerter) Tick(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.cfg.Now()
-	reasons := a.reasons(now)
+	watch := a.watchSince(now)
+	reasons, state := a.reasons(now, watch)
 
 	if len(reasons) == 0 {
+		// «Снова в порядке» -- только когда состояние решено: файл прочитан и
+		// ни один прогон не идёт. Идущий прогон ещё может провалиться.
+		if state.undecided() {
+			return
+		}
 		if active, _ := a.cfg.KV.Get(backupAlertActiveKey); active == "1" {
 			if a.send(ctx, backupRecoveredText) {
 				a.forget()
@@ -126,19 +136,49 @@ func (a *BackupAlerter) Tick(ctx context.Context) {
 		last, err := a.cfg.KV.Get(backupAlertKeyPrefix + r.key)
 		if err != nil {
 			slog.Warn("backup alert: state not read", "reason", r.key, "err", err.Error())
-			continue
 		}
-		if at, perr := time.Parse(time.RFC3339, last); perr == nil && now.Sub(at) < backupAlertRepeat {
+		at, perr := time.Parse(time.RFC3339, last)
+		if perr != nil {
+			at = time.Time{}
+		}
+		if mem := a.lastSent[r.key]; mem.After(at) {
+			at = mem
+		}
+		if !at.IsZero() && now.Sub(at) < backupAlertRepeat {
 			// Молчим, но «активна» помним: восстановление должно сработать.
-			_ = a.cfg.KV.Set(backupAlertActiveKey, "1")
+			a.set(backupAlertActiveKey, "1")
 			continue
 		}
 		if !a.send(ctx, r.text) {
 			continue // не записываем: следующий тик попробует снова
 		}
-		_ = a.cfg.KV.Set(backupAlertKeyPrefix+r.key, now.UTC().Format(time.RFC3339))
-		_ = a.cfg.KV.Set(backupAlertActiveKey, "1")
+		a.lastSent[r.key] = now
+		a.set(backupAlertKeyPrefix+r.key, now.UTC().Format(time.RFC3339))
+		a.set(backupAlertActiveKey, "1")
 	}
+}
+
+// set пишет в хранилище и громко жалуется, если не вышло.
+func (a *BackupAlerter) set(key, value string) {
+	if err := a.cfg.KV.Set(key, value); err != nil {
+		slog.Warn("backup alert: state not written", "key", key, "err", err.Error())
+	}
+}
+
+// watchSince -- якорь «с каких пор следим»: записывается на первом тике и
+// переживает перезапуски; от него, а не от запуска процесса, считается
+// «ни разу не делался». Хранилище недоступно -- запасной якорь: запуск процесса.
+func (a *BackupAlerter) watchSince(now time.Time) time.Time {
+	v, err := a.cfg.KV.Get(backupAlertWatchKey)
+	if err == nil {
+		if t, perr := time.Parse(time.RFC3339, v); perr == nil {
+			return t
+		}
+		a.set(backupAlertWatchKey, now.UTC().Format(time.RFC3339))
+		return now
+	}
+	slog.Warn("backup alert: anchor not read", "err", err.Error())
+	return a.cfg.StartedAt
 }
 
 func (a *BackupAlerter) send(ctx context.Context, text string) bool {
@@ -151,15 +191,27 @@ func (a *BackupAlerter) send(ctx context.Context, text string) bool {
 
 func (a *BackupAlerter) forget() {
 	for _, k := range []string{"stale", "failed", "verify"} {
-		_ = a.cfg.KV.Set(backupAlertKeyPrefix+k, "")
+		a.set(backupAlertKeyPrefix+k, "")
+		delete(a.lastSent, k)
 	}
-	_ = a.cfg.KV.Set(backupAlertActiveKey, "")
+	a.set(backupAlertActiveKey, "")
+	// watch_since не трогаем: это якорь, а не метка тревоги.
 }
 
+// alertState -- насколько можно доверять тому, что причин нет.
+type alertState struct {
+	unreadable bool // файл состояния не прочитан
+	running    bool // какой-то прогон идёт (свежая отметка «не завершён»)
+}
+
+func (s alertState) undecided() bool { return s.unreadable || s.running }
+
 // reasons -- какие причины для тревоги есть прямо сейчас.
-func (a *BackupAlerter) reasons(now time.Time) []backupAlertReason {
+func (a *BackupAlerter) reasons(now, watch time.Time) ([]backupAlertReason, alertState) {
+	var state alertState
 	st, err := backup.LoadStatus(a.cfg.StatusPath)
 	if err != nil {
+		state.unreadable = true
 		// Нет файла или он битый: судить не по чему. Остаётся правило
 		// «давно работает, а бэкапа так и нет».
 		st = backup.Status{}
@@ -175,6 +227,7 @@ func (a *BackupAlerter) reasons(now time.Time) []backupAlertReason {
 		d, ok := age(k.LastRunAt)
 		return k.Error == backup.RunUnfinishedText && ok && d < backupAlertRunningFor
 	}
+	state.running = running(st.Small) || running(st.Full)
 	failedRun := func(k backup.KindStatus) bool { return !k.OK && k.LastRunAt != "" && !running(k) }
 
 	var out []backupAlertReason
@@ -185,7 +238,7 @@ func (a *BackupAlerter) reasons(now time.Time) []backupAlertReason {
 			out = append(out, backupAlertReason{"stale", fmt.Sprintf(
 				"Бэкап не делался больше суток: последний удачный малый архив был около %d ч назад. %s", int(d.Hours()), backupAlertFooter)})
 		}
-	} else if !smallFailed && !running(st.Small) && now.Sub(a.cfg.StartedAt) > backupAlertStaleAfter {
+	} else if !smallFailed && !running(st.Small) && now.Sub(watch) > backupAlertStaleAfter {
 		out = append(out, backupAlertReason{"stale", "Бэкап ещё ни разу не делался, хотя ночной прогон давно должен был пройти. " + backupAlertFooter})
 	}
 
@@ -201,10 +254,14 @@ func (a *BackupAlerter) reasons(now time.Time) []backupAlertReason {
 	}
 
 	if st.Verify.LastRunAt != "" && !st.Verify.OK {
-		out = append(out, backupAlertReason{"verify", "Проверка восстановления бэкапа не прошла" + alertReason(st.Verify.Error) +
-			". Архивы есть, но по ним могут не восстановиться. " + backupAlertFooter})
+		text := "Проверка восстановления бэкапа не прошла" + alertReason(st.Verify.Error) + ". "
+		// «Архивы есть» -- неправда, когда причина как раз в их отсутствии или возрасте.
+		if w := backupReasonWords(st.Verify.Error); w != "малого архива ещё нет" && !strings.Contains(w, "старше 48 часов") {
+			text += "Архивы есть, но по ним могут не восстановиться. "
+		}
+		out = append(out, backupAlertReason{"verify", text + backupAlertFooter})
 	}
-	return out
+	return out, state
 }
 
 // alertReason -- «: «причина словами»»; причина из закрытого набора фраз, в

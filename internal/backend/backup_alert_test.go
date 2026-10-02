@@ -246,7 +246,6 @@ func TestBackupAlertSurvivesRestart(t *testing.T) {
 // Провал уже сделанного прогона тревожит сразу -- это отдельная причина.
 func TestBackupAlertFreshInstallStaysQuietUntilUptime26h(t *testing.T) {
 	r := newAlertRig(t)
-	r.start = alertT0.Add(-time.Hour)
 	a := r.alerter()
 	a.Tick(context.Background()) // файла нет
 	if len(r.sender.msgs) != 0 {
@@ -262,7 +261,7 @@ func TestBackupAlertFreshInstallStaysQuietUntilUptime26h(t *testing.T) {
 	}
 	// Бэкенд работает больше 26 часов, файла так и нет.
 	r2 := newAlertRig(t)
-	r2.start = alertT0.Add(-27 * time.Hour)
+	r2.kv[backupAlertWatchKey] = ts(alertT0, 27*time.Hour)
 	r2.alerter().Tick(context.Background())
 	if got := r2.texts(); len(got) != 1 || !strings.Contains(got[0], "ещё ни разу") {
 		t.Fatalf("давно работает, бэкапа нет: %v", got)
@@ -272,7 +271,6 @@ func TestBackupAlertFreshInstallStaysQuietUntilUptime26h(t *testing.T) {
 	if err := writeAlertFile(r3.path, "{не json"); err != nil {
 		t.Fatal(err)
 	}
-	r3.start = alertT0.Add(-time.Hour)
 	r3.alerter().Tick(context.Background())
 	if len(r3.sender.msgs) != 0 {
 		t.Fatalf("битый файл на свежей установке: %v", r3.texts())
@@ -332,7 +330,7 @@ func TestBackupAlertTextsSpeakHumanRussian(t *testing.T) {
 		all = append(all, r.texts()...)
 	}
 	r := newAlertRig(t)
-	r.start = alertT0.Add(-30 * time.Hour)
+	r.kv[backupAlertWatchKey] = ts(alertT0, 30*time.Hour)
 	r.alerter().Tick(context.Background())
 	all = append(all, r.texts()...)
 	all = append(all, backupRecoveredText)
@@ -378,3 +376,132 @@ func TestBackupAlertStateInRealKV(t *testing.T) {
 }
 
 func writeAlertFile(path, body string) error { return os.WriteFile(path, []byte(body), 0o644) }
+
+// I1: идущий прогон -- состояние «не решено»: ни «в порядке», ни стирания меток.
+func TestBackupAlertNoFalseRecoveryWhileRunInProgress(t *testing.T) {
+	r := newAlertRig(t)
+	r.healthy()
+	r.status(func(s *backup.Status) { s.Full.OK, s.Full.Error = false, "архив не записан: x" })
+	a := r.alerter()
+	a.Tick(context.Background())
+	if len(r.sender.msgs) != 1 {
+		t.Fatal("нет первой тревоги")
+	}
+	// Новый прогон начат: отметка пятиминутной давности.
+	r.clk.advance(time.Hour)
+	r.status(func(s *backup.Status) {
+		s.Full = backup.KindStatus{LastOKAt: s.Full.LastOKAt, LastRunAt: ts(r.clk.t, 5*time.Minute), Error: backup.RunUnfinishedText}
+	})
+	a.Tick(context.Background())
+	// Прогон снова провалился.
+	r.clk.advance(10 * time.Minute)
+	r.status(func(s *backup.Status) {
+		s.Full.LastRunAt, s.Full.Error = ts(r.clk.t, time.Minute), "архив не записан: y"
+	})
+	a.Tick(context.Background())
+	if len(r.sender.msgs) != 1 {
+		t.Fatalf("ждали одно сообщение, получили %d: %v", len(r.sender.msgs), r.texts())
+	}
+	// Начат -> удался: одно «в порядке» после успеха.
+	r.clk.advance(time.Hour)
+	r.status(func(s *backup.Status) {
+		s.Full = backup.KindStatus{LastOKAt: s.Full.LastOKAt, LastRunAt: ts(r.clk.t, 5*time.Minute), Error: backup.RunUnfinishedText}
+	})
+	a.Tick(context.Background())
+	if len(r.sender.msgs) != 1 {
+		t.Fatalf("«в порядке» во время прогона: %v", r.texts())
+	}
+	r.clk.advance(10 * time.Minute)
+	r.healthy()
+	a.Tick(context.Background())
+	if got := r.texts(); len(got) != 2 || got[1] != backupRecoveredText {
+		t.Fatalf("после успеха: %v", got)
+	}
+}
+
+// I2: нечитаемый файл -- никогда не «снова в порядке».
+func TestBackupAlertUnreadableStatusNeverRecovers(t *testing.T) {
+	r := newAlertRig(t)
+	r.healthy()
+	r.status(func(s *backup.Status) { s.Full.OK, s.Full.Error = false, "архив не записан: x" })
+	a := r.alerter()
+	a.Tick(context.Background())
+	if err := writeAlertFile(r.path, "{не json"); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	if err := os.Remove(r.path); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	if len(r.sender.msgs) != 1 {
+		t.Fatalf("ложное восстановление: %v", r.texts())
+	}
+}
+
+// I3: «ни разу» считается от якоря в хранилище, а не от запуска процесса.
+func TestBackupAlertNeverRuleUsesPersistedAnchor(t *testing.T) {
+	r := newAlertRig(t)
+	r.alerter().Tick(context.Background())
+	if r.kv[backupAlertWatchKey] == "" {
+		t.Fatal("якорь не записан на первом тике")
+	}
+	// Ежедневные перезапуски: каждый раз новый экземпляр, файла нет.
+	for h := 1; h <= 25; h++ {
+		r.clk.advance(time.Hour)
+		r.alerter().Tick(context.Background())
+	}
+	if len(r.sender.msgs) != 0 {
+		t.Fatalf("раньше 26 часов: %v", r.texts())
+	}
+	r.clk.advance(2 * time.Hour)
+	r.alerter().Tick(context.Background())
+	if got := r.texts(); len(got) != 1 || !strings.Contains(got[0], "ещё ни разу") {
+		t.Fatalf("после 26 часов: %v", got)
+	}
+	// Восстановление не стирает якорь.
+	r.healthy()
+	r.clk.advance(time.Hour)
+	r.alerter().Tick(context.Background())
+	if r.kv[backupAlertWatchKey] == "" {
+		t.Fatal("якорь стёрт восстановлением")
+	}
+}
+
+type failingKV struct{ mapKV }
+
+func (failingKV) Set(string, string) error {
+	return errors.New("база только для чтения")
+}
+
+// I4: хранилище не пишется -- тревога не повторяется каждый тик.
+func TestBackupAlertNoStormWhenStateCannotBeWritten(t *testing.T) {
+	r := newAlertRig(t)
+	r.kv = nil
+	r.healthy()
+	r.status(func(s *backup.Status) { s.Small.LastOKAt = ts(r.clk.t, 40*time.Hour) })
+	a := NewBackupAlerter(BackupAlertConfig{StatusPath: r.path, KV: failingKV{mapKV{}}, Sender: r.sender, AdminUserID: alertAdmin, Now: r.clk.now, StartedAt: r.start})
+	for i := 0; i < 5; i++ {
+		a.Tick(context.Background())
+		r.clk.advance(10 * time.Minute)
+	}
+	if len(r.sender.msgs) != 1 {
+		t.Fatalf("штормит: %d сообщений", len(r.sender.msgs))
+	}
+}
+
+// M3: у «нет архива» и «старше 48 часов» нет фразы «Архивы есть».
+func TestBackupAlertVerifyNoArchivesWordingIsHonest(t *testing.T) {
+	for _, raw := range []string{"малого архива ещё нет -- проверять нечего", "последний малый архив x старше 48 часов: ночной бэкап не идёт"} {
+		r := newAlertRig(t)
+		r.healthy()
+		r.status(func(s *backup.Status) { s.Verify = backup.VerifyStatus{LastRunAt: ts(r.clk.t, time.Hour), Error: raw} })
+		r.alerter().Tick(context.Background())
+		got := r.texts()
+		if len(got) != 1 || strings.Contains(got[0], "Архивы есть") {
+			t.Fatalf("%q: %v", raw, got)
+		}
+	}
+}
