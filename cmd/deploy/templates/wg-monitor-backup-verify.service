@@ -6,9 +6,11 @@ Documentation=https://github.com/Jkaotlic/wg-monitor
 Type=oneshot
 User=wgmonitor
 Group=wgmonitor
-# Разворачивает последний малый архив во временный каталог и сверяет с живой
-# базой: целостность, число роутеров, владельцев и операторов, хранилища,
-# ключ оживления. Итог -- в секции verify файла backup-status.json.
+# Разворачивает последний малый архив во временный каталог и сверяет базу из
+# него со счётчиками, записанными в манифест при бэкапе: целостность, число
+# роутеров, владельцев и операторов, хранилища из строки stores=. Ключа
+# оживления в бэкапе нет по правилу. Итог -- в секции verify файла
+# backup-status.json.
 ExecStart=/usr/local/bin/wg-monitor-backend backup verify --config /etc/wg-monitor/backend.yaml --passphrase-file /etc/wg-monitor/backup-passphrase.txt --out-dir /var/lib/wg-monitor/backups
 
 # Hardening mirrors the backend service; the check needs no network.

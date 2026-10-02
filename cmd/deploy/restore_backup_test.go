@@ -285,6 +285,9 @@ func TestBuildRestoreRemoteScriptRemovesWalAndShmAfterStop(t *testing.T) {
 		"cp -p /var/lib/wg-monitor/state.db-shm.bak.20260522T055443Z /var/lib/wg-monitor/state.db-shm",
 	} {
 		at := strings.Index(script, want)
+		if strings.HasPrefix(want, "rm -f") {
+			at = strings.LastIndex(script, want) // первый -- в откате, нужен рабочий
+		}
 		if at < 0 {
 			t.Fatalf("в скрипте нет %q:\n%s", want, script)
 		}
@@ -292,7 +295,7 @@ func TestBuildRestoreRemoteScriptRemovesWalAndShmAfterStop(t *testing.T) {
 			t.Errorf("rm -f wal/shm должен идти после остановки и до установки базы:\n%s", script)
 		}
 	}
-	rm := strings.Index(script, "rm -f /var/lib/wg-monitor/state.db-wal")
+	rm := strings.LastIndex(script, "rm -f /var/lib/wg-monitor/state.db-wal")
 	bakWal := strings.Index(script, "cp -p /var/lib/wg-monitor/state.db-wal /var/lib/")
 	if bakWal < 0 || bakWal > rm {
 		t.Error("копия wal должна быть сделана до удаления")
@@ -449,5 +452,21 @@ wizard:
 	}
 	if err := validateRestoreBackendYAML(noAdmin); err == nil {
 		t.Fatal("конфиг без admin_user_id принят: бэкенд с ним не стартует")
+	}
+}
+
+// Откат: сначала убрать журнал восстановленной базы, потом возвращать копии.
+func TestBuildRestoreRemoteScriptRollbackRemovesWalFirst(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z", testStaging)
+	start := strings.Index(script, "rollback() {")
+	end := strings.Index(script, "systemctl stop wg-monitor-backend")
+	if start < 0 || end < start {
+		t.Fatalf("нет функции отката:\n%s", script)
+	}
+	body := script[start:end]
+	rm := strings.Index(body, "rm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm")
+	restore := strings.Index(body, "cp -p /var/lib/wg-monitor/state.db.bak.20260522T055443Z")
+	if rm < 0 || restore < 0 || rm > restore {
+		t.Fatalf("в откате rm -f wal/shm должен идти раньше возврата state.db:\n%s", body)
 	}
 }

@@ -286,3 +286,24 @@ func TestBackupVerifyFailsOnStaleNewestSmallArchive(t *testing.T) {
 		t.Fatalf("архив 47 часов: %v", err)
 	}
 }
+
+// verify-done: ошибки ОС с полными путями не попадают в файл состояния.
+func TestBackupStatusErrorsCarryNoLocalPaths(t *testing.T) {
+	f := newBackupFixture(t)
+	if err := os.Remove(filepath.Join(f.dir, "wizard-token.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runBackup(context.Background(), f.opts("small")); err == nil {
+		t.Fatal("ждали ошибку")
+	}
+	raw, err := os.ReadFile(f.statusFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(f.dir)) || bytes.Contains(raw, []byte("/var/")) {
+		t.Fatalf("путь в файле состояния:\n%s", raw)
+	}
+	if s := f.status(t); !strings.Contains(s.Small.Error, "файла нет") {
+		t.Fatalf("ошибка: %q", s.Small.Error)
+	}
+}

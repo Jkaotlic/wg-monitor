@@ -197,7 +197,7 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		if !slices.Contains(members, name) {
 			return archive, counts, fmt.Errorf("в архиве нет хранилища %s, записанного в манифесте", name)
 		}
-		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста, проверено ниже
+		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста: присутствие в архиве проверено выше, а члены архива -- простые имена (extractEncryptedArchive)
 		if err != nil {
 			return archive, counts, fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
 		}

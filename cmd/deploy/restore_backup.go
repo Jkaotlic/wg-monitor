@@ -896,6 +896,7 @@ test "$(sqlite3 %[6]s/state.db 'PRAGMA integrity_check;')" = "ok"
 test -s /etc/wg-monitor/bot-token.txt
 test -s /etc/wg-monitor/wizard-token.txt
 %[2]srollback() {
+	rm -f /var/lib/wg-monitor/state.db-wal /var/lib/wg-monitor/state.db-shm
 	if [ -f /var/lib/wg-monitor/state.db.bak.%[1]s ]; then
 		cp -p /var/lib/wg-monitor/state.db.bak.%[1]s /var/lib/wg-monitor/state.db || true
 	fi

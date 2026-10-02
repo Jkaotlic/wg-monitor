@@ -172,3 +172,37 @@ func TestUpdateStatusStartsFreshOnMissingOrGarbledFile(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 }
+
+// В файл состояния не попадают полные пути из ошибок ОС: они уходят только в журнал.
+func TestStatusErrorTextScrubsPaths(t *testing.T) {
+	cases := map[string]string{
+		"архив не записан: open /var/lib/wg-monitor/backups/x.partial: permission denied":  "архив не записан: open …: нет прав",
+		"архив не собран: wizard token file: stat /tmp/a/b.txt: no such file or directory": "архив не собран: wizard token file: stat …: файла нет",
+		"mkdir /var/x: no space left on device":                                            "mkdir …: нет места на диске",
+		"archive contains suspect path \"/abs\"":                                           "archive contains suspect path \"…\"",
+		`Post "https://api.telegram.org/bot<redacted>/sendDocument": timeout`:              `Post "https://api.telegram.org/bot<redacted>/sendDocument": timeout`,
+		"в архиве операторов 1, в манифесте архива 2":                                      "в архиве операторов 1, в манифесте архива 2",
+	}
+	for in, want := range cases {
+		if got := StatusErrorText(in); got != want {
+			t.Errorf("StatusErrorText(%q)\n= %q\nждали %q", in, got, want)
+		}
+	}
+}
+
+func TestLoadStatusIgnoresOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StatusFileName)
+	if err := os.WriteFile(path, []byte(`{"version":1,"pad":"`+strings.Repeat("x", 70<<10)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadStatus(path); err == nil {
+		t.Fatal("огромный файл принят")
+	}
+	// Для записи это «битый файл»: начинаем с чистого листа, а не застреваем.
+	if err := UpdateStatus(path, func(s *Status) { s.Small.OK = true }); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := LoadStatus(path); err != nil || !st.Small.OK {
+		t.Fatalf("%+v %v", st, err)
+	}
+}

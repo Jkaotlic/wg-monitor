@@ -8,9 +8,11 @@ Type=oneshot
 User={{.User}}
 Group={{.Group}}
 {{end}}
-# Разворачивает последний малый архив во временный каталог и сверяет с живой
-# базой: целостность, число роутеров, владельцев и операторов, хранилища,
-# ключ оживления. Итог -- в секции verify файла backup-status.json.
+# Разворачивает последний малый архив во временный каталог и сверяет базу из
+# него со счётчиками, записанными в манифест при бэкапе: целостность, число
+# роутеров, владельцев и операторов, хранилища из строки stores=. Ключа
+# оживления в бэкапе нет по правилу. Итог -- в секции verify файла
+# backup-status.json.
 ExecStart={{.BinaryPath}} backup verify --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}}
 
 {{if not .OmitHardening}}

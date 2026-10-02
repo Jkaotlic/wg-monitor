@@ -174,3 +174,16 @@ func TestDashboardSummaryAndFleetCarryBackup(t *testing.T) {
 		t.Fatalf("без источника: %+v", f2.Backup)
 	}
 }
+
+func TestBackupReasonWordsForManifestProblems(t *testing.T) {
+	cases := map[string]string{
+		"в манифесте архива нет счётчиков (routers) -- архив собран без них, сверить нечем": "в архиве нет счётчиков для сверки",
+		"в архиве нет хранилища hidemyname.json, записанного в манифесте":                   "в архиве нет хранилища, записанного при бэкапе",
+		"в архиве операторов 1, в манифесте архива 2":                                       "числа в архиве не сходятся с записанными при бэкапе",
+	}
+	for raw, want := range cases {
+		if got := backupReasonWords(raw); got != want {
+			t.Errorf("%q -> %q, ждали %q", raw, got, want)
+		}
+	}
+}

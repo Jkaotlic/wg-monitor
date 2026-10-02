@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -23,6 +24,9 @@ const (
 // RunUnfinishedText -- текст ошибки в отметке «прогон начат»: она стоит в
 // файле, пока прогон идёт, и остаётся, если его убили (память, SIGKILL).
 const RunUnfinishedText = "прогон не завершён"
+
+// maxStatusFileBytes -- выше этого файл состояния не читается.
+const maxStatusFileBytes = 64 << 10
 
 // MaxStatusErrorRunes -- предел длины текста ошибки в файле состояния.
 const MaxStatusErrorRunes = 300
@@ -73,6 +77,15 @@ func StatusPath(dbPath string) string {
 // LoadStatus читает файл состояния. Файла нет -- ошибка os.ErrNotExist
 // (бэкап ещё не запускался).
 func LoadStatus(path string) (Status, error) {
+	// Файл состояния -- сотни байт. Огромный -- чужой или испорченный: не
+	// читаем целиком, считаем неизвестным (для записи -- битым).
+	info, err := os.Stat(path)
+	if err != nil {
+		return Status{}, err
+	}
+	if info.Size() > maxStatusFileBytes {
+		return Status{}, fmt.Errorf("%w: %s больше %d байт", errStatusGarbled, StatusFileName, maxStatusFileBytes)
+	}
 	body, err := os.ReadFile(path) // #nosec G304 -- путь выведен из db_path конфига
 	if err != nil {
 		return Status{}, err
@@ -141,9 +154,37 @@ func UpdateStatus(path string, mutate func(*Status)) error {
 // строка, не длиннее MaxStatusErrorRunes. Секреты вычищает вызывающий --
 // эта функция про форму, а не про содержание.
 func StatusErrorText(msg string) string {
-	msg = strings.Join(strings.Fields(msg), " ")
+	msg = scrubOSError(strings.Join(strings.Fields(msg), " "))
 	if r := []rune(msg); len(r) > MaxStatusErrorRunes {
 		msg = string(r[:MaxStatusErrorRunes-1]) + "…"
+	}
+	return msg
+}
+
+// localPathRe -- локальный путь в тексте ошибки: после пробела, кавычки или
+// скобки, начинается с «/». Адреса вида https://… и куски вроде bot<x>/y не
+// задеваются.
+var localPathRe = regexp.MustCompile(`(^|[\s"'(])/[^\s"'),]+`)
+
+// scrubOSError: полные пути из ошибок ОС в файл состояния не идут (они
+// остаются в журнале процесса), частые английские фразы ОС -- словами.
+func scrubOSError(msg string) string {
+	msg = localPathRe.ReplaceAllStringFunc(msg, func(m string) string {
+		lead := ""
+		if m[0] != '/' {
+			lead, m = m[:1], m[1:]
+		}
+		if strings.HasSuffix(m, ":") {
+			return lead + "…:"
+		}
+		return lead + "…"
+	})
+	for from, to := range map[string]string{
+		"permission denied":         "нет прав",
+		"no such file or directory": "файла нет",
+		"no space left on device":   "нет места на диске",
+	} {
+		msg = strings.ReplaceAll(msg, from, to)
 	}
 	return msg
 }
