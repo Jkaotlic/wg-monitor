@@ -444,6 +444,13 @@ body {
   margin-top: 0;
 }
 
+/* Строка итога под заголовком вкладки («Проверки»: «7 вопросов роутеру…») и
+   плитки под ней: тот же шаг, что от заголовка группы до её карточки. Без
+   него строка лежала вплотную на плитках. */
+.router-lastseen + .stat-grid {
+  margin-top: var(--sp-3);
+}
+
 /* Vertical stack of standalone .card elements (one per incident).
    .list-reset strips the <ul>'s marker/margin; this adds the
    between-card gap that .row's dividers provide inside a single
@@ -4565,6 +4572,12 @@ body {
   .now-side > *,
   .now-side > .section:first-child {
     margin-top: 0 !important;
+  }
+
+  /* Строка «На «имя» тревога — открыть» несёт свой нижний отступ для телефона;
+     в колонке он складывался с gap, и под строкой получался двойной зазор. */
+  .now-main > .other-alert {
+    margin-bottom: 0;
   }
 
   @media (min-width: 1200px) {
