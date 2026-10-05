@@ -229,7 +229,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
   // traffic из того же ответа /events, что и проверки.
   const view = tunnelsView(shown, checks?.traffic)
-  const list = tunnelList(shown)
+  // Тревоги -- в подпись строк: строка говорит то же, что считает счёт (Fix 2).
+  const list = tunnelList(shown, checks?.incidents)
   // Счёт, заголовок и подпись -- одной функцией, с тревогами (I1, M2).
   const summary = tunnelsTabSummary(list, checks)
   const phase = snapshotState({ busy, error, result, snapshot })

@@ -97,7 +97,7 @@ describe('M2: заголовок «Все VPN-туннели · N» -- по по
     expect(list.length).toBe(3)
     expect(s.title).toBe('Все VPN-туннели · 3')
     expect(s.counts.total).toBe(2)
-    expect(s.note).toMatch(/из 2/)
+    expect(s.note).toMatch(/^\d+ работа\S* из 2 /)
     expect(s.note).toMatch(/в списке 3/)
   })
 
@@ -105,7 +105,7 @@ describe('M2: заголовок «Все VPN-туннели · N» -- по по
     const list = tunnelList(withCheckVerdict(snapshot, events))
     const s = tunnelsTabSummary(list, { ...events, incidents: [] })
     expect(s.title).toBe('Все VPN-туннели · 2')
-    expect(s.note).toBe('работают из 2 настроенных')
+    expect(s.note).toBe('2 работают из 2 настроенных')
     expect(s.note).not.toMatch(/в списке/)
   })
 
@@ -154,5 +154,25 @@ describe('M1: несущий по снимку -- только у политик
       ],
     }
     expect(withSnapshotCarrier(traffic, snap).carrier_tunnel_id).toBe('awg11')
+  })
+})
+
+describe('Fix 2: строка VPN-туннеля с открытой тревогой', () => {
+  it('подписана так же, как считается: не «работает»', () => {
+    const rows = tunnelList(withCheckVerdict(snapshot, events), incidents)
+    expect(rows.find((r) => r.id === 'awg10').stateLabel).toBe('не отвечает — тревога открыта')
+    expect(rows.find((r) => r.id === 'awg11').stateLabel).toBe('работает')
+    // Без тревог -- как раньше.
+    expect(tunnelList(withCheckVerdict(snapshot, events)).find((r) => r.id === 'awg10').stateLabel).toBe('работает')
+  })
+
+  it('выключенный настройкой с открытой тревогой остаётся «выключен»', () => {
+    const off = { ...snapshot, tunnels: snapshot.tunnels.map((t) => (t.id === 'awg10' ? { ...t, status: 'stopped', enabled: false } : t)) }
+    expect(tunnelList(off, incidents).find((r) => r.id === 'awg10').stateLabel).not.toMatch(/тревога/)
+  })
+
+  it('экран передаёт тревоги в список', () => {
+    const tab = readFileSync(new URL('../src/screens/TunnelsTab.jsx', import.meta.url), 'utf8')
+    expect(tab).toMatch(/tunnelList\(shown, checks\?\.incidents\)/)
   })
 })

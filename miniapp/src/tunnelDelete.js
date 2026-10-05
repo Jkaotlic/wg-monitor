@@ -35,11 +35,15 @@ function isManaged(type) {
   return String(type ?? '').trim().toLowerCase() === 'managed'
 }
 
-export function tunnelList(snapshot) {
+// incidents -- открытые тревоги (checks.incidents): строка VPN-туннеля с
+// открытой тревогой подписывается так же, как считается, -- не «работает»
+// (Fix 2 v0.56: счёт его уже не считал, а строка звала работающим).
+export function tunnelList(snapshot, incidents = []) {
   const meta = new Map((snapshot?.tunnels ?? []).map((t) => [t.id, t]))
+  const alarmed = new Set((incidents ?? []).map((i) => i?.check_name).filter((n) => typeof n === 'string' && n.startsWith('tunnel_')).map((n) => n.slice('tunnel_'.length)))
   return tunnelRows(snapshot)
     .filter((r) => isManaged(r.type))
-    .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id)) }))
+    .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id), alarmed.has(r.id)) }))
 }
 
 // Счёт для вкладки -- ТЕМ ЖЕ определением, что на «Роутере» и «Проверках»:
@@ -78,14 +82,28 @@ export function tunnelsTabSummary(list, checks) {
   const rows = list ?? []
   const counts = tunnelListSummary(rows, checks?.incidents ?? [], checks?.tunnels)
   const base = workingTunnelNote(counts.working, counts.total, counts.unchecked)
-  const note = counts.total === rows.length ? base : `${base} — по проверкам роутера; в списке ${rows.length}`
+  // На «Роутере» и «Проверках» число работающих -- значение плитки, а
+  // подпись -- её хвост. Здесь подпись -- обычная строка, и без числа она
+  // читалась «работают из 3 настроенных» (Fix 2): число ставится впереди.
+  const withNumber = `${counts.working} ${base}`
+  const note = counts.total === rows.length ? withNumber : `${withNumber} — по проверкам роутера; в списке ${rows.length}`
   return { counts, title: `${TUNNEL_TEXTS.listTitle} · ${rows.length}`, note }
 }
 
 // Состояние словами. «Выключен» -- только выключенный настройкой: включённый,
 // но не поднявшийся VPN-туннель «не отвечает» (так же его зовёт цепочка
 // подхвата), и чинят его перезапуском, а не включением.
-function stateLabel(live, t) {
+export const ALARM_OPEN_LABEL = 'не отвечает — тревога открыта'
+
+function stateLabel(live, t, alarmed = false) {
+  // Тревога по VPN-туннелю открыта (снимается за 2-3 удачных отчёта): счёт
+  // его не считает работающим, и строка не говорит «работает». Выключенный
+  // настройкой остаётся «выключен».
+  if (alarmed && !tunnelSwitchedOff(t)) {
+    const own = stateLabel(live, t)
+    if (own === tunnelLiveLabel('up') || own === 'поднят, не проверено') return ALARM_OPEN_LABEL
+    return own
+  }
   // Проверка главнее (A1.1): роутер поднял VPN-туннель, а проверка провалена --
   // «работает» сказать нельзя, и «выключен» тоже: он поднят, но не отвечает.
   if (t?.check_failed && !tunnelSwitchedOff(t)) return 'поднят, но не отвечает'
