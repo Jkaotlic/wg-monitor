@@ -1093,3 +1093,51 @@ func waitDone(t *testing.T, d Deps, jobID string) provision.Job {
 	t.Fatal("задание не завершилось за отведённое время")
 	return provision.Job{}
 }
+
+// Вторая тревога по тому же роутеру, пока идёт первая починка: движок
+// отказывает ErrAlreadyRunning, люди получают одно «не запускалась», а первая
+// починка доходит до конца как ни в чём не бывало.
+func TestAutostart_SecondHardWhileRunning(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	restart := e.cmd.on["tunnel_restart"]
+	e.cmd.on["route_status"] = func(c *scriptCommander, n int) {
+		if n == 1 {
+			close(entered)
+			<-release
+		}
+	}
+	e.cmd.on["tunnel_restart"] = restart
+
+	id, err := e.d.Start(ladderReq())
+	if err != nil {
+		t.Fatalf("первый запуск: %v", err)
+	}
+	<-entered
+	second := ladderReq()
+	second.CheckName = "tunnel_awg10"
+	if _, err := e.d.Start(second); !errors.Is(err, ErrAlreadyRunning) {
+		close(release)
+		t.Fatalf("ждали ErrAlreadyRunning, получили %v", err)
+	}
+	close(release)
+	if job := waitDone(t, e.d, id); job.State != provision.StateSuccess {
+		t.Fatalf("первая починка: %s", job.State)
+	}
+	e.rep.final(t)
+	_, calls := e.rep.snapshot()
+	n := 0
+	for _, c := range calls {
+		if c.Kind == "notstarted" {
+			n++
+			if !strings.Contains(c.Text, "уже идёт") {
+				t.Errorf("причина: %q", c.Text)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("«не запускалась» ждали один раз, было %d: %+v", n, calls)
+	}
+}

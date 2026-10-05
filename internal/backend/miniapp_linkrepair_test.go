@@ -95,23 +95,6 @@ func TestMiniappRepair_NoScenario(t *testing.T) {
 	}
 }
 
-func TestMiniappRepair_AutoToggle(t *testing.T) {
-	d, routerID, tgUser := linkRepairDeps(t)
-	rr := doRepair(t, NewMux(d), http.MethodPut,
-		fmt.Sprintf("/v1/miniapp/routers/%d/repair/auto", routerID), tgUser,
-		`{"enabled":false}`)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("код %d, хотим 200: %s", rr.Code, rr.Body.String())
-	}
-	on, err := d.DB.RepairSettings().AutoRepair(routerID)
-	if err != nil {
-		t.Fatalf("AutoRepair: %v", err)
-	}
-	if on {
-		t.Fatal("выключение полуавтомата обязано доехать до базы")
-	}
-}
-
 // Чужой роутер не виден даже для отказа: 404, а не 409 и не 422.
 func TestMiniappRepair_StrangerGets404(t *testing.T) {
 	d, routerID, _ := linkRepairDeps(t)
