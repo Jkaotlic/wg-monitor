@@ -21,13 +21,19 @@ const (
 	LookupMixed      = "mixed"
 )
 
+// LookupSourceFirmwareViaAWGM -- источник совпадения: правило заведено через
+// awg-manager как список прошивки (backend=ndms), а не движком HydraRoute.
+const LookupSourceFirmwareViaAWGM = "firmware_via_awgm"
+
 // RouteLookupResult is the payload of a successful route_lookup
 // CommandResult: where one site goes according to the router's own rules.
 //
 // Notes carry codes, not prose — the screen turns them into words:
 // hr_not_running, policies_unknown, singbox_router, ip_rules_unchecked,
 // regexp_unchecked, geo_expand_failed:<TAG>, exit_unrecognized:<NAME>
-// (подключение, по типу которого не сказать, VPN-туннель это или провайдер).
+// (подключение, по типу которого не сказать, VPN-туннель это или провайдер),
+// firmware_lists (на роутере есть собственные списки сайтов прошивки --
+// в проверку не входят).
 type RouteLookupResult struct {
 	Domain     string `json:"domain"`
 	Verdict    string `json:"verdict"` // tunnel | direct | unknown | mixed
@@ -38,6 +44,10 @@ type RouteLookupResult struct {
 	ByDefault bool               `json:"by_default"`
 	Matches   []RouteLookupMatch `json:"matches"`
 	Notes     []string           `json:"notes,omitempty"`
+	// FirmwareLists -- сколько собственных списков сайтов прошивки
+	// (object-group fqdn) нашлось в конфиге роутера; 0 -- нет или не
+	// прочитано. Только число: состав списков агент не разбирает.
+	FirmwareLists int `json:"firmware_lists,omitempty"`
 }
 
 // RouteLookupMatch is one rule that names the site.
@@ -47,6 +57,9 @@ type RouteLookupMatch struct {
 	Via        string `json:"via"`     // tunnel | direct | unknown
 	TunnelID   string `json:"tunnel_id,omitempty"`
 	TunnelName string `json:"tunnel_name,omitempty"`
+	// Source -- откуда правило, когда это важно человеку: пусто для правил
+	// движка, LookupSourceFirmwareViaAWGM для списков прошивки.
+	Source string `json:"source,omitempty"`
 }
 
 type HRStatus struct {

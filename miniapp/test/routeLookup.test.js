@@ -63,9 +63,25 @@ const NOTE_WORDS = {
   'geo_expand_failed:ANTHROPIC': 'Роутер не раскрыл список «ANTHROPIC»',
   policies_unknown: 'Роутер не отдал общие наборы правил',
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
+  firmware_lists: 'На роутере есть собственные списки сайтов прошивки — они в эту проверку не входят',
   'exit_unrecognized:Guest network':
     'Сайт уйдёт через подключение «Guest network» — роутер не сказал, VPN-туннель это или провайдер',
 }
+
+describe('lookupAnswer: списки прошивки', () => {
+  it('признак списков -- пометка и warn; без признака -- без пометки', () => {
+    const a = lookupAnswer(answer({ notes: ['firmware_lists'], firmware_lists: 2 }))
+    expect(a.lines).toContain('На роутере есть собственные списки сайтов прошивки — они в эту проверку не входят')
+    expect(a.tone).toBe('warn')
+    const b = lookupAnswer(answer())
+    expect(b.lines.join(' ')).not.toContain('списки сайтов прошивки')
+    expect(b.tone).toBe('ok')
+  })
+  it('правило awg-manager с backend=ndms называет источник', () => {
+    const a = lookupAnswer(answer({ matches: [rule({ source: 'firmware_via_awgm' })] }))
+    expect(a.lines).toContain('правило «Все AI сервисы» — список прошивки через «awg-manager»')
+  })
+})
 
 describe('lookupAnswer', () => {
   it('туннель по правилу: куда и каким правилом', () => {

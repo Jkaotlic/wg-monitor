@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -268,6 +269,7 @@ func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client,
 		Version:              Version,
 		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
 		DNSChanged:           dnsChangedHook(singleChecks, multiChecks),
+		FirmwareSiteGroups:   func() int { return int(firmwareSiteGroups.Load()) },
 	}
 }
 
@@ -330,11 +332,22 @@ func buildDNSSplitCheck(awgClient *awgmgr.Client) *checks.DNSSplit {
 		Endpoints:  readDNSEndpoints,
 		Resolve:    resolveVia,
 		RouteLookup: dnsSplitRouteLookup(func(ctx context.Context, host string) (string, error) {
-			return actions.RouteLookup(ctx, awgClient, host)
+			return actions.RouteLookup(ctx, awgClient, host, 0)
 		}),
 		PerProbeTimeout: 2 * time.Second,
 		MinInterval:     dnsSplitInterval,
 	}
+}
+
+// firmwareSiteGroups -- число собственных списков сайтов прошивки по
+// последнему чтению running-config. Своего чтения у него нет: значение
+// записывает то же чтение, что кормит проверки DNS.
+var firmwareSiteGroups atomic.Int64
+
+// noteRunningConfig запоминает признак списков прошивки из уже прочитанного
+// конфига. Содержимое списков не разбирается.
+func noteRunningConfig(rc string) {
+	firmwareSiteGroups.Store(int64(keenetic.CountFQDNGroups(rc)))
 }
 
 // readDNSEndpoints читает апстримы DNS из running-config роутера.
@@ -345,6 +358,7 @@ func readDNSEndpoints(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
 	if err != nil {
 		return nil, err
 	}
+	noteRunningConfig(rc)
 	return keenetic.ParseDNSEndpoints(rc), nil
 }
 

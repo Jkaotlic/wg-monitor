@@ -256,3 +256,20 @@ ip name-server 1.2.3.4 "" on Iface1
 		t.Fatalf("want 1 valid line, got %d: %+v", len(eps), eps)
 	}
 }
+
+func TestCountFQDNGroups(t *testing.T) {
+	withGroups := "dns-proxy\n    include AccessPoint\n!\nobject-group fqdn work-sites\n    include example.com\n!\nobject-group fqdn other\n    include example.org\n!\nobject-group ip nets\n"
+	if got := CountFQDNGroups(withGroups); got != 2 {
+		t.Fatalf("с группами: %d, ждали 2", got)
+	}
+	if got := CountFQDNGroups("dns-proxy\n    include AccessPoint\n!\nobject-group ip nets\n"); got != 0 {
+		t.Fatalf("без групп: %d", got)
+	}
+	// Вложенная строка с теми же словами -- не группа верхнего уровня.
+	if got := CountFQDNGroups("dns-proxy\n    object-group fqdn x\n"); got != 0 {
+		t.Fatalf("вложенная строка засчитана: %d", got)
+	}
+	if got := CountFQDNGroups("object-group fqdn a\r\n!\r\n"); got != 1 {
+		t.Fatalf("CRLF: %d", got)
+	}
+}

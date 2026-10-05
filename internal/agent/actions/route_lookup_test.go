@@ -67,7 +67,7 @@ func TestLookupRoute_PlainDomainRule(t *testing.T) {
 	if res.Domain != "chat.example.com" {
 		t.Fatalf("domain = %q", res.Domain)
 	}
-	want := wire.RouteLookupMatch{RuleName: "Работа", Pattern: "example.com", Via: wire.LookupViaTunnel, TunnelID: "awg1", TunnelName: "vpn-nl"}
+	want := wire.RouteLookupMatch{RuleName: "Работа", Pattern: "example.com", Via: wire.LookupViaTunnel, TunnelID: "awg1", TunnelName: "vpn-nl", Source: wire.LookupSourceFirmwareViaAWGM}
 	if len(res.Matches) != 1 || res.Matches[0] != want {
 		t.Fatalf("matches = %+v", res.Matches)
 	}
@@ -504,5 +504,37 @@ func TestRunner_RouteLookup_Dispatch(t *testing.T) {
 	}
 	if got.Domain != "api.claude.ai" || got.Verdict != wire.LookupViaTunnel || got.TunnelName != "vpn-nl" {
 		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestLookupRoute_NdmsRuleCarriesFirmwareSource(t *testing.T) {
+	in := lookupInputs(
+		awgmgr.DNSRoute{ID: "ndms:work", Name: "Работа", Backend: "ndms", Enabled: true,
+			Domains: []string{"example.com"}, Routes: boundTo("opkgtun1")},
+		awgmgr.DNSRoute{ID: "hr:x", Name: "Движок", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"example.net"}, Routes: boundTo("opkgtun1")},
+	)
+	res := lookupRoute("example.com", in, noExpand(t))
+	if len(res.Matches) != 1 || res.Matches[0].Source != wire.LookupSourceFirmwareViaAWGM {
+		t.Fatalf("ndms-правило без источника: %+v", res.Matches)
+	}
+	res = lookupRoute("example.net", in, noExpand(t))
+	if len(res.Matches) != 1 || res.Matches[0].Source != "" {
+		t.Fatalf("правило движка получило источник: %+v", res.Matches)
+	}
+}
+
+func TestWithFirmwareLists(t *testing.T) {
+	base := wire.RouteLookupResult{Domain: "example.com", Notes: []string{"ip_rules_unchecked"}}
+	got := withFirmwareLists(base, 2)
+	if got.FirmwareLists != 2 || !slices.Contains(got.Notes, lookupNoteFirmwareLists) || !slices.Contains(got.Notes, "ip_rules_unchecked") {
+		t.Fatalf("с признаком: %+v", got)
+	}
+	if again := withFirmwareLists(got, 2); len(again.Notes) != len(got.Notes) {
+		t.Fatalf("пометка задвоилась: %+v", again.Notes)
+	}
+	none := withFirmwareLists(base, 0)
+	if none.FirmwareLists != 0 || slices.Contains(none.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("без признака есть пометка: %+v", none)
 	}
 }

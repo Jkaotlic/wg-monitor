@@ -11,6 +11,7 @@ const NOTE_TEXT = {
   regexp_unchecked: 'Часть правил записана шаблоном — их не проверить',
   policies_unknown: 'Роутер не отдал общие наборы правил',
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
+  firmware_lists: 'На роутере есть собственные списки сайтов прошивки — они в эту проверку не входят',
 }
 const GEO_EXPAND_FAILED = 'geo_expand_failed:'
 const EXIT_UNRECOGNIZED = 'exit_unrecognized:'
@@ -63,6 +64,13 @@ function parseLookup(result) {
   return result && typeof result === 'object' ? result : null
 }
 
+// ruleLabel -- «правило «X»», с источником, когда это список прошивки,
+// заведённый через awg-manager: человек должен знать, чьё это правило.
+function ruleLabel(m) {
+  const base = `правило «${m.rule_name}»`
+  return m.source === 'firmware_via_awgm' ? `${base} — список прошивки через «awg-manager»` : base
+}
+
 function destination(via, tunnelName) {
   if (via === 'tunnel') return `через VPN-туннель «${tunnelName}»`
   if (via === 'direct') return 'напрямую через провайдера'
@@ -86,7 +94,7 @@ export function lookupAnswer(result) {
   const matches = Array.isArray(r.matches) ? r.matches : []
   const codes = Array.isArray(r.notes) ? r.notes : []
   const notes = [...new Set(codes.map(noteText).filter(Boolean))]
-  const rules = [...new Set(matches.map((m) => `правило «${m.rule_name}»`))]
+  const rules = [...new Set(matches.map(ruleLabel))]
   // Остановленный движок значит, что правила, на которые человек, возможно,
   // рассчитывает, не действуют: ответ верный, но повод насторожиться.
   //
@@ -96,7 +104,7 @@ export function lookupAnswer(result) {
   // это ответ, догадка -- нет: здесь оговорка и warn, а не уверенное ok.
   const unchecked = codes.some((c) => c === 'regexp_unchecked' || (typeof c === 'string' && c.startsWith(GEO_EXPAND_FAILED)))
   const hedged = Boolean(r.by_default) && unchecked
-  const tone = codes.includes('hr_not_running') || hedged ? 'warn' : 'ok'
+  const tone = codes.includes('hr_not_running') || codes.includes('firmware_lists') || hedged ? 'warn' : 'ok'
   const noRule = hedged
     ? `Правил для ${site} не нашлось, но часть правил проверить не удалось — сайт, скорее всего, пойдёт`
     : `Правил для ${site} нет — сайт пойдёт`
@@ -120,7 +128,7 @@ export function lookupAnswer(result) {
       return {
         title: `Несколько правил ведут ${site} в разные места`,
         lines: [
-          ...matches.map((m) => `правило «${m.rule_name}» — ${destination(m.via, m.tunnel_name || m.tunnel_id)}`),
+          ...matches.map((m) => `${ruleLabel(m)} — ${destination(m.via, m.tunnel_name || m.tunnel_id)}`),
           ...notes,
         ],
         tone: 'warn',
