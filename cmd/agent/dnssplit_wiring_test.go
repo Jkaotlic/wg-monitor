@@ -120,7 +120,7 @@ func TestDNSChangedHook_InvalidatesReportedSplit(t *testing.T) {
 		return wire.RouteLookupResult{Verdict: wire.LookupViaDirect}, nil
 	}
 	split.Run(context.Background(), checks.Deps{})
-	hook := dnsChangedHook(list)
+	hook := dnsChangedHook(list, nil)
 	if hook == nil {
 		t.Fatal("хук не собран — сброс DNS не отпустит кеш")
 	}
@@ -138,7 +138,7 @@ func TestBuildRunner_WiresDNSResetGuards(t *testing.T) {
 	cfg.DNSWatchdog.Endpoint = "https://dns.example.com/path"
 	awg := awgmgr.New("http://127.0.0.1:1")
 	list := buildSingleChecks(cfg, awg, nil)
-	r := buildRunner(cfg, "/opt/etc/wg-monitor/config.yaml", awg, nil, nil, list)
+	r := buildRunner(cfg, "/opt/etc/wg-monitor/config.yaml", awg, nil, nil, list, nil)
 	if r.ConfigPath != "/opt/etc/wg-monitor/config.yaml" {
 		t.Errorf("ConfigPath = %q: снимок «до» не ляжет рядом с конфигом", r.ConfigPath)
 	}

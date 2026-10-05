@@ -149,3 +149,59 @@ func TestReferenceFitsKeeneticDoTLimit(t *testing.T) {
 		}
 	}
 }
+
+// Апстримы эталона несут роль (спека v0.55, C): падение того, кому отданы
+// русские зоны, -- отдельная беда, и проверка обязана отличать его от
+// заграничных. Роль -- часть самого эталона, а не догадка проверки.
+func TestReferenceUpstreamsCarryRole(t *testing.T) {
+	ups := dnsref.ReferenceUpstreams()
+	lines := dnsref.ReferenceDoTLines()
+	if len(ups) != len(lines) {
+		t.Fatalf("строк с ролью %d, строк эталона %d -- источник обязан быть один", len(ups), len(lines))
+	}
+	var ru, foreign int
+	for i, u := range ups {
+		if u.Line != lines[i] {
+			t.Errorf("строка %d: %q против %q", i, u.Line, lines[i])
+		}
+		switch u.Purpose {
+		case dnsref.PurposeRU:
+			ru++
+			if !strings.Contains(u.Line, " domain ") || !strings.HasPrefix(u.Line, "tls upstream "+dnsref.YandexDoTHost()) {
+				t.Errorf("ру-роль у строки не Яндекса по DoT с зоной: %q", u.Line)
+			}
+		case dnsref.PurposeForeign:
+			foreign++
+			if strings.Contains(u.Line, " domain ") {
+				t.Errorf("заграничная роль у зонной строки: %q", u.Line)
+			}
+		default:
+			t.Errorf("строка %q без роли ru/foreign: %q", u.Line, u.Purpose)
+		}
+	}
+	if ru != len(dnsref.RUZones()) || foreign == 0 {
+		t.Errorf("ru=%d foreign=%d", ru, foreign)
+	}
+	if dnsref.PurposeRU != "ru" || dnsref.PurposeForeign != "foreign" {
+		t.Errorf("значения ролей: %q / %q", dnsref.PurposeRU, dnsref.PurposeForeign)
+	}
+}
+
+// Роль строки НАСТРОЕК роутера определяется её зоной: кому роутер отдал
+// русскую зону, тот и несёт русские сайты, будь это Яндекс или нет.
+func TestZonePurpose(t *testing.T) {
+	cases := map[string]dnsref.Purpose{
+		"ru":             dnsref.PurposeRU,
+		"RU.":            dnsref.PurposeRU,
+		" xn--p1ai ":     dnsref.PurposeRU,
+		"su":             dnsref.PurposeRU,
+		"":               dnsref.PurposeForeign,
+		"example.com":    dnsref.PurposeForeign,
+		"themoviedb.org": dnsref.PurposePinned,
+	}
+	for zone, want := range cases {
+		if got := dnsref.ZonePurpose(zone); got != want {
+			t.Errorf("ZonePurpose(%q) = %q, хотим %q", zone, got, want)
+		}
+	}
+}

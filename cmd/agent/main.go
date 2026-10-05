@@ -106,6 +106,9 @@ func main() {
 			// Окно терпимости -- два плановых отчёта (A2.10).
 			Grace: &checks.RunGrace{Window: 2 * cfg.Agent.Interval()},
 		},
+		// Серверы имён русских сайтов (v0.55, C): MultiCheck, потому что без
+		// ру-апстримов в настройках строки проверки нет вовсе.
+		buildDNSRuCheck(cfg),
 	}
 
 	deps := checks.Deps{Runner: checks.OSExec{}}
@@ -143,7 +146,7 @@ func main() {
 		// Общий замок с cron-обновлением пакетов (AGENT-14).
 		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
-	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks)
+	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
 	runner.ExitProbeNow = signals.prober.ProbeNow
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
@@ -250,7 +253,7 @@ func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog
 // защит сброса DNS (свой резолвер, снимок «до», сброс кеша проверки) можно было
 // проверить тестом: удалённое поле иначе компилируется и молчит.
 func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client, opkg *actions.OpkgRunner,
-	forceRecheck func(context.Context), singleChecks []checks.Check) *actions.Runner {
+	forceRecheck func(context.Context), singleChecks []checks.Check, multiChecks []checks.MultiCheck) *actions.Runner {
 	return &actions.Runner{
 		AwgClient:            awgClient,
 		ForceRecheck:         forceRecheck,
@@ -264,19 +267,51 @@ func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client,
 		BackendURL:           cfg.Backend.URL,
 		Version:              Version,
 		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
-		DNSChanged:           dnsChangedHook(singleChecks),
+		DNSChanged:           dnsChangedHook(singleChecks, multiChecks),
 	}
 }
 
 // dnsChangedHook -- что сделать после настоящего сброса DNS: отпустить кеш
-// проверки раздельного DNS, чтобы следующий отчёт рассказал о новых настройках.
-func dnsChangedHook(list []checks.Check) func() {
+// проверок раздельного DNS (dns_split) и русских серверов имён (dns_ru),
+// чтобы следующий отчёт рассказал о новых настройках.
+func dnsChangedHook(list []checks.Check, multi []checks.MultiCheck) func() {
+	var fns []func()
 	for _, c := range list {
 		if split, ok := c.(*checks.DNSSplit); ok {
-			return split.Invalidate
+			fns = append(fns, split.Invalidate)
 		}
 	}
-	return nil
+	for _, c := range multi {
+		if ru, ok := c.(*checks.DNSRu); ok {
+			fns = append(fns, ru.Invalidate)
+		}
+	}
+	if len(fns) == 0 {
+		return nil
+	}
+	return func() {
+		for _, fn := range fns {
+			fn()
+		}
+	}
+}
+
+// buildDNSRuCheck собирает проверку серверов имён русских сайтов. Роль
+// апстрима (ру или нет) -- из эталона dnsref, русское имя для пробы -- оттуда
+// же; заграничное имя «роутер вообще резолвит» -- то же, что у проверки dns.
+func buildDNSRuCheck(cfg *agent.Config) *checks.DNSRu {
+	return &checks.DNSRu{
+		Endpoints: readDNSEndpoints,
+		Probe: checks.DNS{
+			HTTPClient:      &http.Client{Timeout: 5 * time.Second},
+			PerProbeTimeout: 3 * time.Second,
+		}.ProbeEndpoint,
+		Resolve:         resolveVia,
+		RUName:          dnsref.RUCanary(),
+		ForeignName:     cfg.Checks.DNS.TestDomain,
+		PerProbeTimeout: 3 * time.Second,
+		ConfigInterval:  dnsSplitInterval,
+	}
 }
 
 // dnsSplitInterval -- как часто пересчитывать вердикт раздельного DNS. Агент

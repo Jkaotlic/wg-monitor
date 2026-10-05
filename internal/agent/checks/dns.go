@@ -299,6 +299,19 @@ func epTarget(ep keenetic.DNSEndpoint) string {
 	return "?"
 }
 
+// ProbeEndpoint -- та же проба живости апстрима, что у проверки dns, для
+// других проверок (dns_ru): второй копии транспортов не заводим.
+func (c DNS) ProbeEndpoint(ctx context.Context, ep keenetic.DNSEndpoint, domain string) error {
+	if c.PerProbeTimeout <= 0 {
+		c.PerProbeTimeout = 3 * time.Second
+	}
+	httpc := c.HTTPClient
+	if httpc == nil {
+		httpc = http.DefaultClient
+	}
+	return c.probeOne(ctx, ep, domain, httpc)
+}
+
 // probeOne runs the basic reachability A-query for `domain` over `ep`.
 func (c DNS) probeOne(ctx context.Context, ep keenetic.DNSEndpoint, domain string, httpc *http.Client) error {
 	switch ep.Type {
