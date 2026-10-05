@@ -1,0 +1,374 @@
+{
+ "sandbox-broken": {
+  "events": {
+   "tunnels": [
+    {
+     "tunnel_id": "awg10",
+     "name": "vpn-de",
+     "status": "ok",
+     "run_state": "running",
+     "enabled": true,
+     "handshake_age_sec": 48,
+     "ping_check_status": "ok",
+     "ping_latency_ms": 52,
+     "matrix_latency_ms": 226,
+     "matrix_updated_at": "2026-09-09T09:32:23Z",
+     "default_route_intent": false,
+     "is_active_default": false,
+     "active_default_known": true,
+     "ts": "2026-10-05T19:47:16Z"
+    },
+    {
+     "tunnel_id": "awg12",
+     "name": "vpn-nl",
+     "status": "fail",
+     "run_state": "down",
+     "enabled": true,
+     "handshake_age_sec": 5400,
+     "ping_check_status": "fail",
+     "default_route_intent": true,
+     "is_active_default": false,
+     "active_default_known": true,
+     "note": "рукопожатия нет 90 минут",
+     "ts": "2026-10-05T19:47:16Z"
+    },
+    {
+     "tunnel_id": "awg15",
+     "name": "a3-main_awg1",
+     "status": "ok",
+     "run_state": "running",
+     "enabled": true,
+     "handshake_age_sec": 30,
+     "ping_check_status": "ok",
+     "default_route_intent": false,
+     "is_active_default": false,
+     "active_default_known": true,
+     "ts": "2026-10-05T19:47:16Z"
+    }
+   ]
+  },
+  "incidents": [
+   {
+    "check_name": "tunnel_awg12"
+   }
+  ],
+  "snapshot": {
+   "hr_neo": {
+    "installed": true,
+    "running": true
+   },
+   "tunnels": [
+    {
+     "id": "awg12",
+     "name": "vpn-nl",
+     "iface": "opkgtun12",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 21,
+     "ping_status": "ok",
+     "default_route": true,
+     "restart_method": "control"
+    },
+    {
+     "id": "awg10",
+     "name": "vpn-de",
+     "iface": "opkgtun10",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "down",
+     "has_handshake": true,
+     "handshake_age_sec": 3600,
+     "ping_status": "fail",
+     "ping_fails": 4,
+     "ping_fail_max": 5,
+     "restart_method": "control"
+    },
+    {
+     "id": "awg14",
+     "name": "vpn-spare",
+     "iface": "opkgtun14",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 40,
+     "ping_status": "ok",
+     "restart_method": "control"
+    },
+    {
+     "id": "ISP",
+     "name": "Провайдер",
+     "iface": "ISP",
+     "type": "ndms",
+     "enabled": true,
+     "available": true,
+     "restart_method": "none"
+    },
+    {
+     "id": "awg15",
+     "name": "a3-main_awg1",
+     "iface": "opkgtun15",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 30,
+     "ping_status": "ok",
+     "restart_method": "control"
+    }
+   ],
+   "counts": {
+    "awg10": {
+     "dns": 2,
+     "static": 0,
+     "hr_neo": 0
+    },
+    "awg12": {
+     "dns": 0,
+     "static": 4,
+     "hr_neo": 0
+    }
+   },
+   "other": {
+    "dns": 1,
+    "static": 0,
+    "hr_neo": 0
+   },
+   "policies": [
+    {
+     "name": "HydraRoute",
+     "description": "обход блокировок",
+     "interfaces": [
+      {
+       "bind": "OpkgTun12",
+       "name": "vpn-nl",
+       "role": "active",
+       "available": true,
+       "order": 1,
+       "tunnel_id": "awg12",
+       "via_vpn": true
+      },
+      {
+       "bind": "OpkgTun10",
+       "name": "vpn-de",
+       "role": "fallback",
+       "available": true,
+       "order": 2,
+       "tunnel_id": "awg10",
+       "via_vpn": true
+      },
+      {
+       "bind": "opkgtun15",
+       "name": "a3-main_awg1",
+       "role": "fallback",
+       "available": true,
+       "order": 3,
+       "tunnel_id": "awg15",
+       "via_vpn": true
+      }
+     ],
+     "dns": 32,
+     "hr_neo": 28,
+     "active_tunnel_id": "awg12",
+     "via_vpn": true
+    }
+   ],
+   "rules": [
+    {
+     "id": "",
+     "name": "Figma",
+     "kind": "dns",
+     "backend": "hydraroute",
+     "enabled": true,
+     "bind": "OpkgTun12"
+    },
+    {
+     "id": "",
+     "name": "GitHub",
+     "kind": "dns",
+     "backend": "hydraroute",
+     "enabled": true,
+     "bind": "OpkgTun12"
+    },
+    {
+     "id": "",
+     "name": "офисная сеть",
+     "kind": "static",
+     "backend": "ndms",
+     "enabled": true,
+     "bind": "OpkgTun10"
+    }
+   ],
+   "default_egress": "direct",
+   "policy_model": true
+  }
+ },
+ "sandbox-work": {
+  "events": {
+   "tunnels": [
+    {
+     "tunnel_id": "awg10",
+     "name": "vpn-nl",
+     "status": "fail",
+     "run_state": "running",
+     "enabled": true,
+     "handshake_age_sec": 1447,
+     "ping_check_status": "disabled",
+     "default_route_intent": true,
+     "is_active_default": false,
+     "active_default_known": true,
+     "ts": "2026-10-05T19:49:46Z"
+    },
+    {
+     "tunnel_id": "awg12",
+     "name": "vpn-fi",
+     "status": "ok",
+     "run_state": "running",
+     "enabled": true,
+     "handshake_age_sec": 21,
+     "ping_check_status": "ok",
+     "ping_latency_ms": 38,
+     "matrix_latency_ms": 84,
+     "matrix_updated_at": "2026-09-09T09:32:23Z",
+     "default_route_intent": false,
+     "is_active_default": false,
+     "active_default_known": true,
+     "ts": "2026-10-05T19:49:46Z"
+    },
+    {
+     "tunnel_id": "awg14",
+     "name": "vpn-hip",
+     "status": "ok",
+     "run_state": "running",
+     "enabled": true,
+     "handshake_age_sec": 88,
+     "ping_check_status": "disabled",
+     "matrix_latency_ms": 117,
+     "matrix_updated_at": "2026-09-18T07:58:02Z",
+     "default_route_intent": true,
+     "is_active_default": false,
+     "active_default_known": true,
+     "note": "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу",
+     "ts": "2026-10-05T19:49:46Z"
+    }
+   ]
+  },
+  "incidents": [
+   {
+    "check_name": "tunnel_awg10"
+   }
+  ],
+  "snapshot": {
+   "hr_neo": {
+    "installed": true,
+    "running": true
+   },
+   "tunnels": [
+    {
+     "id": "awg14",
+     "name": "vpn-hip",
+     "iface": "opkgtun14",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 88,
+     "ping_status": "disabled",
+     "default_route": true,
+     "restart_method": "control"
+    },
+    {
+     "id": "awg10",
+     "name": "vpn-nl",
+     "iface": "opkgtun10",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 1447,
+     "ping_status": "disabled",
+     "default_route": true,
+     "restart_method": "control"
+    },
+    {
+     "id": "awg12",
+     "name": "vpn-fi",
+     "iface": "opkgtun12",
+     "type": "managed",
+     "enabled": true,
+     "available": true,
+     "status": "up",
+     "has_handshake": true,
+     "handshake_age_sec": 21,
+     "ping_status": "ok",
+     "restart_method": "control"
+    },
+    {
+     "id": "ISP",
+     "name": "Провайдер",
+     "iface": "ISP",
+     "type": "ndms",
+     "enabled": true,
+     "available": true,
+     "restart_method": "none"
+    }
+   ],
+   "counts": {},
+   "other": {
+    "dns": 0,
+    "static": 0,
+    "hr_neo": 0
+   },
+   "policies": [
+    {
+     "name": "HydraRoute",
+     "description": "обход блокировок",
+     "interfaces": [
+      {
+       "bind": "OpkgTun14",
+       "name": "vpn-hip",
+       "role": "active",
+       "available": true,
+       "order": 1,
+       "tunnel_id": "awg14",
+       "via_vpn": true
+      },
+      {
+       "bind": "OpkgTun10",
+       "name": "vpn-nl",
+       "role": "fallback",
+       "available": true,
+       "order": 2,
+       "tunnel_id": "awg10",
+       "via_vpn": true
+      }
+     ],
+     "dns": 32,
+     "hr_neo": 32,
+     "active_tunnel_id": "awg14",
+     "via_vpn": true
+    }
+   ],
+   "rules": [
+    {
+     "id": "",
+     "name": "Figma",
+     "kind": "dns",
+     "backend": "hydraroute",
+     "enabled": true,
+     "bind": "OpkgTun14"
+    }
+   ],
+   "default_egress": "direct",
+   "policy_model": true
+  }
+ }
+}

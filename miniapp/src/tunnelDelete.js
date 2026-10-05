@@ -42,18 +42,24 @@ export function tunnelList(snapshot) {
     .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id)) }))
 }
 
-// Счёт для вкладки -- тем же правилом, что на «Роутере» и «Проверках»
-// (labels.tunnelCountSummary): строка вкладки приводится к виду проверки
-// tunnel_*, а считает одна и та же функция.
+// Счёт для вкладки -- ТЕМ ЖЕ определением, что на «Роутере» и «Проверках»:
+// свой VPN-туннель -- тот, по которому есть строка проверки tunnel_* (агент
+// пишет её по управляемым awg-manager), работает -- поднят и проверка не
+// провалена (labels.tunnelCountSummary). Поэтому при загруженных проверках
+// считаются САМИ строки проверок, исключая лишь тех, кого снимок назвал
+// чужими (type != managed): числа на экранах совпадают по построению.
+// Проверки не загрузились -- строки вкладки приводятся к виду tunnel_*.
 export function tunnelListSummary(list, incidents = [], checkRows = []) {
-  // Обмен ключами в снимке маршрутов не приходит -- его берём из проверки того
-  // же VPN-туннеля, как на «Роутере»; проверки нет -- не придираемся.
-  const hs = new Map((checkRows ?? []).map((c) => [c.tunnel_id, c.handshake_age_sec]))
+  const rows = Array.isArray(checkRows) ? checkRows : []
+  if (rows.length > 0) {
+    const foreign = new Set((list ?? []).filter((r) => !isManaged(r.type)).map((r) => r.id))
+    return tunnelCountSummary(rows.filter((c) => !foreign.has(c.tunnel_id)), incidents)
+  }
   return tunnelCountSummary(
     (list ?? []).map((r) => ({
       tunnel_id: r.id,
-      handshake_age_sec: hs.has(r.id) ? hs.get(r.id) : 0,
       type: r.type,
+      handshake_age_sec: 0,
       enabled: !r.switchedOff,
       run_state: r.live === 'up' ? 'running' : r.switchedOff ? 'stopped' : 'dead',
       status: r.checkFailed ? 'fail' : r.checkUnverified ? 'unknown' : 'ok',

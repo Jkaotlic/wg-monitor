@@ -58,3 +58,24 @@ describe('B3: счёт VPN-туннелей', () => {
     expect(tunnelListSummary(tunnelList(withCheckVerdict(snapshot, events)), inc, events.tunnels).working).toBe(0)
   })
 })
+
+// Живые данные песочницы (fixtures/sandbox_counts.json -- снято с настоящего
+// бэкенда песочницы: ответ /events, тревоги и снимок route_status). Общая
+// фикстура выше проходила, а на этих данных экраны расходились:
+// «2 из 3» на «Роутере» против «4 из 4» на «VPN-туннелях».
+import sandbox from './fixtures/sandbox_counts.json'
+
+describe.each(['sandbox-broken', 'sandbox-work'])('B3 на данных песочницы: %s', (name) => {
+  const s = sandbox[name]
+  it('«Роутер»/«Проверки» и вкладка дают один счёт', () => {
+    const main = tunnelCountSummary(s.events.tunnels, s.incidents)
+    const tab = tunnelListSummary(tunnelList(withCheckVerdict(s.snapshot, s.events)), s.incidents, s.events.tunnels)
+    expect(tab).toEqual(main)
+    expect(main.total).toBe(s.events.tunnels.length)
+  })
+
+  it('без загруженных проверок вкладка не придумывает чужое: чужой NDMS-интерфейс не считается', () => {
+    const tab = tunnelListSummary(tunnelList(s.snapshot), [], [])
+    expect(tab.total).toBe(s.snapshot.tunnels.filter((t) => t.type === 'managed').length)
+  })
+})
