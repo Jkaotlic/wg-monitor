@@ -558,3 +558,22 @@ func TestThread_QuietSaysNothingAndUncovers(t *testing.T) {
 		t.Fatal("после Quiet «восстановилось» обязано уйти")
 	}
 }
+
+// Блок починки длиной 3997-3998 знаков: места под тревогу нет, а резать блок
+// по maxEditRunes-1 нельзя -- он короче: срез за длину (паника или мусор).
+func TestWithRepairBlock_LongBlockNoPanic(t *testing.T) {
+	for _, n := range []int{3996, 3997, 3998, 3999, 4000, 4100} {
+		block := strings.Repeat("ж", n)
+		got := withRepairBlock("тревога", block)
+		if l := len([]rune(got)); l > maxEditRunes {
+			t.Fatalf("блок %d: правка длиной %d знаков", n, l)
+		}
+		if !strings.Contains(got, "ж") {
+			t.Fatalf("блок %d: блок починки потерялся", n)
+		}
+		// Срез за длину внутри ёмкости не паникует, а дописывает нулевые знаки.
+		if strings.ContainsRune(got, 0) {
+			t.Fatalf("блок %d: в правке нулевые знаки", n)
+		}
+	}
+}

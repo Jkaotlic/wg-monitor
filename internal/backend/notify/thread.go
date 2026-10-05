@@ -374,8 +374,9 @@ func withRepairBlock(base, block string) string {
 	}
 	room := maxEditRunes - utf8.RuneCountInString(sep+block) - utf8.RuneCountInString(cut)
 	if room <= 0 {
+		// Блок в 3997-3998 знаков короче среза: резать по своей длине.
 		b := []rune(block)
-		return string(b[:maxEditRunes-1]) + cut
+		return string(b[:min(len(b), maxEditRunes-1)]) + cut
 	}
 	head := []rune(base)
 	if len(head) > room {
