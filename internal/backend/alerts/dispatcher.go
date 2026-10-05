@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -56,6 +57,72 @@ type Dispatcher struct {
 	// notify -- рассылка по личкам получателей. Заменила адресацию в тему
 	// группы: у роутера несколько получателей, и у каждого свой чат.
 	notify notifySink
+
+	// autoHint -- включена ли у проверки автопочинка (строка в тревоге);
+	// nil -- не спрашивать. covered -- починка уже дописала «Починил» в
+	// тревогу, и ответ «восстановилось» не нужен; nil -- никогда.
+	autoHint func(userID int64, checkName string) bool
+	covered  func(userID int64, checkName string) bool
+
+	// lastHard -- текст и кнопки последней HARD-тревоги по проверке. Только
+	// в памяти: правка Telegram заменяет текст целиком, и починке, чтобы
+	// дописать свой блок, нужен исходный текст (notify.AlertTexts). После
+	// перезапуска памяти нет -- починка шлёт итог новым сообщением.
+	mu       sync.Mutex
+	lastHard map[hardKey]hardAlert
+}
+
+type hardKey struct {
+	userID    int64
+	checkName string
+}
+
+type hardAlert struct {
+	text string
+	kb   tg.InlineKeyboardMarkup
+}
+
+// SetAutoRepairHint -- откуда диспетчер знает, что у проверки включена
+// автопочинка. Вызывается до первой тревоги.
+func (di *Dispatcher) SetAutoRepairHint(fn func(userID int64, checkName string) bool) {
+	di.autoHint = fn
+}
+
+// SetCovered -- откуда диспетчер знает, что «восстановилось» уже сказано
+// правкой тревоги (notify.Repairs.Covered). Вызывается до первой тревоги.
+func (di *Dispatcher) SetCovered(fn func(userID int64, checkName string) bool) {
+	di.covered = fn
+}
+
+// Last -- текст и кнопки последней HARD-тревоги по проверке
+// (notify.AlertTexts). Кнопки отдаются копией: правки не трогают память.
+func (di *Dispatcher) Last(userID int64, checkName string) (string, *tg.InlineKeyboardMarkup, bool) {
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	a, ok := di.lastHard[hardKey{userID, checkName}]
+	if !ok {
+		return "", nil, false
+	}
+	rows := make([][]tg.InlineKeyboardButton, len(a.kb.InlineKeyboard))
+	for i, r := range a.kb.InlineKeyboard {
+		rows[i] = append([]tg.InlineKeyboardButton(nil), r...)
+	}
+	return a.text, &tg.InlineKeyboardMarkup{InlineKeyboard: rows}, true
+}
+
+func (di *Dispatcher) rememberHard(userID int64, checkName, text string, kb tg.InlineKeyboardMarkup) {
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	if di.lastHard == nil {
+		di.lastHard = map[hardKey]hardAlert{}
+	}
+	di.lastHard[hardKey{userID, checkName}] = hardAlert{text: text, kb: kb}
+}
+
+func (di *Dispatcher) forgetHard(userID int64, checkName string) {
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	delete(di.lastHard, hardKey{userID, checkName})
 }
 
 func NewDispatcher(d *db.DB, tgc TGSender, cfg Config) *Dispatcher {
@@ -110,6 +177,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			HardSince:   *tr.Next.HardSince,
 			Check:       check,
 		}
+		if di.autoHint != nil {
+			args.AutoRepair = di.autoHint(userID, checkName)
+		}
 		if u, err := di.d.Users().GetByID(userID); err == nil {
 			args.IsMobile = u.IsMobile()
 		} else {
@@ -131,6 +201,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err != nil {
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
+		di.rememberHard(userID, checkName, text, kb)
 		if delivered == 0 {
 			// Слать некому: владелец не привязан, операторы не заведены либо
 			// всем недоставимо. Тревога не теряется -- её видно в сводке
@@ -185,7 +256,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			RecoveredAt: di.now(),
 			Check:       check,
 		})
-		if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
+		di.forgetHard(userID, checkName)
+		// Починка уже дописала «Починил» в саму тревогу -- второе
+		// «восстановилось» ответом было бы шумом.
+		if di.covered != nil && di.covered(userID, checkName) {
+			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
+				"user_id", userID, "check", checkName)
+		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
 			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
 		// Переписка по этой проверке закончилась: следующая поломка начнёт
@@ -270,3 +347,6 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		LastAlertAt: &now,
 	})
 }
+
+// Диспетчер -- память тревог для нити починки.
+var _ notify.AlertTexts = (*Dispatcher)(nil)

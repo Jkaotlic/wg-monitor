@@ -693,3 +693,101 @@ func TestDispatcherRecoveryRepliesToEach(t *testing.T) {
 		t.Fatalf("переписка=%v, после «починилось» её надо забыть", left)
 	}
 }
+
+func hardTr() state.Transition {
+	hardSince := time.Now().Add(-2 * time.Minute).UTC()
+	return state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: &hardSince},
+	}
+}
+
+// Включённая автопочинка -- строка в тревоге; текст и кнопки тревоги
+// диспетчер помнит, чтобы починка дописывала ход прямо в неё.
+func TestDispatcher_HardRemembersTextAndAutoRepairHint(t *testing.T) {
+	d := newDB(t)
+	uid, _ := d.Users().Insert("router-a", "6666000000000000000000000000000000000000000000000000000000000000", "1.1.1.1", "awg0")
+	disp := NewDispatcher(d, &fakeTG{}, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+	disp.SetNotifySink(&recordingSink{delivers: 1})
+	var asked []string
+	disp.SetAutoRepairHint(func(userID int64, check string) bool {
+		asked = append(asked, check)
+		return userID == uid && check == "tunnel_awg11"
+	})
+
+	if _, _, ok := disp.Last(uid, "tunnel_awg11"); ok {
+		t.Fatal("до тревоги помнить нечего")
+	}
+	if err := disp.Handle(context.Background(), uid, "router-a", "tunnel_awg11", hardTr(),
+		chk("tunnel_awg11", "fail", map[string]any{"tunnel_name": "Франкфурт"})); err != nil {
+		t.Fatal(err)
+	}
+	text, kb, ok := disp.Last(uid, "tunnel_awg11")
+	if !ok || !strings.Contains(text, "Автопочинка включена — начинаю чинить, допишу сюда.") {
+		t.Fatalf("тревога не запомнена или без строки автопочинки (ok=%v):\n%s", ok, text)
+	}
+	if kb == nil || len(kb.InlineKeyboard) != 2 {
+		t.Fatalf("кнопки тревоги не запомнены: %+v", kb)
+	}
+
+	if err := disp.Handle(context.Background(), uid, "router-a", "awg_handshake", hardTr(),
+		chk("awg_handshake", "fail", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if text, _, _ := disp.Last(uid, "awg_handshake"); strings.Contains(text, "Автопочинка") {
+		t.Fatalf("строка автопочинки в чужой тревоге:\n%s", text)
+	}
+	if len(asked) != 2 {
+		t.Fatalf("подсказку спросили %v раз", asked)
+	}
+
+	// «Восстановилось» -- случай закрыт, помнить тревогу незачем.
+	tr := state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok"}}
+	if err := disp.Handle(context.Background(), uid, "router-a", "tunnel_awg11", tr, chk("tunnel_awg11", "ok", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := disp.Last(uid, "tunnel_awg11"); ok {
+		t.Fatal("после восстановления тревога всё ещё в памяти")
+	}
+}
+
+// Починка уже дописала «Починил» в тревогу -- второе «восстановилось»
+// ответом не шлётся; состояние и переписка закрываются как обычно.
+func TestDispatcher_RecoverySkippedWhenCovered(t *testing.T) {
+	d := newDB(t)
+	uid, _ := d.Users().Insert("router-c", "5555000000000000000000000000000000000000000000000000000000000000", "1.1.1.1", "awg0")
+	if err := d.AlertMessages().Put(uid, "tunnel_awg11", 1001, 555); err != nil {
+		t.Fatal(err)
+	}
+	disp := NewDispatcher(d, &fakeTG{}, Config{FailThreshold: 3, RecoveryThreshold: 2})
+	sink := &recordingSink{}
+	disp.SetNotifySink(sink)
+	disp.SetCovered(func(userID int64, check string) bool { return userID == uid && check == "tunnel_awg11" })
+
+	tr := state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok"}}
+	if err := disp.Handle(context.Background(), uid, "router-c", "tunnel_awg11", tr, chk("tunnel_awg11", "ok", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.replies) != 0 {
+		t.Fatalf("ответов=%v, закрытая починкой проверка не получает второго «восстановилось»", sink.replies)
+	}
+	saved, err := d.State().Get(uid, "tunnel_awg11")
+	if err != nil || saved.CurrentStatus != "ok" {
+		t.Fatalf("состояние не сохранено: %+v err=%v", saved, err)
+	}
+	left, err := d.AlertMessages().List(uid, "tunnel_awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("переписка=%v, её надо забыть и здесь", left)
+	}
+
+	// Не закрытая проверка -- ответ как раньше.
+	if err := disp.Handle(context.Background(), uid, "router-c", "awg_handshake", tr, chk("awg_handshake", "ok", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.replies) != 1 {
+		t.Fatalf("ответов=%v, ждали один -- по незакрытой проверке", sink.replies)
+	}
+}

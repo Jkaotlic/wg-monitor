@@ -24,7 +24,14 @@ type HardArgs struct {
 	IsMobile    bool
 	Check       wire.Check
 	Neighbors   []NeighborSummary
+	// AutoRepair -- у VPN-туннеля включена автопочинка: тревога последней
+	// строкой обещает дописать ход починки сюда же (notify.Repairs правит
+	// это сообщение).
+	AutoRepair bool
 }
+
+// AutoRepairLine -- последняя строка тревоги, когда автопочинка включена.
+const AutoRepairLine = "Автопочинка включена — начинаю чинить, допишу сюда."
 
 type NeighborSummary struct {
 	CheckName    string // e.g. "tunnel_awg11"
@@ -74,6 +81,9 @@ func FormatHard(a HardArgs) string {
 
 	if adv := suggestAction(a.CheckName, a.Check.Details, a.Neighbors); adv != "" {
 		sections = append(sections, CardSection{Title: "Что делать", Lines: []string{adv}})
+	}
+	if a.AutoRepair {
+		sections = append(sections, CardSection{Lines: []string{AutoRepairLine}})
 	}
 
 	meta := []string{
