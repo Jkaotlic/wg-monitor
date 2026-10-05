@@ -50,7 +50,10 @@ func (s repairSource) Fresh(ctx context.Context, routerID int64, provider, optio
 	return s.cabinet(ctx, routerID, provider, option)
 }
 
-func (s repairSource) Options(ctx context.Context, routerID int64, provider string) ([]string, error) {
+// Options -- варианты кабинета с подписью и отметкой «уже выпущен»: смена
+// локации у «Amnezia Premium» берёт только выпущенные страны (новая заняла бы
+// место в подписке), а человеку локация называется подписью кабинета.
+func (s repairSource) Options(ctx context.Context, routerID int64, provider string) ([]linkrepair.Option, error) {
 	if provider == RepairProviderAwg3 {
 		return nil, nil
 	}
@@ -68,10 +71,10 @@ func (s repairSource) Options(ctx context.Context, routerID int64, provider stri
 	if !acc.Connected {
 		return nil, &linkrepair.NeedHuman{Cause: errors.New("кабинет не подключён: " + acc.Note), Action: act}
 	}
-	out := make([]string, 0, len(acc.Options))
+	out := make([]linkrepair.Option, 0, len(acc.Options))
 	for _, o := range acc.Options {
 		if id := strings.TrimSpace(o.ID); id != "" {
-			out = append(out, id)
+			out = append(out, linkrepair.Option{ID: id, Label: strings.TrimSpace(o.Label), Issued: o.Issued})
 		}
 	}
 	return out, nil

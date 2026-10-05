@@ -382,10 +382,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 	// Ступень 3. Пересоздать.
 	ok, nh, used := d.tryRecreate(ctx, jobID, req, sc, names, set, th, log)
 	if ok {
-		if set.Provider != "awg3" && used != "" && used != set.Option && d.SaveOption != nil {
-			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used)
+		if set.Provider != "awg3" && used.ID != "" && used.ID != set.Option && d.SaveOption != nil {
+			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used.ID)
 		}
-		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRecreated(set.Provider, used)))
+		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRecreated(set.Provider, optionLabel(used))))
 		return
 	}
 	if nh != nil {
@@ -395,7 +395,24 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 	if d.aborted(ctx, jobID, req, th, names, log) {
 		return
 	}
-	d.finishNeedHuman(ctx, jobID, req, th, names, log, ActServerDead)
+	d.finishNeedHuman(ctx, jobID, req, th, names, log, lastAction(set))
+}
+
+// lastAction -- что сказать человеку, когда не помогла ни одна ступень. Свой
+// сервер -- проверить его: локации у него нет. Смена локации уже разрешена
+// (и не помогла) -- советовать её разрешить незачем.
+func lastAction(set Setting) string {
+	switch {
+	case set.Provider == "awg3":
+		if panel, _, _ := strings.Cut(set.Option, "/"); strings.TrimSpace(panel) != "" {
+			return ActVPSPanel(strings.TrimSpace(panel))
+		}
+		return ActServerDead
+	case set.AllowRelocate:
+		return ActRelocateNoHelp
+	default:
+		return ActServerDead
+	}
 }
 
 // tryRestart -- ступень 1: перезапуск и доказательство.
@@ -500,56 +517,79 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 	return true, nil
 }
 
+// relocateOnlyIssued -- у кабинета новый вариант занимает место в подписке
+// («Amnezia Premium»: каждая выпущенная страна -- слот). Тогда смена локации
+// берёт только уже выпущенные варианты: автопочинка не тратит то, за что
+// человек платит. У «HideMy.name» код открывает все серверы разом.
+func relocateOnlyIssued(provider string) bool { return provider == "amnezia" }
+
 // tryRecreate -- ступень 3. Свой сервер: новый пир. Кабинет: другая
 // локация -- только если человек разрешил её менять. used -- вариант,
 // который помог.
-func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string) (ok bool, nh *NeedHuman, used string) {
+func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string) (ok bool, nh *NeedHuman, used Option) {
 	if set.Provider == "awg3" {
 		th.Progress(ctx, progressText(names, log, "завожу новое подключение на своём сервере"))
 		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 			return d.Source.Fresh(ctx, req.RouterID, set.Provider, set.Option)
 		})
-		return ok, nh, set.Option
+		return ok, nh, Option{ID: set.Option}
 	}
 	if !set.AllowRelocate {
 		d.skip(jobID, "смена локации не разрешена", StepRecreate)
-		return false, nil, ""
+		return false, nil, Option{}
 	}
 	opts, err := d.Source.Options(ctx, req.RouterID, set.Provider)
 	if err != nil {
 		if errors.As(err, &nh) {
 			d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не дал список локаций — "+nh.Action)
-			return false, nh, ""
+			return false, nh, Option{}
 		}
 		d.logWarn("linkrepair: варианты кабинета не получены", "err", err)
 		d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не дал список локаций")
-		return false, nil, ""
+		return false, nil, Option{}
 	}
-	tried := 0
-	for _, opt := range opts {
-		if opt == "" || opt == set.Option {
+	var cands []Option
+	for _, o := range opts {
+		if o.ID == "" || o.ID == set.Option {
 			continue
 		}
-		if tried == maxRelocations || ctx.Err() != nil {
+		if relocateOnlyIssued(set.Provider) && !o.Issued {
+			continue
+		}
+		cands = append(cands, o)
+	}
+	if len(cands) == 0 {
+		if relocateOnlyIssued(set.Provider) {
+			d.step(jobID, StepRecreate, provision.StepFailed, "другой уже выпущенной страны в кабинете нет, а новая заняла бы место в подписке")
+			return false, &NeedHuman{Cause: errors.New("нет другой выпущенной страны"), Action: ActIssueOther}, Option{}
+		}
+		d.step(jobID, StepRecreate, provision.StepFailed, "другой локации у кабинета нет")
+		return false, nil, Option{}
+	}
+	// Отказ кабинета по одной локации -- не повод бросать остальные: человек
+	// нужен, только если не помогла ни одна. Тогда -- действие последнего
+	// отказа.
+	var lastNH *NeedHuman
+	for i, opt := range cands {
+		if i == maxRelocations || ctx.Err() != nil {
 			break
 		}
-		tried++
-		th.Progress(ctx, progressText(names, log, "пробую локацию «"+opt+"»"))
+		th.Progress(ctx, progressText(names, log, "пробую локацию «"+optionLabel(opt)+"»"))
 		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
-			return d.Source.Issue(ctx, req.RouterID, set.Provider, opt)
+			return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
 		})
 		if ok {
 			return true, nil, opt
 		}
 		if nh != nil {
-			return false, nh, ""
+			lastNH = nh
 		}
 	}
-	if tried == 0 {
-		d.step(jobID, StepRecreate, provision.StepFailed, "другой локации у кабинета нет")
-	}
-	return false, nil, ""
+	return false, lastNH, Option{}
 }
+
+// optionLabel -- как вариант кабинета называется для человека.
+func optionLabel(o Option) string { return orID(o.Label, o.ID) }
 
 // aborted -- бэкенд останавливается: дальше ступени не идут, трафик остаётся
 // там, где он сейчас. Это не вердикт автопочинке, поэтому стоп не ставится.

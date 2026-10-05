@@ -15,7 +15,16 @@ type Source interface {
 	// Fresh -- пересоздать: awg3 -- новый пир; amnezia/hidemyname -- то же, что Issue.
 	Fresh(ctx context.Context, routerID int64, provider, option string) (replace.Issued, error)
 	// Options -- варианты кабинета по порядку (страны/серверы); для awg3 -- nil.
-	Options(ctx context.Context, routerID int64, provider string) ([]string, error)
+	Options(ctx context.Context, routerID int64, provider string) ([]Option, error)
+}
+
+// Option -- вариант кабинета. Label -- подпись кабинета («Германия»), её и
+// читает владелец; Issued -- конфиг этого варианта уже выпущен и места в
+// подписке больше не займёт.
+type Option struct {
+	ID     string
+	Label  string
+	Issued bool
 }
 
 // NeedHuman -- провал, после которого нужен человек, и что именно ему сделать.
@@ -37,6 +46,11 @@ const (
 	ActServerDead = "сервер не отвечает — смените сервер или разрешите автопочинке менять локацию"
 	ActTooOften   = "VPN-туннель падает раз за разом — нужна ручная проверка"
 	ActAgentOld   = "обновите агента во вкладке «Управление»"
+	// ActIssueOther -- у «Amnezia Premium» нет другой уже выпущенной страны:
+	// выпустить новую автопочинка не вправе, это место в подписке.
+	ActIssueOther = "выпустите конфиг другой страны во вкладке «Управление» — новый конфиг займёт место в подписке"
+	// ActRelocateNoHelp -- менять локацию было разрешено, и это не помогло.
+	ActRelocateNoHelp = "другие локации тоже не помогли — смените сервер во вкладке «Управление»"
 )
 
 // ActVPSPanel -- действие, когда не ответила панель своего сервера.

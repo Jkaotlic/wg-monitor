@@ -129,15 +129,23 @@ func TestRepairSource_Awg3BadOptionNeedsHuman(t *testing.T) {
 
 func TestRepairSource_OptionsOrder(t *testing.T) {
 	cab := &fakeCabinet{accounts: map[string]VPNAccount{
-		"amnezia": {Provider: "amnezia", Connected: true, Options: []VPNOption{{ID: "nl"}, {ID: "de"}, {ID: "fi"}}},
+		"amnezia": {Provider: "amnezia", Connected: true, Options: []VPNOption{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия", Issued: true}}},
 	}}
 	src, id := repairSourceEnv(t, cab, &fakeAwg3{})
 	got, err := src.Options(context.Background(), id, "amnezia")
 	if err != nil {
 		t.Fatalf("Options: %v", err)
 	}
-	if len(got) != 3 || got[0] != "nl" || got[1] != "de" || got[2] != "fi" {
-		t.Fatalf("порядок вариантов: %v", got)
+	// Подпись и «уже выпущен» доходят до движка: по ним он решает, что можно
+	// пробовать без нового места в подписке, и как назвать локацию человеку.
+	want := []linkrepair.Option{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия", Issued: true}}
+	if len(got) != len(want) {
+		t.Fatalf("варианты: %+v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("вариант %d = %+v, ждали %+v", i, got[i], want[i])
+		}
 	}
 	if opts, err := src.Options(context.Background(), id, "awg3"); err != nil || opts != nil {
 		t.Fatalf("у своего сервера вариантов нет: %v %v", opts, err)
