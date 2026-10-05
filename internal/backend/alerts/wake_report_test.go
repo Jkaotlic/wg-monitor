@@ -43,7 +43,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 	if !strings.Contains(card.Summary, "проблемы") {
 		t.Errorf("summary must mention проблемы, got %q", card.Summary)
 	}
-	if !strings.Contains(card.Details, "список VPN-туннелей не читается") || !strings.Contains(card.Details, "поиск сайтов по имени не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
+	if !strings.Contains(card.Details, "список VPN-туннелей не читается") || !strings.Contains(card.Details, "определение адресов сайтов не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
 		t.Errorf("details must list failing checks, got %q", card.Details)
 	}
 	if strings.Contains(card.Details, "external_reach") {
@@ -120,7 +120,7 @@ func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
 			{Name: "tunnels", Status: "fail"},
 			{Name: "hydraroute", Status: "fail"},
 			{Name: "tunnel_awg13", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт"}},
-		}, []string{"VPN-туннель «Франкфурт»", "движок умной раздельной маршрутизации"}},
+		}, []string{"VPN-туннель «Франкфурт»", "обход блокировок не работает"}},
 		{"есть проблемы", []wire.Check{
 			{Name: "dns_via_tunnel", Status: "fail"},
 			{Name: "awg_manager", Status: "fail"},
@@ -146,5 +146,16 @@ func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
 			}
 			assertSaysVPNTunnel(t, st.name, text)
 		})
+	}
+}
+
+// v0.56, B4: «ночной отчёт» не держит своего словаря -- существительное
+// берёт из общей таблицы подписей, а пояснение к нему -- только глагол.
+func TestWakeCheckLabelUsesCheckNamesTable(t *testing.T) {
+	for _, key := range []string{"tunnels", "dns", "hydraroute", "awg_manager", "external_reach", "dns_ru", "resolver_guard"} {
+		got := wakeCheckLabel(wire.Check{Name: key, Status: "fail"})
+		if !strings.HasPrefix(got, lowerFirst(CheckNames[key])) {
+			t.Errorf("%s: %q не начинается с подписи из таблицы %q", key, got, CheckNames[key])
+		}
 	}
 }

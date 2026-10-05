@@ -88,15 +88,18 @@ func isWarmupCheck(name string) bool {
 	}
 }
 
+// wakeName -- подпись проверки из общей таблицы (check_names.json) для
+// середины фразы: своих имён у «ночного отчёта» нет.
+func wakeName(key string) string { return lowerFirst(CheckNames[key]) }
+
 // wakeCheckLabel -- что не так, словами приложения: VPN-туннель с именем
-// владельца, «поиск сайтов по имени» вместо DNS, «панель роутера» вместо
-// awg-manager, HydraRoute с пояснением.
+// владельца, остальное -- имена из общей таблицы подписей.
 func wakeCheckLabel(c wire.Check) string {
 	switch c.Name {
 	case "tunnels":
-		return "список VPN-туннелей не читается"
+		return wakeName("tunnels") + " не читается"
 	case "dns_via_tunnel":
-		return "поиск сайтов по имени не отвечает"
+		return wakeName("dns") + " не отвечает"
 	}
 	switch checkCategory(c.Name) {
 	case "tunnel":
@@ -105,20 +108,20 @@ func wakeCheckLabel(c wire.Check) string {
 		}
 		return "VPN-туннель не на связи"
 	case "dns":
-		return "поиск сайтов по имени не отвечает"
+		return wakeName("dns") + " не отвечает"
 	case "hydraroute":
-		return "HydraRoute (движок умной раздельной маршрутизации) не работает"
+		return wakeName("hydraroute") + " не работает"
 	case "awg_manager", "awgmgr_api":
-		return "панель роутера не отвечает"
+		return wakeName("awg_manager") + " не отвечает"
 	case "external_reach":
-		return "сервисы не открываются через обход"
+		return wakeName("external_reach") + " не работает"
 	case "dns_ru":
 		return dnsRuHumanName + " не отвечает"
 	case "resolver_guard":
 		if resolverGuardForeignLeftover(c.Details) {
 			return "запасные DNS-серверы не снялись" // отвечает ли свой -- не знаем
 		}
-		return "свой DNS-сервер не отвечает"
+		return wakeName("resolver_guard") + " не отвечает"
 	default:
 		return c.Name
 	}

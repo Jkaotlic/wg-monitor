@@ -109,8 +109,8 @@ func TestSealCabinetStores_NoKeyWarnsAndLeavesFiles(t *testing.T) {
 	if sealedfile.Enabled() {
 		t.Fatal("ключ процесса поставлен без ключа")
 	}
-	// Ключ задан, но файла нет -- то же, что нет ключа.
-	if w := SealCabinetStores(stores, filepath.Join(dir, "missing.key"), sealLogger(&log)); w != CabinetSealWarnOpen {
+	// Ключ задан, но файла нет -- хранилища по-прежнему открытые, но текст свой.
+	if w := SealCabinetStores(stores, filepath.Join(dir, "missing.key"), sealLogger(&log)); w != CabinetSealWarnOpenKeyMissing {
 		t.Fatalf("ключ не прочитан: %q", w)
 	}
 }
@@ -337,7 +337,7 @@ func TestSealCabinetStores_WrongKeyRuntimeWritesStayPlain(t *testing.T) {
 // что именно с ключами и что делать, без «ключ шифрования не задан».
 func TestCabinetSealWarningsSpecTexts(t *testing.T) {
 	cases := map[string]struct{ got, want string }{
-		"открыто":    {CabinetSealWarnOpen, "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в DEPLOY.md"},
+		"открыто":    {CabinetSealWarnOpen, "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в «DEPLOY.md»"},
 		"нет файла":  {CabinetSealWarnNoKey, "Ключи кабинетов зашифрованы, а файл «revive.key» не найден. Верните прежний файл — добавлять ключи заново не нужно"},
 		"чужой ключ": {CabinetSealWarnWrongKey, "Ключи кабинетов зашифрованы другим файлом «revive.key». Верните прежний, не создавайте новый"},
 	}
@@ -346,4 +346,57 @@ func TestCabinetSealWarningsSpecTexts(t *testing.T) {
 			t.Errorf("%s: %q, ждали %q", name, c.got, c.want)
 		}
 	}
+}
+
+// v0.56, B5: честный текст для каждого состояния ключа и хранилищ.
+func TestSealCabinetStoresWarningPerState(t *testing.T) {
+	t.Cleanup(func() { sealedfile.SetKey(nil) })
+	plain := func(t *testing.T) []StoreFile {
+		stores := sealTestStores(t.TempDir())
+		if err := os.WriteFile(stores[0].Path, []byte(`{"version":1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return stores
+	}
+	run := func(stores []StoreFile, keyFile string) string {
+		var log bytes.Buffer
+		return SealCabinetStores(stores, keyFile, sealLogger(&log))
+	}
+	t.Run("key_file не задан, хранилище открытое", func(t *testing.T) {
+		if w := run(plain(t), ""); w != CabinetSealWarnOpen {
+			t.Fatalf("%q", w)
+		}
+	})
+	t.Run("key_file задан, файла нет, хранилище открытое", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "nope.key")
+		if w := run(plain(t), missing); w != CabinetSealWarnOpenKeyMissing {
+			t.Fatalf("%q", w)
+		}
+	})
+	t.Run("файл есть, но испорчен", func(t *testing.T) {
+		bad := filepath.Join(t.TempDir(), "revive.key")
+		if err := os.WriteFile(bad, []byte("не ключ"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if w := run(plain(t), bad); w != CabinetSealWarnKeyDamaged {
+			t.Fatalf("%q", w)
+		}
+	})
+	t.Run("зашифровано, ключа нет", func(t *testing.T) {
+		stores := plain(t)
+		key := writeSealKeyFile(t, t.TempDir())
+		run(stores, key) // шифрует
+		sealedfile.SetKey(nil)
+		if w := run(stores, filepath.Join(t.TempDir(), "gone.key")); w != CabinetSealWarnNoKey {
+			t.Fatalf("%q", w)
+		}
+	})
+	t.Run("зашифровано, чужой ключ", func(t *testing.T) {
+		stores := plain(t)
+		run(stores, writeSealKeyFile(t, t.TempDir()))
+		sealedfile.SetKey(nil)
+		if w := run(stores, writeSealKeyFile(t, t.TempDir())); w != CabinetSealWarnWrongKey {
+			t.Fatalf("%q", w)
+		}
+	})
 }

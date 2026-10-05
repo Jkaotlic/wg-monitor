@@ -15,7 +15,11 @@ import (
 // Предупреждения сводки парка про ключи кабинетов на диске (v0.55, B1).
 // Тексты -- по спеке v0.56 (B5); экспортированы, чтобы песочница показывала те же.
 const (
-	CabinetSealWarnOpen       = "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в DEPLOY.md"
+	CabinetSealWarnOpen = "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в «DEPLOY.md»"
+	// Файл ключа указан в настройках, но его нет, а хранилища открытые.
+	CabinetSealWarnOpenKeyMissing = "Ключи кабинетов лежат открытым текстом: файл «revive.key», указанный в настройках сервера, не найден — верните его на место"
+	// Файл ключа есть, но не читается как ключ (не base64, не та длина, нет прав).
+	CabinetSealWarnKeyDamaged = "Файл «revive.key» на сервере повреждён — верните прежний, добавлять ключи заново не нужно"
 	CabinetSealWarnNoKey      = "Ключи кабинетов зашифрованы, а файл «revive.key» не найден. Верните прежний файл — добавлять ключи заново не нужно"
 	CabinetSealWarnWrongKey   = "Ключи кабинетов зашифрованы другим файлом «revive.key». Верните прежний, не создавайте новый"
 	cabinetSealWarnPartlyOpen = "Не все ключи кабинетов зашифрованы — подробности в журнале сервера"
@@ -55,6 +59,12 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 	}
 
 	if box == nil {
+		keyState := sealKeyState(keyErr)
+		if keyState == sealKeyDamaged && len(present) > 0 {
+			log.Error("файл ключа шифрования кабинетов не читается как ключ; файлы не тронуты",
+				"reason", keyErr, "stores", storeNames(present))
+			return CabinetSealWarnKeyDamaged
+		}
 		if len(sealed) > 0 {
 			log.Error("ключи кабинетов зашифрованы, а ключа шифрования нет — кабинеты не работают; файлы не тронуты",
 				"reason", keyErr, "stores", storeNames(sealed))
@@ -65,6 +75,9 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		}
 		log.Warn("ключи кабинетов лежат на диске открытыми: ключ шифрования (revive.key_file) не задан или не прочитан",
 			"reason", keyErr, "stores", storeNames(present))
+		if keyState == sealKeyMissing {
+			return CabinetSealWarnOpenKeyMissing
+		}
 		return CabinetSealWarnOpen
 	}
 
@@ -116,6 +129,27 @@ func removeStaleSealTemps(storePath string) {
 		if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() {
 			_ = os.Remove(m)
 		}
+	}
+}
+
+type sealKeyKind int
+
+const (
+	sealKeyNotConfigured sealKeyKind = iota // revive.key_file не задан
+	sealKeyMissing                          // задан, но файла нет
+	sealKeyDamaged                          // файл есть, но не читается как ключ
+)
+
+// sealKeyState различает три причины, по которым ключа нет: от этого зависит,
+// что честно сказать человеку.
+func sealKeyState(err error) sealKeyKind {
+	switch {
+	case err == nil, errors.Is(err, revive.ErrKeyNotConfigured):
+		return sealKeyNotConfigured
+	case errors.Is(err, os.ErrNotExist):
+		return sealKeyMissing
+	default:
+		return sealKeyDamaged
 	}
 }
 
