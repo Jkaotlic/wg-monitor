@@ -296,16 +296,23 @@ func (e *EventsRepo) ListSince(userID int64, checkName string, since time.Time) 
 // happened on this router" (a timeline across all checks), and the two differ
 // in both the WHERE clause and the sort direction a reader expects.
 func (e *EventsRepo) ListAllSince(userID int64, since time.Time, limit int) ([]EventRow, error) {
+	return e.ListAllSinceExcept(userID, since, limit, "")
+}
+
+// ListAllSinceExcept -- ListAllSince без строк проверки except (пусто -- без
+// исключений). Исключение -- в самой выборке, до LIMIT: отброшенные после
+// обрезки строки съедали бы предел.
+func (e *EventsRepo) ListAllSinceExcept(userID int64, since time.Time, limit int, except string) ([]EventRow, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	rows, err := e.d.db.Query(
 		`SELECT id, user_id, check_name, status, details_json, ts
 		   FROM events
-		  WHERE user_id = ? AND ts >= ?
+		  WHERE user_id = ? AND ts >= ? AND check_name <> ?
 		  ORDER BY ts DESC
 		  LIMIT ?`,
-		userID, since.UTC(), limit,
+		userID, since.UTC(), except, limit,
 	)
 	if err != nil {
 		return nil, err

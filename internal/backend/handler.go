@@ -553,12 +553,6 @@ func thresholdsForCheck(base state.Thresholds, policy AlertPolicy, checkName str
 		base.Fail = 1
 		return base
 	}
-	// bypass_leak -- то же: порог (три отчёта на двух замерах) бэкенд уже
-	// отсчитал сам, fail в строке -- поднятая тревога.
-	if checkName == bypassLeakCheck {
-		base.Fail = 1
-		return base
-	}
 	if !isNoisyCheck(checkName) {
 		return base
 	}
@@ -1053,6 +1047,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 			checkThresholds := thresholdsForCheck(thresholds, d.AlertPolicy, c.Name)
 			tr := state.Apply(prev, c.Status, time.Now(), checkThresholds)
+			if c.Name == bypassLeakCheck {
+				// Порог и снятие бэкенд отсчитал в самой строке.
+				tr = bypassLeakApply(prev, c.Status, time.Now())
+			}
 			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery
 			// stay at Info; SoftFlap is Debug to avoid noise on transient flaps.
 			switch tr.Kind {

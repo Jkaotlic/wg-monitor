@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -726,7 +725,14 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 		}
 		// Запрашиваем на одну строку больше предела: только так видно, что
 		// строки кончились не потому, что событий больше нет.
-		rows, err := d.DB.Events().ListAllSince(routerID, since, limit+1)
+		// Скрытая строка (тихий режим bypass_leak) отсекается в самой выборке:
+		// после обрезки по пределу она съела бы бюджет ленты и поставила бы
+		// «обрезано».
+		hidden := ""
+		if bypassLeakHidden(d, bypassLeakCheck) {
+			hidden = bypassLeakCheck
+		}
+		rows, err := d.DB.Events().ListAllSinceExcept(routerID, since, limit+1, hidden)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "timeline lookup failed")
 			return
@@ -740,7 +746,6 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 			rows = rows[:limit]
 			resp.Truncated = true
 		}
-		rows = slices.DeleteFunc(rows, func(row db.EventRow) bool { return bypassLeakHidden(d, row.CheckName) })
 		if raw {
 			for _, row := range rows {
 				resp.Events = append(resp.Events, miniappTimelineEvent{

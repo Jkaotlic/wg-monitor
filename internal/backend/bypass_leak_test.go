@@ -91,6 +91,11 @@ func TestBypassLeakObserve(t *testing.T) {
 		{"правила не прочитаны", []wire.Check{carrier, {Name: "hydraroute", Status: "ok", Details: map[string]any{
 			"running": true, "mechanism_probe_error": "too many"}}},
 			leakExit(now, map[string]wire.ExitProbe{"awg12": same}), bypassLeakUnverified, bypassLeakReasonRulesUnreadable, ""},
+		{"сводка политик не прочитана", []wire.Check{
+			leakTunnel("awg10", "Амстердам", "running", 0),
+			leakTunnel("awg12", "Франкфурт", "running", 30),
+			{Name: "hydraroute", Status: "ok", Details: map[string]any{"running": true, "policies_error": "timeout"}}},
+			leakExit(now, map[string]wire.ExitProbe{"awg12": same}), bypassLeakUnverified, bypassLeakReasonRulesUnreadable, ""},
 		{"проверки механизма нет в отчёте", []wire.Check{leakTunnel("awg12", "Франкфурт", "running", 12)},
 			leakExit(now, map[string]wire.ExitProbe{"awg12": same}), bypassLeakUnverified, bypassLeakReasonRulesUnreadable, ""},
 		{"факт устарел", []wire.Check{carrier, policyHydra},
@@ -338,14 +343,16 @@ func TestReportBypassLeakQuietModeWritesRowsButNoAlerts(t *testing.T) {
 
 func TestReportBypassLeakEnabledGoesHard(t *testing.T) {
 	h := newLeakHarness(t, true)
-	p1 := time.Now().UTC().Add(-30 * time.Minute)
+	p1 := time.Now().UTC().Add(-50 * time.Minute)
 	p2 := p1.Add(20 * time.Minute)
 	leakReport(h, p1, "ok", true)
 	leakReport(h, p1, "ok", false)
-	leakReport(h, p2, "ok", true)
-	leakReport(h, p2, "ok", false)
+	if st, _ := h.d.State().Get(h.uid(), bypassLeakCheck); st.CurrentStatus == "hard" {
+		t.Fatalf("тревога раньше третьего отчёта: %+v", st)
+	}
+	leakReport(h, p2, "ok", true) // третий отчёт, второй замер -- порог спеки
 	if st, _ := h.d.State().Get(h.uid(), bypassLeakCheck); st.CurrentStatus != "hard" {
-		t.Fatalf("включённый режим: want hard, got %+v", st)
+		t.Fatalf("включённый режим: ровно на третьем отчёте want hard, got %+v", st)
 	}
 	h.disp.mu.Lock()
 	defer h.disp.mu.Unlock()
@@ -355,6 +362,64 @@ func TestReportBypassLeakEnabledGoesHard(t *testing.T) {
 	}
 	if last.Details["tunnel_name"] != "Франкфурт" || last.Details["external_reach"] != "ok" {
 		t.Fatalf("тревоге не хватает имени или ответа доступности: %#v", last.Details)
+	}
+}
+
+// Снятие -- по двум замерам спеки, без лишней задержки автомата.
+func TestReportBypassLeakEnabledRecoversOnSecondProbe(t *testing.T) {
+	h := newLeakHarness(t, true)
+	p1 := time.Now().UTC().Add(-50 * time.Minute)
+	p2, p3, p4 := p1.Add(10*time.Minute), p1.Add(20*time.Minute), p1.Add(30*time.Minute)
+	leakReport(h, p1, "ok", true)
+	leakReport(h, p1, "ok", false)
+	leakReport(h, p2, "ok", true)
+	matchReport := func(at time.Time) {
+		h.post("", &wire.ReportFacts{Exit: leakExit(at, map[string]wire.ExitProbe{
+			"awg12": leakProbe(boolp(true), "198.51.100.9", "203.0.113.7", at)})},
+			heartbeatCheck, leakTunnel("awg12", "Франкфурт", "running", 0),
+			leakHydra(true, leakPolicy("awg12", 40)), wire.Check{Name: "external_reach", Status: "ok"})
+	}
+	matchReport(p3)
+	matchReport(p3)
+	if st, _ := h.d.State().Get(h.uid(), bypassLeakCheck); st.CurrentStatus != "hard" {
+		t.Fatalf("один замер снял тревогу: %+v", st)
+	}
+	matchReport(p4)
+	if st, _ := h.d.State().Get(h.uid(), bypassLeakCheck); st.CurrentStatus != "ok" {
+		t.Fatalf("второй замер не снял тревогу: %+v", st)
+	}
+	h.disp.mu.Lock()
+	defer h.disp.mu.Unlock()
+	if h.disp.calls[len(h.disp.calls)-1] != state.Recovery {
+		t.Fatalf("нет Recovery: %v", h.disp.calls)
+	}
+}
+
+// Мобильный роутер проспал дольше предела возраста с открытой тревогой:
+// перерыв рвёт только набирающуюся серию, поднятую тревогу снимают лишь
+// замеры с изменившимся адресом.
+func TestReportBypassLeakAlarmSurvivesLongGap(t *testing.T) {
+	h := newLeakHarness(t, false)
+	old := h.base.Add(-3 * time.Hour)
+	if err := h.d.Events().Insert(h.uid(), bypassLeakCheck, "fail",
+		`{"tunnel_id":"awg12","observed":"mismatch","state":{"alarm":true,"tunnel_id":"awg12","mismatch_reports":5,"mismatch_probes":2}}`, old); err != nil {
+		t.Fatal(err)
+	}
+	p := time.Now().UTC().Add(-5 * time.Minute)
+	leakReport(h, p, "ok", true)
+	if rows := h.leakRows(); rows[0].Status != "fail" || !strings.Contains(rows[0].DetailsJSON, `"alarm":true`) {
+		t.Fatalf("тревога потерялась после перерыва: %+v", rows[0])
+	}
+	// А незавершённая серия после перерыва начинается заново.
+	h2 := newLeakHarness(t, false)
+	if err := h2.d.Events().Insert(h2.uid(), bypassLeakCheck, "ok",
+		`{"tunnel_id":"awg12","observed":"mismatch","state":{"tunnel_id":"awg12","mismatch_reports":2,"mismatch_probes":2,"last_mismatch_probe":"2026-01-01T00:00:00Z"}}`,
+		h2.base.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	leakReport(h2, p, "ok", true)
+	if rows := h2.leakRows(); rows[0].Status != "ok" || !strings.Contains(rows[0].DetailsJSON, `"mismatch_reports":1`) {
+		t.Fatalf("старая серия продолжилась после перерыва: %+v", rows[0])
 	}
 }
 
@@ -434,6 +499,32 @@ func TestMiniappHidesBypassLeakInQuietMode(t *testing.T) {
 	}
 }
 
+// Скрытые строки не съедают бюджет ленты и не ставят «обрезано».
+func TestMiniappTimelineHiddenRowsDoNotEatLimit(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	base := time.Now().UTC().Add(-time.Hour)
+	if err := d.Events().Insert(ownedID, "agent_heartbeat", "ok", "", base); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= miniappTimelineMaxRows+1; i++ {
+		if err := d.Events().Insert(ownedID, bypassLeakCheck, "ok", `{}`, base.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline?raw=1", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var tl miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &tl); err != nil {
+		t.Fatal(err)
+	}
+	if tl.Truncated || len(tl.Events) != 1 || tl.Events[0].CheckName != "agent_heartbeat" {
+		t.Fatalf("want одна строка heartbeat без обрезки, got truncated=%v events=%d", tl.Truncated, len(tl.Events))
+	}
+}
+
 // --- образец подсчёта за неделю (копия -- в docs/operations, вне git) ---
 
 func TestBypassLeakWeeklyCountSQL(t *testing.T) {
@@ -445,42 +536,50 @@ func TestBypassLeakWeeklyCountSQL(t *testing.T) {
 	a, _ := d.Users().Insert("leak-a", "7171717171717171717171717171717171717171717171717171717171717171", "198.51.100.12", "awg0")
 	b, _ := d.Users().Insert("leak-b", "7272727272727272727272727272727272727272727272727272727272727272", "198.51.100.13", "awg0")
 	now := time.Now().UTC()
-	ins := func(uid int64, status, details string, ts time.Time) {
-		if err := d.Events().Insert(uid, bypassLeakCheck, status, details, ts); err != nil {
+	ins := func(uid int64, status, details string, ago time.Duration) {
+		if err := d.Events().Insert(uid, bypassLeakCheck, status, details, now.Add(-ago)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ins(a, "ok", `{"observed":"mismatch"}`, now.Add(-3*time.Hour))
-	ins(a, "fail", `{"observed":"mismatch"}`, now.Add(-2*time.Hour))
-	ins(a, "fail", `{"observed":"mismatch"}`, now.Add(-time.Hour))
-	ins(a, "fail", `{"observed":"mismatch"}`, now.Add(-10*24*time.Hour)) // старше недели
-	ins(b, "ok", `{"unverified":true,"reason":"singbox"}`, now.Add(-time.Hour))
-	ins(b, "ok", `{"observed":"match"}`, now.Add(-30*time.Minute))
+	const (
+		calm   = `{"observed":"mismatch","state":{"alarm":false}}`
+		alarm  = `{"observed":"mismatch","state":{"alarm":true}}`
+		heldUV = `{"unverified":true,"reason":"exit_stale","state":{"alarm":true}}`
+	)
+	ins(a, "fail", alarm, 10*24*time.Hour) // эпизод старше недели
+	ins(a, "ok", calm, 3*time.Hour)
+	ins(a, "fail", alarm, 2*time.Hour) // эпизод 1
+	ins(a, "ok", heldUV, 90*time.Minute)
+	ins(a, "fail", alarm, time.Hour) // тот же эпизод
+	ins(a, "ok", `{"observed":"match","state":{"alarm":false}}`, 50*time.Minute)
+	ins(a, "fail", alarm, 40*time.Minute) // эпизод 2
+	ins(b, "ok", `{"unverified":true,"reason":"singbox","state":{"alarm":false}}`, time.Hour)
+	ins(b, "ok", `{"observed":"match","state":{"alarm":false}}`, 30*time.Minute)
 	if err := d.Events().Insert(a, "dns", "fail", "", now.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	since := now.Add(-7 * 24 * time.Hour)
-	rows, err := d.SQL().Query(bypassLeakWeeklySQL, since, since, since)
+	rows, err := d.SQL().Query(bypassLeakWeeklySQL, since, since, since, since)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	got := map[string][3]int{}
+	got := map[string][4]int{}
 	for rows.Next() {
 		var nick string
-		var reports, fails, unverified int
-		if err := rows.Scan(&nick, &reports, &fails, &unverified); err != nil {
+		var reports, episodes, fails, unverified int
+		if err := rows.Scan(&nick, &reports, &episodes, &fails, &unverified); err != nil {
 			t.Fatal(err)
 		}
-		got[nick] = [3]int{reports, fails, unverified}
+		got[nick] = [4]int{reports, episodes, fails, unverified}
 	}
-	if got["leak-a"] != [3]int{3, 2, 0} || got["leak-b"] != [3]int{2, 0, 1} {
-		t.Fatalf("подсчёт: %v", got)
+	if got["leak-a"] != [4]int{6, 2, 3, 1} || got["leak-b"] != [4]int{2, 0, 0, 1} {
+		t.Fatalf("подсчёт (строк, эпизодов, fail, непроверенных): %v", got)
 	}
 
 	// Таблица горячая: подсчёт обязан идти по индексу (user_id, check_name, ts).
-	plan, err := d.SQL().Query("EXPLAIN QUERY PLAN "+bypassLeakWeeklySQL, since, since, since)
+	plan, err := d.SQL().Query("EXPLAIN QUERY PLAN "+bypassLeakWeeklySQL, since, since, since, since)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +594,7 @@ func TestBypassLeakWeeklyCountSQL(t *testing.T) {
 		steps = append(steps, detail)
 	}
 	for _, s := range steps {
-		if strings.HasPrefix(s, "SCAN e") || strings.HasPrefix(s, "SCAN events") {
+		if strings.HasPrefix(s, "SCAN e") || strings.HasPrefix(s, "SCAN p") || strings.HasPrefix(s, "SCAN events") {
 			t.Fatalf("полный проход по events: %v", steps)
 		}
 	}

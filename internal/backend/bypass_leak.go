@@ -6,6 +6,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -104,11 +105,22 @@ func bypassLeakObserve(checks []wire.Check, exit func() *wire.ExitFacts, now tim
 		hd      miniappHydraDetails
 		hdSeen  bool
 		tunnels []miniappTunnel
+		// policiesErr -- агент не прочитал сводку политик (policies_error) и
+		// оставил её пустой. Без неё не видно, кто запасное звено, а правила
+		// без явного маршрута агент приписывает первому VPN-туннелю с главным
+		// маршрутом -- резерв судился бы как несущий.
+		policiesErr string
 	)
 	for _, c := range checks {
 		row := db.EventRow{CheckName: c.Name, Status: c.Status, DetailsJSON: normaliseDetailsJSON(c.Details)}
 		if c.Name == "hydraroute" {
 			hdSeen = json.Unmarshal([]byte(row.DetailsJSON), &hd) == nil
+			var pe struct {
+				PoliciesError string `json:"policies_error"`
+			}
+			if hdSeen && json.Unmarshal([]byte(row.DetailsJSON), &pe) == nil {
+				policiesErr = pe.PoliciesError
+			}
 			continue
 		}
 		if t, ok := miniappTunnelFromEvent(row); ok {
@@ -118,7 +130,7 @@ func bypassLeakObserve(checks []wire.Check, exit func() *wire.ExitFacts, now tim
 	switch {
 	case hdSeen && hd.SingboxRouterActive:
 		return unverified(bypassLeakReasonSingbox)
-	case !hdSeen || hd.MechanismProbeError != "":
+	case !hdSeen || hd.MechanismProbeError != "" || policiesErr != "":
 		return unverified(bypassLeakReasonRulesUnreadable)
 	}
 
@@ -298,6 +310,39 @@ func bypassLeakStep(prev bypassLeakState, o bypassLeakObs) bypassLeakState {
 	return next
 }
 
+// bypassLeakResume -- счёт из прошлой строки после паузы gap. Долгая пауза
+// (роутер молчал, мобильный спал) рвёт только набирающуюся серию: «подряд»
+// уже не про него. Поднятую тревогу пауза не снимает -- иначе после сна шла
+// бы строка ok, автомат засчитал бы «снова меняет адрес», а следующие
+// несовпадения дали бы новую тревогу. Снять её вправе только замеры
+// (bypassLeakRecoverProbes).
+func bypassLeakResume(prev bypassLeakState, gap time.Duration) bypassLeakState {
+	if gap <= bypassLeakStateMaxAge || prev.Alarm {
+		return prev
+	}
+	return bypassLeakState{}
+}
+
+// bypassLeakApply -- переход автомата тревог для bypass_leak. Порог «три
+// отчёта на двух замерах» и снятие «два замера» бэкенд уже отсчитал в самой
+// строке: первая строка fail и есть тревога, первая ok после неё -- снятие.
+// Общий автомат добавил бы свою задержку (ok→fail у него Soft, HARD -- только
+// на следующем fail; снятие -- после Recovery ok подряд).
+func bypassLeakApply(prev db.IncidentState, incoming string, now time.Time) state.Transition {
+	th := state.Thresholds{Fail: 1, Recovery: 1}
+	if incoming == "fail" && prev.CurrentStatus != "hard" {
+		next := prev
+		next.ConsecutiveFails = prev.ConsecutiveFails + 1
+		next.ConsecutiveOKs = 0
+		next.CurrentStatus = "hard"
+		t := now
+		next.HardSince = &t
+		next.LastAlertAt = &t
+		return state.Transition{Kind: state.Hard, Next: next}
+	}
+	return state.Apply(prev, incoming, now, th)
+}
+
 // bypassLeakStatus -- статус строки: fail только у поднятой тревоги на
 // проверенном отчёте. Непроверенный -- ok с unverified=true: автомат тревог
 // им не двигается ни в какую сторону (checkUnverified).
@@ -361,12 +406,12 @@ func bypassLeakReportCheck(d Deps, uid int64, rep *wire.Report, ts time.Time) wi
 	var prev bypassLeakState
 	if row, ok, err := d.DB.Events().LatestEvent(uid, bypassLeakCheck); err != nil {
 		d.Logger.Warn("bypass_leak: прошлая строка не прочитана", "router_id", uid, "err", err)
-	} else if ok && row.TS.Before(ts) && ts.Sub(row.TS) <= bypassLeakStateMaxAge {
+	} else if ok && row.TS.Before(ts) {
 		var pd struct {
 			State bypassLeakState `json:"state"`
 		}
 		if json.Unmarshal([]byte(row.DetailsJSON), &pd) == nil {
-			prev = pd.State
+			prev = bypassLeakResume(pd.State, ts.Sub(row.TS))
 		}
 	}
 	reach := ""
@@ -380,17 +425,27 @@ func bypassLeakReportCheck(d Deps, uid int64, rep *wire.Report, ts time.Time) wi
 }
 
 // bypassLeakWeeklySQL -- сколько тревог «мимо VPN-туннеля» было бы за период
-// (параметры -- начало периода трижды). Подзапросы по роутеру идут по индексу
-// (user_id, check_name, ts): полный проход по горячей events недопустим.
-// Копия для ручного прогона -- docs/operations (вне git).
+// (параметры -- начало периода четырежды). episodes -- переходы в тревогу:
+// строка с поднятой тревогой (state.alarm), у которой предыдущая строка
+// роутера без неё. Строки «не проверено» при поднятой тревоге несут alarm и
+// эпизод не дробят. Тревога, поднятая до начала периода, в нём эпизодом не
+// считается. Все подзапросы идут по индексу (user_id, check_name, ts):
+// полный проход по горячей events недопустим. Копия для ручного прогона --
+// docs/operations (вне git).
 const bypassLeakWeeklySQL = `
 SELECT u.nickname,
   (SELECT COUNT(*) FROM events e
     WHERE e.user_id = u.id AND e.check_name = 'bypass_leak' AND e.ts >= ?) AS reports,
+  (SELECT COUNT(*) FROM events e
+    WHERE e.user_id = u.id AND e.check_name = 'bypass_leak' AND e.ts >= ?
+      AND json_extract(e.details_json, '$.state.alarm') = 1
+      AND COALESCE((SELECT json_extract(p.details_json, '$.state.alarm') FROM events p
+                     WHERE p.user_id = e.user_id AND p.check_name = 'bypass_leak' AND p.ts < e.ts
+                     ORDER BY p.ts DESC LIMIT 1), 0) = 0) AS episodes,
   (SELECT COUNT(*) FROM events e
     WHERE e.user_id = u.id AND e.check_name = 'bypass_leak' AND e.ts >= ? AND e.status = 'fail') AS fails,
   (SELECT COUNT(*) FROM events e
     WHERE e.user_id = u.id AND e.check_name = 'bypass_leak' AND e.ts >= ?
       AND e.details_json LIKE '%"unverified":true%') AS unverified
 FROM users u
-ORDER BY fails DESC, u.nickname`
+ORDER BY episodes DESC, fails DESC, u.nickname`
