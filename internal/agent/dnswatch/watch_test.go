@@ -206,6 +206,7 @@ type harness struct {
 	statePath string
 	logs      *bytes.Buffer
 	w         *Watcher
+	endpoint  string // пусто -- ownEndpoint; тест смены endpoint подставляет свой
 }
 
 func newHarness(t *testing.T, r *fakeRouter, dead ...string) *harness {
@@ -228,8 +229,12 @@ func newHarness(t *testing.T, r *fakeRouter, dead ...string) *harness {
 // newWatcher builds a watcher over the harness' router, probes, clock and
 // state file — a second call models an agent restart.
 func (h *harness) newWatcher() *Watcher {
+	ep := ownEndpoint
+	if h.endpoint != "" {
+		ep = h.endpoint
+	}
 	cfg := Config{
-		Endpoint:          ownEndpoint,
+		Endpoint:          ep,
 		CanaryDomain:      "example.com",
 		RUCanary:          "ya.ru",
 		Interval:          time.Minute,
