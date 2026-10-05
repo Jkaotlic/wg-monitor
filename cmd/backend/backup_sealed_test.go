@@ -86,3 +86,14 @@ func TestBackupVerifySealedStoresWrongKey(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Fix round 1: битый ключ на машине (не «нет файла») -- провал проверки, а
+// не «ключа нет».
+func TestBackupVerifySealedStoresBrokenKey(t *testing.T) {
+	setIncludeReviveKey(t, false)
+	f := newBackupFixture(t)
+	f.sealFixtureStores(t)
+	f.backupSmall(t)
+	mustWrite(t, f.keyPath, "not-base64-at-all!\n")
+	f.verifyFails(t, "ключ шифрования этой машины негоден")
+}

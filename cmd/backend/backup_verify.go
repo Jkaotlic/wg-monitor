@@ -245,6 +245,11 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (string, error) {
 	list := strings.Join(names, ", ")
 	key, err := revive.LoadKey(liveKeyPath)
+	if err != nil && !errors.Is(err, revive.ErrKeyNotConfigured) && !errors.Is(err, os.ErrNotExist) {
+		// Файл ключа есть, но битый (не base64, не та длина) -- это не
+		// «ключа нет»: с таким ключом бэкенд кабинеты не прочитает.
+		return "", fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
+	}
 	if err != nil {
 		return "хранилища кабинетов в архиве зашифрованы (" + list + "), а ключа шифрования на этой машине нет: после восстановления ключи кабинетов не прочитать, пока на сервер не вернётся прежний revive.key", nil
 	}

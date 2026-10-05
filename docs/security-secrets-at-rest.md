@@ -90,7 +90,12 @@ Operator decision 05.10.2026: the four cabinet JSON stores are encrypted with
   words ("ключ шифрования не найден" / "ключ шифрования не тот"; codes
   `cabinet_key_missing` / `cabinet_key_wrong`, HTTP 503) instead of "key not
   saved", and **no write goes over an encrypted file without the key** — the
-  file is left untouched. Bring the old `revive.key` back and restart.
+  file is left untouched. With a key that does not open every encrypted
+  store, startup re-encrypts **nothing** (plain stores stay plain), and a
+  write never replaces an encrypted file that the current key cannot open —
+  so one key always reads every store. Bring the old `revive.key` back and
+  restart. Leftover `.<store>.tmp-*` files from an interrupted write are
+  removed on startup.
 - **Backup:** encrypted stores go into the archive as they are. The key stays
   **out** of the archive (variant A, `includeReviveKey = false`): a leaked
   archive decrypts neither root passwords nor cabinet keys. `backup verify`

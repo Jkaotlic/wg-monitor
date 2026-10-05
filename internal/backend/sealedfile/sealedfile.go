@@ -32,6 +32,10 @@ const (
 	DomainAwg3       = "awg3-panels.json"
 )
 
+// TempInfix -- временный файл записи: «.<имя>» + TempInfix + случайный
+// хвост, в каталоге хранилища. Старт убирает оставшиеся после падения.
+const TempInfix = ".tmp-"
+
 // Magic -- заголовок версии зашифрованного файла.
 const Magic = "wg-monitor-sealed v1\n"
 
@@ -126,6 +130,10 @@ func ReadFile(path, domain string) ([]byte, error) {
 // fsync каталога; каталог создаётся 0700. С ключом -- шифр. Без ключа
 // существующий зашифрованный файл не перезаписывается (ErrKeyMissing):
 // открытая запись поверх него стёрла бы остальные секреты.
+//
+// С ключом существующий зашифрованный файл, который этим ключом не
+// открывается, тоже не перезаписывается (ErrUnreadable): чужой ключ иначе
+// молча стёр бы записанное прежним (защита в глубину, fix round 1).
 func WriteFile(path, domain string, plain []byte) error {
 	if !Enabled() {
 		sealed, err := fileIsSealed(path)
@@ -135,6 +143,8 @@ func WriteFile(path, domain string, plain []byte) error {
 		if sealed {
 			return ErrKeyMissing
 		}
+	} else if err := ensureOwnSealOrAbsent(path, domain); err != nil {
+		return err
 	}
 	body, err := Encode(domain, plain)
 	if err != nil {
@@ -167,6 +177,24 @@ func Reseal(path, domain string) (changed bool, err error) {
 	return true, nil
 }
 
+// ensureOwnSealOrAbsent: файла нет, он открытый или открывается текущим
+// ключом -- nil; иначе ErrUnreadable.
+func ensureOwnSealOrAbsent(path, domain string) error {
+	sealed, err := fileIsSealed(path)
+	if err != nil || !sealed {
+		return err
+	}
+	plain, err := ReadFile(path, domain)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	clear(plain)
+	return nil
+}
+
 func fileIsSealed(path string) (bool, error) {
 	f, err := os.Open(path) // #nosec G304 -- путь хранилища из конфига
 	if errors.Is(err, os.ErrNotExist) {
@@ -189,7 +217,7 @@ func writeAtomic(path string, body []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("каталог хранилища: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+TempInfix+"*")
 	if err != nil {
 		return fmt.Errorf("временный файл хранилища: %w", err)
 	}

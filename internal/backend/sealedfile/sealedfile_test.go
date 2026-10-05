@@ -208,3 +208,23 @@ func TestReseal_NoKeyOrNoFile(t *testing.T) {
 		t.Fatal("без ключа файл тронут")
 	}
 }
+
+// Защита в глубину (fix round 1): с ключом запись поверх зашифрованного
+// файла, который этим ключом не открывается, отказывает -- иначе чужой ключ
+// молча затёр бы файл, записанный прежним.
+func TestWrite_RefusesOverSealedFileOfOtherKey(t *testing.T) {
+	withKey(t, newBox(t))
+	path := filepath.Join(t.TempDir(), "amnezia-premium.json")
+	if err := WriteFile(path, DomainAmnezia, []byte(`{"a":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+	SetKey(newBox(t))
+	if err := WriteFile(path, DomainAmnezia, []byte(`{"a":2}`)); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("err = %v", err)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("файл перезаписан чужим ключом")
+	}
+}

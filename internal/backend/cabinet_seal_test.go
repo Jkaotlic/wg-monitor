@@ -224,3 +224,72 @@ func TestStoreFileNamesAreSealDomains(t *testing.T) {
 		}
 	}
 }
+
+// Fix round 1: одно хранилище зашифровано ключом A, другое открыто. Старт с
+// ключом B ничего не шифрует (иначе ни один ключ не читал бы все файлы),
+// говорит «не тот ключ»; старт с A после этого читает оба.
+func TestSealCabinetStores_WrongKeyDoesNotSealPlainStores(t *testing.T) {
+	t.Cleanup(func() { sealedfile.SetKey(nil) })
+	dir := t.TempDir()
+	keyA := writeSealKeyFile(t, t.TempDir())
+	keyB := writeSealKeyFile(t, t.TempDir())
+	stores := sealTestStores(dir)
+	_ = os.WriteFile(stores[0].Path, []byte(`{"version":1,"a":1}`), 0o600)
+	var log bytes.Buffer
+	SealCabinetStores(stores[:1], keyA, sealLogger(&log)) // amnezia -- шифр A
+	plain := []byte(`{"version":1,"h":1}`)
+	_ = os.WriteFile(stores[3].Path, plain, 0o600) // hidemy -- открыт
+
+	log.Reset()
+	w := SealCabinetStores(stores, keyB, sealLogger(&log))
+	if !strings.Contains(w, "не тот") {
+		t.Fatalf("сводка: %q", w)
+	}
+	if !strings.Contains(log.String(), "level=ERROR") {
+		t.Fatalf("нет ERROR в журнале: %s", log.String())
+	}
+	raw, _ := os.ReadFile(stores[3].Path)
+	if !bytes.Equal(raw, plain) {
+		t.Fatalf("открытый файл зашифрован чужим ключом: %q", raw)
+	}
+
+	if w := SealCabinetStores(stores, keyA, sealLogger(&log)); w != "" {
+		t.Fatalf("старт с прежним ключом: %q", w)
+	}
+	for _, i := range []int{0, 3} {
+		if _, err := sealedfile.ReadFile(stores[i].Path, stores[i].Name); err != nil {
+			t.Fatalf("%s не читается прежним ключом: %v", stores[i].Name, err)
+		}
+	}
+}
+
+// Оба предупреждения не затирают друг друга.
+func TestCabinetSealWarningsJoin(t *testing.T) {
+	got := joinSealWarnings([]string{cabinetSealWarnPartlyOpen, cabinetSealWarnWrongKey, cabinetSealWarnPartlyOpen})
+	if !strings.Contains(got, cabinetSealWarnPartlyOpen) || !strings.Contains(got, cabinetSealWarnWrongKey) || strings.Count(got, cabinetSealWarnPartlyOpen) != 1 {
+		t.Fatalf("got %q", got)
+	}
+	if joinSealWarnings(nil) != "" {
+		t.Fatal("пусто")
+	}
+}
+
+// На старте убираются временные файлы прерванной записи хранилищ: в них
+// секреты, читать их некому.
+func TestSealCabinetStores_RemovesStaleTemps(t *testing.T) {
+	t.Cleanup(func() { sealedfile.SetKey(nil) })
+	dir := t.TempDir()
+	stores := sealTestStores(dir)
+	stale := filepath.Join(dir, "."+sealedfile.DomainHideMy+".tmp-12345")
+	other := filepath.Join(dir, ".unrelated.tmp-1")
+	_ = os.WriteFile(stale, []byte(`{"code":"1234567890"}`), 0o600)
+	_ = os.WriteFile(other, []byte(`x`), 0o600)
+	var log bytes.Buffer
+	SealCabinetStores(stores, "", sealLogger(&log))
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("временный файл хранилища не убран")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("чужой файл убран")
+	}
+}

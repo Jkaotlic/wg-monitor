@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
@@ -36,6 +38,7 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		if strings.TrimSpace(st.Path) == "" {
 			continue
 		}
+		removeStaleSealTemps(st.Path)
 		body, err := os.ReadFile(st.Path) // #nosec G304 -- путь хранилища из конфига
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -65,25 +68,52 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		return cabinetSealWarnOpen
 	}
 
-	warn := ""
+	// Сначала -- что каждое зашифрованное хранилище открывается этим ключом.
+	// Хоть одно нет -- ключ не тот (fix round 1): открытые файлы НЕ
+	// перешифровываются, иначе после возврата прежнего ключа уже они
+	// перестали бы читаться и ни один ключ не читал бы все хранилища.
+	var foreign []StoreFile
+	for _, st := range sealed {
+		if _, err := sealedfile.ReadFile(st.Path, st.Name); err != nil {
+			foreign = append(foreign, st)
+		}
+	}
+	if len(foreign) > 0 {
+		log.Error("хранилища кабинетов не расшифровываются этим ключом — открытые не перешифрованы, файлы не тронуты; верните прежний ключ шифрования",
+			"stores", storeNames(foreign))
+		return cabinetSealWarnWrongKey
+	}
+
+	var warns []string
 	for _, st := range present {
 		changed, err := sealedfile.Reseal(st.Path, st.Name)
 		if err != nil {
 			log.Warn("хранилище кабинетов не зашифровано — осталось открытым", "store", st.Name, "err", err)
-			warn = cabinetSealWarnPartlyOpen
+			warns = append(warns, cabinetSealWarnPartlyOpen)
 			continue
 		}
 		if changed {
 			log.Info("хранилище кабинетов зашифровано", "store", st.Name)
 		}
 	}
-	for _, st := range sealed {
-		if _, err := sealedfile.ReadFile(st.Path, st.Name); err != nil {
-			log.Error("хранилище кабинетов не расшифровывается этим ключом", "store", st.Name)
-			warn = cabinetSealWarnWrongKey
+	return joinSealWarnings(warns)
+}
+
+// removeStaleSealTemps убирает .<имя>.tmp-*, оставшиеся рядом с хранилищем
+// после падения посреди записи (sealedfile.WriteFile): в них секреты, а
+// читать их некому. Только обычные файлы; зовётся на старте, до того как
+// хранилища кто-то пишет.
+func removeStaleSealTemps(storePath string) {
+	pattern := filepath.Join(filepath.Dir(storePath), "."+globEscape(filepath.Base(storePath))+sealedfile.TempInfix+"*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		if info, err := os.Lstat(m); err == nil && info.Mode().IsRegular() {
+			_ = os.Remove(m)
 		}
 	}
-	return warn
 }
 
 func loadSealBox(keyFile string) (*revive.Box, error) {
@@ -101,4 +131,16 @@ func storeNames(stores []StoreFile) string {
 		names = append(names, st.Name)
 	}
 	return strings.Join(names, ",")
+}
+
+// joinSealWarnings -- все предупреждения одной строкой, без повторов: одно
+// не затирает другое.
+func joinSealWarnings(ws []string) string {
+	var out []string
+	for _, w := range ws {
+		if w != "" && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, ". ")
 }
