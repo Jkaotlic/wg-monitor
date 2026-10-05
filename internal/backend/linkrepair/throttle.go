@@ -101,6 +101,39 @@ func (a Attempts) Record(nickname, checkName string, ok bool) error {
 	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
 }
 
+// Started засчитывает автозапуск в окно попыток в момент старта, не меняя
+// вердикта: прерванная починка (перезапуск бэкенда посреди лесенки) итога
+// не пишет, и без этого перезапуски давали бы бесконечный цикл «падает --
+// чиним». Итог -- Finish.
+func (a Attempts) Started(nickname, checkName string) error {
+	log := a.load(nickname, checkName)
+	cutoff := a.now().Add(-attemptWindow)
+	kept := log.At[:0]
+	for _, t := range log.At {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	log.At = append(kept, a.now())
+	return a.save(nickname, checkName, log)
+}
+
+// Finish -- итог попытки, уже засчитанной Started: ok=false ставит стоп до
+// человека. Новой отметки в окне не добавляет.
+func (a Attempts) Finish(nickname, checkName string, ok bool) error {
+	log := a.load(nickname, checkName)
+	log.Failed = !ok
+	return a.save(nickname, checkName, log)
+}
+
+func (a Attempts) save(nickname, checkName string, log attemptLog) error {
+	raw, err := json.Marshal(log)
+	if err != nil {
+		return err
+	}
+	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
+}
+
 // Blocked -- то же, что Allow, глазами экрана: стоит ли автопочинка и почему.
 func (a Attempts) Blocked(nickname, checkName string) (bool, string) {
 	ok, why := a.Allow(nickname, checkName)

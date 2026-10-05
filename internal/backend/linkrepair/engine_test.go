@@ -1934,3 +1934,39 @@ func TestLadder_FailbackPartialFailure(t *testing.T) {
 		t.Fatalf("шаг возврата: %+v", st)
 	}
 }
+
+// A4.7: прерванный автозапуск тоже засчитывается в потолок попыток: иначе
+// перезапуски бэкенда посреди починки дают бесконечный цикл «падает --
+// чиним». Стоп при этом не ставится -- вердикта нет.
+func TestLadder_InterruptedAutoRunCounts(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	for i := 0; i < attemptLimit; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		e.d.BaseCtx = ctx
+		e.cmd.on = map[string]func(*scriptCommander, int){
+			"tunnel_restart": func(*scriptCommander, int) { cancel() },
+		}
+		e.rep = &recReporter{}
+		e.d.Report = e.rep
+		job, _ := e.run(t, ladderReq())
+		cancel()
+		if job.Hint != ActAborted {
+			t.Fatalf("запуск %d: подсказка %q", i, job.Hint)
+		}
+	}
+	ok, why, tooOften := e.d.Attempts.verdict("роутер", "tunnel_awg12")
+	if ok || !tooOften {
+		t.Fatalf("после %d прерванных запусков автопочинка разрешена: ok=%v why=%q", attemptLimit, ok, why)
+	}
+}
+
+// A4.7: удачный автозапуск считается одной попыткой, не двумя.
+func TestLadder_AutoRunCountsOnce(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	_, _ = e.run(t, ladderReq())
+	log := e.d.Attempts.load("роутер", "tunnel_awg12")
+	if len(log.At) != 1 || log.Failed {
+		t.Fatalf("журнал попыток: %+v", log)
+	}
+}

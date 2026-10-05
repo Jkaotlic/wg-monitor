@@ -323,6 +323,10 @@ func (d Deps) Start(req StartReq) (string, error) {
 		notStarted("уже идёт починка или замена конфига")
 		return "", ErrAlreadyRunning
 	}
+	if req.Auto {
+		// Попытка считается с запуска: прерванная итога не напишет.
+		_ = d.Attempts.Started(req.Nickname, req.CheckName)
+	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
 	th := d.begin(ctx, req)
@@ -891,7 +895,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
 	}
 	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, true)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
 	} else {
 		_ = d.Attempts.Clear(req.Nickname, req.CheckName)
 	}
@@ -905,7 +909,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, false)
 	}
 	text := failText(names, log)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -925,7 +929,7 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	if req.Auto {
 		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
 		// но стоп не ставится, следующая тревога снова может её запустить.
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, names.noSnapshot)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, names.noSnapshot)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
