@@ -42,12 +42,13 @@ type scriptCommander struct {
 	hs  bool   // у awg12 свежий обмен ключами
 	via string // ответ check_via_tunnel
 
-	noBackup bool                                       // в наборе только awg12
-	reserve  bool                                       // awg12 -- резерв: первым в цепочке стоит живой awg10
-	snapshot string                                     // ответ route_status вместо обычного
-	silent   map[string]bool                            // действия, на которые роутер молчит
-	refuse   map[string]bool                            // действия, которым агент отказывает
-	on       map[string]func(c *scriptCommander, n int) // крючок на n-й вызов действия (под замком)
+	noBackup    bool                                       // в наборе только awg12
+	reserve     bool                                       // awg12 -- резерв: первым в цепочке стоит живой awg10
+	carrierDown bool                                       // вместе с reserve: первое звено awg10 тоже лежит
+	snapshot    string                                     // ответ route_status вместо обычного
+	silent      map[string]bool                            // действия, на которые роутер молчит
+	refuse      map[string]bool                            // действия, которым агент отказывает
+	on          map[string]func(c *scriptCommander, n int) // крючок на n-й вызов действия (под замком)
 }
 
 func newScript() *scriptCommander {
@@ -121,6 +122,9 @@ func (c *scriptCommander) snapshotLocked() string {
 		ifaces = []wire.RoutePolicyInterface{
 			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "active", Available: true, Order: 1},
 			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "unavailable", Available: false, Order: 2},
+		}
+		if c.carrierDown {
+			ifaces[0].Role, ifaces[0].Available = "unavailable", false
 		}
 	}
 	snap.Policies = []wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}
@@ -976,6 +980,42 @@ func TestLadder_ReserveBrokenNoPromote(t *testing.T) {
 	}
 }
 
+// Упал резерв, а первое звено цепочки тоже лежит: называть его тем, через
+// что «и так идёт трафик», -- неправда. Говорим, что рабочего VPN-туннеля у
+// трафика сейчас нет; набор правил по-прежнему не трогаем.
+func TestLadder_ReserveBrokenCarrierDown(t *testing.T) {
+	for _, fixed := range []bool{true, false} {
+		t.Run(fmt.Sprint("починен=", fixed), func(t *testing.T) {
+			e := newLadder(t, &Setting{Enabled: true})
+			e.cmd.reserve, e.cmd.carrierDown = true, true
+			if fixed {
+				fixOn(e.cmd, "tunnel_restart", 1, true)
+			}
+
+			job, final := e.run(t, ladderReq())
+
+			if n := len(e.cmd.actions("route_policy_promote")); n != 0 {
+				t.Fatalf("набор правил переставлен %d раз", n)
+			}
+			texts := []string{final.Text}
+			for _, st := range job.Steps {
+				texts = append(texts, st.Detail)
+			}
+			for _, text := range texts {
+				if strings.Contains(text, "«Работа»") {
+					t.Fatalf("назван лежащий VPN-туннель: %q", text)
+				}
+			}
+			if st := stepOf(job, StepFailover); st.Status != provision.StepDone || !strings.Contains(st.Detail, "нет рабочего VPN-туннеля") {
+				t.Fatalf("ступень 0: %+v", st)
+			}
+			if !fixed && !strings.Contains(final.Text, "нет рабочего VPN-туннеля") {
+				t.Fatalf("провал не говорит, что трафику некуда идти: %q", final.Text)
+			}
+		})
+	}
+}
+
 // Ход починки виден людям по мере дела: перед каждой ступенью -- правка.
 func TestLadder_ProgressTellsWhatNow(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
@@ -1134,6 +1174,10 @@ func TestLadder_StopsOnCancel(t *testing.T) {
 
 	if job.State != provision.StateFailed || final.Kind != "need" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	// Экран починки без подсказки показал бы голое «Не получилось».
+	if job.Hint != ActAborted {
+		t.Fatalf("подсказка прерванной починки %q, ждали %q", job.Hint, ActAborted)
 	}
 	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
 		t.Fatalf("после отмены ушёл импорт: %d", n)

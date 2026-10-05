@@ -18,8 +18,12 @@ func textMovedTo(backup string) string {
 	return "увёл трафик на запасной VPN-туннель «" + backup + "»"
 }
 
-// textCarrier -- упал резерв: трафик и так идёт через первое звено цепочки.
+// textCarrier -- упал резерв: трафик и так идёт через живое звено цепочки.
+// Живого нет -- так и сказать: назвать лежащее звено было бы неправдой.
 func textCarrier(carrier string) string {
+	if carrier == "" {
+		return "это запасной VPN-туннель, а у трафика сейчас нет рабочего VPN-туннеля"
+	}
 	return "трафик и так идёт через «" + carrier + "»"
 }
 
@@ -93,8 +97,10 @@ func failText(n lineNames, log []string) string {
 	}
 	text += "."
 	switch {
-	case n.carrier != "":
+	case n.reserve && n.carrier != "":
 		text += " Трафик и так идёт через «" + n.carrier + "»."
+	case n.reserve:
+		text += " Сейчас у трафика нет рабочего VPN-туннеля — заблокированное не открывается."
 	case n.noSnapshot:
 		// Снимка нет -- неизвестно, подхватил ли трафик запасной VPN-туннель.
 		text += " Подхватил ли трафик запасной VPN-туннель, роутер не сообщил — это видно в приложении."

@@ -163,21 +163,29 @@ func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, boo
 // carrierOf -- упал ли резерв, а не первое звено цепочки. Уводить и
 // возвращать трафик имеет смысл только для первого звена: оно и несёт трафик,
 // когда живо. Упал резерв -- route_policy_promote сделал бы его первым и
-// переставил цепочку, которую человек собирал сам. Ответ -- имя звена, через
-// которое трафик идёт сейчас (активное, иначе первое); пусто -- упало первое.
-func carrierOf(pol wire.RoutePolicySummary, brokenTunnelID string) string {
+// переставил цепочку, которую человек собирал сам.
+//
+// reserve -- упал резерв. carrier -- звено, через которое трафик идёт сейчас:
+// активное и доступное, иначе первое доступное по порядку. Пусто при reserve --
+// живого звена нет, и называть лежащее «тем, через что идёт трафик» нельзя.
+func carrierOf(pol wire.RoutePolicySummary, brokenTunnelID string) (carrier string, reserve bool) {
 	if len(pol.Interfaces) == 0 || pol.Interfaces[0].TunnelID == brokenTunnelID {
-		return ""
+		return "", false
 	}
 	label := func(iface wire.RoutePolicyInterface) string {
 		return orID(iface.Name, iface.Bind)
 	}
 	for _, iface := range pol.Interfaces {
-		if iface.Role == "active" && iface.TunnelID != brokenTunnelID {
-			return label(iface)
+		if iface.Role == "active" && iface.Available && iface.TunnelID != brokenTunnelID {
+			return label(iface), true
 		}
 	}
-	return label(pol.Interfaces[0])
+	for _, iface := range pol.Interfaces {
+		if iface.Available && iface.TunnelID != brokenTunnelID {
+			return label(iface), true
+		}
+	}
+	return "", true
 }
 
 // lineNames -- как VPN-туннели называются для человека. Отчёт о починке
@@ -197,9 +205,10 @@ type lineNames struct {
 	// failbackFailed -- VPN-туннель починен, но вернуть на него трафик не
 	// вышло: трафик остался на запасном.
 	failbackFailed bool
-	// carrier -- упал не первый VPN-туннель цепочки, а резерв: трафик и так
-	// идёт через это звено, уводить и возвращать нечего. Пусто -- упало
-	// первое звено.
+	// reserve -- упал не первый VPN-туннель цепочки, а резерв: уводить и
+	// возвращать нечего. carrier -- звено, через которое трафик идёт сейчас;
+	// пусто при reserve -- живого звена у трафика нет.
+	reserve bool
 	carrier string
 }
 
@@ -336,7 +345,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	defer d.Store.Unlock(req.Nickname)
 	ctx := d.baseCtx()
 
-	pol, backup, carrier, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
+	pol, backup, carrier, reserve, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
 	if err != nil {
 		// Снимка нет или VPN-туннель не в наборе -- чинить вслепую нельзя.
 		// Имя -- из снимка, иначе от запускающего, иначе id.
@@ -356,7 +365,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		renamedTo = brokenName
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
-	names.carrier = carrier
+	names.carrier, names.reserve = carrier, reserve
 	if names.broken == sc.TunnelID {
 		names.broken = orID(brokenName, req.TunnelName, sc.TunnelID)
 	}
@@ -365,7 +374,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	// Ступень 0. Увести трафик, пока чиним. Резерва может не быть -- это не
 	// провал: чинить всё равно надо, человек просто побудет без обхода.
 	// Упал резерв -- трафик и так идёт через первое звено, цепочку не трогаем.
-	if carrier != "" {
+	if reserve {
 		d.step(jobID, StepFailover, provision.StepDone, textCarrier(carrier))
 	} else if backup != "" {
 		d.step(jobID, StepFailover, provision.StepActive, "уводим трафик на запасной VPN-туннель «"+names.backup+"»")
@@ -700,9 +709,10 @@ func (d Deps) aborted(ctx context.Context, jobID string, req StartReq, th Thread
 	d.skip(jobID, errStopped.Error(), StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	d.Store.Update(jobID, func(j *provision.Job) {
-		// Подсказка -- «что делать»; человеку тут делать нечего, причина --
-		// в шагах.
+		// Подсказка -- «что делать»: без неё экран починки показал бы голое
+		// «Не получилось». Сделать можно одно -- запустить снова.
 		j.State = provision.StateFailed
+		j.Hint = ActAborted
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), "")
 	return true
@@ -724,7 +734,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 		} else {
 			d.step(jobID, StepFailback, provision.StepDone, "трафик снова идёт через VPN-туннель «"+names.broken+"»")
 		}
-	} else if names.carrier != "" {
+	} else if names.reserve {
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — "+textCarrier(names.carrier))
 	} else {
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
@@ -774,7 +784,7 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 }
 
 func (d Deps) skipFailback(jobID string, names lineNames) {
-	if names.carrier != "" {
+	if names.reserve {
 		d.skip(jobID, "возвращать нечего — "+textCarrier(names.carrier), StepFailback)
 		return
 	}
@@ -878,15 +888,15 @@ func (d Deps) step(jobID, name string, status provision.StepStatus, detail strin
 // name -- имя упавшего VPN-туннеля из того же снимка. Оно нужно и тогда, когда
 // набора не нашлось: причина уходит владельцу в личку, и идентификатор там
 // читать некому. Не пришёл снимок -- имени взять неоткуда, name пустое.
-func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (pol wire.RoutePolicySummary, backup, carrier, name string, err error) {
+func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (pol wire.RoutePolicySummary, backup, carrier string, reserve bool, name string, err error) {
 	res, err := d.command(ctx, routerID, "route_status", map[string]any{})
 	if err != nil {
-		return pol, "", "", "", fmt.Errorf("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: %w", err)
+		return pol, "", "", false, "", fmt.Errorf("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: %w", err)
 	}
 	var snap wire.RouteSnapshot
 	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
 		d.logCommandFailure("route_status", "unparsable", err.Error())
-		return pol, "", "", "", errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
+		return pol, "", "", false, "", errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
 	for _, t := range snap.Tunnels {
 		if t.ID == tunnelID && strings.TrimSpace(t.Name) != "" {
@@ -898,13 +908,13 @@ func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (
 			if iface.TunnelID != tunnelID {
 				continue
 			}
-			if c := carrierOf(p, tunnelID); c != "" {
-				return p, "", c, name, nil
+			if c, res := carrierOf(p, tunnelID); res {
+				return p, "", c, true, name, nil
 			}
 			backup, _ := pickBackup(p, tunnelID)
-			return p, backup, "", name, nil
+			return p, backup, "", false, name, nil
 		}
 	}
 	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
-	return pol, "", "", name, ErrNotInAnySet
+	return pol, "", "", false, name, ErrNotInAnySet
 }
