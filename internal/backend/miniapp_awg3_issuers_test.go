@@ -231,3 +231,23 @@ func TestAwg3IssueErrorTextsByRole(t *testing.T) {
 		}
 	}
 }
+
+// Список панелей для выпуска видит и допущенный не админ: отказ панели ему
+// -- общим текстом без причины (пароль, пауза -- дело админа), админу --
+// по-прежнему с кодом причины.
+func TestAwg3IssuableErrorByRole(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.awg3.issuable = issuableMain()
+	_, _ = env.awg3.AddIssuer("main", cabOperator, cabAdmin)
+	env.awg3.issuableErr = &awg3panel.Error{Kind: awg3panel.KindBadPassword, Msg: "пароль панели не принят"}
+
+	rec := env.do(t, cabOperator, http.MethodGet, "/v1/miniapp/routers/{id}/vpn/awg3", "")
+	code, msg, _ := cabinetErrorBody(t, rec)
+	if code != "awg3_unavailable" || msg != miniappAwg3IssuerText {
+		t.Fatalf("допущенному не админу: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/routers/{id}/vpn/awg3", "")
+	if code, _, _ := cabinetErrorBody(t, rec); code == "awg3_unavailable" {
+		t.Fatalf("админ потерял причину: %s", rec.Body.String())
+	}
+}
