@@ -110,6 +110,15 @@ func wakeCheckLabel(c wire.Check) string {
 	case "dns":
 		return wakeName("dns") + " не отвечает"
 	case "hydraroute":
+		// «Не работает» -- только доказанное: агент прочитал статус
+		// (installed/running в details) и вынес Fail. Пометка unverified или
+		// ошибка чтения статуса (details пуст) -- «не удалось проверить».
+		if unverified, _ := boolOrFalse(c.Details, "unverified"); unverified {
+			return wakeName("hydraroute") + " не удалось проверить"
+		}
+		if _, read := boolOrFalse(c.Details, "installed"); !read {
+			return wakeName("hydraroute") + " не удалось проверить"
+		}
 		return wakeName("hydraroute") + " не работает"
 	case "awg_manager", "awgmgr_api":
 		return wakeName("awg_manager") + " не отвечает"

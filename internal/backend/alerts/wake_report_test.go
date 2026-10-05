@@ -54,7 +54,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 func TestRenderWakeReport_StartupFailuresAreWarmup(t *testing.T) {
 	checks := []wire.Check{
 		{Name: "tunnels", Status: "fail"},
-		{Name: "hydraroute", Status: "fail"},
+		{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}},
 		{Name: "tunnel_awg13", Status: "fail"},
 		{Name: "agent_heartbeat", Status: "ok"},
 	}
@@ -118,7 +118,7 @@ func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
 		{"ждёт проверок", []wire.Check{{Name: "agent_heartbeat", Status: "ok"}}, nil},
 		{"поднимается", []wire.Check{
 			{Name: "tunnels", Status: "fail"},
-			{Name: "hydraroute", Status: "fail"},
+			{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}},
 			{Name: "tunnel_awg13", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт"}},
 		}, []string{"VPN-туннель «Франкфурт»", "обход блокировок не работает"}},
 		{"есть проблемы", []wire.Check{
@@ -156,6 +156,27 @@ func TestWakeCheckLabelUsesCheckNamesTable(t *testing.T) {
 		got := wakeCheckLabel(wire.Check{Name: key, Status: "fail"})
 		if !strings.HasPrefix(got, lowerFirst(CheckNames[key])) {
 			t.Errorf("%s: %q не начинается с подписи из таблицы %q", key, got, CheckNames[key])
+		}
+	}
+}
+
+// «Не работает» про обход -- только доказанное; непроверенное и ошибка чтения
+// статуса awg-manager говорят «не удалось проверить».
+func TestWakeCheckLabelHydraRouteProvenVsUnproven(t *testing.T) {
+	cases := []struct {
+		name string
+		c    wire.Check
+		want string
+	}{
+		{"не установлен, правила требуют", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": false, "running": false}}, "обход блокировок не работает"},
+		{"не запущен", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}}, "обход блокировок не работает"},
+		{"не проверено", wire.Check{Name: "hydraroute", Status: "unknown", Details: map[string]any{"installed": false, "running": false, "unverified": true}}, "обход блокировок не удалось проверить"},
+		{"ошибка чтения статуса", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"error": "awg-manager: timeout"}}, "обход блокировок не удалось проверить"},
+		{"ошибка чтения, details пуст", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}}, "обход блокировок не удалось проверить"},
+	}
+	for _, c := range cases {
+		if got := wakeCheckLabel(c.c); got != c.want {
+			t.Errorf("%s: %q, ждали %q", c.name, got, c.want)
 		}
 	}
 }
