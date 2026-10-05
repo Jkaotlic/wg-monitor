@@ -62,10 +62,15 @@ func IsSealed(body []byte) bool { return bytes.HasPrefix(body, []byte(magicFamil
 // Decode возвращает открытые байты: открытый файл -- как есть, шифр --
 // расшифрованным.
 func Decode(domain string, body []byte) ([]byte, error) {
+	return DecodeWith(currentBox(), domain, body)
+}
+
+// DecodeWith -- Decode явным ключом, мимо ключа процесса: проверка
+// восстановления бэкапа берёт ключ из конфига сама. b == nil -- ключа нет.
+func DecodeWith(b *revive.Box, domain string, body []byte) ([]byte, error) {
 	if !IsSealed(body) {
 		return body, nil
 	}
-	b := currentBox()
 	if b == nil {
 		return nil, ErrKeyMissing
 	}

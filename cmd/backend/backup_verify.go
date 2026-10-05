@@ -20,6 +20,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
 )
 
@@ -64,6 +65,9 @@ type verifyCounts struct {
 	Routers   int
 	Owners    int
 	Operators int
+	// SealNote -- строка вывода про зашифрованные хранилища кабинетов;
+	// пусто -- зашифрованных в архиве нет.
+	SealNote string
 }
 
 // runBackupVerify разворачивает последний малый архив во временный каталог
@@ -121,6 +125,9 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 		archive, counts.Routers, counts.Owners, counts.Operators)
 	if !includeReviveKey {
 		fmt.Fprintln(opts.stdout, reviveKeyNotInBackupNote)
+	}
+	if counts.SealNote != "" {
+		fmt.Fprintln(opts.stdout, counts.SealNote)
 	}
 	fmt.Fprintln(opts.stdout, "в малом архиве нет истории событий: после восстановления экран пуст до первого отчёта агентов (до минуты)")
 	return serr
@@ -193,6 +200,7 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 	// Хранилища: всё, что манифест перечисляет в `stores=`, обязано быть в
 	// архиве и разбираться как JSON. Сверка с манифестом, а не с живыми
 	// файлами: хранилище, заведённое после бэкапа, проверку не валит.
+	var sealed []string
 	for _, name := range manifestList(manifest, "stores") {
 		if !slices.Contains(members, name) {
 			return archive, counts, fmt.Errorf("в архиве нет хранилища %s, записанного в манифесте", name)
@@ -201,9 +209,22 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		if err != nil {
 			return archive, counts, fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
 		}
+		if sealedfile.IsSealed(body) {
+			// Зашифровано ключом revive.key (v0.55, B1): JSON проверяется
+			// после расшифровки ключом этой машины, ниже.
+			sealed = append(sealed, name)
+			continue
+		}
 		if !json.Valid(body) {
 			return archive, counts, fmt.Errorf("хранилище %s из архива -- не JSON", name)
 		}
+	}
+	if len(sealed) > 0 {
+		note, err := verifySealedStores(tmpDir, sealed, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot))
+		if err != nil {
+			return archive, counts, err
+		}
+		counts.SealNote = note
 	}
 
 	// Ключ оживления в архиве по правилу не лежит (includeReviveKey), и
@@ -214,6 +235,40 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		}
 	}
 	return archive, counts, nil
+}
+
+// verifySealedStores: зашифрованные хранилища кабинетов из архива
+// расшифровываются ключом шифрования этой машины (revive.key вне архива,
+// вариант А) и разбираются как JSON. Ключа нет -- не провал, а слова: без
+// него после восстановления ключи кабинетов не прочитать. Ключ не тот или
+// внутри не JSON -- провал. Возвращает строку для вывода.
+func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (string, error) {
+	list := strings.Join(names, ", ")
+	key, err := revive.LoadKey(liveKeyPath)
+	if err != nil {
+		return "хранилища кабинетов в архиве зашифрованы (" + list + "), а ключа шифрования на этой машине нет: после восстановления ключи кабинетов не прочитать, пока на сервер не вернётся прежний revive.key", nil
+	}
+	box, err := revive.NewBox(key)
+	clear(key)
+	if err != nil {
+		return "", fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
+	}
+	for _, name := range names {
+		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста, присутствие в архиве проверено
+		if err != nil {
+			return "", fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
+		}
+		plain, err := sealedfile.DecodeWith(box, name, body)
+		if err != nil {
+			return "", fmt.Errorf("хранилище %s из архива не расшифровывается ключом шифрования этой машины: после восстановления ключи кабинетов не прочитать", name)
+		}
+		ok := json.Valid(plain)
+		clear(plain)
+		if !ok {
+			return "", fmt.Errorf("хранилище %s из архива -- не JSON после расшифровки", name)
+		}
+	}
+	return "хранилища кабинетов в архиве зашифрованы (" + list + ") и расшифровываются ключом шифрования этой машины; самого ключа в архиве нет -- храните revive.key отдельно: без него ключи кабинетов не прочитать", nil
 }
 
 // readManifest разбирает manifest.txt (строки key=value) архива.
