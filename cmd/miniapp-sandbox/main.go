@@ -40,9 +40,11 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -230,6 +232,12 @@ func main() {
 	// Движок починки -- тоже настоящий: подменены только кабинет, очередь
 	// команд и панели своих серверов. Замок у него общий с мастером замены, поэтому
 	// Store один на двоих -- ровно как в проде.
+	//
+	// Уведомления о ходе починки -- настоящий notify.Repairs поверх Telegram,
+	// пишущего в консоль. Диспетчера тревог в песочнице нет, поэтому текста
+	// тревоги нет и нить работает новыми сообщениями (ход молчит, итог --
+	// строкой в консоли), а «восстановилось» гасить некому.
+	repairs := notify.NewRepairs(notify.NewFanout(d, tgToLog{}, slog.Default(), 0), tgToLog{}, d, nil, time.Now)
 	repairEngine := &linkrepair.Deps{
 		Store:      replaceEngine.Store,
 		Probe:      *replaceEngine,
@@ -238,6 +246,7 @@ func main() {
 		SaveOption: backend.LinkRepairSaveOption(d, nil),
 		Attempts:   linkrepair.Attempts{KV: d.KV()},
 		Commands:   sink,
+		Report:     repairs,
 		BaseCtx:    context.Background(),
 		AwaitStep:  20 * time.Second,
 	}
@@ -322,6 +331,24 @@ type offlineToLog struct{}
 
 func (offlineToLog) SendOffline(_ context.Context, userID int64, nickname string, since time.Duration) error {
 	slog.Info("песочница: роутер молчит", "nickname", nickname, "user_id", userID, "молчит", since.Round(time.Second))
+	return nil
+}
+
+// tgToLog -- Telegram песочницы: отправки и правки уведомлений о починке
+// уходят строкой в консоль.
+type tgToLog struct{}
+
+func (tgToLog) SendMessage(_ context.Context, chatID int64, _ *int64, text, _ string, replyTo *int64) (int64, error) {
+	var re int64
+	if replyTo != nil {
+		re = *replyTo
+	}
+	slog.Info("песочница: сообщение в личку", "chat_id", chatID, "reply_to", re, "text", text)
+	return time.Now().UnixNano() % 1_000_000, nil
+}
+
+func (tgToLog) EditMessageText(_ context.Context, chatID, messageID int64, text, _ string, _ *tg.InlineKeyboardMarkup) error {
+	slog.Info("песочница: правка сообщения", "chat_id", chatID, "message_id", messageID, "text", text)
 	return nil
 }
 

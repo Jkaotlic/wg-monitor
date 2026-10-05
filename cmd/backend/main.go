@@ -19,6 +19,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
@@ -237,7 +238,15 @@ func main() {
 	// Движок починки VPN-туннеля -- лесенка v0.54. Store общий с мастером
 	// замены: замок один на двоих, иначе починка и замена столкнулись бы на
 	// одном роутере. Проверки (обмен ключами, выход, анализ конфига) -- те же,
-	// что у мастера. Report пока nil: говорить с людьми будет notify (Task 6).
+	// что у мастера. Ход починки дописывается в саму тревогу (notify.Repairs):
+	// текст тревоги помнит диспетчер, он же спрашивает у починки, сказано ли
+	// уже «починил», и печатает в тревоге строку «Автопочинка включена».
+	repairs := notify.NewRepairs(
+		notify.NewFanout(d, tgClient, logger.With("component", "linkrepair_notify"), cfg.Telegram.AdminUserID),
+		tgClient, d, disp, time.Now)
+	repairs.SetMiniAppBaseURL(cfg.PublicBaseURL)
+	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
+	disp.SetCovered(repairs.Covered)
 	repairEngine := &linkrepair.Deps{
 		Store:      provisionStore,
 		Probe:      *replaceEngine,
@@ -246,6 +255,7 @@ func main() {
 		SaveOption: backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
 		Attempts:   linkrepair.Attempts{KV: d.KV()},
 		Commands:   cmdQueue,
+		Report:     repairs,
 		BaseCtx:    ctx,
 		Now:        time.Now,
 		Logger:     logger.With("component", "linkrepair"),

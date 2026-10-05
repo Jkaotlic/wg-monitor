@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -58,6 +59,21 @@ func (o linkRepairOrigin) Get(routerID int64, tunnelID string) (string, string, 
 		return "", "", false
 	}
 	return got.Provider, got.Variant, true
+}
+
+// AutoRepairHint -- для диспетчера тревог: включена ли автопочинка у
+// VPN-туннеля этой проверки. Тогда тревога последней строкой обещает дописать
+// ход починки сюда же. Не VPN-туннель или настройка не прочиталась -- нет:
+// пообещать и не прийти хуже, чем промолчать.
+func AutoRepairHint(database *db.DB) func(userID int64, checkName string) bool {
+	return func(userID int64, checkName string) bool {
+		tid, ok := strings.CutPrefix(checkName, "tunnel_")
+		if !ok || tid == "" {
+			return false
+		}
+		s, found, err := database.TunnelRepairSettings().Get(userID, tid)
+		return err == nil && found && s.Enabled
+	}
 }
 
 // LinkRepairSettings -- настройка автопочинки туннеля глазами движка. Ошибка

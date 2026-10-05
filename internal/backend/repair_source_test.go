@@ -223,3 +223,28 @@ func TestLinkRepairSaveOption_DoesNotReenable(t *testing.T) {
 		t.Fatalf("происхождение: %+v %v", o, ok)
 	}
 }
+
+// Строка «Автопочинка включена» в тревоге -- только у VPN-туннеля с
+// включённой настройкой; у прочих проверок её не бывает.
+func TestAutoRepairHint(t *testing.T) {
+	d, id := repairDB(t)
+	hint := AutoRepairHint(d)
+	if hint(id, "tunnel_awg12") {
+		t.Fatal("строки нет -- автопочинка выключена")
+	}
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: true}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if !hint(id, "tunnel_awg12") {
+		t.Fatal("включённая автопочинка не видна")
+	}
+	if hint(id, "awg12") || hint(id, "dns") || hint(id, "tunnel_awg13") {
+		t.Fatal("подсказка у чужой проверки")
+	}
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: false}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if hint(id, "tunnel_awg12") {
+		t.Fatal("выключенная автопочинка видна как включённая")
+	}
+}
