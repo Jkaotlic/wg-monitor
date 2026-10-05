@@ -316,7 +316,12 @@ func (d Deps) Start(req StartReq) (string, error) {
 		if !set.Enabled {
 			return "", ErrAutoDisabled
 		}
-		if allow, why := d.Attempts.Allow(req.Nickname, req.CheckName); !allow {
+		if allow, why, tooOften := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+			// Потолок попыток -- не новый провал: громкого ответа нет, но что
+			// делать, человек читает в той же правке.
+			if tooOften {
+				why += ". Что делать: " + ActTooOften
+			}
 			notStarted(why)
 			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
 		}
@@ -355,7 +360,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 			names.notInSet = true
 		} else {
 			names.noSnapshot = true
-			action = "роутер не ответил — проверьте, на связи ли он"
+			action = ActRouterSilent
 		}
 		d.finishFail(ctx, jobID, req, th, StepFailover, names, err, action)
 		return
@@ -382,12 +387,16 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 			"policy_name": pol.Name,
 			"tunnel_id":   backup,
 		}); err != nil {
-			cause := fmt.Errorf("увести трафик на запасной VPN-туннель «%s» не вышло: %w", names.backup, err)
-			d.finishFail(ctx, jobID, req, th, StepFailover, lineNames{broken: names.broken}, cause, "")
-			return
+			// Отказ увода -- не повод бросать починку: чиним как без резерва,
+			// трафик там, где был. Возвращать потом нечего.
+			d.step(jobID, StepFailover, provision.StepFailed,
+				"роутер не дал увести трафик на запасной VPN-туннель «"+names.backup+"» ("+err.Error()+") — чиним как есть")
+			log = append(log, "роутер не дал увести трафик на запасной VPN-туннель «"+names.backup+"»")
+			names.backup = ""
+		} else {
+			d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
+			log = append(log, textMovedTo(names.backup))
 		}
-		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
-		log = append(log, textMovedTo(names.backup))
 	} else {
 		d.step(jobID, StepFailover, provision.StepDone, "запасного VPN-туннеля нет — чиним как есть")
 	}
@@ -772,7 +781,9 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
+		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
+		// но стоп не ставится, следующая тревога снова может её запустить.
+		_ = d.Attempts.Record(req.Nickname, req.CheckName, names.noSnapshot)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {

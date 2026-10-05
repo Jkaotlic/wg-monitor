@@ -1063,24 +1063,25 @@ func TestLadder_AttemptsFollowOutcome(t *testing.T) {
 // Снимка нет -- чинить вслепую нельзя. Человеку -- слова, а не инженерия.
 func TestLadder_RouterFailuresReachOwnerAsWords(t *testing.T) {
 	cases := []struct {
-		name   string
-		setup  func(*scriptCommander)
-		want   []string
-		forbid []string
-		action bool
+		name    string
+		setup   func(*scriptCommander)
+		want    []string
+		forbid  []string
+		action  bool
+		restart int // увод не удался -- лесенка идёт дальше без него
 	}{
 		{"молчит на снимке", func(c *scriptCommander) {
 			c.silent = map[string]bool{"route_status": true}
-		}, []string{"не ответил", "запасной VPN-туннель"}, []string{"Заблокированное"}, true},
+		}, []string{"не ответил", "запасной VPN-туннель"}, []string{"Заблокированное"}, true, 0},
 		{"снимок не разобрался", func(c *scriptCommander) {
 			c.snapshot = "<html>502 Bad Gateway</html>"
-		}, []string{"непонятн"}, nil, true},
+		}, []string{"непонятн"}, nil, true, 0},
 		{"отказал уводу на резерв", func(c *scriptCommander) {
 			c.refuse = map[string]bool{"route_policy_promote": true}
-		}, []string{"запасной VPN-туннель «Работа»", "ошибкой"}, nil, false},
+		}, []string{"запасной VPN-туннель «Работа»", "роутер не дал"}, nil, true, 1},
 		{"VPN-туннель вне наборов", func(c *scriptCommander) {
 			c.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
-		}, []string{"VPN-туннель «Дача»", "чинить нечего", "ничего не идёт"}, []string{"Заблокированное"}, false},
+		}, []string{"VPN-туннель «Дача»", "чинить нечего", "ничего не идёт"}, []string{"Заблокированное"}, false, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1112,10 +1113,54 @@ func TestLadder_RouterFailuresReachOwnerAsWords(t *testing.T) {
 					t.Errorf("человек прочёл %q:\n%s", f, all)
 				}
 			}
-			if n := len(e.cmd.actions("tunnel_restart")); n != 0 {
-				t.Fatalf("без снимка или увода ушёл перезапуск: %d", n)
+			if n := len(e.cmd.actions("tunnel_restart")); n != tc.restart {
+				t.Fatalf("перезапусков %d, ждали %d", n, tc.restart)
 			}
 		})
+	}
+}
+
+// Роутер отказал уводу на резерв: это не повод бросать починку -- перезапуск
+// и дальше идут как без резерва, и удача остаётся удачей.
+func TestLadder_PromoteRefusedStillRepairs(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	e.cmd.refuse = map[string]bool{"route_policy_promote": true}
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if n := len(e.cmd.actions("route_policy_promote")); n != 1 {
+		t.Fatalf("увод пробован %d раз, возврата быть не должно", n)
+	}
+	if st := stepOf(job, StepFailover); !strings.Contains(st.Detail, "роутер не дал") {
+		t.Fatalf("ступень 0: %+v", st)
+	}
+	if strings.Contains(final.Text, "вернул") || strings.Contains(final.Text, "увёл") {
+		t.Fatalf("итог врёт про трафик: %q", final.Text)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("удача поставила стоп: %s", why)
+	}
+}
+
+// Снимка нет: громко «роутер не ответил», и это не вердикт автопочинке --
+// следующая тревога снова может её запустить.
+func TestLadder_NoSnapshotNotSticky(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	e.cmd.silent = map[string]bool{"route_status": true}
+	req := ladderReq()
+	req.TunnelName = "Дача"
+
+	_, final := e.run(t, req)
+
+	if final.Kind != "need" || final.Action != "роутер не ответил — проверьте, на связи ли он" {
+		t.Fatalf("итог %+v", final)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 }
 
@@ -1130,9 +1175,10 @@ func TestLadder_HintIsActionOnly(t *testing.T) {
 		{"VPN-туннель вне наборов", func(c *scriptCommander) {
 			c.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
 		}, ""},
+		// Отказ увода лесенку не обрывает: итог -- настоящее действие.
 		{"отказал уводу", func(c *scriptCommander) {
 			c.refuse = map[string]bool{"route_policy_promote": true}
-		}, ""},
+		}, ActServerDead},
 		{"лесенка кончилась", func(*scriptCommander) {}, ActServerDead},
 	}
 	for _, tc := range cases {
@@ -1281,6 +1327,10 @@ func TestStart_ThrottledSaysWhy(t *testing.T) {
 	calls := e.rep.waitCalls(t, 1)
 	if len(calls) != 1 || calls[0].Kind != "notstarted" || !strings.Contains(calls[0].Text, "6 часов") {
 		t.Fatalf("причина не сказана: %+v", calls)
+	}
+	// Что делать -- в той же правке: это не новый провал, громкого ответа нет.
+	if !strings.Contains(calls[0].Text, ActTooOften) {
+		t.Fatalf("правка не говорит, что делать: %q", calls[0].Text)
 	}
 }
 
