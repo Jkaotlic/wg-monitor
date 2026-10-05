@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"net/url"
 	"os"
@@ -217,8 +218,13 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 	if watchdogEditNeedsHold(before, check) {
 		afterWatchdogConfigWritten()
 		if err := refuseStrandingWatchdog(before, check, watchdogStatePath); err != nil {
-			if werr := os.WriteFile(tmp, raw, 0600); werr == nil {
-				_ = os.Rename(tmp, configPath)
+			// Откат не удался -- в конфиге остаётся новая запись, и об этом
+			// должен знать журнал (только причина, содержимое файла не пишем).
+			if werr := os.WriteFile(tmp, raw, 0600); werr != nil {
+				slog.Warn("update_agent_config: откат конфига не записан", "err", werr)
+			} else if rerr := os.Rename(tmp, configPath); rerr != nil {
+				_ = os.Remove(tmp)
+				slog.Warn("update_agent_config: откат конфига не переименован", "err", rerr)
 			}
 			return "", err
 		}
