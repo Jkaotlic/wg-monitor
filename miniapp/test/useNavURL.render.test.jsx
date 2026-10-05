@@ -46,7 +46,8 @@ describe('useNavURL', () => {
     expect(window.history.length).toBe(before + 2)
     await act(async () => api.dispatch({ type: 'sheet', sheet: { title: 'Точно?' } }))
     expect(window.location.search).toBe('?router=7&tab=events&open=routes')
-    expect(window.history.length).toBe(before + 2)
+    // Лист адрес не меняет, но кладёт запись-метку: «назад» браузера закрывает его (A1.4).
+    expect(window.history.length).toBe(before + 3)
     render(null, root)
   })
 

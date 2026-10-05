@@ -287,3 +287,38 @@ describe('«назад» браузера закрывает слой вклад
     expect(window.history.state).toBe(null)
   })
 })
+
+// A1.4 (v0.55): лист подтверждения поверх «Маршрутов» (слой с адресом) --
+// тоже слой для «назад» браузера; «вперёд» на метку не теряет цель возврата.
+describe('лист поверх слоя с адресом («Маршруты»)', () => {
+  const ROUTES = '?router=7&tab=tunnels&open=routes'
+
+  it('«назад» закрывает лист, «Маршруты» остаются на месте', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'routes' })
+    await d({ type: 'sheet', sheet: { title: 'Перенести?' } })
+    await browserBack()
+    expect(api.nav.sheet).toBe(null)
+    expect(api.nav.overlay).toBe('routes')
+    expect(window.location.search).toBe(ROUTES)
+    await browserBack()
+    expect(api.nav.overlay).toBe(null)
+    expect(address()).toBe(START)
+  })
+
+  it('лист закрыт кнопкой, «вперёд» на метку: цель возврата «Маршрутов» не теряется', async () => {
+    await mount()
+    await d({ type: 'overlay', overlay: 'tunnel', params: { tunnelID: 'awg10' } })
+    await d({ type: 'overlay', overlay: 'routes', params: { returnTo: 'tunnel', returnParams: { tunnelID: 'awg10' } } })
+    await d({ type: 'sheet', sheet: { title: 'Перенести?' } })
+    await d({ type: 'sheet', sheet: null })
+    await settle()
+    await browserForward()
+    await settle()
+    expect(api.nav.overlay).toBe('routes')
+    expect(api.nav.overlayParams).toEqual({ returnTo: 'tunnel', returnParams: { tunnelID: 'awg10' } })
+    await d({ type: 'back' })
+    expect(api.nav.overlay).toBe('tunnel')
+  })
+})
+
