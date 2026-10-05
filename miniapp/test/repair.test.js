@@ -126,6 +126,12 @@ describe('repairView: лесенка автопочинки', () => {
     expect(repairView({ state: 'failed', steps: ladder(['done', 'failed', 'failed', 'failed', 'skipped']) }).action).toBe('')
   })
 
+  it('стадия увода показывает, что сделано: резерв упал -- «трафик и так идёт через …»', () => {
+    const steps = ladder(['done', 'active'])
+    steps[0].detail = 'трафик и так идёт через «Работа»'
+    expect(repairView({ state: 'running', running: true, steps }).steps[0].sub).toBe('трафик и так идёт через «Работа»')
+  })
+
   it('провал посреди идущего задания -- ещё active, пока есть куда идти', () => {
     const v = repairView({ state: 'running', running: true, steps: ladder(['done', 'failed', 'pending']) })
     expect(v.steps[1].state).toBe('active')

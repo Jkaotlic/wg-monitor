@@ -123,7 +123,10 @@ export function repairView(job, { checkName = '', ownJobID = '', pollFailed = fa
       ? (() => {
           const raise = raiseStage(steps, done)
           return [
-            { key: 'failover', label: LABELS.failover, state: foldState(steps, ['failover'], done), sub: '' },
+            // Подстрока увода -- что сделано на самом деле: «трафик идёт через
+            // запасной…», «запасного нет…» или (упал резерв) «трафик и так
+            // идёт через «A»» -- подпись стадии одна на все случаи.
+            { key: 'failover', label: LABELS.failover, state: foldState(steps, ['failover'], done), sub: steps.find((s) => s.name === 'failover')?.detail ?? '' },
             { key: 'raise', label: LABELS.raise, state: raise.state, sub: raise.sub },
             { key: 'failback', label: LABELS.failback, state: foldState(steps, ['failback'], done), sub: '' },
           ]
