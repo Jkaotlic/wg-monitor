@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -596,6 +597,63 @@ func TestBypassLeakWeeklyCountSQL(t *testing.T) {
 	for _, s := range steps {
 		if strings.HasPrefix(s, "SCAN e") || strings.HasPrefix(s, "SCAN p") || strings.HasPrefix(s, "SCAN events") {
 			t.Fatalf("полный проход по events: %v", steps)
+		}
+	}
+}
+
+// bypassLeakWeeklyManualBound -- граница периода в ручной копии запроса
+// (docs/operations/2026-10-06-bypass-leak-week.sql) -- в формате хранения
+// ts: драйвер пишет time.Time.String() («2026-10-05 19:37:35.257916 +0000
+// UTC»), и сравнение идёт как текст. RFC3339 ('…T…Z') выбрасывал первые сутки
+// периода: пробел меньше 'T'.
+const bypassLeakWeeklyManualBound = `strftime('%Y-%m-%d %H:%M:%S', 'now', '-7 days')`
+
+func bypassLeakWeeklyManualSQL() string {
+	return strings.ReplaceAll(bypassLeakWeeklySQL, "?", bypassLeakWeeklyManualBound)
+}
+
+// Fix 3 (v0.56): ts в events хранится текстом драйвера --
+// «2026-10-05 19:37:35.257916 +0000 UTC», с пробелом, а не 'T'. Ручная копия
+// запроса сравнивает ts как текст, и граница в другом виде выбрасывала
+// целые сутки. Строки вставляются боевым путём (Events().Insert) у самой
+// границы периода.
+func TestBypassLeakWeeklyManualSQL_ProductionTSFormat(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	uid, _ := d.Users().Insert("leak-edge", "7373737373737373737373737373737373737373737373737373737373737373", "198.51.100.14", "awg0")
+	now := time.Now().UTC()
+	for _, at := range []time.Time{now.Add(-7*24*time.Hour + 5*time.Minute), now.Add(-7*24*time.Hour - 5*time.Minute), now.Add(-time.Hour)} {
+		if err := d.Events().Insert(uid, bypassLeakCheck, "ok", `{"state":{"alarm":false}}`, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// CAST -- сырой текст: по объявленному типу столбца драйвер иначе сам
+	// разобрал бы время и отдал его в RFC3339.
+	var stored string
+	if err := d.SQL().QueryRow(`SELECT CAST(ts AS TEXT) FROM events WHERE user_id = ? ORDER BY ts LIMIT 1`, uid).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) < 11 || stored[10] != ' ' {
+		t.Fatalf("формат хранения ts изменился: %q -- поправьте границу ручной копии", stored)
+	}
+	var nick string
+	var reports, episodes, fails, unverified int
+	if err := d.SQL().QueryRow(bypassLeakWeeklyManualSQL()).Scan(&nick, &reports, &episodes, &fails, &unverified); err != nil {
+		t.Fatal(err)
+	}
+	if reports != 2 {
+		t.Fatalf("строк за неделю %d, ждали 2 (у границы внутри и час назад); ts хранится как %q", reports, stored)
+	}
+	// Сама ручная копия (вне git: в CI её нет) -- тот же ответ.
+	if raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "operations", "2026-10-06-bypass-leak-week.sql")); err == nil {
+		if err := d.SQL().QueryRow(string(raw)).Scan(&nick, &reports, &episodes, &fails, &unverified); err != nil {
+			t.Fatal(err)
+		}
+		if reports != 2 {
+			t.Fatalf("ручная копия: строк за неделю %d, ждали 2", reports)
 		}
 	}
 }
