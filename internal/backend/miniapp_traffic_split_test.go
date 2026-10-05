@@ -110,3 +110,22 @@ func TestMiniappTunnelRuleCountsStayServerSide(t *testing.T) {
 		t.Fatalf("счётчики правил не прочитаны: %+v", tu)
 	}
 }
+
+// A2.10: VPN-туннель с правилами перезапускается -- на одном отчёте он
+// «stopped», но агент держит за ним правила окном терпимости (run_grace).
+// Экран на этом отчёте не говорит «напрямую»: обход идёт через него.
+func TestMiniappDeriveTrafficSplitKeepsRecentlyStoppedTunnel(t *testing.T) {
+	tu, ok := miniappTunnelFromEvent(tunnelRowFromAgent("awg10", "vpn-nl",
+		`{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"stopped","enabled":true,"active_default_known":true,"is_active_default":false,"routes_dns":12,"routes_dns_hr":12,"run_grace":true}`))
+	if !ok {
+		t.Fatal("строка не спроецировалась")
+	}
+	tu.Status = "fail"
+	byCheck := map[string]db.EventRow{
+		"hydraroute": {CheckName: "hydraroute", Status: "ok", DetailsJSON: `{"installed":true,"running":true,"routes_hrneo":12}`},
+	}
+	got := miniappDeriveTraffic([]miniappTunnel{tu}, byCheck)
+	if got.Mode != miniappTrafficSplit || got.EgressTunnelID != "awg10" {
+		t.Fatalf("разовый перезапуск дал %+v, ждали обход через awg10", got)
+	}
+}

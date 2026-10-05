@@ -103,6 +103,7 @@ func main() {
 			Client:          awgClient,
 			HandshakeMaxAge: cfg.Checks.AWG.HandshakeMaxAge(),
 			AwgmDownSince:   signals.tracker.DownSince,
+			Grace:           &checks.RunGrace{},
 		},
 	}
 
