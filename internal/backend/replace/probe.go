@@ -134,3 +134,41 @@ func (d Deps) VerifyExit(ctx context.Context, routerID int64) (string, error) {
 	}
 	return fmt.Sprintf("через VPN-туннель %s, напрямую %s", via, orUnknown(direct)), nil
 }
+
+// VerifyTunnelExit -- критерий успеха для лесенки автопочинки: адрес выхода
+// именно через этот VPN-туннель (exit_ip_probe по tunnel_id, агент v0.47+),
+// а не через активное звено набора правил. После увода трафика на резерв
+// VerifyExit проверил бы резерв, а не починенный VPN-туннель.
+//
+// Доказано: замер без ошибки, адрес через VPN-туннель известен и выход
+// сменился (признак changed от агента; нет признака -- адрес через туннель
+// отличается от прямого, если прямой известен). Ошибку замера агент пишет
+// инженерным языком -- она уходит в лог, владельцу -- фраза.
+func (d Deps) VerifyTunnelExit(ctx context.Context, routerID int64, tunnelID string) (string, error) {
+	res, err := d.command(ctx, routerID, "exit_ip_probe", map[string]any{"tunnel_id": tunnelID})
+	if err != nil {
+		return "", fmt.Errorf("адрес выхода через VPN-туннель проверить не вышло: %w", err)
+	}
+	var p wire.ExitProbe
+	if err := json.Unmarshal([]byte(res.Output), &p); err != nil {
+		d.logCommandFailure("exit_ip_probe", "unparsable", err.Error())
+		return "", errors.New("адрес выхода через VPN-туннель проверить не вышло: " + RouterGarbled)
+	}
+	if strings.TrimSpace(p.Err) != "" {
+		d.logCommandFailure("exit_ip_probe", "probe error", p.Err)
+		return "", errors.New("через VPN-туннель адрес выхода не определился")
+	}
+	via := strings.TrimSpace(p.VPNIP)
+	direct := strings.TrimSpace(p.DirectIP)
+	if via == "" {
+		return "", errors.New("через VPN-туннель адрес выхода не определился")
+	}
+	same := p.Changed != nil && !*p.Changed
+	if p.Changed == nil && direct != "" && via == direct {
+		same = true
+	}
+	if same {
+		return "", fmt.Errorf("снаружи виден тот же адрес, что и напрямую (%s): трафик в обход не пошёл", via)
+	}
+	return fmt.Sprintf("через VPN-туннель %s, напрямую %s", via, orUnknown(direct)), nil
+}

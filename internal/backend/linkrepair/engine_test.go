@@ -87,6 +87,13 @@ func (c *scriptCommander) AwaitResult(_ context.Context, _ int64, id string, _ t
 		out = `✅ Туннель "Дача" заменён (id=awg12)`
 	case "check_via_tunnel":
 		out = c.via
+	case "exit_ip_probe":
+		// Замер по tunnel_id: выход сменился, только когда awg12 починен.
+		if c.via == exitTunnel {
+			out = `{"vpn_ip":"203.0.113.19","direct_ip":"203.0.113.7","changed":true,"source":"awgm"}`
+		} else {
+			out = `{"vpn_ip":"203.0.113.7","direct_ip":"203.0.113.7","changed":false,"source":"awgm"}`
+		}
 	case "check_direct":
 		out = exitDirect
 	}
@@ -850,6 +857,64 @@ func TestLadder_StopsOnCancel(t *testing.T) {
 	}
 	if got := e.cmd.promotedTo(); len(got) != 1 {
 		t.Fatalf("после отмены трогали набор правил: %v", got)
+	}
+}
+
+// После увода активен резерв: доказательство обязано мерить выход именно
+// через чинимый VPN-туннель (exit_ip_probe по его id), иначе «починил»
+// означало бы «резерв работает».
+func TestLadder_ProofTargetsBrokenTunnel(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	fixOn(e.cmd, "tunnel_import", 1, true)
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	probes := e.cmd.actions("exit_ip_probe")
+	// Перезапуск отсеян ещё на обмене ключами; замер -- у ступени «тот же конфиг».
+	if len(probes) != 1 {
+		t.Fatalf("замеров %d, ждали 1", len(probes))
+	}
+	for _, p := range probes {
+		if p.Args["tunnel_id"] != "awg12" {
+			t.Fatalf("замер не по чинимому VPN-туннелю: %+v", p.Args)
+		}
+	}
+	if n := len(e.cmd.actions("check_via_tunnel")); n != 0 {
+		t.Fatalf("проверка через активное звено (то есть резерв) ушла %d раз", n)
+	}
+	// Первый замер -- уже после увода на резерв.
+	promoted := false
+	for _, s := range e.cmd.all() {
+		if s.Action == "route_policy_promote" && s.Args["tunnel_id"] == "awg10" {
+			promoted = true
+		}
+		if s.Action == "exit_ip_probe" && !promoted {
+			t.Fatal("замер до увода")
+		}
+	}
+}
+
+// Агент старше v0.47 не умеет мерить выход по туннелю: доказательство --
+// только свежий обмен ключами, проверку через активное звено не шлём.
+func TestLadder_PreExitProbeAgentHandshakeOnly(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	fixOn(e.cmd, "tunnel_restart", 1, false) // обмен есть, выход не меряется
+	req := ladderReq()
+	req.AgentVersion = "v0.46.0"
+
+	job, final := e.run(t, req)
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if n := len(e.cmd.actions("exit_ip_probe")) + len(e.cmd.actions("check_via_tunnel")); n != 0 {
+		t.Fatalf("старому агенту ушло %d замеров выхода", n)
+	}
+	if !strings.Contains(stepOf(job, StepRestart).Detail, "ключами обменялся") {
+		t.Fatalf("шаг не говорит, чем доказан: %+v", stepOf(job, StepRestart))
 	}
 }
 

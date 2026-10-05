@@ -377,7 +377,7 @@ func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Sce
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не прошёл: "+err.Error())
 		return false
 	}
-	verdict, err := d.prove(ctx, req.RouterID, sc.TunnelID, names.broken)
+	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не помог: "+err.Error())
 		return false
@@ -386,16 +386,27 @@ func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Sce
 	return true
 }
 
+// MinAgentExitProbe -- агент, который меряет адрес выхода по конкретному
+// VPN-туннелю (exit_ip_probe tunnel_id, v0.47). Старше -- мерить нечем:
+// check_via_tunnel идёт через активное звено набора правил, а после увода
+// это резерв. Тогда доказательство -- только свежий обмен ключами.
+const MinAgentExitProbe = "v0.47.0"
+
 // prove -- доказательство ступени: свежий обмен ключами и выход через
-// VPN-туннель, отличный от прямого.
-func (d Deps) prove(ctx context.Context, routerID int64, tunnelID, name string) (string, error) {
-	if err := d.Probe.WaitHandshake(ctx, routerID, tunnelID, name); err != nil {
+// ИМЕННО этот VPN-туннель, отличный от прямого.
+func (d Deps) prove(ctx context.Context, req StartReq, tunnelID, name string) (string, error) {
+	if err := d.Probe.WaitHandshake(ctx, req.RouterID, tunnelID, name); err != nil {
 		if ctx.Err() != nil {
 			return "", errStopped
 		}
 		return "", err
 	}
-	verdict, err := d.Probe.VerifyExit(ctx, routerID)
+	// Пустая версия даёт false, как и в пороге мастера замены: агент, не
+	// назвавший версию, до ступени перезапуска допущен и меряется наравне.
+	if upstream.SoftwareNewerThan(req.AgentVersion, MinAgentExitProbe) {
+		return "ключами обменялся (адрес выхода этот агент мерить не умеет)", nil
+	}
+	verdict, err := d.Probe.VerifyTunnelExit(ctx, req.RouterID, tunnelID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", errStopped
@@ -452,7 +463,7 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
 		return false, nil
 	}
-	verdict, err := d.prove(ctx, req.RouterID, sc.TunnelID, names.broken)
+	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, step, provision.StepFailed, "конфиг заменён, но "+err.Error())
 		return false, nil

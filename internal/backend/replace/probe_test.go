@@ -112,3 +112,53 @@ func TestWaitHandshake_StaleHandshakeIsNotProof(t *testing.T) {
 		t.Fatalf("причина обязана сказать, что обмен давний: %v", err)
 	}
 }
+
+// VerifyTunnelExit -- адрес выхода именно через этот VPN-туннель (агентский
+// exit_ip_probe по tunnel_id), а не через активное звено набора правил.
+func TestVerifyTunnelExit(t *testing.T) {
+	cases := []struct {
+		name   string
+		out    string
+		status string
+		ok     bool
+	}{
+		{"сменился", `{"vpn_ip":"203.0.113.19","direct_ip":"203.0.113.7","changed":true,"source":"awgm"}`, "ok", true},
+		{"ошибка замера", `{"source":"own","err":"dial tcp: i/o timeout"}`, "ok", false},
+		{"адрес пуст", `{"direct_ip":"203.0.113.7","source":"own"}`, "ok", false},
+		{"не сменился", `{"vpn_ip":"203.0.113.7","direct_ip":"203.0.113.7","changed":false,"source":"awgm"}`, "ok", false},
+		{"нет признака, адреса равны", `{"vpn_ip":"203.0.113.7","direct_ip":"203.0.113.7","source":"own"}`, "ok", false},
+		{"нет признака, адреса разные", `{"vpn_ip":"203.0.113.19","direct_ip":"203.0.113.7","source":"own"}`, "ok", true},
+		{"нет признака, прямого нет", `{"vpn_ip":"203.0.113.19","source":"own"}`, "ok", true},
+		{"агент отказал", `exit_ip_probe: tunnel_id is required`, "err", false},
+		{"не разобрался", `<html>`, "ok", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cmd := probeDeps(t, map[string]wire.CommandResult{
+				"exit_ip_probe": {Status: tc.status, Output: tc.out},
+			})
+			verdict, err := d.VerifyTunnelExit(context.Background(), 1, "awg12")
+			if (err == nil) != tc.ok {
+				t.Fatalf("verdict=%q err=%v, ждали ok=%v", verdict, err, tc.ok)
+			}
+			text := verdict
+			if err != nil {
+				text = err.Error()
+			}
+			if text == "" || strings.Contains(text, "dial") || strings.Contains(text, "awg12") || strings.Contains(text, "exit_ip_probe") {
+				t.Fatalf("текст владельцу: %q", text)
+			}
+			cmd.mu.Lock()
+			defer cmd.mu.Unlock()
+			var probe *wire.Command
+			for i := range cmd.sent {
+				if cmd.sent[i].Action == "exit_ip_probe" {
+					probe = &cmd.sent[i]
+				}
+			}
+			if probe == nil || probe.Args["tunnel_id"] != "awg12" {
+				t.Fatalf("замер не по этому VPN-туннелю: %+v", probe)
+			}
+		})
+	}
+}
