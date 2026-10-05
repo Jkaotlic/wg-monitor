@@ -736,3 +736,63 @@ func TestRCILogText_Shapes(t *testing.T) {
 		t.Fatal("не журнал принят за журнал")
 	}
 }
+
+// RCI отвечает объектом ошибки с HTTP 200 на неизвестный параметр: это не
+// журнал, и читать надо запасным путём ndmc.
+func TestRCILogText_ErrorObjectIsNotLog(t *testing.T) {
+	if _, ok := rciLogText([]byte(`{"status":[{"status":"error","code":"1","ident":"Core::Rci","message":"unknown parameter."}]}`)); ok {
+		t.Fatal("объект ошибки принят за журнал")
+	}
+}
+
+func TestInstallFirmware_RCIErrorObjectFallsBackToNdmcLog(t *testing.T) {
+	noWait(t)
+	after := logBefore + "I [Oct 02 11:32:34] ndm: Core::System::RebootManager: activated reboot.\n"
+	base, rci, _ := fakeFirmware(`{"continued": false}`, nil, logBefore, after)
+	wrapped := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/show/log" {
+			return []byte(`{"status":[{"status":"error","message":"unknown parameter."}]}`), nil
+		}
+		return rci(ctx, method, path, body)
+	}
+	msg, err := InstallFirmware(context.Background(), base, wrapped)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+}
+
+// Снимок «до» через RCI, а опрос не смог бы дать те же строки другим путём:
+// путь закреплён на всю установку, старая «update interrupted» не становится
+// свежим провалом.
+func TestInstallFirmware_LogPathPinnedNoFalseFailure(t *testing.T) {
+	noWait(t)
+	oldFail := "E [Oct 01 09:00:00] ndm: Components::Manager: update interrupted.\n"
+	rciOld := `{"log":{"1":{"label":"W","timestamp":"Oct 01 09:00:00","message":"ndm: Components::Manager: update interrupted."}}}`
+	base, rci, _ := fakeFirmware(`{"continued": false}`, nil, oldFail, oldFail)
+	committed := false
+	n := 0
+	wrapped := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		switch path {
+		case "/rci/components/commit":
+			committed = true
+		case "/rci/show/log":
+			if !committed {
+				return []byte(rciOld), nil
+			}
+			n++
+			return nil, errors.New("rci: HTTP 500") // опрос по RCI не отвечает
+		}
+		return rci(ctx, method, path, body)
+	}
+	// ndmc отдаёт ту же старую строку в своём формате.
+	msg, err := InstallFirmware(context.Background(), base, wrapped)
+	if err != nil {
+		t.Fatalf("старая строка прочитана как свежий провал: %v", err)
+	}
+	if msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("msg=%q", msg)
+	}
+	if n == 0 {
+		t.Fatal("опрос по RCI не вызывался")
+	}
+}

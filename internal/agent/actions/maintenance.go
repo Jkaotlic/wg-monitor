@@ -196,7 +196,7 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		}
 	}
 	before := map[string]bool{}
-	beforeLines, beforeErr := firmwareLogLines(ctx, exec, rci)
+	beforeLines, logVia, beforeErr := firmwareLogLines(ctx, exec, rci, "")
 	for _, l := range beforeLines {
 		before[l] = true
 	}
@@ -218,7 +218,9 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		if err := watch.sleep(ctx); err != nil {
 			break
 		}
-		lines, err := firmwareLogLines(ctx, exec, rci)
+		// Путь чтения закреплён снимком «до»: строки RCI и ndmc отличаются
+		// форматом, и смешение путей выдало бы старые строки за свежие.
+		lines, _, err := firmwareLogLines(ctx, exec, rci, logVia)
 		if err != nil {
 			continue // неудачный взгляд = «новых строк нет»
 		}
@@ -337,21 +339,26 @@ const firmwareLogWindow = 400
 // Журнал читаем тем же путём, что и запускаем установку: через локальный RCI
 // (show/log). Роутер без RCI или не отдавший журнал отвечает старым путём ndmc
 // с тем же окном.
-func firmwareLogLines(ctx context.Context, exec ExecFunc, rci RCIFunc) ([]string, error) {
-	var text string
-	if rci != nil {
+func firmwareLogLines(ctx context.Context, exec ExecFunc, rci RCIFunc, pin string) ([]string, string, error) {
+	var text, via string
+	if rci != nil && pin != "ndmc" {
 		if body, err := rci(ctx, "POST", "/rci/show/log", []byte(fmt.Sprintf(`{"max-lines":%d}`, firmwareLogWindow))); err == nil {
 			if t, ok := rciLogText(body); ok {
-				text = t
+				text, via = t, "rci"
 			}
 		}
+		if pin == "rci" && via == "" {
+			// Закреплённый путь не ответил -- «новых строк нет», а не повод
+			// читать другим форматом.
+			return nil, pin, errors.New("rci show/log: no log in the answer")
+		}
 	}
-	if text == "" {
+	if via == "" {
 		out, err := exec(ctx, "ndmc", "-c", fmt.Sprintf("show log %d", firmwareLogWindow))
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		text = string(out)
+		text, via = string(out), "ndmc"
 	}
 	var lines []string
 	for _, raw := range strings.Split(text, "\n") {
@@ -360,12 +367,12 @@ func firmwareLogLines(ctx context.Context, exec ExecFunc, rci RCIFunc) ([]string
 			lines = append(lines, l)
 		}
 	}
-	return lines, nil
+	return lines, via, nil
 }
 
 // rciLogText переводит ответ RCI show/log в строки вида «I [Oct 02 11:31:54]
 // ndm: Components::Manager: …», как у ndmc. Записи -- объекты с полем message
-// (label и timestamp необязательны) в массиве или в словаре по номерам;
+// (label и timestamp необязательны) под ключом log в массиве или в словаре по номерам;
 // порядок словаря -- по номеру записи. ok=false -- ответ не журнал, нужен
 // запасной путь.
 func rciLogText(body []byte) (string, bool) {
@@ -403,12 +410,17 @@ func rciLogText(body []byte) (string, bool) {
 			}
 		}
 	}
-	if m, ok := root.(map[string]any); ok {
-		if l, ok := m["log"]; ok {
-			root = l
-		}
+	// Журнал -- только под ключом log: объект ошибки RCI с полем message
+	// (HTTP 200 на неизвестный параметр) журналом не считается.
+	m, ok := root.(map[string]any)
+	if !ok {
+		return "", false
 	}
-	walk(root)
+	l, ok := m["log"]
+	if !ok {
+		return "", false
+	}
+	walk(l)
 	if len(entries) == 0 {
 		return "", false
 	}
