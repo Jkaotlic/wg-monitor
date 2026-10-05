@@ -1278,6 +1278,18 @@ body {
   overflow-wrap: break-word;
 }
 
+/* Лист включения автопочинки: четыре раздела в теле листа. */
+.sheet-sec {
+  display: block;
+  margin-top: var(--sp-2);
+}
+
+.sheet-sec-h {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+}
+
 .sheet-note {
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-sm);
@@ -2712,6 +2724,15 @@ body {
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--ink);
+}
+
+/* Подстрока стадии: какая ступень лесенки сработала (v0.54). */
+.repair-step-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .repair-step-pending .repair-step-label,
