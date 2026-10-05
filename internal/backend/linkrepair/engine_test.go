@@ -181,6 +181,8 @@ type fakeSource struct {
 	calls   []string
 	errs    map[string]error // по «issue:провайдер:вариант» / «fresh:…» / «options:провайдер»
 	options []Option
+	// onOptions -- крючок на вызов Options (например, остановить бэкенд).
+	onOptions func()
 }
 
 // issuedOpts -- варианты кабинета, все уже выпущенные; подпись -- id в
@@ -215,6 +217,9 @@ func (s *fakeSource) Fresh(_ context.Context, _ int64, provider, option string) 
 }
 
 func (s *fakeSource) Options(_ context.Context, _ int64, provider string) ([]Option, error) {
+	if s.onOptions != nil {
+		s.onOptions()
+	}
 	if err := s.rec("options:" + provider); err != nil {
 		return nil, err
 	}
@@ -1156,6 +1161,30 @@ func TestLadder_ReissueAmneziaRevokedNeedsHuman(t *testing.T) {
 	}
 }
 
+// Остановка посреди сверки страны: это прерывание, а не «обновите ключ».
+func TestLadder_ReissueCheckCancelledIsAborted(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.d.BaseCtx = ctx
+	e.src.errs = map[string]error{"options:amnezia": &NeedHuman{Cause: context.Canceled, Action: ActAmneziaKey}}
+	e.src.onOptions = cancel
+
+	job, final := e.run(t, ladderReq())
+
+	if final.Action == ActAmneziaKey || job.Hint == ActAmneziaKey {
+		t.Fatalf("прерывание выдано за ключ: final=%+v hint=%q", final, job.Hint)
+	}
+	if job.Hint != ActAborted {
+		t.Fatalf("подсказка %q, ждали ActAborted", job.Hint)
+	}
+	for _, st := range job.Steps {
+		if strings.Contains(st.Detail, "бэкенд") {
+			t.Fatalf("шаг %s: %q", st.Name, st.Detail)
+		}
+	}
+}
+
 // Роутер не ответил на увод: «не дал» -- неправда, он мог и не получить.
 func TestLadder_PromoteSilentSaysNotConfirmed(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true})
@@ -1275,9 +1304,14 @@ func TestLadder_StopsOnCancel(t *testing.T) {
 	if job.Hint != ActAborted {
 		t.Fatalf("подсказка прерванной починки %q, ждали %q", job.Hint, ActAborted)
 	}
-	// «Бэкенд» владельцу -- не слово.
+	// «Бэкенд» владельцу -- не слово: ни в подсказке, ни в шагах.
 	if strings.Contains(job.Hint, "бэкенд") {
 		t.Fatalf("подсказка: %q", job.Hint)
+	}
+	for _, st := range job.Steps {
+		if strings.Contains(st.Detail, "бэкенд") {
+			t.Fatalf("шаг %s: %q", st.Name, st.Detail)
+		}
 	}
 	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
 		t.Fatalf("после отмены ушёл импорт: %d", n)

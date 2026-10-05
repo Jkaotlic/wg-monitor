@@ -443,6 +443,9 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	// место в подписке.
 	if set.Provider == "amnezia" {
 		if nh := d.checkIssued(ctx, jobID, req, set); nh != nil {
+			if d.aborted(ctx, jobID, req, th, names, log) {
+				return
+			}
 			d.skip(jobID, "не понадобилось: источник ждёт человека", StepRecreate)
 			d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
 			return
@@ -550,7 +553,7 @@ func (d Deps) prove(ctx context.Context, req StartReq, tunnelID, name string) (s
 }
 
 // errStopped -- бэкенд останавливается: ступень не провалена, её прервали.
-var errStopped = errors.New("починка прервана: бэкенд перезапускается")
+var errStopped = errors.New("починка прервана: сервер приложения перезапускается")
 
 // tryIssue -- ступени 2 и 3: выпустить конфиг, проверить, положить в ТОТ ЖЕ
 // VPN-туннель (target_id), доказать. nh != nil -- источник ждёт человека.
@@ -610,6 +613,11 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 // проверки «тот же конфиг» мог бы занять новое место в подписке.
 func (d Deps) checkIssued(ctx context.Context, jobID string, req StartReq, set Setting) *NeedHuman {
 	opts, err := d.Source.Options(ctx, req.RouterID, set.Provider)
+	if ctx.Err() != nil {
+		// Остановка, а не отказ кабинета: «обновите ключ» здесь неправда.
+		d.step(jobID, StepReissue, provision.StepFailed, errStopped.Error())
+		return &NeedHuman{Cause: errStopped, Action: ActAborted}
+	}
 	if err != nil {
 		var nh *NeedHuman
 		if errors.As(err, &nh) {
