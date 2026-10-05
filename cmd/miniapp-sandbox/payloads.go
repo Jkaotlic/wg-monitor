@@ -157,9 +157,13 @@ var sandboxRouter = struct {
 	own    map[int64][]wire.TunnelMeta
 	egress string
 	nextID int
+	// work -- id роутера sandbox-work: его снимок маршрутов свой (снимок
+	// прода workrouter 18.09, seedWorkChecks), а не общий.
+	work int64
 }{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, hrneoStopped: map[int64]bool{}, own: map[int64][]wire.TunnelMeta{}, egress: wire.DefaultEgressDirect, nextID: 21}
 
 type routerSnapshotState struct {
+	work         bool
 	imported     []wire.TunnelMeta
 	active       string
 	disabled     map[string]bool
@@ -173,7 +177,8 @@ func routerState(routerID int64) routerSnapshotState {
 	sandboxRouter.mu.Lock()
 	defer sandboxRouter.mu.Unlock()
 	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}, deleted: map[string]bool{},
-		hrneoStopped: sandboxRouter.hrneoStopped[routerID], egress: sandboxRouter.egress}
+		hrneoStopped: sandboxRouter.hrneoStopped[routerID], egress: sandboxRouter.egress,
+		work: routerID != 0 && routerID == sandboxRouter.work}
 	st.imported = append(st.imported, sandboxRouter.imported...)
 	st.own = append(st.own, sandboxRouter.own[routerID]...)
 	for k, v := range sandboxRouter.disabled {
@@ -281,7 +286,80 @@ func setTunnelPower(id string, on bool) {
 	sandboxRouter.disabled[id] = !on
 }
 
+// setWorkRouter -- какой роутер песочницы показывает снимок workrouter.
+func setWorkRouter(routerID int64) {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.work = routerID
+}
+
+// workRouteSnapshot -- снимок маршрутов sandbox-work в тех же именах и с тем
+// же активным звеном, что его проверки (seedWorkChecks): набор HydraRoute
+// несёт vpn-hip (awg14), запасной vpn-nl (awg10) поднят, но не отвечает,
+// vpn-fi (awg12) в наборе не состоит. Общий снимок песочницы здесь не
+// годится: в нём awg10 -- «vpn-de», а активное звено -- awg12, и экраны
+// песочницы спорили между собой из-за сида (B1, v0.56).
+func workRouteSnapshot(st routerSnapshotState) wire.RouteSnapshot {
+	snap := wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: !st.hrneoStopped},
+		Tunnels: []wire.TunnelMeta{
+			{
+				ID: "awg14", Name: "vpn-hip", Iface: "opkgtun14", Type: "managed",
+				Enabled: true, Available: true, Status: "up",
+				HasHandshake: true, HandshakeAge: 88, PingStatus: "disabled",
+				DefaultRoute: true, RestartMethod: "control",
+			},
+			{
+				ID: "awg10", Name: "vpn-nl", Iface: "opkgtun10", Type: "managed",
+				Enabled: true, Available: true, Status: "up",
+				HasHandshake: true, HandshakeAge: 1447, PingStatus: "disabled",
+				DefaultRoute: true, RestartMethod: "control",
+			},
+			{
+				ID: "awg12", Name: "vpn-fi", Iface: "opkgtun12", Type: "managed",
+				Enabled: true, Available: true, Status: "up",
+				HasHandshake: true, HandshakeAge: 21, PingStatus: "ok",
+				RestartMethod: "control",
+			},
+			{ID: "ISP", Name: "Провайдер", Iface: "ISP", Type: "ndms", Enabled: true, Available: true, RestartMethod: "none"},
+		},
+		Counts: map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{
+			{
+				Name: "HydraRoute", Description: "обход блокировок",
+				Interfaces: []wire.RoutePolicyInterface{
+					{Bind: "OpkgTun14", Name: "vpn-hip", Role: "active", Available: true, Order: 1, TunnelID: "awg14", ViaVPN: true},
+					{Bind: "OpkgTun10", Name: "vpn-nl", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
+				},
+				DNS: 32, HRNeo: 32, ActiveTunnelID: "awg14", ViaVPN: true,
+			},
+		},
+		Rules: []wire.RouteRuleSummary{
+			{Name: "Figma", Bind: "OpkgTun14", Backend: "hydraroute", Kind: "dns", Enabled: true},
+		},
+		DefaultEgress: wire.DefaultEgressDirect,
+		PolicyModel:   true,
+	}
+	kept := snap.Tunnels[:0]
+	for _, t := range snap.Tunnels {
+		if !st.deleted[t.ID] {
+			kept = append(kept, t)
+		}
+	}
+	snap.Tunnels = kept
+	for i := range snap.Tunnels {
+		if st.disabled[snap.Tunnels[i].ID] {
+			snap.Tunnels[i].Enabled = false
+			snap.Tunnels[i].Status = "down"
+		}
+	}
+	return snap
+}
+
 func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
+	if st.work {
+		return workRouteSnapshot(st)
+	}
 	snap := wire.RouteSnapshot{
 		HRNeo: wire.HRStatus{Installed: true, Running: !st.hrneoStopped},
 		Tunnels: []wire.TunnelMeta{
