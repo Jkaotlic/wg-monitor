@@ -240,3 +240,19 @@ describe('tunnelTargetLabel: непроверенное состояние', () 
     expect(tunnelTargetLabel({ live: 'down', checkUnverified: true })).toBe('выключен')
   })
 })
+
+// dns_ru (v0.55, спека C) -- сервер имён, которому роутер отдал русские зоны.
+// Бот называет проверку «сервер имён для русских сайтов» (checkHumanName в
+// alerts/format.go) и говорит «Русские сайты могут не открываться» --
+// приложение говорит теми же словами.
+describe('dns_ru говорит о русских сайтах', () => {
+  it('в списке проверок', () => {
+    expect(checkLabel('dns_ru')).toBe('Сервер имён для русских сайтов')
+  })
+  it('в карточке тревоги', () => {
+    const copy = incidentCopy('dns_ru')
+    expect(copy.what).toBe('Русские сайты могут не открываться')
+    expect(copy.why).toContain('Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов')
+    for (const w of ['dns_ru', 'DNS', 'апстрим', 'DoT']) expect(copy.why).not.toContain(w)
+  })
+})

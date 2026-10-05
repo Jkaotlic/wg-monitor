@@ -199,7 +199,7 @@ export const DIAG_SECTIONS = [
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
 // роутер, отчитывающийся о себе.
-const ROW_ORDER = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels', 'agent_heartbeat']
+const ROW_ORDER = ['dns', 'dns_ru', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels', 'agent_heartbeat']
 
 const ANSWER_TONE = { да: 'ok', нет: 'danger', 'не знаем': 'muted', 'не проверено': 'muted' }
 const UNCHECKED = 'не проверено'
@@ -296,6 +296,7 @@ function tunnelsRow(check, tunnels, clock, incidents) {
 
 const ROW_TITLES = {
   dns: 'Сайты открываются по имени',
+  dns_ru: 'Русские сайты открываются по имени',
   external_reach: 'Сайты снаружи отвечают',
   hydraroute: 'Обход блокировок работает',
   awg_manager: 'Панель роутера отвечает',
@@ -335,6 +336,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     else if (key === 'external_reach') body = reachRow(check, clock)
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
+    else if (key === 'dns_ru') body = { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
     else body = tunnelsRow(check ?? null, tunnels, clock, incidents)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
