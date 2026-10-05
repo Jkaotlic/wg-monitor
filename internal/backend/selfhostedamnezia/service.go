@@ -356,8 +356,10 @@ func checkFailureText(cfg Config, err error) string {
 		return "Сервер не ответил за 25 секунд — проверьте адрес и порт SSH"
 	case strings.HasPrefix(msg, "ssh dial"):
 		return "Сервер не отвечает по SSH — проверьте адрес и порт SSH"
-	case strings.HasPrefix(msg, "ssh host key"):
+	case strings.HasPrefix(msg, "ssh host key save"):
 		return "Вход по SSH прошёл, но ключ сервера не запомнился — повторите позже"
+	case strings.HasPrefix(msg, "ssh refused"):
+		return "Вход не выполнен: ключ сервера нечем проверить"
 	case strings.HasPrefix(msg, "ssh auth"):
 		return "SSH не принял пользователя или пароль"
 	case strings.HasPrefix(msg, "ssh session"):

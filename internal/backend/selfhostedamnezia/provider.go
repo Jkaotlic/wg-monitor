@@ -535,7 +535,7 @@ func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte
 		case hk.changed:
 			return nil, fmt.Errorf("ssh host key %s: %w", addr, ErrHostKeyChanged)
 		case hk.refused:
-			return nil, fmt.Errorf("ssh host key %s: %w", addr, errNoHostKeyPolicy)
+			return nil, fmt.Errorf("ssh refused %s: %w", addr, errNoHostKeyPolicy)
 		}
 		return nil, fmt.Errorf("ssh auth %s: %w", addr, err)
 	}
@@ -544,7 +544,7 @@ func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte
 	// Вход удался -- первый ключ запоминается до любой команды. Не записался --
 	// команды нет: иначе следующий вход снова поверил бы любому ключу.
 	if err := hk.remember(); err != nil {
-		return nil, fmt.Errorf("ssh host key %s: %w", addr, err)
+		return nil, fmt.Errorf("ssh host key save %s: %w", addr, err)
 	}
 	session, err := client.NewSession()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -19,7 +20,7 @@ var ErrHostKeyChanged = errors.New("ssh host key changed")
 
 // errNoHostKeyPolicy -- отпечатка нет и запомнить его некуда: такой вход был
 // бы без проверки ключа, поэтому его нет вовсе.
-var errNoHostKeyPolicy = errors.New("ssh host key: no stored fingerprint and nowhere to remember one")
+var errNoHostKeyPolicy = errors.New("no stored host key fingerprint and nowhere to remember one")
 
 // HostKeyChangedError -- смена ключа с именем сервера для человека.
 type HostKeyChangedError struct{ Label string }
@@ -33,14 +34,49 @@ func (e *HostKeyChangedError) Unwrap() error { return ErrHostKeyChanged }
 // HostKeyPolicy -- чего ждать от ключа хоста. Known -- запомненный отпечаток
 // («SHA256:…»); пусто -- первый вход, предъявленный ключ запоминает Remember,
 // но только после удачного входа по паролю.
+//
+// Один раннер -- несколько входов (выпуск читает четыре файла, каждый --
+// отдельный вход). pinned -- общий для копий политики отпечаток, который
+// записал первый удачный вход: следующие входы того же раннера сверяют его
+// в колбэке, до пароля, а не доверяют снова.
 type HostKeyPolicy struct {
 	Known    string
 	Remember func(fingerprint string) error
+	pinned   *pinnedHostKey
+}
+
+type pinnedHostKey struct {
+	mu sync.Mutex
+	fp string
+}
+
+// known -- отпечаток, с которым сверяется вход: запомненный этим раннером
+// или тот, что был в файле при его создании.
+func (p HostKeyPolicy) known() string {
+	if p.pinned != nil {
+		p.pinned.mu.Lock()
+		fp := p.pinned.fp
+		p.pinned.mu.Unlock()
+		if fp != "" {
+			return fp
+		}
+	}
+	return strings.TrimSpace(p.Known)
+}
+
+func (p HostKeyPolicy) pin(fp string) {
+	if p.pinned == nil {
+		return
+	}
+	p.pinned.mu.Lock()
+	p.pinned.fp = fp
+	p.pinned.mu.Unlock()
 }
 
 // hostKeyCheck -- одна попытка входа: что предъявил сервер и чем кончилось.
 type hostKeyCheck struct {
 	policy  HostKeyPolicy
+	known   string
 	seen    string
 	changed bool
 	refused bool
@@ -48,7 +84,8 @@ type hostKeyCheck struct {
 
 func (c *hostKeyCheck) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
 	fp := ssh.FingerprintSHA256(key)
-	known := strings.TrimSpace(c.policy.Known)
+	known := c.policy.known()
+	c.known = known
 	switch {
 	case known != "" && fp != known:
 		c.changed = true
@@ -63,16 +100,21 @@ func (c *hostKeyCheck) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
 
 // remember -- после удачного входа: первый ключ записывается.
 func (c *hostKeyCheck) remember() error {
-	if strings.TrimSpace(c.policy.Known) != "" || c.seen == "" {
+	if c.known != "" || c.seen == "" {
 		return nil
 	}
-	return c.policy.Remember(c.seen)
+	if err := c.policy.Remember(c.seen); err != nil {
+		return err
+	}
+	c.policy.pin(c.seen)
+	return nil
 }
 
 // hostKeyPolicy -- политика ключа для инстанса из файла.
 func (s *Service) hostKeyPolicy(inst Instance) HostKeyPolicy {
 	return HostKeyPolicy{
-		Known: inst.SSHHostKey,
+		Known:  inst.SSHHostKey,
+		pinned: &pinnedHostKey{},
 		Remember: func(fp string) error {
 			return s.rememberHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
 		},
