@@ -25,12 +25,8 @@ func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, erro
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// OpkgRunner enforces a lock-file so two opkg actions don't overlap and
-// performs the dry-run preflight (`opkg update` + `opkg list-upgradable`).
-//
-// SmartUpgrade runs the full live update + upgrade pipeline. DryRun is kept
-// for the OpkgExecutor interface contract but is no longer wired into the
-// runner dispatch.
+// OpkgRunner enforces a lock-file so two opkg actions don't overlap;
+// SmartUpgrade runs the full live update + upgrade pipeline.
 type OpkgRunner struct {
 	LockPath string
 	LockTTL  time.Duration
@@ -110,8 +106,8 @@ func (o *OpkgRunner) now() time.Time {
 // *under-estimating* the install need (the caller's 10% margin absorbs
 // the slack).
 func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
-	if held, age, ok := o.lockHeldFresh(); ok {
-		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
+	if _, _, ok := o.lockHeldFresh(); ok {
+		return "locked", opkgLockHeldText, payload
 	}
 	if err := o.releaseStaleLock(); err != nil {
 		return "err", "clear stale lock: " + err.Error(), payload
@@ -449,8 +445,8 @@ func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, ou
 	}
 	url := normalizeFeedURL(rawURL)
 
-	if held, age, ok := o.lockHeldFresh(); ok {
-		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
+	if _, _, ok := o.lockHeldFresh(); ok {
+		return "locked", opkgLockHeldText, payload
 	}
 	if err := o.releaseStaleLock(); err != nil {
 		return "err", "clear stale lock: " + err.Error(), payload
@@ -537,41 +533,6 @@ func humanKB(kb int64) string {
 	return fmt.Sprintf("%.1f MB", mb)
 }
 
-// DryRun returns ("locked", ...) if a fresh lock-file exists, otherwise
-// runs the preflight, releases the lock, and returns ("ok", listing) or
-// ("err", explanation).
-//
-// DEPRECATED 2026-05-06: kept for the OpkgExecutor interface contract +
-// any external callers (none known in the tree). New work calls
-// SmartUpgrade — it does the live upgrade with a space safety check.
-func (o *OpkgRunner) DryRun(ctx context.Context) (status, output string) {
-	if held, age, ok := o.lockHeldFresh(); ok {
-		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)
-	}
-	if err := o.releaseStaleLock(); err != nil {
-		return "err", "clear stale lock: " + err.Error()
-	}
-	if err := o.takeLock(); err != nil {
-		if text, busy := opkgLockBusyText(err); busy {
-			return "locked", text
-		}
-		return "err", "acquire lock: " + err.Error()
-	}
-	defer o.releaseLock()
-
-	if out, err := o.Exec(ctx, "opkg", "update"); err != nil {
-		return "err", "opkg update failed: " + err.Error() + "\n" + string(out)
-	}
-	listing, err := o.Exec(ctx, "opkg", "list-upgradable")
-	if err != nil {
-		return "err", "opkg list-upgradable failed: " + err.Error() + "\n" + string(listing)
-	}
-	if strings.TrimSpace(string(listing)) == "" {
-		return "ok", "all packages up to date"
-	}
-	return "ok", "upgradable packages:\n" + string(listing)
-}
-
 func (o *OpkgRunner) lockHeldFresh() (path string, age time.Duration, ok bool) {
 	st, err := os.Stat(o.LockPath)
 	if err != nil {
@@ -607,6 +568,9 @@ var errOpkgCronBusy = errors.New("opkg lock is held by a running owner")
 // errOpkgLockUnknownOwner -- замок свежий, но pid в нём нет (старый
 // cron-скрипт): жив ли владелец, неизвестно.
 var errOpkgLockUnknownOwner = errors.New("opkg lock is held, owner unknown")
+
+// opkgLockHeldText -- свежий замок пакетов держит другая операция агента.
+const opkgLockHeldText = "на роутере уже идёт другая операция с пакетами — повторите через пару минут"
 
 // opkgCronBusyText -- владелец замка жив.
 const opkgCronBusyText = "на роутере идёт другое обновление пакетов (по расписанию) — повторите через несколько минут"

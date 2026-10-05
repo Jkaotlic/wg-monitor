@@ -554,7 +554,7 @@ func TestRunner_OpkgUpgrade_DispatchesToOpkg(t *testing.T) {
 		t.Errorf("output: %q", res.Output)
 	}
 	if stub.calls != 1 {
-		t.Errorf("expected 1 DryRun call, got %d", stub.calls)
+		t.Errorf("expected 1 SmartUpgrade call, got %d", stub.calls)
 	}
 }
 
@@ -719,14 +719,6 @@ type stubOpkg struct {
 	smartFn   func(ctx context.Context) (string, string, wire.OpkgUpgradeResult)
 	disableFn func(ctx context.Context, url string) (string, string, wire.OpkgUpgradeResult)
 	hrneoFn   func(ctx context.Context) (string, string)
-}
-
-func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
-	s.calls++
-	if s.retErr != nil {
-		return "err", s.retErr.Error()
-	}
-	return s.retStatus, s.retOutput
 }
 
 func (s *stubOpkg) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
