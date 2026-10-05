@@ -2,6 +2,7 @@ package replace
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,5 +77,38 @@ func TestWaitHandshake_ByID(t *testing.T) {
 	}
 	if err := d.WaitHandshake(context.Background(), 1, "awg99", "нет такого"); err == nil {
 		t.Fatal("туннеля нет в снимке -- ошибка")
+	}
+}
+
+// Лесенка автопочинки ждёт обмена ключами внутри BaseCtx процесса: на
+// остановке бэкенда ожидание обязано кончиться сразу, а не дослушать все
+// попытки снимка.
+func TestWaitHandshake_StopsOnCancel(t *testing.T) {
+	d, cmd := probeDeps(t, nil)
+	d.HandshakeTries = 10
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := d.WaitHandshake(ctx, 1, "awg11", "old")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ждали context.Canceled, получили %v", err)
+	}
+	cmd.mu.Lock()
+	defer cmd.mu.Unlock()
+	if cmd.statusCalls > 1 {
+		t.Fatalf("после отмены снимок спрошен %d раз", cmd.statusCalls)
+	}
+}
+
+// HasHandshake у агента -- «обмен был когда-нибудь». Упавший VPN-туннель,
+// работавший час назад, несёт его до сих пор; доказательство ступени
+// починки -- только свежий обмен.
+func TestWaitHandshake_StaleHandshakeIsNotProof(t *testing.T) {
+	d, _ := probeDeps(t, nil)
+	err := d.WaitHandshake(context.Background(), 1, "awg31", "stale")
+	if err == nil {
+		t.Fatal("обмен 15 минут назад -- не доказательство")
+	}
+	if !strings.Contains(err.Error(), "давно") {
+		t.Fatalf("причина обязана сказать, что обмен давний: %v", err)
 	}
 }

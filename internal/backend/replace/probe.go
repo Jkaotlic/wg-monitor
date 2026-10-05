@@ -63,35 +63,53 @@ func joinIssues(issues []analyzeIssue) string {
 	return strings.Join(msgs, "; ")
 }
 
+// FreshHandshakeSec -- обмен ключами не старше этого считается свежим.
+// HasHandshake у агента значит «обмен был когда-нибудь»: упавший VPN-туннель,
+// работавший час назад, несёт его до сих пор. WireGuard повторяет обмен раз
+// в две минуты, пока VPN-туннель живой, отсюда три минуты с запасом. Агент,
+// не присылающий возраст (поле пустое), читается как «свежий» -- как раньше.
+const FreshHandshakeSec = 180
+
 // WaitHandshake ищет линию в снимке по идентификатору, а в текст для человека
-// кладёт её имя.
+// кладёт её имя. Отмена ctx (остановка бэкенда) прерывает ожидание сразу.
+// Тексты без «новый»: тем же ожиданием лесенка автопочинки проверяет
+// перезапущенный VPN-туннель, а он не новый.
 func (d Deps) WaitHandshake(ctx context.Context, routerID int64, tunnelID, name string) error {
 	last := ""
 	for i := 0; i < d.handshakeTries(); i++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("ожидание обмена ключами прервано: %w", err)
+		}
 		res, err := d.command(ctx, routerID, "route_status", map[string]any{})
 		if err != nil {
-			return fmt.Errorf("не узнали у роутера, обменялся ли новый VPN-туннель ключами: %w", err)
+			return fmt.Errorf("не узнали у роутера, обменялся ли VPN-туннель ключами: %w", err)
 		}
 		var snap wire.RouteSnapshot
 		if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
 			d.logCommandFailure("route_status", "unparsable", err.Error())
-			return errors.New("не узнали у роутера, обменялся ли новый VPN-туннель ключами: " + RouterGarbled)
+			return errors.New("не узнали у роутера, обменялся ли VPN-туннель ключами: " + RouterGarbled)
 		}
+		// last -- что показал именно этот снимок: туннель, бывший в прошлом
+		// снимке и пропавший в этом, не должен звучать «есть, но не обменялся».
+		last = fmt.Sprintf("VPN-туннеля «%s» на роутере не видно", name)
 		for _, t := range snap.Tunnels {
 			if t.ID != tunnelID {
 				continue
 			}
-			if t.HasHandshake {
+			if t.HasHandshake && t.HandshakeAge <= FreshHandshakeSec {
 				return nil
 			}
 			last = fmt.Sprintf("VPN-туннель «%s» на роутере есть, но ключами ещё не обменялся", name)
-		}
-		if last == "" {
-			last = fmt.Sprintf("VPN-туннеля «%s» на роутере не видно", name)
+			if t.HasHandshake {
+				last = fmt.Sprintf("VPN-туннель «%s» обменивался ключами давно, свежего обмена нет", name)
+			}
 		}
 		d.sleep(ctx, d.handshakeWait())
 	}
-	return errors.New("новый VPN-туннель так и не обменялся ключами: " + last)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ожидание обмена ключами прервано: %w", err)
+	}
+	return errors.New("VPN-туннель так и не обменялся ключами: " + last)
 }
 
 // VerifyExit -- критерий успеха. Одного рукопожатия недостаточно: оно бывает
@@ -100,7 +118,7 @@ func (d Deps) WaitHandshake(ctx context.Context, routerID int64, tunnelID, name 
 func (d Deps) VerifyExit(ctx context.Context, routerID int64) (string, error) {
 	viaRes, err := d.command(ctx, routerID, "check_via_tunnel", map[string]any{})
 	if err != nil {
-		return "", fmt.Errorf("адрес выхода через новый VPN-туннель проверить не вышло: %w", err)
+		return "", fmt.Errorf("адрес выхода через VPN-туннель проверить не вышло: %w", err)
 	}
 	directRes, err := d.command(ctx, routerID, "check_direct", map[string]any{})
 	if err != nil {
@@ -109,7 +127,7 @@ func (d Deps) VerifyExit(ctx context.Context, routerID int64) (string, error) {
 	via := exitIP(viaRes.Output)
 	direct := exitIP(directRes.Output)
 	if via == "" {
-		return "", errors.New("через новый VPN-туннель адрес выхода не определился")
+		return "", errors.New("через VPN-туннель адрес выхода не определился")
 	}
 	if direct != "" && via == direct {
 		return "", fmt.Errorf("снаружи виден тот же адрес, что и напрямую (%s): трафик в обход не пошёл", via)

@@ -54,6 +54,8 @@ func (f *fakeCommander) AwaitResult(_ context.Context, _ int64, id string, _ tim
 		snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{
 			{ID: "awg21", Name: "amnezia_nl", HasHandshake: f.statusCalls > f.handshakeAfter},
 			{ID: "awg11", Name: "old"},
+			// Обмен ключами был, но давно: живым такой VPN-туннель не считается.
+			{ID: "awg31", Name: "stale", HasHandshake: true, HandshakeAge: 900},
 		}}
 		b, _ := json.Marshal(snap)
 		return &wire.CommandResult{ID: id, Status: "ok", Output: string(b)}, true
