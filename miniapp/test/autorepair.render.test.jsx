@@ -2,15 +2,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
+import { ApiError } from '../src/api.js'
+import { FALLBACK_ERROR_TEXT } from '../src/errorText.js'
 
 // Автопочинка на экране VPN-туннеля: выключена -- клик открывает лист с четырьмя
 // разделами; включена -- клик сразу шлёт PUT enabled:false, без листа.
-const mocks = vi.hoisted(() => ({ get: null, put: [], list: {} }))
+const mocks = vi.hoisted(() => ({ get: null, put: [], list: {}, putError: null }))
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getAutorepair: () => Promise.resolve(mocks.get),
   putAutorepair: (rid, tid, body) => {
     mocks.put.push([rid, tid, body])
+    if (mocks.putError) return Promise.reject(mocks.putError)
     return Promise.resolve({ ...mocks.get, ...body, enabled: body.enabled })
   },
   listAutorepair: () => Promise.resolve({ tunnels: mocks.list }),
@@ -50,6 +53,7 @@ async function mount(opts = {}) {
 
 beforeEach(() => {
   mocks.put = []
+  mocks.putError = null
   mocks.list = {}
 })
 
@@ -112,6 +116,45 @@ describe('автопочинка: экран VPN-туннеля', () => {
     const host = document.createElement('div')
     await act(async () => render(sheets[0].body, host))
     expect(host.textContent).not.toContain('запасн')
+    render(null, root)
+    root.remove()
+  })
+})
+
+describe('автопочинка: отказ сервера на PUT', () => {
+  it('включение: русская фраза сервера -- как есть, английская -- общая русская', async () => {
+    mocks.get = { ...BASE }
+    const { root, sheets } = await mount()
+    await act(async () => root.querySelector('.tunnel-autorepair').click())
+    const sh = sheets[0]
+    expect(sh.errorText(new ApiError(409, 'source_not_connected', 'x failed: 409', 'Кабинет не подключён — подключите его и повторите.'))).toBe('Кабинет не подключён — подключите его и повторите.')
+    const en = sh.errorText(new ApiError(500, 'internal', 'x failed: 500', 'settings not saved'))
+    expect(en).toBe(FALLBACK_ERROR_TEXT)
+    expect(en).not.toMatch(/settings/)
+    render(null, root)
+    root.remove()
+  })
+
+  it('выключение: английский отказ -- русская фраза на экране', async () => {
+    mocks.get = { ...BASE, enabled: true, provider: 'amnezia', option: 'nl' }
+    mocks.putError = new ApiError(500, 'internal', 'x failed: 500', 'settings not saved')
+    const { root } = await mount()
+    await act(async () => root.querySelector('.tunnel-autorepair').click())
+    await flush()
+    const err = root.querySelector('.state-error')
+    expect(err.textContent).toBe(FALLBACK_ERROR_TEXT)
+    expect(root.textContent).not.toContain('settings not saved')
+    render(null, root)
+    root.remove()
+  })
+
+  it('выключение: русская фраза сервера показывается', async () => {
+    mocks.get = { ...BASE, enabled: true, provider: 'amnezia', option: 'nl' }
+    mocks.putError = new ApiError(409, 'busy', 'x failed: 409', 'Настройка сейчас занята — повторите через минуту.')
+    const { root } = await mount()
+    await act(async () => root.querySelector('.tunnel-autorepair').click())
+    await flush()
+    expect(root.querySelector('.state-error').textContent).toBe('Настройка сейчас занята — повторите через минуту.')
     render(null, root)
     root.remove()
   })

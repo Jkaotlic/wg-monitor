@@ -87,7 +87,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
         busyLabel: 'Включаем…',
         fields: enableFields(ar),
         fieldsReady: enableReady,
-        errorText: (err) => (err?.serverMessage ? err.serverMessage : errorText(err)),
+        errorText: (err) => errorText(err),
         perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values)),
         onDone: (resp) => {
           if (alive.current && resp) setAr(resp)
