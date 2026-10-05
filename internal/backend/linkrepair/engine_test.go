@@ -1729,14 +1729,12 @@ func TestAutostart_SecondHardWhileRunning(t *testing.T) {
 	fixOn(e.cmd, "tunnel_restart", 1, true)
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	restart := e.cmd.on["tunnel_restart"]
 	e.cmd.on["route_status"] = func(c *scriptCommander, n int) {
 		if n == 1 {
 			close(entered)
 			<-release
 		}
 	}
-	e.cmd.on["tunnel_restart"] = restart
 
 	id, err := e.d.Start(ladderReq())
 	if err != nil {
@@ -1968,5 +1966,44 @@ func TestLadder_AutoRunCountsOnce(t *testing.T) {
 	log := e.d.Attempts.load("роутер", "tunnel_awg12")
 	if len(log.At) != 1 || log.Failed {
 		t.Fatalf("журнал попыток: %+v", log)
+	}
+}
+
+// A4.7: владелец читает подпись локации из кабинета («Германия»), а не её
+// id («de») -- в ходе починки, в шагах и в итоге.
+func TestLadder_RelocationTextsUseLabelNotID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  Setting
+		opts []Option
+	}{
+		{"HideMy.name", Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true},
+			[]Option{{ID: "nl", Label: "Нидерланды"}, {ID: "de", Label: "Германия"}}},
+		{"Amnezia Premium", Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true},
+			[]Option{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}}},
+		{"Amnezia Premium, страна уже выпускалась", Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, RelocateSpent: "de"},
+			[]Option{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия", Issued: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set := tc.set
+			e := newLadder(t, &set)
+			e.src.options = tc.opts
+			job, final := e.run(t, ladderReq())
+			texts := []string{job.Hint, final.Text, final.Action}
+			for _, s := range job.Steps {
+				texts = append(texts, s.Detail)
+			}
+			_, calls := e.rep.snapshot()
+			for _, c := range calls {
+				texts = append(texts, c.Text, c.Action)
+			}
+			all := strings.Join(texts, "\n")
+			if strings.Contains(all, "«de»") || strings.Contains(all, "«nl»") {
+				t.Fatalf("владельцу показан id локации:\n%s", all)
+			}
+			if !strings.Contains(all, "«Германия»") {
+				t.Fatalf("подписи локации нет:\n%s", all)
+			}
+		})
 	}
 }

@@ -2126,10 +2126,16 @@ func TestHardTransition_SkipsUnfixable(t *testing.T) {
 // VPN-туннель ожил сам -- стоп автопочинки после провала снимается (D1):
 // иначе однажды не починенный туннель больше не чинился бы никогда.
 func TestRecovery_ClearsRepairBlock(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = d.Close() })
 	tok := "3131313131313131313131313131313131313131313131313131313131313131"
-	uid, _ := d.Users().Insert("роутер", tok, "198.51.100.11", "awg0")
+	uid, err := d.Users().Insert("роутер", tok, "198.51.100.11", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	hardSince := time.Now().Add(-time.Hour)
 	// Одно «ok» уже было: следующее закрывает тревогу (Recovery: 2).
 	if err := d.State().Save(uid, "tunnel_awg12", db.IncidentState{
@@ -2153,12 +2159,18 @@ func TestRecovery_ClearsRepairBlock(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	body, _ := json.Marshal(wire.Report{
+	body, err := json.Marshal(wire.Report{
 		Timestamp:    time.Now().UTC().Truncate(time.Second),
 		AgentVersion: "v0.54.0",
 		Checks:       []wire.Check{{Name: "tunnel_awg12", Status: "ok"}},
 	})
-	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
