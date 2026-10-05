@@ -279,6 +279,21 @@ func (r *recReporter) final(t *testing.T) recCall {
 	return recCall{}
 }
 
+// waitCalls ждёт, пока нить получит хотя бы n вызовов: «не запускалась»
+// уходит людям в своей горутине, Start его не ждёт.
+func (r *recReporter) waitCalls(t *testing.T, n int) []recCall {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, calls := r.snapshot(); len(calls) >= n {
+			return calls
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, calls := r.snapshot()
+	return calls
+}
+
 type savedOption struct {
 	RouterID           int64
 	TunnelID, Provider string
@@ -1105,7 +1120,7 @@ func TestStart_ThrottledSaysWhy(t *testing.T) {
 	if e.cmd.count() != 0 {
 		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
 	}
-	_, calls := e.rep.snapshot()
+	calls := e.rep.waitCalls(t, 1)
 	if len(calls) != 1 || calls[0].Kind != "notstarted" || !strings.Contains(calls[0].Text, "6 часов") {
 		t.Fatalf("причина не сказана: %+v", calls)
 	}
@@ -1119,7 +1134,7 @@ func TestStart_NotStartedWhenLockedOrOldAgent(t *testing.T) {
 	if _, err := e.d.Start(ladderReq()); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("ждали ErrAlreadyRunning, получили %v", err)
 	}
-	_, calls := e.rep.snapshot()
+	calls := e.rep.waitCalls(t, 1)
 	if len(calls) != 1 || calls[0].Kind != "notstarted" || !strings.Contains(calls[0].Text, "уже идёт") {
 		t.Fatalf("замок: %+v", calls)
 	}
@@ -1130,7 +1145,7 @@ func TestStart_NotStartedWhenLockedOrOldAgent(t *testing.T) {
 	if _, err := e2.d.Start(req); !errors.Is(err, replace.ErrAgentTooOld) {
 		t.Fatalf("ждали ErrAgentTooOld, получили %v", err)
 	}
-	_, calls = e2.rep.snapshot()
+	calls = e2.rep.waitCalls(t, 1)
 	if len(calls) != 1 || calls[0].Kind != "notstarted" {
 		t.Fatalf("старый агент: %+v", calls)
 	}
@@ -1234,6 +1249,58 @@ func TestLadder_SettingNameMatches(t *testing.T) {
 	}
 	if got := e.droppedSettings(); len(got) != 0 {
 		t.Fatalf("своя настройка удалена: %v", got)
+	}
+}
+
+// blockingReporter -- Telegram, который не отвечает: NotStarted висит, пока
+// тест не отпустит.
+type blockingReporter struct {
+	release  chan struct{}
+	deadline chan time.Time
+}
+
+func (b *blockingReporter) Begin(context.Context, int64, string) Thread { return b }
+func (b *blockingReporter) Progress(context.Context, string)            {}
+func (b *blockingReporter) Done(context.Context, string)                {}
+func (b *blockingReporter) NeedHuman(context.Context, string, string)   {}
+func (b *blockingReporter) Quiet(context.Context)                       {}
+func (b *blockingReporter) NotStarted(ctx context.Context, _ string) {
+	dl, _ := ctx.Deadline()
+	b.deadline <- dl
+	<-b.release
+}
+
+// «Не запускалась» уходит из обработчика отчёта агента: медленный Telegram
+// не должен держать отчёт. Start возвращается сразу, сообщение -- в своей
+// горутине и со сроком.
+func TestStart_NotStartedDoesNotBlock(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	br := &blockingReporter{release: make(chan struct{}), deadline: make(chan time.Time, 1)}
+	defer close(br.release)
+	e.d.Report = br
+	for i := 0; i < 3; i++ {
+		_ = e.d.Attempts.Record("роутер", "tunnel_awg12", true)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.d.Start(ladderReq())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrAutoDisabled) {
+			t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start ждёт Telegram")
+	}
+	select {
+	case dl := <-br.deadline:
+		if dl.IsZero() || time.Until(dl) > 31*time.Second {
+			t.Fatalf("у «не запускалась» нет срока: %v", dl)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("«не запускалась» так и не ушло")
 	}
 }
 

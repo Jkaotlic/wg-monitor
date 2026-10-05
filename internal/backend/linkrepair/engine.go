@@ -42,6 +42,9 @@ var (
 // на агенте старше этого (или неизвестной версии) не выполняются вовсе.
 const MinAgentLadder = "v0.54.0"
 
+// notStartedTimeout -- сколько ждать Telegram с правкой «не запускалась».
+const notStartedTimeout = 30 * time.Second
+
 // maxRelocations -- сколько других локаций пробует ступень «пересоздать».
 // Третья смена страны подряд -- уже не починка, а перебор.
 const maxRelocations = 2
@@ -290,10 +293,20 @@ func (d Deps) Start(req StartReq) (string, error) {
 	// notStarted -- при автозапуске люди уже получили тревогу; почему
 	// починка не пошла, дописывается к ней. Ручному запуску ответ виден на
 	// экране сразу.
+	//
+	// Автозапуск зовётся из обработчика отчёта агента: поход в Telegram там
+	// держал бы отчёт. Begin -- без сети и синхронно (закрытие проверки
+	// ставится сразу), сама правка -- в своей горутине и со сроком.
 	notStarted := func(why string) {
-		if req.Auto {
-			d.begin(ctx, req).NotStarted(ctx, why)
+		if !req.Auto {
+			return
 		}
+		th := d.begin(ctx, req)
+		go func() {
+			c, cancel := context.WithTimeout(ctx, notStartedTimeout)
+			defer cancel()
+			th.NotStarted(c, why)
+		}()
 	}
 	if req.Auto {
 		// Выключено -- молчим: тревога уже ушла, а «не запускалась» про
