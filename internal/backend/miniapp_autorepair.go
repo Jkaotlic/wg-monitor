@@ -339,6 +339,11 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_provider", "неизвестный источник")
 			return
 		}
+		if req.Provider == "" {
+			// Урезанный режим -- только перезапуск: варианту и смене локации
+			// без источника взяться неоткуда.
+			req.Option, req.AllowRelocate = "", false
+		}
 		repo := d.DB.TunnelRepairSettings()
 		cur, found, err := repo.Get(routerID, tid)
 		if err != nil {
