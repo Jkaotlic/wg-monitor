@@ -388,10 +388,14 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 			"tunnel_id":   backup,
 		}); err != nil {
 			// Отказ увода -- не повод бросать починку: чиним как без резерва,
-			// трафик там, где был. Возвращать потом нечего.
-			d.step(jobID, StepFailover, provision.StepFailed,
-				"роутер не дал увести трафик на запасной VPN-туннель «"+names.backup+"» ("+err.Error()+") — чиним как есть")
-			log = append(log, "роутер не дал увести трафик на запасной VPN-туннель «"+names.backup+"»")
+			// трафик там, где был. Возвращать потом нечего. Молчание -- не
+			// отказ: роутер мог команду и не получить.
+			what := "роутер не дал увести трафик на запасной VPN-туннель «" + names.backup + "»"
+			if errors.Is(err, errNoAnswer) {
+				what = "роутер не подтвердил увод трафика на запасной VPN-туннель «" + names.backup + "»"
+			}
+			d.step(jobID, StepFailover, provision.StepFailed, what+" ("+err.Error()+") — чиним как есть")
+			log = append(log, what)
 			names.backup = ""
 		} else {
 			d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
@@ -434,7 +438,16 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		return
 	}
 
-	// Ступень 2. Тот же конфиг на месте.
+	// Ступень 2. Тот же конфиг на месте. У «Amnezia Premium» -- только если
+	// страна ещё выпущена: отозванную кабинет выпустил бы заново, и это новое
+	// место в подписке.
+	if set.Provider == "amnezia" {
+		if nh := d.checkIssued(ctx, jobID, req, set); nh != nil {
+			d.skip(jobID, "не понадобилось: источник ждёт человека", StepRecreate)
+			d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
+			return
+		}
+	}
 	th.Progress(ctx, progressText(names, log, "выпускаю конфиг заново из "+sourceLabel(set.Provider)))
 	ok, nh := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
 		return d.Source.Issue(ctx, req.RouterID, set.Provider, set.Option)
@@ -592,6 +605,35 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 	return true, nil
 }
 
+// checkIssued -- страна настройки «Amnezia Premium» всё ещё выпущена. Не
+// выпущена (отозвали) или список не получен -- ступень 2 не выпускает: без
+// проверки «тот же конфиг» мог бы занять новое место в подписке.
+func (d Deps) checkIssued(ctx context.Context, jobID string, req StartReq, set Setting) *NeedHuman {
+	opts, err := d.Source.Options(ctx, req.RouterID, set.Provider)
+	if err != nil {
+		var nh *NeedHuman
+		if errors.As(err, &nh) {
+			d.step(jobID, StepReissue, provision.StepFailed, "кабинет не дал список стран — "+nh.Action)
+			return nh
+		}
+		d.logWarn("linkrepair: список стран не получен", "err", err)
+		d.step(jobID, StepReissue, provision.StepFailed, "кабинет не дал список стран — выпускать вслепую не стал")
+		return &NeedHuman{Cause: err, Action: ActAmneziaKey}
+	}
+	label := set.Option
+	for _, o := range opts {
+		if o.ID != set.Option {
+			continue
+		}
+		label = optionLabel(o)
+		if o.Issued {
+			return nil
+		}
+	}
+	d.step(jobID, StepReissue, provision.StepFailed, "страна «"+label+"» больше не выпущена в кабинете — новое место в подписке не беру")
+	return &NeedHuman{Cause: errors.New("страна не выпущена"), Action: ActCountryRevoked(label)}
+}
+
 // relocateNewOnce -- у кабинета выпущенная страна -- это ключ, который уже
 // стоит на другом устройстве или в другом VPN-туннеле («Amnezia Premium»):
 // поставить его сюда -- сломать оба места. Смена локации берёт только ещё
@@ -687,14 +729,15 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 			"все страны уже выпущены — их ключи стоят в других местах, а один ключ в двух местах ломает оба")
 		return false, &NeedHuman{Cause: errors.New("невыпущенной страны нет"), Action: ActNoNewCountry}, Option{}
 	}
+	notIssued := &NeedHuman{Cause: errors.New("отметка о новой стране не записалась"), Action: ActNewCountryNotIssued}
 	if d.SpendRelocation == nil {
 		d.step(jobID, StepRecreate, provision.StepFailed, "отметку о новой стране записать некуда — новую страну не выпускаю")
-		return false, nil, Option{}
+		return false, notIssued, Option{}
 	}
 	if err := d.SpendRelocation(req.RouterID, sc.TunnelID, opt.ID); err != nil {
 		d.logWarn("linkrepair: отметка о новой стране не записалась", "err", err)
 		d.step(jobID, StepRecreate, provision.StepFailed, "отметка о новой стране не записалась — новую страну не выпускаю")
-		return false, nil, Option{}
+		return false, notIssued, Option{}
 	}
 	th.Progress(ctx, progressText(names, log, "выпускаю новую страну «"+optionLabel(opt)+"»"))
 	ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
@@ -702,6 +745,10 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 	})
 	if ok {
 		return true, nil, opt
+	}
+	if nh == nil && ctx.Err() == nil {
+		// Пробовалась одна страна: «другие локации тоже не помогли» -- неправда.
+		nh = &NeedHuman{Cause: errors.New("новая страна не помогла"), Action: ActNewCountryNoHelp(optionLabel(opt))}
 	}
 	return false, nh, Option{}
 }
@@ -858,7 +905,7 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	res, ok := d.Commands.AwaitResult(ctx, routerID, id, d.awaitStep())
 	if !ok || res == nil {
 		d.logCommandFailure(action, "no answer", "")
-		return nil, errors.New(replace.RouterFailure(false, ""))
+		return nil, errNoAnswer
 	}
 	if res.Status != "ok" {
 		d.logCommandFailure(action, res.Status, res.Output)
@@ -866,6 +913,9 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	}
 	return res, nil
 }
+
+// errNoAnswer -- роутер не ответил на команду: выполнил ли он её, неизвестно.
+var errNoAnswer = errors.New(replace.RouterFailure(false, ""))
 
 // logCommandFailure -- то, что владельцу не показывают (какая команда, с
 // каким статусом, что ответил агент), остаётся оператору в логе. Причина

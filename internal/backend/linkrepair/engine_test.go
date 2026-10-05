@@ -323,7 +323,9 @@ func (e *ladderEnv) spentMarks() []string {
 
 func newLadder(t *testing.T, set *Setting) *ladderEnv {
 	t.Helper()
-	e := &ladderEnv{cmd: newScript(), src: &fakeSource{}, rep: &recReporter{}}
+	// По умолчанию страна «nl» у кабинета выпущена: ступень 2 у «Amnezia
+	// Premium» сверяется со списком, прежде чем выпускать.
+	e := &ladderEnv{cmd: newScript(), src: &fakeSource{options: []Option{{ID: "nl", Label: "NL", Issued: true}}}, rep: &recReporter{}}
 	e.d = Deps{
 		Store: provision.NewStore(),
 		Probe: replace.Deps{
@@ -481,7 +483,7 @@ func TestLadder_ReissueInPlace(t *testing.T) {
 	if imp[0].Args["target_id"] != "awg12" || imp[0].Args["replace"] != true {
 		t.Fatalf("импорт не в тот же VPN-туннель: %+v", imp[0].Args)
 	}
-	if got := e.src.got(); len(got) != 1 || got[0] != "issue:amnezia:nl" {
+	if got := e.src.got(); strings.Join(got, ",") != "options:amnezia,issue:amnezia:nl" {
 		t.Fatalf("источник: %v", got)
 	}
 	wantSteps(t, job, map[string]provision.StepStatus{
@@ -528,10 +530,10 @@ func TestLadder_RelocateOnlyWhenAllowed(t *testing.T) {
 	if job.State != provision.StateFailed {
 		t.Fatalf("state=%s", job.State)
 	}
-	for _, c := range e.src.got() {
-		if strings.HasPrefix(c, "options:") {
-			t.Fatalf("варианты спрошены без разрешения менять локацию: %v", e.src.got())
-		}
+	// Список спрошен один раз -- сверка страны перед ступенью 2; для смены
+	// локации без разрешения -- ни разу.
+	if got := e.src.got(); strings.Join(got, ",") != "options:amnezia,issue:amnezia:nl" {
+		t.Fatalf("варианты спрошены без разрешения менять локацию: %v", got)
 	}
 	if final.Kind != "need" || final.Action != ActServerDead {
 		t.Fatalf("итог %+v, ждали need с ActServerDead", final)
@@ -584,7 +586,7 @@ func TestLadder_RelocateAmneziaNewCountryOnce(t *testing.T) {
 	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	want := []string{"issue:amnezia:nl", "options:amnezia", "issue:amnezia:de"}
+	want := []string{"options:amnezia", "issue:amnezia:nl", "options:amnezia", "issue:amnezia:de"}
 	if got := e.src.got(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("источник: %v, ждали %v -- выпущенная страна занята в другом месте", got, want)
 	}
@@ -606,7 +608,7 @@ func TestLadder_RelocateAmneziaNewCountryFailsNoSecond(t *testing.T) {
 
 	job, final := e.run(t, ladderReq())
 
-	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRelocateNoHelp {
+	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActNewCountryNoHelp("Германия") {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
 	for _, c := range e.src.got() {
@@ -679,7 +681,12 @@ func TestLadder_RelocateAmneziaSpendNotSavedNoIssue(t *testing.T) {
 	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
 	e.spendErr = errors.New("база занята")
 
-	job, _ := e.run(t, ladderReq())
+	job, final := e.run(t, ladderReq())
+
+	// «Другие локации тоже не помогли» -- неправда: ни одна не пробовалась.
+	if final.Action != ActNewCountryNotIssued {
+		t.Fatalf("итог %+v, ждали ActNewCountryNotIssued", final)
+	}
 
 	for _, c := range e.src.got() {
 		if c == "issue:amnezia:de" {
@@ -816,10 +823,8 @@ func TestLadder_SourceGoneNeedsHuman(t *testing.T) {
 	wantSteps(t, job, map[string]provision.StepStatus{
 		StepReissue: provision.StepFailed, StepRecreate: provision.StepSkipped, StepFailback: provision.StepSkipped,
 	})
-	for _, c := range e.src.got() {
-		if strings.HasPrefix(c, "options:") {
-			t.Fatal("кабинет отказал -- менять локацию через него же бессмысленно")
-		}
+	if got := e.src.got(); strings.Join(got, ",") != "options:amnezia,issue:amnezia:nl" {
+		t.Fatalf("кабинет отказал -- менять локацию через него же бессмысленно: %v", got)
 	}
 }
 
@@ -1120,6 +1125,51 @@ func TestLadder_RouterFailuresReachOwnerAsWords(t *testing.T) {
 	}
 }
 
+// Страну отозвали в кабинете: выпуск «того же конфига» занял бы новое место в
+// подписке. Ступень 2 не выпускает, нужен человек.
+func TestLadder_ReissueAmneziaRevokedNeedsHuman(t *testing.T) {
+	for _, opts := range [][]Option{
+		{{ID: "nl", Label: "Нидерланды"}, {ID: "de", Label: "Германия", Issued: true}},
+		{{ID: "de", Label: "Германия", Issued: true}},
+	} {
+		e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+		e.src.options = opts
+
+		job, final := e.run(t, ladderReq())
+
+		label := "nl"
+		if len(opts) == 2 {
+			label = "Нидерланды"
+		}
+		if final.Kind != "need" || final.Action != ActCountryRevoked(label) {
+			t.Fatalf("итог %+v, ждали ActCountryRevoked(%q)", final, label)
+		}
+		for _, c := range e.src.got() {
+			if strings.HasPrefix(c, "issue:") {
+				t.Fatalf("выпуск без выпущенной страны: %v", e.src.got())
+			}
+		}
+		if n := len(e.cmd.actions("tunnel_import")); n != 0 {
+			t.Fatalf("импортов %d", n)
+		}
+		wantSteps(t, job, map[string]provision.StepStatus{StepReissue: provision.StepFailed, StepRecreate: provision.StepSkipped})
+	}
+}
+
+// Роутер не ответил на увод: «не дал» -- неправда, он мог и не получить.
+func TestLadder_PromoteSilentSaysNotConfirmed(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.cmd.silent = map[string]bool{"route_policy_promote": true}
+	e.d.AwaitStep = 50 * time.Millisecond
+
+	job, _ := e.run(t, ladderReq())
+
+	st := stepOf(job, StepFailover)
+	if !strings.Contains(st.Detail, "роутер не подтвердил увод трафика на запасной VPN-туннель «Работа»") || strings.Contains(st.Detail, "не дал") {
+		t.Fatalf("ступень 0: %+v", st)
+	}
+}
+
 // Роутер отказал уводу на резерв: это не повод бросать починку -- перезапуск
 // и дальше идут как без резерва, и удача остаётся удачей.
 func TestLadder_PromoteRefusedStillRepairs(t *testing.T) {
@@ -1224,6 +1274,10 @@ func TestLadder_StopsOnCancel(t *testing.T) {
 	// Экран починки без подсказки показал бы голое «Не получилось».
 	if job.Hint != ActAborted {
 		t.Fatalf("подсказка прерванной починки %q, ждали %q", job.Hint, ActAborted)
+	}
+	// «Бэкенд» владельцу -- не слово.
+	if strings.Contains(job.Hint, "бэкенд") {
+		t.Fatalf("подсказка: %q", job.Hint)
 	}
 	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
 		t.Fatalf("после отмены ушёл импорт: %d", n)
