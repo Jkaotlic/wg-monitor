@@ -18,11 +18,8 @@ import { withSnapshotCarrier } from './trafficPath.js'
 // решении там, где случилась поломка, и подсовывал кнопку «включить» VPN-туннелю,
 // который и так включён. Различение бесплатное: enabled -- это настройка,
 // status -- факт, и они приходят порознь.
-function chainRole(link, tunnel, activeTunnelID, { singbox = false, carrierDead = false } = {}) {
+function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
   const live = tunnelLive(tunnel ?? {})
-  // sing-box выбирает маршрут для каждого адреса: активное звено политики
-  // настроено, но «несёт трафик» о нём сказать нельзя (B1).
-  if (singbox && link.tunnel_id && link.tunnel_id === activeTunnelID) return 'routed'
   // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict,
   // или сервер сказал carrier_alive=false): трафик в него уходит и теряется --
   // «Работает сейчас» было бы неправдой.
@@ -53,7 +50,6 @@ const ROLE_NOTE = {
   // п. 5): неизвестна проверка, а не слово роутера.
   activeUnknown: 'проверка не пришла: сервер не ответил',
   checkUnknown: 'поднят, проверка не пришла: сервер не ответил',
-  routed: '',
 }
 
 // Имя VPN-туннеля глазами человека. Пустое имя -- это отсутствие имени, а не повод
@@ -146,7 +142,11 @@ export function tunnelsView(snapshot, serverTraffic) {
 
   if (traffic?.mode === 'singbox') {
     const p = firstVPNPolicy(policies, byID)
-    const chain = chainOf(p, byID, p?.active_tunnel_id ?? '', { singbox: true })
+    // sing-box выбирает маршрут для каждого адреса: несущего нет, и звенья
+    // называются по своему состоянию. Подпись режима -- у вкладки, а не у
+    // строки VPN-туннеля (песочница v0.56: строка vpn-nl была озаглавлена
+    // «Настроено, маршрут выбирается по адресу»).
+    const chain = chainOf(p, byID, '')
     return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
   }
 

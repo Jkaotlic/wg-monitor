@@ -82,9 +82,37 @@ export const CARRIER_SCENARIOS = [
     expect: { name: 'vpn-nl', alive: false },
   },
   {
+    // Живые данные песочницы sandbox-work (cmd/miniapp-sandbox:
+    // seedWorkChecks + workRouteSnapshot, сверены тестом
+    // TestSandboxSnapshotAgreesWithChecks): набор несёт vpn-hip (awg14),
+    // запасной vpn-nl (awg10) поднят, но не отвечает, vpn-fi (awg12) вне
+    // набора. До v0.56 у одного awg10 было два имени -- «vpn-nl» в проверках
+    // и «vpn-de» в снимке.
+    title: 'песочница sandbox-work',
+    router: ONLINE,
+    reserveOnlyAlert: true,
+    incidents: [{ check_name: 'tunnel_awg10' }],
+    events: {
+      tunnels: [
+        { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'fail' },
+        { tunnel_id: 'awg12', name: 'vpn-fi', run_state: 'running', status: 'ok', matrix_latency_ms: 84 },
+        { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'ok', matrix_latency_ms: 117 },
+      ],
+      traffic: { mode: 'split', contested_default: true, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', carrier_tunnel_id: 'awg14', carrier_basis: 'policy', carrier_alive: true },
+    },
+    snapshot: {
+      tunnels: [snapTunnel('awg14', 'vpn-hip', 'up'), snapTunnel('awg10', 'vpn-nl', 'up'), snapTunnel('awg12', 'vpn-fi', 'up')],
+      policies: [policy('awg14', [['awg14', 'vpn-hip', 'active'], ['awg10', 'vpn-nl', 'fallback']])],
+    },
+    checks: { tunnels: [{ tunnel_id: 'awg10', status: 'fail' }, { tunnel_id: 'awg12', status: 'ok' }, { tunnel_id: 'awg14', status: 'ok' }] },
+    expect: { name: 'vpn-hip', alive: true },
+  },
+  {
     // Песочница sandbox-broken: sing-box выбирает маршрут для каждого адреса,
     // vpn-nl упал, vpn-de жив. До v0.56 «Роутер» называл vpn-de (первый
-    // живой), вкладка -- vpn-nl (активное звено политики).
+    // живой), вкладка -- vpn-nl (активное звено политики), а «Маршруты» --
+    // «главный vpn-nl не отвечает»: снимок поддельного агента о sing-box
+    // молчит (singbox_router нет), знает об этом только сервер.
     title: 'sandbox-broken: sing-box',
     singbox: true,
     router: ONLINE,
@@ -97,7 +125,9 @@ export const CARRIER_SCENARIOS = [
       traffic: { mode: 'singbox', contested_default: false, carrier_basis: 'none', carrier_alive: false },
     },
     snapshot: {
-      tunnels: [snapTunnel('awg12', 'vpn-nl', 'up'), snapTunnel('awg10', 'vpn-de', 'down'), snapTunnel('awg14', 'vpn-spare', 'up')],
+      // default_route у vpn-nl -- как в снимке поддельного агента
+      // (payloads.go): по нему «Маршруты» и называли «главного».
+      tunnels: [{ ...snapTunnel('awg12', 'vpn-nl', 'up'), default_route: true }, snapTunnel('awg10', 'vpn-de', 'down'), snapTunnel('awg14', 'vpn-spare', 'up')],
       policies: [policy('awg12', [['awg12', 'vpn-nl', 'active'], ['awg10', 'vpn-de', 'fallback']])],
     },
     checks: { tunnels: [{ tunnel_id: 'awg12', status: 'fail' }, { tunnel_id: 'awg10', status: 'ok' }] },

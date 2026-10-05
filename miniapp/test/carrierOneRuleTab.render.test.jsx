@@ -46,7 +46,8 @@ describe.each(CARRIER_SCENARIOS)('вкладка «VPN-туннели», B1: $ti
     }
     if (s.singbox) {
       expect(root.textContent).toContain('настроено, маршрут выбирается по адресу')
-      expect(root.textContent).toContain('Настроено, маршрут выбирается по адресу')
+      // Подпись режима -- у вкладки, а не заголовком строки VPN-туннеля.
+      expect(root.textContent).not.toContain('Настроено, маршрут выбирается по адресу')
     }
     render(null, root)
     root.remove()

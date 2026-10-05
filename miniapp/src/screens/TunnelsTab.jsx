@@ -43,9 +43,6 @@ const CHAIN_TITLE = {
   unknown: 'Состояние неизвестно',
   activeUnknown: 'Назначен несущим, проверка неизвестна',
   checkUnknown: 'Проверка неизвестна',
-  // sing-box (B1): звено настроено, но маршрут роутер выбирает для каждого
-  // адреса -- «несёт трафик» о нём сказать нельзя.
-  routed: 'Настроено, маршрут выбирается по адресу',
 }
 
 const SOURCES_WAIT_MS = 8000
@@ -524,7 +521,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           и «не используются» выше отвечают на другие вопросы и не содержат
           всех VPN-туннелей сразу. */}
       {list.length > 0 && (
-        <Section title={`${TUNNEL_TEXTS.listTitle} · ${list.length}`}>
+        <Section title={`${TUNNEL_TEXTS.listTitle} · ${checks?.tunnels?.length ? counts.total : list.length}`}>
           {/* Тот же счёт и те же слова, что на «Роутере» и «Проверках» (B3). */}
           <p class="state">{countNote}</p>
           <ul class="card list-reset">

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { CARRIER_SCENARIOS } from './fixtures/carrier_screens.js'
 import { pathState, reserveLine, withSnapshotCarrier } from '../src/trafficPath.js'
 import { routerHeadline } from '../src/routerHeadline.js'
-import { withCheckVerdict } from '../src/routes.js'
+import { routingVerdict, withCheckVerdict } from '../src/routes.js'
 import { tunnelsView } from '../src/tunnelsView.js'
 
 // v0.56, спека B1: «Роутер» и «VPN-туннели» называют один и тот же несущий
@@ -25,6 +25,11 @@ function tabScreen(s) {
   return tunnelsView(withCheckVerdict(s.snapshot, s.checks), s.events.traffic)
 }
 
+// «Маршруты»: тот же снимок с вердиктом проверок и тот же traffic.
+function routesScreen(s) {
+  return routingVerdict(withCheckVerdict(s.snapshot, s.checks), s.events.traffic)
+}
+
 // Имена живых VPN-туннелей сценария, которых экран не вправе назвать
 // несущим, когда несущий неизвестен.
 const allNames = (s) => s.events.tunnels.map((t) => t.name)
@@ -32,6 +37,28 @@ const allNames = (s) => s.events.tunnels.map((t) => t.name)
 describe.each(CARRIER_SCENARIOS)('B1: $title', (s) => {
   const r = routerScreen(s)
   const v = tabScreen(s)
+  const rv = routesScreen(s)
+
+  it('фикстура сама с собой согласна: один id -- одно имя в проверках и в снимке', () => {
+    const snapNames = new Map(s.snapshot.tunnels.map((t) => [t.id, t.name]))
+    for (const t of s.events.tunnels) {
+      if (snapNames.has(t.tunnel_id)) expect(snapNames.get(t.tunnel_id)).toBe(t.name)
+    }
+  })
+
+  it('«Маршруты» говорят о несущем то же, что «Роутер» и «VPN-туннели»', () => {
+    if (s.expect.name) {
+      expect(rv.title).toContain(`«${s.expect.name}»`)
+      if (s.expect.alive) expect(rv.title).not.toMatch(/не отвечает/)
+      else expect(rv.title).toMatch(/не отвечает/)
+    } else {
+      for (const name of allNames(s)) expect(`${rv.title} ${rv.detail}`).not.toContain(`«${name}»`)
+    }
+  })
+
+  it('заголовок звена -- его состояние, а не подпись режима', () => {
+    for (const c of v.chain) expect(['active', 'activeDown', 'activeUnknown', 'ready', 'down', 'off', 'unknown', 'checkUnknown']).toContain(c.role)
+  })
 
   if (s.expect.name) {
     it('оба экрана называют одного несущего', () => {
@@ -89,10 +116,11 @@ describe.each(CARRIER_SCENARIOS)('B1: $title', (s) => {
   }
 
   if (s.singbox) {
-    it('sing-box: вкладка говорит «настроено, маршрут выбирается по адресу», а не «несёт»', () => {
+    it('sing-box: вкладка говорит «настроено, маршрут выбирается по адресу», звенья -- по состоянию', () => {
       expect(v.state).toBe('singbox')
       const link = v.chain.find((c) => c.tunnelID === s.snapshot.policies[0].active_tunnel_id)
-      expect(link.role).toBe('routed')
+      expect(link.role).toBe('down')
+      expect(rv.title).toMatch(/sing-box/)
     })
   } else if (!s.expect.name) {
     it('несущий неизвестен: вкладка говорит «не знаем», а не «ни один не несёт»', () => {

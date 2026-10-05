@@ -205,7 +205,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   const policies = policyRows(snapshot)
   const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
   // Заголовок говорит то же, что плашки: по снимку с вердиктом проверок.
-  const verdict = shown ? routingVerdict(shown) : null
+  // Несущий -- тем же правилом, что «Роутер» и «VPN-туннели» (B1).
+  const verdict = shown ? routingVerdict(shown, checks?.traffic) : null
   const rows = tunnelRows(shown)
   const tunnels = visibleTunnelRows(rows)
   const groups = rulesByBind(snapshot)

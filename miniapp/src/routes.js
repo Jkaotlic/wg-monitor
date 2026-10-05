@@ -7,6 +7,7 @@
 // Пока экран только показывает.
 
 import { rulesCount, pluralRu } from './labels.js'
+import { withSnapshotCarrier } from './trafficPath.js'
 
 // Жив ли туннель прямо сейчас. Судить об этом можно ТОЛЬКО по status:
 // поле enabled в снимке отвечает на другой вопрос -- годится ли интерфейс
@@ -140,13 +141,18 @@ function rulesThrough(snapshot, tunnelID) {
   return row?.total ?? 0
 }
 
-export function routingVerdict(snapshot) {
+// traffic -- ответ сервера (/events) с несущим (B1): «Маршруты» говорят о
+// несущем то же, что «Роутер» и «VPN-туннели». Без traffic.carrier_basis
+// (бэкенд старше v0.56, проверки не загрузились) -- прежний вывод по
+// настройке «основной маршрут» из снимка.
+export function routingVerdict(snapshot, traffic) {
   const partial = Boolean(snapshot?.warnings?.length)
 
   // Порядок важен: sing-box выбирает маршрут для каждого адреса отдельно,
   // поэтому единого ответа "напрямую или через VPN" тут не существует, и
-  // любой другой вердикт был бы враньём.
-  if (snapshot?.singbox_router?.enabled) {
+  // любой другой вердикт был бы враньём. Сервер знает это по проверке
+  // роутера, даже когда снимок о sing-box молчит.
+  if (snapshot?.singbox_router?.enabled || traffic?.mode === 'singbox') {
     return {
       mode: 'unknown',
       partial,
@@ -157,6 +163,43 @@ export function routingVerdict(snapshot) {
   }
 
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
+
+  // Несущий по одному правилу (сервер, а без него -- активное звено снимка).
+  // «Главный VPN-туннель» по настройке default_route -- другой вопрос, и
+  // отвечать им на «куда идёт обход» значило спорить с соседними экранами.
+  if (traffic?.carrier_basis) {
+    const tr = withSnapshotCarrier(traffic, snapshot)
+    const t = tr.carrier_tunnel_id ? tunnels.find((x) => x.id === tr.carrier_tunnel_id) : null
+    if (t) {
+      const name = t.name || t.id
+      if (tr.carrier_alive === false || tunnelLive(t) === 'down') {
+        return {
+          mode: 'unknown',
+          partial,
+          title: `VPN-туннель обхода «${name}» не отвечает`,
+          detail: 'Заблокированное роутер ведёт через него — такие сайты могут не открываться.',
+        }
+      }
+      const n = rulesThrough(snapshot, t.id)
+      return {
+        mode: 'vpn',
+        partial,
+        title: `Обход идёт через «${name}»`,
+        detail: n > 0
+          ? `В VPN-туннель отправлено ${rulesCount(n)} — только они и идут через обход.`
+          : 'Через него пока ничего не отправлено — весь трафик идёт напрямую.',
+      }
+    }
+    if (tr.mode !== 'direct') {
+      return {
+        mode: 'unknown',
+        partial,
+        title: 'Какой VPN-туннель несёт обход, роутер не сообщил',
+        detail: 'Гадать по настройкам не будем: состояние каждого VPN-туннеля — ниже.',
+      }
+    }
+  }
+
   // default_route -- это НАСТРОЙКА туннеля, а не факт о трафике: выключенный
   // туннель остаётся с ней и претендентом на основной маршрут быть не может.
   // Поэтому спорящими считаются только те, про кого не известно, что они
