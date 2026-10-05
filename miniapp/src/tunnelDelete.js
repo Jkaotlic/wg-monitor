@@ -6,7 +6,7 @@
 // (miniappTunnelRuleCount -- порт tunnelRows), чтобы не предлагать кнопку,
 // которая заведомо получит отказ, -- и говорит теми же словами, что при отказе.
 import { tunnelRows, tunnelSwitchedOff } from './routes.js'
-import { rulesCount, tunnelLiveLabel } from './labels.js'
+import { rulesCount, tunnelLiveLabel, tunnelCountSummary } from './labels.js'
 import { commandOutcome } from './commandWait.js'
 
 export const TUNNEL_TEXTS = {
@@ -40,6 +40,26 @@ export function tunnelList(snapshot) {
   return tunnelRows(snapshot)
     .filter((r) => isManaged(r.type))
     .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id)) }))
+}
+
+// Счёт для вкладки -- тем же правилом, что на «Роутере» и «Проверках»
+// (labels.tunnelCountSummary): строка вкладки приводится к виду проверки
+// tunnel_*, а считает одна и та же функция.
+export function tunnelListSummary(list, incidents = [], checkRows = []) {
+  // Обмен ключами в снимке маршрутов не приходит -- его берём из проверки того
+  // же VPN-туннеля, как на «Роутере»; проверки нет -- не придираемся.
+  const hs = new Map((checkRows ?? []).map((c) => [c.tunnel_id, c.handshake_age_sec]))
+  return tunnelCountSummary(
+    (list ?? []).map((r) => ({
+      tunnel_id: r.id,
+      handshake_age_sec: hs.has(r.id) ? hs.get(r.id) : 0,
+      type: r.type,
+      enabled: !r.switchedOff,
+      run_state: r.live === 'up' ? 'running' : r.switchedOff ? 'stopped' : 'dead',
+      status: r.checkFailed ? 'fail' : r.checkUnverified ? 'unknown' : 'ok',
+    })),
+    incidents,
+  )
 }
 
 // Состояние словами. «Выключен» -- только выключенный настройкой: включённый,

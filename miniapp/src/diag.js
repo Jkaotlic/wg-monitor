@@ -181,7 +181,7 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount } from './labels.js'
+import { pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount, tunnelCountSummary } from './labels.js'
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 import { agoText, whenText } from './when.js'
@@ -284,10 +284,11 @@ function tunnelsRow(check, tunnels, clock, incidents) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
   const alive = workingTunnelCount(list, incidents)
+  const total = tunnelCountSummary(list, incidents).total
   // «Не проверено» -- ни работающий, ни упавший (статус unknown, v0.46).
   const unchecked = uncheckedTunnelCount(list)
-  const broken = list.length - alive - unchecked
-  const value = `${alive} из ${list.length} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
+  const broken = total - alive - unchecked
+  const value = `${alive} из ${total} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
   return {
     answer: broken > 0 ? 'нет' : unchecked > 0 ? UNCHECKED : 'да',
     value,

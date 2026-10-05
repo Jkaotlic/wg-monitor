@@ -7,11 +7,11 @@ import { Pill } from '../ui/Pill.jsx'
 import { parseRouteSnapshot, rememberRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { tunnelList, tunnelListSummary, TUNNEL_TEXTS } from '../tunnelDelete.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
-import { humanAge } from '../labels.js'
+import { humanAge, workingTunnelNote } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -234,6 +234,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // traffic из того же ответа /events, что и проверки.
   const view = tunnelsView(shown, checks?.traffic)
   const list = tunnelList(shown)
+  const counts = tunnelListSummary(list, [], checks?.tunnels)
+  const countNote = workingTunnelNote(counts.working, counts.total, counts.unchecked)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
@@ -524,6 +526,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           всех VPN-туннелей сразу. */}
       {list.length > 0 && (
         <Section title={`${TUNNEL_TEXTS.listTitle} · ${list.length}`}>
+          {/* Тот же счёт и те же слова, что на «Роутере» и «Проверках» (B3). */}
+          <p class="state">{countNote}</p>
           <ul class="card list-reset">
             {list.map((t) => (
               <ListRow

@@ -268,17 +268,34 @@ export function tunnelStateLabel(t) {
 // Статус «unknown» (проверка ничего не проверила) -- ни работающий, ни
 // упавший: он считается отдельно (uncheckedTunnelCount).
 export function workingTunnelCount(tunnels = [], incidents = []) {
-  return (tunnels ?? []).filter(
+  return tunnelCountSummary(tunnels, incidents).working
+}
+
+export function uncheckedTunnelCount(tunnels = []) {
+  return tunnelCountSummary(tunnels, []).unchecked
+}
+
+// «Свой» VPN-туннель -- управляемый awg-manager. Строки tunnel_* агент пишет
+// только по списку управляемых (checks/tunnels.go, tunnels/all .tunnels), так
+// что у них типа нет и они все свои; чужой NDMS-интерфейс из снимка маршрутов
+// приходит с type != managed и в счёт не входит (B3).
+export function isOwnTunnel(t) {
+  const type = String(t?.type ?? '').trim().toLowerCase()
+  return type === '' || type === 'managed'
+}
+
+// ОДИН счёт на все экраны («Роутер», «Проверки», вкладка «VPN-туннели»):
+// свои / работают / не проверено.
+export function tunnelCountSummary(tunnels = [], incidents = []) {
+  const own = (tunnels ?? []).filter(isOwnTunnel)
+  const working = own.filter(
     (t) =>
       tunnelStateLabel(t) === 'работает' &&
       t.status !== 'fail' &&
       t.status !== 'unknown' &&
       !(incidents ?? []).some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
   ).length
-}
-
-export function uncheckedTunnelCount(tunnels = []) {
-  return (tunnels ?? []).filter((t) => t.status === 'unknown').length
+  return { total: own.length, working, unchecked: own.filter((t) => t.status === 'unknown').length }
 }
 
 export function workingTunnelNote(live, total, unchecked = 0) {

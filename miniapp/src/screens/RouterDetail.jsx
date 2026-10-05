@@ -27,6 +27,7 @@ import {
   tunnelOf,
   checkState as checkStateOf,
   workingTunnelCount,
+  tunnelCountSummary,
   workingTunnelNote,
   uncheckedTunnelCount,
   commandOutcomeLabel,
@@ -437,6 +438,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
   const liveCount = workingTunnelCount(tunnels, incidents)
+  const ownTotal = tunnelCountSummary(tunnels, incidents).total
   // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
   const uncheckedCount = uncheckedTunnelCount(tunnels)
 
@@ -503,7 +505,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? workingTunnelNote(liveCount, tunnels.length, uncheckedCount)
+              ? workingTunnelNote(liveCount, ownTotal, uncheckedCount)
               : 'роутер не сообщил ни одного'
         }
         tone={!headline.stale && tunnels.length && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}
