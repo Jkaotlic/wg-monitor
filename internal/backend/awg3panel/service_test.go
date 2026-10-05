@@ -810,3 +810,37 @@ func TestIssuablePanelsSkipsBrokenPanel(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+// TestFreshConfigForRouter_AddsPeerEvenIfExists -- ступень «пересоздать»
+// лесенки автопочинки: пир «wgmon-<ник>» уже есть, но нужен новый. Старый
+// не трогается -- удаление пира на панели решает админ, а не автоматика.
+func TestFreshConfigForRouter_AddsPeerEvenIfExists(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Peers: map[string][]awg3paneltest.Peer{"awg1": {
+		{ID: "old000000001", Name: "wgmon-router-owned", Address: "10.66.0.2/32", Enabled: true, CreatedAt: "2026-09-01T10:00:00Z"},
+	}}})
+	e.create(t, "main")
+	rc, err := e.s.FreshConfigForRouter(context.Background(), "main", "awg1", "router-owned")
+	if err != nil {
+		t.Fatalf("FreshConfigForRouter: %v", err)
+	}
+	if rc.Reused || rc.PeerID == "" || rc.PeerID == "old000000001" || len(rc.Conf) == 0 {
+		t.Fatalf("ждали новый пир с конфигом: %+v", rc)
+	}
+	if e.p.Hits("POST ") != 1 {
+		t.Fatalf("новый пир не выпущен: POST=%d", e.p.Hits("POST "))
+	}
+	if n := len(e.p.PeerList("awg1")); n != 2 {
+		t.Fatalf("пиров на интерфейсе %d, ждали 2: старый остаётся", n)
+	}
+}
+
+func TestFreshConfigForRouter_ReadonlyRefused(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{Readonly: true})
+	e.create(t, "main")
+	if _, err := e.s.FreshConfigForRouter(context.Background(), "main", "awg1", "router-owned"); KindOf(err) != KindReadonly {
+		t.Fatalf("панель только для просмотра обязана отказать: %v", err)
+	}
+	if n := len(e.p.PeerList("awg1")); n != 0 {
+		t.Fatalf("на панели только для просмотра появился пир: %d", n)
+	}
+}

@@ -754,6 +754,40 @@ func (s *Service) ConfigForRouter(ctx context.Context, id, iface, nickname strin
 	return RouterConfig{Conf: []byte(issued.Config), PeerID: issued.ID}, nil
 }
 
+// FreshConfigForRouter -- как ConfigForRouter, но всегда новый пир
+// «wgmon-<ник>»: ступень «пересоздать» автопочинки, когда тот же конфиг уже
+// не помог. Старый пир не трогается -- удалить пир на панели решает админ, а
+// не автоматика. Самым свежим по created_at становится новый, поэтому
+// следующий ConfigForRouter отдаст именно его.
+func (s *Service) FreshConfigForRouter(ctx context.Context, id, iface, nickname string) (RouterConfig, error) {
+	name, err := RouterPeerName(nickname)
+	if err != nil {
+		return RouterConfig{}, err
+	}
+	iface = strings.TrimSpace(iface)
+	if iface == "" {
+		return RouterConfig{}, &FieldError{Field: "iface", Reason: "Выберите интерфейс панели"}
+	}
+	id = normID(id)
+	unlock := s.lockInstance(id)
+	defer unlock()
+	inst, c, err := s.ready(id)
+	if err != nil {
+		return RouterConfig{}, err
+	}
+	if inst.Readonly {
+		return RouterConfig{}, &Error{Kind: KindReadonly, Msg: "панель только для просмотра"}
+	}
+	// WithoutCancel: см. IssueDevice.
+	issued, err := c.AddPeer(context.WithoutCancel(ctx), iface, name)
+	if err != nil {
+		return RouterConfig{}, notFoundAsIface(s.trip(id, err))
+	}
+	s.forgetPages(id)
+	s.opts.Logger.Info("awg3-панель: выпущен новый пир роутера взамен прежнего", "panel", id, "iface", iface, "peer_id", issued.ID)
+	return RouterConfig{Conf: []byte(issued.Config), PeerID: issued.ID}, nil
+}
+
 // newestNamed -- среди пиров с этим именем самый свежий по created_at (RFC3339
 // UTC сравнивается строкой); при равенстве -- последний в списке.
 func newestNamed(peers []Peer, name string) (Peer, bool) {
