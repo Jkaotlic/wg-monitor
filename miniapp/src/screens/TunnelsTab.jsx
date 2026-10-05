@@ -515,6 +515,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
+          verdictSnapshot={shown}
           tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}

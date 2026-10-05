@@ -131,7 +131,9 @@ export function repairView(job, { checkName = '', ownJobID = '', pollFailed = fa
             // идёт через «A»» -- подпись стадии одна на все случаи.
             { key: 'failover', label: LABELS.failover, state: foldState(steps, ['failover'], done), sub: steps.find((s) => s.name === 'failover')?.detail ?? '' },
             { key: 'raise', label: LABELS.raise, state: raise.state, sub: raise.sub },
-            { key: 'failback', label: LABELS.failback, state: foldState(steps, ['failback'], done), sub: '' },
+            // Подстрока возврата -- тоже что сделано: «трафик снова идёт через…»
+            // или «возвращать нечего — …».
+            { key: 'failback', label: LABELS.failback, state: foldState(steps, ['failback'], done), sub: steps.find((s) => s.name === 'failback')?.detail ?? '' },
           ]
         })()
       : [

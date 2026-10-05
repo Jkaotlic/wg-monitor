@@ -144,6 +144,19 @@ describe('автопочинка: экран VPN-туннеля', () => {
     root.remove()
   })
 
+  it('резерв, чья проверка провалена, листом не называется -- как на главном экране', async () => {
+    mocks.get = { ...BASE }
+    const verdict = { ...SNAP, tunnels: SNAP.tunnels.map((t) => (t.id === 'awg10' ? { ...t, status: 'dead' } : t)) }
+    const { root, sheets } = await mount({ verdictSnapshot: verdict })
+    await act(async () => root.querySelector('.tunnel-autorepair').click())
+    const host = document.createElement('div')
+    await act(async () => render(sheets[0].body, host))
+    expect(host.textContent).not.toContain('«vpn-de»')
+    expect(host.textContent).toContain('Запасного VPN-туннеля нет')
+    render(null, root)
+    root.remove()
+  })
+
   it('снимок не знает резерв -- фразы о резерве нет', async () => {
     mocks.get = { ...BASE }
     const { root, sheets } = await mount({ snapshot: { tunnels: SNAP.tunnels } })

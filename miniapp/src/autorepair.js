@@ -72,6 +72,11 @@ export function autorepairRow(resp) {
 // carrier -- имя звена, через которое трафик идёт сейчас, и обещать «уведу
 // на запасной» нельзя. reserve -- этот случай; carrier пустой при reserve --
 // живого звена нет (первое тоже лежит), и называть лежащее нельзя.
+//
+// Снимок сюда приходит с вердиктом проверок (withCheckVerdict): звено, чья
+// проверка провалена (status 'dead'), не живое, даже если интерфейс поднят, --
+// главный экран такой VPN-туннель несущим тоже не называет. self -- этот
+// VPN-туннель резерв, но трафик сейчас идёт через него самого.
 function linkAvailable(i) {
   if (typeof i.available === 'boolean') return i.available
   return Boolean(i.role) && i.role !== 'unavailable' && i.role !== 'down'
@@ -79,24 +84,25 @@ function linkAvailable(i) {
 
 export function backupFor(snapshot, tunnelID) {
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
-  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '', carrier: '', reserve: false }
-  const nameOf = (link) => {
-    const meta = tunnels.find((t) => link.tunnel_id && t.id === link.tunnel_id)
-    return String(meta?.name || link.name || link.tunnel_id || link.bind || '').trim()
-  }
+  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '', carrier: '', reserve: false, self: false }
+  const metaOf = (link) => tunnels.find((t) => link.tunnel_id && t.id === link.tunnel_id)
+  const nameOf = (link) => String(metaOf(link)?.name || link.name || link.tunnel_id || link.bind || '').trim()
+  const alive = (link) => linkAvailable(link) && metaOf(link)?.status !== 'dead'
   for (const p of snapshot.policies) {
     const links = Array.isArray(p.interfaces) ? p.interfaces : []
     if (!links.some((i) => i.tunnel_id === tunnelID) && p.active_tunnel_id !== tunnelID) continue
     if (links.length > 0 && links[0].tunnel_id !== tunnelID && links.some((i) => i.tunnel_id === tunnelID)) {
-      const live = (i) => i.tunnel_id !== tunnelID && linkAvailable(i)
-      const carrier = links.find((i) => i.role === 'active' && live(i)) || links.find(live)
-      return { known: true, name: '', carrier: carrier ? nameOf(carrier) : '', reserve: true }
+      const activeID = p.active_tunnel_id || links.find((i) => i.role === 'active')?.tunnel_id
+      if (activeID === tunnelID) return { known: true, name: '', carrier: '', reserve: true, self: true }
+      const live = (i) => i.tunnel_id !== tunnelID && alive(i)
+      const carrier = links.find((i) => i.tunnel_id === activeID && live(i)) || links.find(live)
+      return { known: true, name: '', carrier: carrier ? nameOf(carrier) : '', reserve: true, self: false }
     }
-    const other = links.find((i) => i.tunnel_id && i.tunnel_id !== tunnelID && linkAvailable(i))
+    const other = links.find((i) => i.tunnel_id && i.tunnel_id !== tunnelID && alive(i))
     if (!other) continue
-    return { known: true, name: nameOf(other), carrier: '', reserve: false }
+    return { known: true, name: nameOf(other), carrier: '', reserve: false, self: false }
   }
-  return { known: true, name: '', carrier: '', reserve: false }
+  return { known: true, name: '', carrier: '', reserve: false, self: false }
 }
 
 function okSources(resp) {
@@ -128,12 +134,14 @@ function initialPick(resp) {
 //
 // Источник человек выбирает в поле ниже и может сменить его до нажатия, а
 // текст листа от поля не зависит: поэтому источник здесь не называется.
-export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve = Boolean(carrier)) {
+export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve = Boolean(carrier), self = false) {
   const sources = okSources(resp)
   const name = `«${tunnelName}»`
   const reissue = sources.length > 0 ? ', а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере' : ''
   let what
-  if (reserve && carrier) {
+  if (reserve && self) {
+    what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной, но сейчас трафик идёт через него самого: первый VPN-туннель цепочки не отвечает, а порядок VPN-туннелей я не меняю.`
+  } else if (reserve && carrier) {
     what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной: трафик и так идёт через «${carrier}», порядок VPN-туннелей я не меняю.`
   } else if (reserve) {
     what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной, а у трафика сейчас нет рабочего VPN-туннеля; порядок VPN-туннелей я не меняю.`
@@ -144,30 +152,14 @@ export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve 
   } else {
     what = `Запасного VPN-туннеля нет: пока чиню, заблокированное открываться не будет. Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}.`
   }
-  // Цена -- своя у каждого кабинета: у «Amnezia Premium» страна -- место в
-  // подписке, у «HideMy.name» код открывает все серверы.
-  const costs = []
-  const amnezia = findSource(sources, 'amnezia')
-  if (amnezia) {
-    costs.push(
-      `${quote(amnezia.label || BRAND.amnezia)}: повторный выпуск того же конфига места в подписке не тратит. Смена страны может один раз занять ещё одно место в подписке: выпущу одну новую страну и больше не буду. Уже выпущенные страны не беру — их ключи стоят на других устройствах, а один ключ в двух местах ломает оба.`,
-    )
-  }
-  const hidemy = findSource(sources, 'hidemyname')
-  if (hidemy) {
-    costs.push(`${quote(hidemy.label || BRAND.hidemyname)}: повторный выпуск и смена сервера места не тратят — код открывает все серверы.`)
-  }
-  if (amnezia || hidemy) costs.push('Смена локации меняет страну, через которую видны сайты.')
-  if (sources.some((s) => s.provider === 'awg3')) {
-    costs.push('Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.')
-  }
-  if (costs.length === 0) costs.push('Перезапуск ничего не тратит.')
   return {
     // Переименованный VPN-туннель: тот же лист, но это подтверждение.
     title: resp?.rename_pending ? `Подтвердить автопочинку «${tunnelName}»?` : `Включить автопочинку «${tunnelName}»?`,
     sections: [
       { h: 'Что будет делать', text: what },
-      { h: 'Чего стоит', text: costs.join(' ') },
+      // Цена своя у каждого источника, а источник человек меняет в поле:
+      // она живёт в подсказке поля (costText) и следует выбору.
+      { h: 'Чего стоит', text: 'Перезапуск ничего не тратит. Цена выпуска зависит от источника — она написана под полем «Откуда выпускать конфиг заново».' },
       { h: 'Кому напишу', text: 'Владельцу, операторам и админу — в личку бота: что упало, что делаю и чем кончилось. Если понадобится ваше участие, напишу отдельно, со звуком.' },
       { h: 'Как выключить', text: 'Кнопкой «Выключить автопочинку» на этом экране, в любой момент.' },
     ],
@@ -175,6 +167,27 @@ export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve 
     // выбору); вторая такая же строка под листом -- повтор.
     note: '',
   }
+}
+
+// costText -- цена выбранного источника: у «Amnezia Premium» страна -- место в
+// подписке (смена страны -- одна на настройку, relocate_spent -- уже
+// израсходована), у «HideMy.name» код открывает все серверы, у своего
+// сервера новое подключение -- место на сервере.
+export function costText(resp, provider) {
+  const src = findSource(resp?.sources, provider)
+  const where = 'Смена локации меняет страну, через которую видны сайты.'
+  if (provider === 'amnezia') {
+    const head = `${quote(src?.label || BRAND.amnezia)}: повторный выпуск того же конфига места в подписке не тратит.`
+    const spent = String(resp?.relocate_spent ?? '').trim()
+    if (spent) {
+      const opt = (src?.options ?? []).find((o) => o.id === spent)
+      return `${head} Смену страны автопочинка этого VPN-туннеля уже использовала (${quote(opt?.label || spent)}), новых мест в подписке она больше не займёт.`
+    }
+    return `${head} Смена страны может один раз занять ещё одно место в подписке: выпущу одну новую страну и больше не буду. Уже выпущенные страны не беру — их ключи стоят на других устройствах, а один ключ в двух местах ломает оба. ${where}`
+  }
+  if (provider === 'hidemyname') return `${quote(src?.label || BRAND.hidemyname)}: повторный выпуск и смена сервера места не тратят — код открывает все серверы. ${where}`
+  if (provider === 'awg3') return 'Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.'
+  return ''
 }
 
 // Поля localSheet: источник (select; только подключённые) и галочка «можно
@@ -194,7 +207,7 @@ export function enableFields(resp) {
       label: 'Откуда выпускать конфиг заново',
       options,
       initial: initialPick(resp),
-      hint: (v) => (v?.source ? '' : NO_SOURCE_NOTE),
+      hint: (v) => (v?.source ? costText(resp, splitPick(v.source)[0]) : NO_SOURCE_NOTE),
     },
     {
       name: 'allow_relocate',

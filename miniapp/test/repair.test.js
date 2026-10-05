@@ -132,6 +132,14 @@ describe('repairView: лесенка автопочинки', () => {
     expect(repairView({ state: 'running', running: true, steps }).steps[0].sub).toBe('трафик и так идёт через «Работа»')
   })
 
+  it('стадия возврата показывает, что сделано, как и первые две', () => {
+    const steps = ladder(['done', 'done', 'skipped', 'skipped', 'done'])
+    steps[4].detail = 'трафик снова идёт через VPN-туннель «Дача»'
+    expect(repairView({ state: 'success', steps }).steps[2].sub).toBe('трафик снова идёт через VPN-туннель «Дача»')
+    steps[4].detail = 'возвращать нечего — запасного VPN-туннеля не было'
+    expect(repairView({ state: 'success', steps }).steps[2].sub).toBe('возвращать нечего — запасного VPN-туннеля не было')
+  })
+
   it('провал посреди идущего задания -- ещё active, пока есть куда идти', () => {
     const v = repairView({ state: 'running', running: true, steps: ladder(['done', 'failed', 'pending']) })
     expect(v.steps[1].state).toBe('active')

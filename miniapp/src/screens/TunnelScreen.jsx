@@ -29,7 +29,7 @@ import { ExitRow } from './SignalSections.jsx'
 // Удаление необратимо, поэтому подтверждается набором имени, а сервер сам
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
-export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
+export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
   const fresh = tunnelCard(snapshot, tunnelID)
   // После удаления снимок уже не знает VPN-туннель: экран держит последнее,
   // что видел, чтобы договорить итог.
@@ -67,8 +67,10 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
 
   function askAutorepair() {
     const target = card
-    const backup = backupFor(snapshot, target.id)
-    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier, backup.reserve)
+    // Резерв и несущий -- по снимку с вердиктом проверок: лист не называет
+    // VPN-туннель, который приложение само показывает как неотвечающий.
+    const backup = backupFor(verdictSnapshot ?? snapshot, target.id)
+    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier, backup.reserve, backup.self)
     openSheet(
       localSheet({
         title: text.title,
