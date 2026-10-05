@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchTimeline } from '../api.js'
 import { groupByDay } from '../events.js'
-import { incidentLine, groupIncidentsByDay, dayTitle } from '../incidents.js'
+import { incidentLine, groupIncidentsByDay, feedRows, dayTitle } from '../incidents.js'
 import { Quoted } from '../ui/Q.jsx'
 
 const DAYS = 7
@@ -84,14 +84,16 @@ function IncidentFeed({ data }) {
         <p class="hint">За неделю ничего не ломалось — это хорошая новость.</p>
       )}
 
-      {groups.map((g) => (
-        <section key={g.day} class="section">
-          <h2 class="section-title">{dayTitle(g.day)}</h2>
-          {g.quiet ? (
-            <p class="day-quiet">Всё работало</p>
-          ) : (
+      {feedRows(groups).map((row) =>
+        row.kind === 'quiet' ? (
+          <p key={row.days[0]} class="day-quiet">
+            {row.text}
+          </p>
+        ) : (
+          <section key={row.group.day} class="section">
+            <h2 class="section-title">{dayTitle(row.group.day)}</h2>
             <ul class="card list-reset">
-              {g.incidents.map((incident, i) => {
+              {row.group.incidents.map((incident, i) => {
                 const line = incidentLine(incident)
                 return (
                   <li key={`${incident.check_name}-${incident.from}-${i}`} class="inc">
@@ -106,9 +108,9 @@ function IncidentFeed({ data }) {
                 )
               })}
             </ul>
-          )}
-        </section>
-      ))}
+          </section>
+        ),
+      )}
     </>
   )
 }

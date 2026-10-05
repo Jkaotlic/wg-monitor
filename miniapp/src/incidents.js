@@ -96,3 +96,30 @@ export function groupIncidentsByDay(incidents = [], days = 7, nowMs = Date.now()
   }
   return out
 }
+
+// Строки ленты «Что было»: день с поломками -- свой раздел, а тихие дни
+// подряд -- одна строка («Вчера — 6 сентября: всё работало»). Неделя без
+// единой строки по-прежнему отвечает, что всё работало (см. выше), но не
+// растягивается на заголовок и подпись для каждого дня.
+export function feedRows(groups = [], nowMs = Date.now()) {
+  const rows = []
+  let run = []
+  const flush = () => {
+    if (!run.length) return
+    const first = dayTitle(run[0].day, nowMs)
+    const last = dayTitle(run[run.length - 1].day, nowMs)
+    const label = run.length === 1 ? first : `${first} — ${last}`
+    rows.push({ kind: 'quiet', label, text: `${label}: всё работало`, days: run.map((g) => g.day) })
+    run = []
+  }
+  for (const g of groups) {
+    if (g.quiet) {
+      run.push(g)
+    } else {
+      flush()
+      rows.push({ kind: 'day', group: g })
+    }
+  }
+  flush()
+  return rows
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { incidentLine, groupIncidentsByDay } from '../src/incidents.js'
+import { incidentLine, groupIncidentsByDay, feedRows } from '../src/incidents.js'
 
 const inc = (check, from, to, extra = {}) => ({
   check_name: check, from, to, down_sec: 240, flaps: 1, ongoing: false, ...extra,
@@ -85,5 +85,32 @@ describe('incidentLine -- линия без идентификатора', () =>
     })
     expect(line.title).toBe('Один из VPN-туннелей не отвечает')
     expect(line.title).not.toContain('awg12')
+  })
+})
+
+// A1.6-б (v0.55): спокойные дни подряд -- одна строка, а не заголовок и «Всё
+// работало» на каждый день.
+describe('feedRows: спокойные дни одной строкой', () => {
+  const now = Date.parse('2026-09-09T12:00:00Z')
+  const line = (rows) => rows.map((r) => (r.kind === 'quiet' ? `quiet:${r.label}` : `day:${r.group.day}`))
+
+  it('подряд идущие тихие дни схлопываются в одну строку', () => {
+    const groups = groupIncidentsByDay([inc('dns', '2026-09-09T09:00:00Z', '2026-09-09T09:04:00Z')], 5, now)
+    const rows = feedRows(groups, now)
+    expect(line(rows)).toEqual(['day:2026-09-09', 'quiet:Вчера — 5 сентября'])
+    expect(rows[1].text).toBe('Вчера — 5 сентября: всё работало')
+  })
+
+  it('один тихий день -- «Вчера: всё работало»', () => {
+    const groups = groupIncidentsByDay([inc('dns', '2026-09-09T09:00:00Z', '2026-09-09T09:04:00Z'), inc('dns', '2026-09-07T09:00:00Z', '2026-09-07T09:04:00Z')], 3, now)
+    const rows = feedRows(groups, now)
+    expect(rows.map((r) => r.kind)).toEqual(['day', 'quiet', 'day'])
+    expect(rows[1].text).toBe('Вчера: всё работало')
+  })
+
+  it('пустая неделя -- одна строка', () => {
+    const rows = feedRows(groupIncidentsByDay([], 7, now), now)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text).toBe('Сегодня — 3 сентября: всё работало')
   })
 })
