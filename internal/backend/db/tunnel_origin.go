@@ -73,10 +73,18 @@ func (r *TunnelOriginRepo) RecordUnconfirmed(userID int64, tunnelID, tunnelName,
 // подтверждена»: awg-manager может отдать тот же id новому туннелю, и чужая
 // история не должна к нему прилипнуть. Нет строки -- не ошибка.
 func (r *TunnelOriginRepo) Delete(userID int64, tunnelID string) error {
-	if _, err := r.d.db.Exec(`DELETE FROM tunnel_config_origin WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+	tx, err := r.d.db.Begin()
+	if err != nil {
 		return fmt.Errorf("tunnel_origin.Delete: %w", err)
 	}
-	if _, err := r.d.db.Exec(`DELETE FROM tunnel_origin_unconfirmed WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM tunnel_config_origin WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+		return fmt.Errorf("tunnel_origin.Delete: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM tunnel_origin_unconfirmed WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+		return fmt.Errorf("tunnel_origin.Delete: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("tunnel_origin.Delete: %w", err)
 	}
 	return nil

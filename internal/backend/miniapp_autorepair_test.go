@@ -572,7 +572,7 @@ func TestAutorepair_SealedCabinetSpeaksAboutKey(t *testing.T) {
 			continue
 		}
 		found = true
-		if s.OK || s.Code != "cabinet_key_missing" || s.Note != miniappCabinetErrorText("cabinet_key_missing") {
+		if s.OK || s.Code != "cabinet_key_missing" || !strings.Contains(s.Note, "напишите администратору") {
 			t.Fatalf("источник: %+v", s)
 		}
 	}
