@@ -537,16 +537,9 @@ func (k *KnownHosts) ReplaceHostKey(alias string, pub ssh.PublicKey) error {
 	defer k.mu.Unlock()
 
 	hostKey := normaliseHostKey(alias)
-	if _, err := ForgetKnownHost(k.path, stripPort(hostKey)); err != nil {
-		return err
-	}
-	line := knownhosts.Line([]string{hostKey}, pub)
-	f, err := os.OpenFile(k.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(line + "\n")
+	// Убрать старую строку и записать новую -- одной атомарной записью: файл
+	// ни в какой момент не остаётся без ключа хоста (Fix 3 v0.56).
+	_, err := rewriteKnownHosts(k.path, stripPort(hostKey), knownhosts.Line([]string{hostKey}, pub))
 	return err
 }
 

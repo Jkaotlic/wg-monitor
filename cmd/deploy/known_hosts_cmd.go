@@ -96,47 +96,58 @@ func ListKnownHostAliases(path string) ([]string, error) {
 // first-column host (port-stripped) does NOT equal the supplied alias.
 // Returns the number of lines removed.
 func ForgetKnownHost(path, alias string) (int, error) {
+	return rewriteKnownHosts(path, alias, "")
+}
+
+// rewriteKnownHosts убирает строки alias и, если add не пуст, дописывает
+// add -- ОДНОЙ записью: временный файл и переименование на место. Замена
+// ключа двумя шагами (удалить, дописать) при сбое между ними оставляла файл
+// без ключа хоста, и следующий вход принимал любой ключ (Fix 3 v0.56).
+// Без add и без удалённых строк файл не трогается.
+func rewriteKnownHosts(path, alias, add string) (int, error) {
 	if alias == "" {
 		return 0, fmt.Errorf("empty alias")
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
-	}
 	var kept []string
 	removed := 0
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		raw := sc.Text()
-		trim := strings.TrimSpace(raw)
-		if trim == "" || strings.HasPrefix(trim, "#") {
-			kept = append(kept, raw)
-			continue
-		}
-		fields := strings.Fields(trim)
-		if len(fields) == 0 {
-			kept = append(kept, raw)
-			continue
-		}
-		host := stripPort(fields[0])
-		if host == alias {
-			removed++
-			continue
-		}
-		kept = append(kept, raw)
-	}
-	if err := sc.Err(); err != nil {
-		f.Close()
+	f, err := os.Open(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return 0, err
+	default:
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			raw := sc.Text()
+			trim := strings.TrimSpace(raw)
+			if trim == "" || strings.HasPrefix(trim, "#") {
+				kept = append(kept, raw)
+				continue
+			}
+			fields := strings.Fields(trim)
+			if len(fields) == 0 {
+				kept = append(kept, raw)
+				continue
+			}
+			if stripPort(fields[0]) == alias {
+				removed++
+				continue
+			}
+			kept = append(kept, raw)
+		}
+		if err := sc.Err(); err != nil {
+			f.Close()
+			return 0, err
+		}
+		f.Close()
 	}
-	f.Close()
 
-	if removed == 0 {
+	if removed == 0 && add == "" {
 		return 0, nil
+	}
+	if add != "" {
+		kept = append(kept, add)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -160,15 +171,25 @@ func ForgetKnownHost(path, alias string) (int, error) {
 		os.Remove(tmp)
 		return 0, err
 	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return 0, err
+	}
 	if err := out.Close(); err != nil {
 		os.Remove(tmp)
 		return 0, err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := knownHostsCommit(tmp, path); err != nil {
+		os.Remove(tmp)
 		return 0, err
 	}
 	return removed, nil
 }
+
+// knownHostsCommit ставит готовый файл на место одним переименованием. Шов
+// для тестов сбоя записи.
+var knownHostsCommit = os.Rename
 
 // ForgetKnownHostInteractive is the CLI entry point: lists current
 // aliases, asks which to forget (operator types alias name or "*" for

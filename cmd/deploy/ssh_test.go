@@ -502,3 +502,59 @@ func TestProgressDots_NoDotsNoNewline(t *testing.T) {
 		t.Errorf("expected no output when no dot boundary crossed, got %q", buf.String())
 	}
 }
+
+// Fix 3 (v0.56): замена отпечатка -- одна атомарная запись. Раньше было два
+// шага (удалить строку, дописать новую): падение между ними оставляло файл
+// без ключа хоста, и следующий вход принимал ЛЮБОЙ ключ (доверие при первом
+// входе). Шов knownHostsCommit -- переименование готового файла на место.
+func TestKnownHosts_ReplaceHostKeyAtomic(t *testing.T) {
+	errCrash := errors.New("crash")
+	for _, tc := range []struct {
+		name   string
+		commit func(tmp, path string) error
+		accept int // какой ключ после сбоя принимается: 1 -- старый, 2 -- новый
+	}{
+		{"сбой до записи", func(tmp, path string) error { return errCrash }, 1},
+		{"сбой сразу после записи", func(tmp, path string) error {
+			if err := os.Rename(tmp, path); err != nil {
+				return err
+			}
+			return errCrash
+		}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "known_hosts")
+			kh, err := NewKnownHosts(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s1, _ := genTestSigner()
+			s2, _ := genTestSigner()
+			s3, _ := genTestSigner()
+			cb := kh.HostKeyCallbackFor("router_alice")
+			if err := cb("198.51.100.1:22", nil, s1.PublicKey()); err != nil {
+				t.Fatal(err)
+			}
+			old := knownHostsCommit
+			knownHostsCommit = tc.commit
+			err = kh.ReplaceHostKey("router_alice", s2.PublicKey())
+			knownHostsCommit = old
+			if err == nil {
+				t.Fatal("ждали ошибку сбоя")
+			}
+			if err := cb("198.51.100.1:22", nil, s3.PublicKey()); err == nil {
+				t.Fatal("после сбоя замены принят чужой ключ -- файл остался без ключа хоста")
+			}
+			want := s1
+			if tc.accept == 2 {
+				want = s2
+			}
+			if err := cb("198.51.100.1:22", nil, want.PublicKey()); err != nil {
+				t.Fatalf("ждали ключ %d: %v", tc.accept, err)
+			}
+			if _, err := os.Stat(path + ".tmp"); err == nil && tc.accept == 1 {
+				t.Fatal("после сбоя остался временный файл")
+			}
+		})
+	}
+}
