@@ -188,8 +188,8 @@ const (
 	// правилами по сводке политик агента (policies[].active_tunnel_id).
 	miniappCarrierPolicy = "policy"
 	// miniappCarrierSingle -- сводки политик нет, но кандидат один: главный
-	// выход роутера (routeTag) или единственный работающий VPN-туннель с
-	// правилами.
+	// выход роутера (routeTag) или единственный работающий VPN-туннель со
+	// своими правилами.
 	miniappCarrierSingle = "single"
 	// miniappCarrierNone -- не знаем, или единого несущего нет (sing-box).
 	miniappCarrierNone = "none"
@@ -289,8 +289,14 @@ func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappT
 	}
 	basis = miniappCarrierPolicy
 	if carrier == nil && tr.EgressTunnelID != "" {
-		carrier = miniappTunnelByID(tunnels, tr.EgressTunnelID)
-		basis = miniappCarrierSingle
+		// Главный выход -- слово роутера (routeTag). Единственный живой при
+		// раздельной маршрутизации -- несущий, только если в него ведут его
+		// собственные правила: правила HydraRoute без сводки политик могут
+		// вести и в лежащий VPN-туннель (ревью B1).
+		if t := miniappTunnelByID(tunnels, tr.EgressTunnelID); t != nil && (tr.Mode == miniappTrafficVPN || t.RoutesDNS+t.RoutesStatic > 0) {
+			carrier = t
+			basis = miniappCarrierSingle
+		}
 	}
 	if carrier == nil {
 		return "", miniappCarrierNone, false, nil

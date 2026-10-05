@@ -99,16 +99,33 @@ func TestMiniappCarrierSingboxNone(t *testing.T) {
 	}
 }
 
-// Старый агент без сводки политик, живой VPN-туннель с правилами один --
-// single.
+// Старый агент без сводки политик, живой VPN-туннель со своими правилами
+// один -- single.
 func TestMiniappCarrierSingleLive(t *testing.T) {
+	hydra := `{"installed":true,"running":true,"routes_hrneo":31,"singbox_router_active":false}`
+	stopped := `{"tunnel_id":"awg10","tunnel_name":"nl2","status":"stopped","enabled":false,"active_default_known":true,"is_active_default":false}`
+	withRules := `{"tunnel_id":"awg14","tunnel_name":"hipvps","status":"running","enabled":true,"routes_dns":3,"default_route_intent":true,"active_default_known":true,"is_active_default":false}`
+	got := carrierTraffic(t, hydra,
+		carrierTunnelRow("awg10", "nl2", "ok", stopped),
+		carrierTunnelRow("awg14", "hipvps", "ok", withRules),
+	)
+	wantCarrier(t, got, "awg14", "single", true)
+}
+
+// Живой один, но своих правил у него нет: обход держат правила HydraRoute,
+// а в какой VPN-туннель они ведут, из проверок не узнать -- единственный
+// живой ещё не несущий (ревью B1, п. 4).
+func TestMiniappCarrierSingleLiveWithoutOwnRulesNone(t *testing.T) {
 	hydra := `{"installed":true,"running":true,"routes_hrneo":31,"singbox_router_active":false}`
 	stopped := `{"tunnel_id":"awg10","tunnel_name":"nl2","status":"stopped","enabled":false,"active_default_known":true,"is_active_default":false}`
 	got := carrierTraffic(t, hydra,
 		carrierTunnelRow("awg10", "nl2", "ok", stopped),
 		carrierTunnelRow("awg14", "hipvps", "ok", rowHipAlive),
 	)
-	wantCarrier(t, got, "awg14", "single", true)
+	if got.Mode != miniappTrafficSplit {
+		t.Fatalf("mode = %q, хотим split", got.Mode)
+	}
+	wantCarrier(t, got, "", "none", false)
 }
 
 // Старый агент, два поднятых: кто несёт -- выбирают правила, и из проверок
