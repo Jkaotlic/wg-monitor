@@ -111,6 +111,17 @@ type fakeSelfHosted struct {
 	issueErr  error
 }
 
+func (f *fakeSelfHosted) TrustNewHostKey(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := f.find(id)
+	if i < 0 {
+		return selfhostedamnezia.ErrInstanceNotFound
+	}
+	f.instances[i].SSHHostKey = ""
+	return nil
+}
+
 func (f *fakeSelfHosted) List() ([]selfhostedamnezia.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

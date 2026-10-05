@@ -32,6 +32,9 @@ type miniappSelfHostedInstance struct {
 	SSHPort             int      `json:"ssh_port"`
 	SSHUser             string   `json:"ssh_user"`
 	PasswordSet         bool     `json:"password_set"`
+	// SSHHostKey -- запомненный отпечаток ключа хоста («SHA256:…»); пусто --
+	// ещё не входили или админ доверился новому ключу (v0.55, B2).
+	SSHHostKey string `json:"ssh_host_key"`
 }
 
 type miniappSelfHostedDefaults struct {
@@ -60,7 +63,7 @@ func miniappSelfHostedView(inst selfhostedamnezia.Instance) miniappSelfHostedIns
 		ServerPublicKeyPath: inst.ServerPubPath, PresharedKeyPath: inst.PSKPath,
 		DNS:     append([]string{}, inst.DNS...),
 		SSHHost: inst.SSHHost, SSHPort: inst.SSHPort, SSHUser: inst.SSHUser,
-		PasswordSet: inst.SSHPassword != "",
+		PasswordSet: inst.SSHPassword != "", SSHHostKey: inst.SSHHostKey,
 	}
 }
 
@@ -161,6 +164,14 @@ func writeMiniappSelfHostedError(d Deps, w http.ResponseWriter, op string, err e
 // miniappSelfHostedIssueError -- то же для выпуска: прочий сбой здесь -- SSH
 // или контейнер, это 502, а не ошибка нашего сервера. Текст SSH наружу не идёт.
 func miniappSelfHostedIssueError(d Deps, w http.ResponseWriter, err error) {
+	// Ключ хоста сменился -- отказ до входа: словами с именем сервера и
+	// подсказкой, где подтвердить новый ключ (v0.55, B2).
+	var hk *selfhostedamnezia.HostKeyChangedError
+	if errors.As(err, &hk) {
+		miniappCabinetLogger(d).Warn("свой сервер: ключ хоста сменился, выпуск отказан", "instance_label", hk.Label)
+		writeMiniappDeployError(w, http.StatusConflict, "selfhosted_host_key_changed", hk.Error())
+		return
+	}
 	if errors.Is(err, selfhostedamnezia.ErrInstanceNotFound) || errors.Is(err, selfhostedamnezia.ErrInstanceDisabled) || errors.Is(err, selfhostedamnezia.ErrInstanceNotReady) {
 		writeMiniappSelfHostedError(d, w, "выпуск", err)
 		return
@@ -287,26 +298,7 @@ func miniappSelfHostedDeleteHandler(d Deps) http.HandlerFunc {
 		if !decodeMiniappCabinetBody(w, r, &body) {
 			return
 		}
-		insts, err := d.SelfHosted.List()
-		if err != nil {
-			writeMiniappSelfHostedError(d, w, "удаление", err)
-			return
-		}
-		label := ""
-		for _, inst := range insts {
-			if inst.ID == id {
-				label = inst.Label
-				if label == "" {
-					label = inst.ID
-				}
-			}
-		}
-		if label == "" {
-			writeMiniappCabinetError(w, http.StatusNotFound, "instance_not_found")
-			return
-		}
-		if !confirmPhraseMatches(body.Confirm, label) {
-			writeMiniappCabinetError(w, http.StatusBadRequest, "confirm_mismatch")
+		if !miniappSelfHostedConfirm(d, w, id, body.Confirm, "удаление") {
 			return
 		}
 		if err := d.SelfHosted.Delete(id); err != nil {
@@ -337,5 +329,64 @@ func miniappSelfHostedCheckHandler(d Deps) http.HandlerFunc {
 			OK      bool   `json:"ok"`
 			Message string `json:"message"`
 		}{OK: res.OK, Message: res.Message})
+	}
+}
+
+// miniappSelfHostedConfirm -- подтверждение набором имени сервера (подписи,
+// а без неё -- имени). false -- ответ уже написан.
+func miniappSelfHostedConfirm(d Deps, w http.ResponseWriter, id, confirm, op string) bool {
+	insts, err := d.SelfHosted.List()
+	if err != nil {
+		writeMiniappSelfHostedError(d, w, op, err)
+		return false
+	}
+	label := ""
+	for _, inst := range insts {
+		if inst.ID == id {
+			label = inst.Label
+			if label == "" {
+				label = inst.ID
+			}
+		}
+	}
+	if label == "" {
+		writeMiniappCabinetError(w, http.StatusNotFound, "instance_not_found")
+		return false
+	}
+	if !confirmPhraseMatches(confirm, label) {
+		writeMiniappCabinetError(w, http.StatusBadRequest, "confirm_mismatch")
+		return false
+	}
+	return true
+}
+
+// miniappSelfHostedTrustHostKeyHandler -- «Доверять новому ключу» (v0.55,
+// B2): только админ, подтверждение набором имени сервера. Запомненный
+// отпечаток сбрасывается; новый запомнит следующий удачный вход -- обычно
+// «Проверить подключение» сразу после.
+func miniappSelfHostedTrustHostKeyHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !miniappSelfHostedGate(d, w, r) {
+			return
+		}
+		id, ok := miniappSelfHostedPathID(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			Confirm string `json:"confirm"`
+		}
+		if !decodeMiniappCabinetBody(w, r, &body) {
+			return
+		}
+		if !miniappSelfHostedConfirm(d, w, id, body.Confirm, "доверие новому ключу") {
+			return
+		}
+		if err := d.SelfHosted.TrustNewHostKey(id); err != nil {
+			writeMiniappSelfHostedError(d, w, "доверие новому ключу", err)
+			return
+		}
+		miniappCabinetLogger(d).Info("свой сервер: отпечаток ключа хоста сброшен", "instance", id)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

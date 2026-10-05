@@ -67,6 +67,9 @@ type SelfHostedVPS interface {
 	Delete(id string) error
 	Check(ctx context.Context, id string) (selfhostedamnezia.CheckResult, error)
 	Issue(ctx context.Context, id, clientName string) (selfhostedamnezia.IssuedConfig, selfhostedamnezia.Instance, error)
+	// TrustNewHostKey -- «Доверять новому ключу» (v0.55, B2): запомненный
+	// отпечаток ключа хоста сбрасывается, следующий вход запомнит новый.
+	TrustNewHostKey(id string) error
 }
 
 // MiniappDocSender -- .conf документом и QR картинкой в личку нажавшему (*tg.Client).

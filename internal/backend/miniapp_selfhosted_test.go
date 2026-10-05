@@ -29,6 +29,7 @@ func TestMiniappSelfHostedAdminOnly(t *testing.T) {
 		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/toggle", `{"enabled":true}`},
 		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/check", ""},
 		{http.MethodDelete, "/v1/miniapp/selfhosted/dacha", `{"confirm":"нет"}`},
+		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/trust-host-key", `{"confirm":"нет"}`},
 	}
 	for _, rt := range routes {
 		for _, who := range []int64{cabStranger, cabOperator, cabOwner} {
@@ -175,6 +176,7 @@ func TestMiniappVPNIssueSelfHostedAdminOnly(t *testing.T) {
 		{"выключен", `{"provider":"selfhosted","instance_id":"dacha"}`, "instance_disabled", http.StatusConflict, selfhostedamnezia.ErrInstanceDisabled},
 		{"не найден", `{"provider":"selfhosted","instance_id":"dacha"}`, "instance_not_found", http.StatusNotFound, selfhostedamnezia.ErrInstanceNotFound},
 		{"SSH упал", `{"provider":"selfhosted","instance_id":"dacha"}`, "selfhosted_failed", http.StatusBadGateway, errors.New("ssh auth 203.0.113.7:22: unable to authenticate")},
+		{"ключ сменился", `{"provider":"selfhosted","instance_id":"dacha"}`, "selfhosted_host_key_changed", http.StatusConflict, &selfhostedamnezia.HostKeyChangedError{Label: "Дом"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,5 +270,40 @@ func TestMiniappSelfHostedUpdateNewSSHTargetNeedsPassword(t *testing.T) {
 	rec = env.do(t, cabAdmin, http.MethodPut, "/v1/miniapp/selfhosted/dacha", `{"endpoint_host":"vpn.example.com","endpoint_port":1,"ssh_host":""}`)
 	if insts, _ = svc.List(); rec.Code != http.StatusNoContent || insts[0].SSHPassword != "" || insts[0].SSHHost != "" {
 		t.Fatalf("стёртый адрес: %d %+v", rec.Code, insts[0])
+	}
+}
+
+// B2 (v0.55): отпечаток ключа хоста виден админу в карточке, «Доверять
+// новому ключу» -- с подтверждением именем, смена ключа при выпуске --
+// словами с именем сервера.
+func TestMiniappSelfHostedHostKey(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedVPS(env)
+	const fp = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
+	env.vps.instances[0].SSHHostKey = fp
+	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ssh_host_key":"`+fp+`"`) {
+		t.Fatalf("отпечатка нет в карточке: %d %s", rec.Code, rec.Body.String())
+	}
+
+	const trust = "/v1/miniapp/selfhosted/dacha/trust-host-key"
+	rec = env.do(t, cabAdmin, http.MethodPost, trust, `{"confirm":"dacha"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || env.vps.instances[0].SSHHostKey != fp {
+		t.Fatalf("доверие без верного имени: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/nope/trust-host-key", `{"confirm":"Дом"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "instance_not_found" {
+		t.Fatalf("доверие несуществующему: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabAdmin, http.MethodPost, trust, `{"confirm":" дом "}`)
+	if rec.Code != http.StatusNoContent || env.vps.instances[0].SSHHostKey != "" {
+		t.Fatalf("доверие: %d %s ключ=%q", rec.Code, rec.Body.String(), env.vps.instances[0].SSHHostKey)
+	}
+
+	env.vps.issueErr = &selfhostedamnezia.HostKeyChangedError{Label: "Дом"}
+	rec = env.do(t, cabAdmin, http.MethodPost, sendConfPath, `{"provider":"selfhosted","instance_id":"dacha"}`)
+	want := "Ключ сервера «Дом» изменился — если вы переустанавливали сервер, подтвердите новый ключ в карточке"
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "selfhosted_host_key_changed" || msg != want {
+		t.Fatalf("файл при смене ключа: %d %s", rec.Code, rec.Body.String())
 	}
 }

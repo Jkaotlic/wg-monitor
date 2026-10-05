@@ -25,12 +25,18 @@ type sandboxSelfHosted struct {
 
 var _ backend.SelfHostedVPS = (*sandboxSelfHosted)(nil)
 
+// sandboxHostKey -- отпечаток ключа хоста «Домашнего VPS» песочницы. Адрес
+// SSH со словом «newkey» -- сервер с другим ключом: проверка отказывает
+// словами о смене ключа, пока отпечаток не сброшен «Доверять новому ключу».
+const sandboxHostKey = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
+
 func newSandboxSelfHosted() *sandboxSelfHosted {
 	return &sandboxSelfHosted{instances: []selfhostedamnezia.Instance{
 		{ID: "home", Label: "Домашний VPS", Enabled: true, EndpointHost: "vpn.sandbox.example.com", EndpointPort: 47567,
 			// Пароль-заглушка не литералом: gosec G101 ловит строку в поле SSHPassword,
 			// а песочница по SSH не ходит вовсе.
-			SSHHost: "203.0.113.10", SSHPort: 22, SSHUser: "root", SSHPassword: strings.Repeat("s", 8)},
+			SSHHost: "203.0.113.10", SSHPort: 22, SSHUser: "root", SSHPassword: strings.Repeat("s", 8),
+			SSHHostKey: sandboxHostKey},
 		{ID: "reserve", Label: "Резервный", Enabled: false, EndpointHost: "vpn2.sandbox.example.com", EndpointPort: 51820,
 			DNS: []string{"1.1.1.1", "8.8.8.8"}},
 	}}
@@ -107,6 +113,10 @@ func (s *sandboxSelfHosted) Update(id string, inst selfhostedamnezia.Instance) e
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
 	inst.Enabled = s.instances[i].Enabled
+	inst.SSHHostKey = ""
+	if cur := s.instances[i]; inst.SSHHost != "" && inst.SSHHost == cur.SSHHost && inst.SSHPort == cur.SSHPort {
+		inst.SSHHostKey = cur.SSHHostKey
+	}
 	if inst.SSHHost != "" && inst.SSHPassword == "" {
 		cur := s.instances[i]
 		if inst.SSHHost != cur.SSHHost || inst.SSHPort != cur.SSHPort || inst.SSHUser != cur.SSHUser {
@@ -158,7 +168,32 @@ func (s *sandboxSelfHosted) Check(_ context.Context, id string) (selfhostedamnez
 	if inst.SSHHost == "" || strings.Contains(inst.SSHHost, "fail") {
 		return selfhostedamnezia.CheckResult{OK: false, Message: "SSH не принял пользователя или пароль"}, nil
 	}
+	presented := sandboxHostKey
+	if strings.Contains(inst.SSHHost, "newkey") {
+		presented = "SHA256:Zm9yLXNhbmRib3gtb25seS1hbm90aGVyLWhvc3Qta2V5"
+	}
+	if inst.SSHHostKey != "" && inst.SSHHostKey != presented {
+		return selfhostedamnezia.CheckResult{OK: false, Message: (&selfhostedamnezia.HostKeyChangedError{Label: inst.Label}).Error()}, nil
+	}
+	if inst.SSHHostKey == "" {
+		s.mu.Lock()
+		if j := s.index(id); j >= 0 {
+			s.instances[j].SSHHostKey = presented
+		}
+		s.mu.Unlock()
+	}
 	return selfhostedamnezia.CheckResult{OK: true, Message: "Подключение есть: контейнер «amnezia-awg2» отвечает"}, nil
+}
+
+func (s *sandboxSelfHosted) TrustNewHostKey(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 {
+		return selfhostedamnezia.ErrInstanceNotFound
+	}
+	s.instances[i].SSHHostKey = ""
+	return nil
 }
 
 func (s *sandboxSelfHosted) Issue(_ context.Context, id, clientName string) (selfhostedamnezia.IssuedConfig, selfhostedamnezia.Instance, error) {
