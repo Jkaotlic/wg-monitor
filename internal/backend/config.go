@@ -38,6 +38,7 @@ type Config struct {
 	HideMy            HideMyConfig             `yaml:"hidemyname"`
 	Digest            DigestConfig             `yaml:"digest"`
 	Revive            ReviveConfig             `yaml:"revive"`
+	Alerts            AlertsConfig             `yaml:"alerts"`
 
 	// storeDefaulted -- какие пути хранилищ выведены из db_path, а не заданы.
 	storeDefaulted storeDefaulted
@@ -48,6 +49,19 @@ type Config struct {
 // backend dies, the digest stops arriving. Pair with an external probe
 // (docs/external-uptime-probe.md) for a hard guarantee outside the failure
 // domain; this is the soft, zero-extra-infra complement.
+
+// AlertsConfig -- включение отдельных тревог.
+type AlertsConfig struct {
+	BypassLeak BypassLeakAlertConfig `yaml:"bypass_leak"`
+}
+
+// BypassLeakAlertConfig -- тревога «трафик мимо VPN-туннеля» (v0.56, спека A).
+// Выключена по умолчанию: вердикт пишется строкой bypass_leak в events, но
+// автомат тревог её не ведёт и экраны не показывают, пока неделя наблюдения
+// не покажет, сколько тревог было бы.
+type BypassLeakAlertConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
 
 // ReviveConfig -- оживление агента на выключенном роутере.
 //

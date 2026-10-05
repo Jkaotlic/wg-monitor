@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -441,6 +442,10 @@ type Deps struct {
 type AlertPolicy struct {
 	NoisyFailThreshold     int
 	NoisyRecoveryThreshold int
+	// BypassLeakEnabled -- alerts.bypass_leak.enabled: ведёт ли автомат тревог
+	// проверку bypass_leak и видят ли её экраны. Выключено (по умолчанию) --
+	// строки пишутся, но молча (тихий режим, спека A v0.56).
+	BypassLeakEnabled bool
 }
 
 func NewMux(d Deps) http.Handler {
@@ -545,6 +550,12 @@ func thresholdsForCheck(base state.Thresholds, policy AlertPolicy, checkName str
 	// resolver, and one good probe flips the check ok with no cooldown — a
 	// recovery threshold of 1 would let an intermittent server flap alerts.
 	if strings.EqualFold(strings.TrimSpace(checkName), resolverGuardCheck) {
+		base.Fail = 1
+		return base
+	}
+	// bypass_leak -- то же: порог (три отчёта на двух замерах) бэкенд уже
+	// отсчитал сам, fail в строке -- поднятая тревога.
+	if checkName == bypassLeakCheck {
 		base.Fail = 1
 		return base
 	}
@@ -803,6 +814,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
 
+		// v0.56: строку bypass_leak пишет только бэкенд (ниже); присланная
+		// агентом под этим именем отбрасывается.
+		rep.Checks = slices.DeleteFunc(rep.Checks, func(c wire.Check) bool { return c.Name == bypassLeakCheck })
+
 		if reportIsFresh && rep.Resumed && d.Resumer != nil {
 			d.Resumer.MarkResumed(uid)
 		}
@@ -820,6 +835,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				})
 			}
+		}
+
+		// v0.56: вердикт «трафик мимо VPN-туннеля» -- до транзакции, тем же
+		// путём в events, что и строки агента. Считается после карточки
+		// пробуждения: в ней только то, что прислал роутер. Хук-отчёт и
+		// несвежий не считаются: внеочередные отчёты ускорили бы порог «три
+		// подряд», а несвежий рассказывает про прошлое.
+		if reportIsFresh && rep.Trigger != wire.TriggerHook {
+			rep.Checks = append(rep.Checks, bypassLeakReportCheck(d, uid, &rep, ts))
 		}
 
 		// Ingest всех событий + UpdateLastSeen — одной транзакцией. Раньше
@@ -954,6 +978,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// после rc19 fix BUG-02 — следующий report не дублирует alert.
 		for _, c := range dispatchChecks {
 			if c.Name == "agent_heartbeat" {
+				continue
+			}
+			if c.Name == bypassLeakCheck && !d.AlertPolicy.BypassLeakEnabled {
+				// Тихий режим: строка пишется, тревоги нет.
 				continue
 			}
 			if !reportIsFresh {

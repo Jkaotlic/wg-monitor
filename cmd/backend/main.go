@@ -297,7 +297,7 @@ func main() {
 		WakeNotifier:        wakeNotifier,
 		DeployNotifier:      deployNotifier,
 		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
-		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold},
+		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold, BypassLeakEnabled: cfg.Alerts.BypassLeak.Enabled},
 		MobileFailThreshold: cfg.State.MobileFailThreshold,
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
 		// SIGTERM and don't outlive srv.Shutdown (BUG-15).

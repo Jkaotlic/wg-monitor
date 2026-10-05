@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -578,6 +579,9 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 	}
 	out := make([]db.EventRow, 0, len(rows))
 	for _, row := range rows {
+		if bypassLeakHidden(d, row.CheckName) {
+			continue
+		}
 		// dns_ru -- то же: строки нет, когда ру-апстримов в настройках нет.
 		if (row.CheckName == resolverGuardCheck || row.CheckName == dnsRuCheck) && haveHeartbeat && row.TS.Before(heartbeatTS) {
 			continue
@@ -736,6 +740,7 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 			rows = rows[:limit]
 			resp.Truncated = true
 		}
+		rows = slices.DeleteFunc(rows, func(row db.EventRow) bool { return bypassLeakHidden(d, row.CheckName) })
 		if raw {
 			for _, row := range rows {
 				resp.Events = append(resp.Events, miniappTimelineEvent{
