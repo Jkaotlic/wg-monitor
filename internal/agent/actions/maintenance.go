@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,7 +196,7 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		}
 	}
 	before := map[string]bool{}
-	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
+	beforeLines, beforeErr := firmwareLogLines(ctx, exec, rci)
 	for _, l := range beforeLines {
 		before[l] = true
 	}
@@ -216,7 +218,7 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		if err := watch.sleep(ctx); err != nil {
 			break
 		}
-		lines, err := firmwareLogLines(ctx, exec)
+		lines, err := firmwareLogLines(ctx, exec, rci)
 		if err != nil {
 			continue // неудачный взгляд = «новых строк нет»
 		}
@@ -324,21 +326,107 @@ func isComponentsFailure(l string) bool {
 	return false
 }
 
+// firmwareLogWindow -- сколько последних записей журнала просим у роутера.
+// 40 терялось на шумном журнале: строка о провале или перезагрузке
+// оказывалась за окном, и установка выглядела «неподтверждённой».
+const firmwareLogWindow = 400
+
 // firmwareLogLines -- строки журнала про компоненты, Ndss и перезагрузку, в порядке журнала
 // (от него зависит понятный текст ошибки).
-func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
-	out, err := exec(ctx, "ndmc", "-c", "show log 40")
-	if err != nil {
-		return nil, err
+//
+// Журнал читаем тем же путём, что и запускаем установку: через локальный RCI
+// (show/log). Роутер без RCI или не отдавший журнал отвечает старым путём ndmc
+// с тем же окном.
+func firmwareLogLines(ctx context.Context, exec ExecFunc, rci RCIFunc) ([]string, error) {
+	var text string
+	if rci != nil {
+		if body, err := rci(ctx, "POST", "/rci/show/log", []byte(fmt.Sprintf(`{"max-lines":%d}`, firmwareLogWindow))); err == nil {
+			if t, ok := rciLogText(body); ok {
+				text = t
+			}
+		}
+	}
+	if text == "" {
+		out, err := exec(ctx, "ndmc", "-c", fmt.Sprintf("show log %d", firmwareLogWindow))
+		if err != nil {
+			return nil, err
+		}
+		text = string(out)
 	}
 	var lines []string
-	for _, raw := range strings.Split(string(out), "\n") {
+	for _, raw := range strings.Split(text, "\n") {
 		l := strings.TrimSpace(strings.ReplaceAll(raw, "\x1b[K", ""))
 		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") || isFirmwareGoingLine(l) {
 			lines = append(lines, l)
 		}
 	}
 	return lines, nil
+}
+
+// rciLogText переводит ответ RCI show/log в строки вида «I [Oct 02 11:31:54]
+// ndm: Components::Manager: …», как у ndmc. Записи -- объекты с полем message
+// (label и timestamp необязательны) в массиве или в словаре по номерам;
+// порядок словаря -- по номеру записи. ok=false -- ответ не журнал, нужен
+// запасной путь.
+func rciLogText(body []byte) (string, bool) {
+	var root any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return "", false
+	}
+	var entries []map[string]any
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		case map[string]any:
+			if _, ok := x["message"].(string); ok {
+				entries = append(entries, x)
+				return
+			}
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool {
+				a, ea := strconv.Atoi(keys[i])
+				b, eb := strconv.Atoi(keys[j])
+				if ea == nil && eb == nil {
+					return a < b
+				}
+				return keys[i] < keys[j]
+			})
+			for _, k := range keys {
+				walk(x[k])
+			}
+		}
+	}
+	if m, ok := root.(map[string]any); ok {
+		if l, ok := m["log"]; ok {
+			root = l
+		}
+	}
+	walk(root)
+	if len(entries) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		label, _ := e["label"].(string)
+		ts, _ := e["timestamp"].(string)
+		msg, _ := e["message"].(string)
+		if label == "" {
+			label = "I"
+		}
+		if ts != "" {
+			fmt.Fprintf(&b, "%s [%s] %s\n", label, ts, msg)
+		} else {
+			fmt.Fprintf(&b, "%s [] %s\n", label, msg)
+		}
+	}
+	return b.String(), true
 }
 
 // logMessage -- «E [Sep 30 11:31:54] ndm: Core::Ndss: …» → «Core::Ndss: …».

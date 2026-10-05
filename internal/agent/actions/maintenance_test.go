@@ -157,7 +157,7 @@ func TestInstallFirmware_ExecCommand(t *testing.T) {
 			commits++
 			commitAt = i
 		}
-		if c == "-c show log 40" && firstLog < 0 {
+		if c == "-c show log 400" && firstLog < 0 {
 			firstLog = i
 		}
 	}
@@ -666,7 +666,7 @@ func fakeFirmwareExec(before string, after ...string) (ExecFunc, *[]string) {
 		case "-c components commit":
 			committed = true
 			return nil, nil
-		case "-c show log 40":
+		case "-c show log 400":
 			if !committed {
 				return []byte(before), nil
 			}
@@ -772,7 +772,7 @@ func TestInstallFirmware_PreReadFailureIsUnconfirmed(t *testing.T) {
 		case "-c components commit":
 			committed = true
 			return nil, nil
-		case "-c show log 40":
+		case "-c show log 400":
 			if !committed {
 				return nil, errors.New("exit status 1")
 			}
