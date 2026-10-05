@@ -72,6 +72,11 @@ func TestMiniappCarrierPolicyStoppedActive(t *testing.T) {
 		carrierTunnelRow("awg14", "hipvps", "ok", rowHipAlive),
 	)
 	wantCarrier(t, got, "awg10", "policy", false)
+	// Резерв -- живые запасные звенья политики несущего, а не «нет»: иначе
+	// экран сказал бы «запасного нет» при живом hipvps.
+	if len(got.ReserveTunnelIDs) != 1 || got.ReserveTunnelIDs[0] != "awg14" {
+		t.Fatalf("reserve = %v, хотим [awg14]", got.ReserveTunnelIDs)
+	}
 }
 
 // sing-box выбирает маршрут для каждого адреса: несущего нет, даже если

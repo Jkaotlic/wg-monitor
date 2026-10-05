@@ -236,7 +236,14 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 	if row, ok := byCheck["hydraroute"]; ok {
 		_ = json.Unmarshal([]byte(row.DetailsJSON), &hd)
 	}
-	out.CarrierTunnelID, out.CarrierBasis, out.CarrierAlive = miniappCarrier(tunnels, hd, out)
+	var pol *wire.PolicyBrief
+	out.CarrierTunnelID, out.CarrierBasis, out.CarrierAlive, pol = miniappCarrier(tunnels, hd, out)
+	// Несущий политики не совпал с главным выходом (активное звено лежит,
+	// и выход назван по единственному живому): резерв -- живые запасные
+	// звенья политики несущего, а не пусто.
+	if pol != nil && out.CarrierTunnelID != out.EgressTunnelID && out.ReserveTunnelIDs == nil {
+		out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol)
+	}
 	return out
 }
 
@@ -256,9 +263,11 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 //
 // alive -- несущий поднят (или на разовом перезапуске) и его проверка не
 // провалена.
-func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappTraffic) (id, basis string, alive bool) {
+//
+// pol -- политика несущего при basis policy, иначе nil.
+func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappTraffic) (id, basis string, alive bool, pol *wire.PolicyBrief) {
 	if tr.Mode == miniappTrafficSingbox {
-		return "", miniappCarrierNone, false
+		return "", miniappCarrierNone, false, nil
 	}
 	var (
 		carrier *miniappTunnel
@@ -275,7 +284,7 @@ func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappT
 			continue
 		}
 		if carrier == nil || executed > best {
-			carrier, best = t, executed
+			carrier, best, pol = t, executed, p
 		}
 	}
 	basis = miniappCarrierPolicy
@@ -284,9 +293,9 @@ func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappT
 		basis = miniappCarrierSingle
 	}
 	if carrier == nil {
-		return "", miniappCarrierNone, false
+		return "", miniappCarrierNone, false, nil
 	}
-	return carrier.TunnelID, basis, miniappTunnelCarriesRules(carrier) && carrier.Status != "fail"
+	return carrier.TunnelID, basis, miniappTunnelCarriesRules(carrier) && carrier.Status != "fail", pol
 }
 
 // miniappDeriveTrafficMode -- режим и главный выход без несущего.
