@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted } from '../api.js'
+import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted, trustSelfhostedHostKey } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
   SELFHOSTED_GROUPS,
@@ -22,6 +22,9 @@ import {
   sshHostWarning,
   SSH_WIPE_TEXT,
   SSH_CHANGED_TEXT,
+  HOSTKEY_TEXTS,
+  hostKeyView,
+  trustHostKeySheetText,
 } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -273,6 +276,34 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
     )
   }
 
+  // «Доверять новому ключу»: набором названия, как удаление. После --
+  // перечитать сервер: отпечатка больше нет, новый запомнит вход.
+  function trustHostKey() {
+    const text = trustHostKeySheetText(inst)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: HOSTKEY_TEXTS.trustButton,
+        busyLabel: 'Сохраняем…',
+        danger: true,
+        confirmPhrase: deleteConfirmPhrase(inst),
+        confirmStrict: true,
+        errorText: selfhostedErrorText,
+        perform: (typed) => trustSelfhostedHostKey(instanceId, typed),
+        onDone: () => {
+          if (!alive.current) return
+          setInst((prev) => ({ ...prev, ssh_host_key: '' }))
+          setCheck(null)
+          setError('')
+          setNotice(HOSTKEY_TEXTS.trusted)
+          reload()
+        },
+      }),
+    )
+  }
+
+  const hostKey = hostKeyView(inst)
   const title = isNew ? SELFHOSTED_TEXTS.newTitle : inst ? `Сервер «${inst.label || inst.id}»` : 'Сервер'
 
   return (
@@ -306,6 +337,21 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                     <p class={`selfhosted-check selfhosted-check-${check.tone}`} role="status">
                       <Quoted text={check.text} />
                     </p>
+                  )}
+                  {hostKey && (
+                    <div class="selfhosted-hostkey">
+                      <p class="selfhosted-hostkey-label">{HOSTKEY_TEXTS.label}</p>
+                      {hostKey.fingerprint ? (
+                        <code class="selfhosted-hostkey-value">{hostKey.fingerprint}</code>
+                      ) : (
+                        <p class="field-hint">{HOSTKEY_TEXTS.unknown}</p>
+                      )}
+                      {hostKey.canTrust && (
+                        <button type="button" class="btn btn-ghost cabinet-danger" onClick={trustHostKey}>
+                          {HOSTKEY_TEXTS.trustButton}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </Section>

@@ -4158,6 +4158,26 @@ body {
   color: var(--danger);
 }
 
+/* Ключ своего сервера (B2): подпись, отпечаток моноширинно -- длинный, без
+   пробелов, поэтому переносится по любому знаку. */
+.selfhosted-hostkey {
+  margin-top: var(--sp-3);
+}
+
+.selfhosted-hostkey-label {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.selfhosted-hostkey-value {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  margin-bottom: var(--sp-2);
+}
+
 .field-error input {
   border-color: var(--danger);
 }

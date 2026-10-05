@@ -224,6 +224,28 @@ export function deleteInstanceSheetText(inst) {
   }
 }
 
+// Ключ своего сервера (v0.55, B2): отпечаток запоминает первый удачный вход,
+// смена ключа -- отказ входа. Блок только у сервера с адресом SSH.
+export const HOSTKEY_TEXTS = {
+  label: 'Ключ сервера',
+  unknown: 'Ещё не запомнен: запомнится при следующем входе.',
+  trustButton: 'Доверять новому ключу',
+  trusted: 'Старый ключ забыт. Нажмите «Проверить подключение» — новый ключ запомнится.',
+}
+
+export function hostKeyView(inst) {
+  if (!inst?.ssh_host) return null
+  const fingerprint = typeof inst.ssh_host_key === 'string' ? inst.ssh_host_key : ''
+  return { fingerprint, canTrust: fingerprint !== '' }
+}
+
+export function trustHostKeySheetText(inst) {
+  return {
+    title: `Доверять новому ключу сервера «${deleteConfirmPhrase(inst)}»?`,
+    body: 'Запомненный ключ сервера будет забыт, и следующий вход запомнит тот ключ, что предъявит сервер. Делайте это, только если сервер переустанавливали: иначе смена ключа может значить, что отвечает чужая машина.',
+  }
+}
+
 const SELFHOSTED_ERRORS = {
   confirm_mismatch: 'Название сервера набрано не так.',
   not_found: 'Такого сервера больше нет — вернитесь к списку.',

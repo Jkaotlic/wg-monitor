@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   toggleReply: null,
   deleteReply: null,
   checkReply: null,
+  trustReply: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -58,6 +59,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
     checkSelfhosted: (id) => {
       log('check', id)
       return reply(mocks.checkReply, { ok: true, message: '' })
+    },
+    trustSelfhostedHostKey: (id, confirm) => {
+      log('trust', id, confirm)
+      if (!mocks.trustReply) {
+        const inst = mocks.instances.find((i) => i.id === id)
+        if (inst) inst.ssh_host_key = ''
+      }
+      return reply(mocks.trustReply, null)
     },
   }
 })
@@ -131,6 +140,7 @@ beforeEach(() => {
   mocks.toggleReply = null
   mocks.deleteReply = null
   mocks.checkReply = null
+  mocks.trustReply = null
 })
 
 describe('«Серверы»: список', () => {
@@ -339,6 +349,44 @@ describe('экран сервера', () => {
     expect(calls('delete')).toEqual([['delete', 'ams', 'Амстердам']])
     expect(seen.closed).toBe(1)
     cleanup(sheetRoot)
+    cleanup(root)
+  })
+
+  // B2 (v0.55): отпечаток ключа хоста в карточке, «Доверять новому ключу» --
+  // набором названия сервера; после -- слова, что новый ключ запомнит вход.
+  it('ключ сервера: отпечаток моноширинно, «Доверять новому ключу» с набором названия', async () => {
+    const FP = 'SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA'
+    mocks.instances[0].ssh_host_key = FP
+    const { root, seen } = await mountInstance('ams')
+    const key = root.querySelector('.selfhosted-hostkey')
+    expect(key.querySelector('.selfhosted-hostkey-label').textContent).toBe('Ключ сервера')
+    expect(key.querySelector('code').textContent).toBe(FP)
+    await click(button(root, 'Доверять новому ключу'))
+    expect(seen.sheets[0]).toMatchObject({ title: 'Доверять новому ключу сервера «Амстердам»?', danger: true, confirmPhrase: 'Амстердам', confirmStrict: true })
+    expect(seen.sheets[0].body).toContain('переустанавливали')
+    const sheetRoot = await mountNode(<Sheet sheet={seen.sheets[0]} asleep={false} onClose={() => {}} />)
+    const primary = () => [...sheetRoot.querySelectorAll('.sheet-actions button')].pop()
+    await fill(sheetRoot, 'sheet-confirm-input', 'ams')
+    expect(primary().disabled).toBe(true)
+    await fill(sheetRoot, 'sheet-confirm-input', 'Амстердам')
+    await click(primary())
+    expect(calls('trust')).toEqual([['trust', 'ams', 'Амстердам']])
+    await flush()
+    expect(root.querySelector('.selfhosted-hostkey code')).toBeFalsy()
+    expect(root.querySelector('.selfhosted-hostkey').textContent).toContain('Ещё не запомнен: запомнится при следующем входе')
+    expect(button(root, 'Доверять новому ключу')).toBeFalsy()
+    expect(root.querySelector('.connection-notice').textContent).toBe('Старый ключ забыт. Нажмите «Проверить подключение» — новый ключ запомнится.')
+    cleanup(sheetRoot)
+    cleanup(root)
+  })
+
+  it('ключ сервера: без адреса SSH блока нет; не запомнен -- слова без кнопки', async () => {
+    let { root } = await mountInstance('spare')
+    expect(root.querySelector('.selfhosted-hostkey')).toBeFalsy()
+    cleanup(root)
+    ;({ root } = await mountInstance('ams'))
+    expect(root.querySelector('.selfhosted-hostkey').textContent).toContain('Ещё не запомнен: запомнится при следующем входе')
+    expect(button(root, 'Доверять новому ключу')).toBeFalsy()
     cleanup(root)
   })
 

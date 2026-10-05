@@ -479,6 +479,12 @@ export function checkSelfhosted(id) {
   return request(`/selfhosted/${encodeURIComponent(id)}/check`, { method: 'POST' })
 }
 
+// «Доверять новому ключу» (v0.55, B2): сервер забывает запомненный отпечаток
+// ключа своего сервера; confirm -- набранное название, сервер сверяет его сам.
+export function trustSelfhostedHostKey(id, confirm) {
+  return request(`/selfhosted/${encodeURIComponent(id)}/trust-host-key`, { method: 'POST', body: JSON.stringify({ confirm }) })
+}
+
 // VPN-туннели (цикл 4 «бот без слеш-команд»). Удаление необратимо: confirm --
 // набранное имя VPN-туннеля, сервер сверяет его сам и сам считает правила по
 // свежему снимку агента. Пока снимка нет, ответ -- {state:"checking"}, и тот
