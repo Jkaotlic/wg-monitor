@@ -195,6 +195,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 			return
 		}
+		if writeMiniappCabinetKeyError(d, w, err) {
+			return
+		}
 		if err != nil {
 			// Текст ошибки кабинета -- только в журнал (реализация кабинета
 			// уже убрала из него ключ и код); человеку -- слова из таблицы.

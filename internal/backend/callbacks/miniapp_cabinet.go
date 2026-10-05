@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 // Кабинеты провайдеров для мини-аппа. Реализация backend.VPNCabinet живёт
@@ -40,6 +42,9 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 	switch provider {
 	case providerAmnezia:
 		key, err := r.getAmneziaKeyByID(routerID, "")
+		if isSealedStoreError(err) {
+			return backend.VPNIssuedConfig{}, err
+		}
 		if err != nil || key == "" {
 			return backend.VPNIssuedConfig{}, fmt.Errorf("ключ Amnezia Premium не сохранён для этого роутера")
 		}
@@ -50,6 +55,9 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 		}
 		return backend.VPNIssuedConfig{TunnelName: "amnezia_" + country, Conf: conf, Backend: "nativewg"}, nil
 	case providerHideMy:
+		if _, err := r.listHideMyCodes(routerID); isSealedStoreError(err) {
+			return backend.VPNIssuedConfig{}, err
+		}
 		stored, ok := r.hideMyStoredCode(routerID, "")
 		if !ok {
 			return backend.VPNIssuedConfig{}, fmt.Errorf("код HideMy.name не сохранён для этого роутера")
@@ -75,6 +83,10 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
 	acc := backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium"}
 	key, err := r.getAmneziaKeyByID(routerID, "")
+	if note := sealedStoreNote(err); note != "" {
+		acc.Note = note
+		return acc, nil
+	}
 	if err != nil || key == "" {
 		acc.Note = "Ключ кабинета не сохранён — добавьте ключ vpn:// кнопкой «Добавить ключ»."
 		return acc, nil
@@ -120,6 +132,10 @@ func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (
 
 func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
 	acc := backend.VPNAccount{Provider: providerHideMy, Label: "HideMy.name"}
+	if _, err := r.listHideMyCodes(routerID); sealedStoreNote(err) != "" {
+		acc.Note = sealedStoreNote(err)
+		return acc, nil
+	}
 	stored, ok := r.hideMyStoredCode(routerID, "")
 	if !ok {
 		acc.Note = "Код доступа не сохранён — добавьте его кнопкой «Добавить код»."
@@ -152,4 +168,22 @@ func (r *Router) NotifyRouterTopic(ctx context.Context, routerID int64, text str
 		return fmt.Errorf("notify router: %w", err)
 	}
 	return nil
+}
+
+// isSealedStoreError -- хранилище кабинета зашифровано, а ключа нет или он
+// не тот (v0.55, B1). Такую ошибку нельзя выдавать за «ключ не сохранён»:
+// человек завёл бы ключ заново, а прежние лежат целыми в файле.
+func isSealedStoreError(err error) bool {
+	return errors.Is(err, sealedfile.ErrKeyMissing) || errors.Is(err, sealedfile.ErrUnreadable)
+}
+
+// sealedStoreNote -- строка экрана кабинета для такой ошибки; "" -- причина другая.
+func sealedStoreNote(err error) string {
+	switch {
+	case errors.Is(err, sealedfile.ErrKeyMissing):
+		return "Ключи кабинетов на сервере не прочитать: ключ шифрования не найден — напишите администратору."
+	case errors.Is(err, sealedfile.ErrUnreadable):
+		return "Ключи кабинетов на сервере не расшифровываются: ключ шифрования не тот — напишите администратору."
+	}
+	return ""
 }

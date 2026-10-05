@@ -280,6 +280,9 @@ func writeMiniappAwg3ErrorFor(d Deps, w http.ResponseWriter, op string, err erro
 		}
 		miniappCabinetLogger(d).Warn("awg3-панель: "+op+" не удалось", "kind", pe.Kind, "status", pe.Status, "err", pe.Error())
 		writeMiniappCabinetJSON(w, status, body)
+	// Ключ шифрования -- админу словами; допущенному не админу -- общий
+	// текст без причины, как у прочих отказов панели (v0.51).
+	case admin && writeMiniappCabinetKeyError(d, w, err):
 	default:
 		miniappCabinetLogger(d).Error("awg3-панель: "+op+" не удалось", "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)

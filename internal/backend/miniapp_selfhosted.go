@@ -151,6 +151,7 @@ func writeMiniappSelfHostedError(d Deps, w http.ResponseWriter, op string, err e
 		writeMiniappCabinetError(w, http.StatusConflict, "instance_disabled")
 	case errors.Is(err, selfhostedamnezia.ErrInstanceNotReady):
 		writeMiniappCabinetError(w, http.StatusConflict, "instance_not_ready")
+	case writeMiniappCabinetKeyError(d, w, err):
 	default:
 		miniappCabinetLogger(d).Error("свой сервер: "+op+" не удалось", "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
@@ -162,6 +163,9 @@ func writeMiniappSelfHostedError(d Deps, w http.ResponseWriter, op string, err e
 func miniappSelfHostedIssueError(d Deps, w http.ResponseWriter, err error) {
 	if errors.Is(err, selfhostedamnezia.ErrInstanceNotFound) || errors.Is(err, selfhostedamnezia.ErrInstanceDisabled) || errors.Is(err, selfhostedamnezia.ErrInstanceNotReady) {
 		writeMiniappSelfHostedError(d, w, "выпуск", err)
+		return
+	}
+	if writeMiniappCabinetKeyError(d, w, err) {
 		return
 	}
 	miniappCabinetLogger(d).Warn("свой сервер: выпуск не удался", "err", err)
