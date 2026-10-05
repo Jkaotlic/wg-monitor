@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
@@ -631,16 +632,34 @@ func closeHardAsRecovery(d Deps, userID int64, nickname, checkName, reason strin
 // clearMissingResolverGuardHard closes an open resolver_guard HARD when a fresh
 // full report no longer carries the check: the watchdog was switched off by a
 // file edit, its config broke, or the agent was rolled back. Nothing else would
-// ever close it, and realert would remind about the fallback forever. A full
-// report is one with agent_heartbeat — the agent appends it to every report.
+// ever close it, and realert would remind about the fallback forever.
 func clearMissingResolverGuardHard(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
+	clearMissingCheckHard(d, userID, nickname, checks, reportIsFresh, resolverGuardCheck, resolverGuardWatchdogOff)
+}
+
+// dnsRuCheck -- серверы имён русских сайтов (агент v0.55, спека C). Строки нет,
+// когда в настройках роутера нет ру-апстримов.
+const dnsRuCheck = "dns_ru"
+
+// clearMissingDNSRuHard закрывает открытую тревогу dns_ru, когда свежий полный
+// отчёт её больше не несёт: ру-апстримы убрали из настроек роутера (или агент
+// откатили). Иначе напоминания шли бы вечно.
+func clearMissingDNSRuHard(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
+	clearMissingCheckHard(d, userID, nickname, checks, reportIsFresh, dnsRuCheck, alerts.DNSRuGoneReason)
+}
+
+// clearMissingCheckHard -- общее правило для проверок, которые агент просто
+// перестаёт присылать: свежий полный отчёт (с agent_heartbeat -- агент
+// добавляет его в каждый) без строки checkName закрывает её HARD с причиной
+// reason.
+func clearMissingCheckHard(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool, checkName, reason string) {
 	if !reportIsFresh || d.DB == nil {
 		return
 	}
 	full := false
 	for _, c := range checks {
 		name := strings.TrimSpace(c.Name)
-		if strings.EqualFold(name, resolverGuardCheck) {
+		if strings.EqualFold(name, checkName) {
 			return
 		}
 		if name == "agent_heartbeat" {
@@ -650,19 +669,19 @@ func clearMissingResolverGuardHard(d Deps, userID int64, nickname string, checks
 	if !full {
 		return
 	}
-	prev, err := d.DB.State().Get(userID, resolverGuardCheck)
+	prev, err := d.DB.State().Get(userID, checkName)
 	if err != nil {
-		d.Logger.Warn("clear missing resolver_guard hard: state get", "nickname", nickname, "err", err)
+		d.Logger.Warn("clear missing check hard: state get", "nickname", nickname, "check", checkName, "err", err)
 		return
 	}
 	if prev.CurrentStatus != "hard" {
 		return
 	}
-	if err := closeHardAsRecovery(d, userID, nickname, resolverGuardCheck, resolverGuardWatchdogOff, prev); err != nil {
-		d.Logger.Warn("clear missing resolver_guard hard: dispatch recovery", "nickname", nickname, "err", err)
+	if err := closeHardAsRecovery(d, userID, nickname, checkName, reason, prev); err != nil {
+		d.Logger.Warn("clear missing check hard: dispatch recovery", "nickname", nickname, "check", checkName, "err", err)
 		return
 	}
-	d.Logger.Info("cleared resolver_guard hard: check gone from a fresh report", "nickname", nickname)
+	d.Logger.Info("cleared hard: check gone from a fresh report", "nickname", nickname, "check", checkName)
 }
 
 func clearMissingTunnelHards(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
@@ -1078,6 +1097,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		if rep.Trigger != wire.TriggerHook {
 			clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
 			clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
+			clearMissingDNSRuHard(d, uid, nick, rep.Checks, reportIsFresh)
 		}
 		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
 		// resumed marker. Per-check status changes already emit dedicated

@@ -578,7 +578,8 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 	}
 	out := make([]db.EventRow, 0, len(rows))
 	for _, row := range rows {
-		if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
+		// dns_ru -- то же: строки нет, когда ру-апстримов в настройках нет.
+		if (row.CheckName == resolverGuardCheck || row.CheckName == dnsRuCheck) && haveHeartbeat && row.TS.Before(heartbeatTS) {
 			continue
 		}
 		if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
