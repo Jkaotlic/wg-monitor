@@ -81,10 +81,6 @@ func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusUnprocessableEntity, "no_scenario",
 				"эту поломку отсюда починить нечем")
 			return
-		case errors.Is(err, linkrepair.ErrUnknownOrigin):
-			writeJSONError(w, http.StatusUnprocessableEntity, "unknown_origin",
-				"не помним, каким конфигом поднят этот VPN-туннель — перевыпустить нечего")
-			return
 		case errors.Is(err, linkrepair.ErrAlreadyRunning):
 			writeJSONError(w, http.StatusConflict, "already_running", err.Error())
 			return

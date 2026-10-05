@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 )
 
 func TestScenarioFor_Tunnel(t *testing.T) {
@@ -15,14 +14,8 @@ func TestScenarioFor_Tunnel(t *testing.T) {
 	if sc.TunnelID != "awg12" {
 		t.Fatalf("TunnelID = %q, хотим awg12", sc.TunnelID)
 	}
-	// Между уводом на резерв и возвратом лежит чеклист мастера замены как
-	// есть: перевыпуск -- это он и есть, дублировать его нельзя.
-	want := []string{
-		StepFailover,
-		replace.StepIssue, replace.StepAnalyze, replace.StepImport, replace.StepHandshake,
-		replace.StepPromote, replace.StepVerify, replace.StepRetire,
-		StepFailback,
-	}
+	// Лесенка: увести, поднять, тот же конфиг, пересоздать, вернуть.
+	want := []string{StepFailover, StepRestart, StepReissue, StepRecreate, StepFailback}
 	if len(sc.Steps) != len(want) {
 		t.Fatalf("шагов %d, хотим %d", len(sc.Steps), len(want))
 	}

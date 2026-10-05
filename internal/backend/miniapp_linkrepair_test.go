@@ -33,10 +33,11 @@ func linkRepairDeps(t *testing.T) (Deps, int64, int64) {
 	}
 	repair := &linkrepair.Deps{
 		Store:      store,
-		Replace:    *eng,
-		Origin:     LinkRepairOrigin(d),
+		Probe:      *eng,
+		Source:     RepairSource(nil, nil, d),
+		Settings:   LinkRepairSettings(d, nil),
+		SaveOption: LinkRepairSaveOption(d, nil),
 		Attempts:   linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(int64) bool { return true },
 		Commands:   sink,
 		BaseCtx:    context.Background(),
 		AwaitStep:  50 * time.Millisecond,

@@ -3,6 +3,7 @@ package linkrepair
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,8 +26,9 @@ var (
 	// ErrAlreadyRunning -- замок общий с мастером замены: две операции разом
 	// оставили бы маршрутизацию в состоянии, которого не ждал никто.
 	ErrAlreadyRunning = errors.New("на этом роутере уже идёт починка или замена конфига")
-	ErrAutoDisabled   = errors.New("полуавтомат выключен владельцем")
-	ErrUnknownOrigin  = errors.New("не помним, каким конфигом поднят этот VPN-туннель")
+	// ErrAutoDisabled -- автозапуск не состоялся: автопочинка этого
+	// VPN-туннеля выключена или стоит (лимит попыток, провал до человека).
+	ErrAutoDisabled = errors.New("автопочинка этого VPN-туннеля выключена или стоит")
 	// ErrNotInAnySet -- VPN-туннель не стоит ни в одном общем наборе правил:
 	// через него ничего не идёт, и чинить нечего. Отдельной меткой, чтобы
 	// отчёт не пугал «заблокированное не открывается» -- для такого туннеля
@@ -34,26 +36,64 @@ var (
 	ErrNotInAnySet = errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
 )
 
-// OriginReader -- чем была поднята линия. Пустой ok означает «система этого
-// не помнит»: у линий, заведённых руками или до мастера замены, строки нет,
-// и выдумать провайдера за них нечем.
-type OriginReader interface {
-	// Своего сервера (selfhosted) среди провайдеров происхождения нет и быть
-	// не должно: перевыпуск там -- новый клиент на общем VPS (спека цикла 3
-	// «кабинеты в мини-апп», решение 8). /vpn/issue для своего сервера
-	// происхождение не пишет.
-	Get(routerID int64, tunnelID string) (provider, option string, ok bool)
+// MinAgentLadder -- агент, который понимает tunnel_import target_id. Старые
+// агенты аргумент молча пропускают и, не найдя туннель по имени, заводят
+// НОВЫЙ -- ровно тот мусор, от которого лесенка уходит. Поэтому ступени 2-3
+// на агенте старше этого (или неизвестной версии) не выполняются вовсе.
+const MinAgentLadder = "v0.54.0"
+
+// maxRelocations -- сколько других локаций пробует ступень «пересоздать».
+// Третья смена страны подряд -- уже не починка, а перебор.
+const maxRelocations = 2
+
+// Setting -- настройка автопочинки туннеля, как её видит движок.
+type Setting struct {
+	Enabled       bool
+	Provider      string
+	Option        string
+	AllowRelocate bool
 }
 
+// Reporter -- как движок говорит с людьми по ходу починки. Реализация живёт
+// в пакете notify (правит сообщения тревоги); nil в Deps -- молчать.
+type Reporter interface {
+	Begin(ctx context.Context, routerID int64, checkName string) Thread
+}
+
+// Thread -- одна починка глазами людей.
+type Thread interface {
+	Progress(ctx context.Context, text string)
+	// Done -- починил: правка; ответ о восстановлении гасится.
+	Done(ctx context.Context, text string)
+	// NeedHuman -- правка и ответ со звуком; пустой action -- только правка.
+	NeedHuman(ctx context.Context, text, action string)
+	// NotStarted -- правка «Автопочинка не запускалась: …».
+	NotStarted(ctx context.Context, why string)
+}
+
+// nopThread -- нить без людей: Report не задан.
+type nopThread struct{}
+
+func (nopThread) Progress(context.Context, string)          {}
+func (nopThread) Done(context.Context, string)              {}
+func (nopThread) NeedHuman(context.Context, string, string) {}
+func (nopThread) NotStarted(context.Context, string)        {}
+
 type Deps struct {
-	Store   *provision.Store
-	Replace replace.Deps
-	Origin  OriginReader
+	Store *provision.Store
+	// Probe -- проверки мастера замены (WaitHandshake, VerifyExit,
+	// AnalyzeConf): те же критерии «получилось», без его задания и шагов.
+	Probe  replace.Deps
+	Source Source
+	// Settings -- настройка автопочинки туннеля; ok=false -- строки нет
+	// (выключено).
+	Settings func(routerID int64, tunnelID string) (Setting, bool)
+	// SaveOption -- удачная смена локации запоминается в настройке туннеля.
+	SaveOption func(routerID int64, tunnelID, provider, option string)
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
-	Attempts   Attempts
-	AutoRepair func(routerID int64) bool
-	Commands   replace.Commander
-	Notify     func(ctx context.Context, routerID int64, text string)
+	Attempts Attempts
+	Commands replace.Commander
+	Report   Reporter
 	// BaseCtx принадлежит процессу, а не запросу: починка переживает
 	// возврат HTTP-хендлера, который её запустил.
 	BaseCtx   context.Context
@@ -68,7 +108,7 @@ type StartReq struct {
 	CheckName    string
 	AgentVersion string
 	// Auto -- запуск сторожем, а не кнопкой. Только для него действуют
-	// выключатель полуавтомата и счётчик попыток: человек, нажавший
+	// выключатель автопочинки и счётчик попыток: человек, нажавший
 	// «Починить», просил явно, и отказывать ему из-за счётчика неверно.
 	Auto bool
 	// TunnelName -- имя VPN-туннеля, каким его знает запускающий: автозапуск
@@ -100,10 +140,18 @@ func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, boo
 // и так, как он их назвал: идентификатор («awg12») он нигде не видел.
 type lineNames struct {
 	broken string
+	// backup -- запасной VPN-туннель, на котором СЕЙЧАС идёт трафик. Пусто --
+	// резерва нет или увести не вышло.
 	backup string
-	// noSnapshot — снимка от роутера нет (молчит или прислал непонятное):
+	// noSnapshot -- снимка от роутера нет (молчит или прислал непонятное):
 	// есть ли запасной VPN-туннель и подхватил ли он трафик, неизвестно.
 	noSnapshot bool
+	// notInSet -- VPN-туннель вне общих наборов правил: через него ничего не
+	// идёт.
+	notInSet bool
+	// failbackFailed -- VPN-туннель починен, но вернуть на него трафик не
+	// вышло: трафик остался на запасном.
+	failbackFailed bool
 }
 
 // namesFor берёт имена из того же снимка политики, где движок нашёл линии:
@@ -124,6 +172,47 @@ func namesFor(pol wire.RoutePolicySummary, brokenID, backupID string) lineNames 
 	return lineNames{broken: name(brokenID), backup: name(backupID)}
 }
 
+// orID -- первое непустое значение.
+func orID(vals ...string) string {
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// agentCanLadder -- понимает ли агент tunnel_import target_id. Неизвестная
+// или нечитаемая версия -- «нет»: цена ошибки здесь -- лишний VPN-туннель на
+// роутере человека.
+func agentCanLadder(version string) bool {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return false
+	}
+	if strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V") == strings.TrimPrefix(MinAgentLadder, "v") {
+		return true
+	}
+	return upstream.SoftwareNewerThan(MinAgentLadder, v)
+}
+
+func (d Deps) baseCtx() context.Context {
+	if d.BaseCtx != nil {
+		return d.BaseCtx
+	}
+	return context.Background()
+}
+
+func (d Deps) begin(ctx context.Context, req StartReq) Thread {
+	if d.Report == nil {
+		return nopThread{}
+	}
+	if th := d.Report.Begin(ctx, req.RouterID, req.CheckName); th != nil {
+		return th
+	}
+	return nopThread{}
+}
+
 // Start заводит починку. Все отказы выдаются ДО замка и до первой команды:
 // это единственное место, где отказ ничего не стоит.
 func (d Deps) Start(req StartReq) (string, error) {
@@ -131,106 +220,395 @@ func (d Deps) Start(req StartReq) (string, error) {
 	if !ok {
 		return "", ErrNoScenario
 	}
+	ctx := d.baseCtx()
+	var set Setting
+	if d.Settings != nil {
+		if s, found := d.Settings(req.RouterID, sc.TunnelID); found {
+			set = s
+		}
+	}
+	// notStarted -- при автозапуске люди уже получили тревогу; почему
+	// починка не пошла, дописывается к ней. Ручному запуску ответ виден на
+	// экране сразу.
+	notStarted := func(why string) {
+		if req.Auto {
+			d.begin(ctx, req).NotStarted(ctx, why)
+		}
+	}
 	if req.Auto {
-		if d.AutoRepair != nil && !d.AutoRepair(req.RouterID) {
+		// Выключено -- молчим: тревога уже ушла, а «не запускалась» про
+		// выключенное -- шум.
+		if !set.Enabled {
 			return "", ErrAutoDisabled
 		}
 		if allow, why := d.Attempts.Allow(req.Nickname, req.CheckName); !allow {
+			notStarted(why)
 			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
 		}
 	}
-	// Порог агента тот же, что у мастера замены: без route_policy_promote и
-	// tunnel_power сценарий не доживёт до конца, а откат опирается на них же.
+	// Порог агента тот же, что у мастера замены: без route_policy_promote
+	// увести и вернуть трафик нечем.
 	if upstream.SoftwareNewerThan(req.AgentVersion, replace.MinAgentVersion) {
+		notStarted("агент роутера слишком старый — " + ActAgentOld)
 		return "", fmt.Errorf("%w: на роутере агент %s, нужен %s или новее",
 			replace.ErrAgentTooOld, req.AgentVersion, replace.MinAgentVersion)
 	}
 	if !d.Store.TryLock(req.Nickname) {
+		notStarted("уже идёт починка или замена конфига")
 		return "", ErrAlreadyRunning
 	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
-	go d.run(job.ID, req, sc)
+	th := d.begin(ctx, req)
+	go d.run(job.ID, req, sc, set, th)
 	return job.ID, nil
 }
 
-func (d Deps) run(jobID string, req StartReq, sc Scenario) {
+func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Thread) {
 	defer d.Store.Unlock(req.Nickname)
-	ctx := d.BaseCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := d.baseCtx()
 
 	pol, backup, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
 	if err != nil {
-		// Имя VPN-туннеля findPolicy достаёт из снимка и тогда, когда набора
-		// не нашлось. Не пришёл сам снимок -- имя знает запускающий
-		// (req.TunnelName); не знает и он -- остаётся id.
-		if brokenName == "" {
-			brokenName = strings.TrimSpace(req.TunnelName)
+		// Снимка нет или VPN-туннель не в наборе -- чинить вслепую нельзя.
+		// Имя -- из снимка, иначе от запускающего, иначе id.
+		names := lineNames{broken: orID(brokenName, req.TunnelName, sc.TunnelID)}
+		action := ""
+		if errors.Is(err, ErrNotInAnySet) {
+			names.notInSet = true
+		} else {
+			names.noSnapshot = true
+			action = "роутер не ответил — проверьте, на связи ли он"
 		}
-		if brokenName == "" {
-			brokenName = sc.TunnelID
-		}
-		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: brokenName, noSnapshot: !errors.Is(err, ErrNotInAnySet)}, err)
+		d.finishFail(ctx, jobID, req, th, StepFailover, names, err, action)
 		return
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
+	if names.broken == sc.TunnelID {
+		names.broken = orID(brokenName, req.TunnelName, sc.TunnelID)
+	}
+	var log []string // что сделано -- для правок и итоговой фразы
 
-	// Шаг 1. Увести трафик, пока чиним. Резерва может не быть -- это не
+	// Ступень 0. Увести трафик, пока чиним. Резерва может не быть -- это не
 	// провал: чинить всё равно надо, человек просто побудет без обхода.
 	if backup != "" {
-		d.step(jobID, StepFailover, provision.StepActive, "уводим трафик на резерв")
+		d.step(jobID, StepFailover, provision.StepActive, "уводим трафик на запасной VPN-туннель «"+names.backup+"»")
 		if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
 			"policy_name": pol.Name,
 			"tunnel_id":   backup,
 		}); err != nil {
-			d.fail(ctx, jobID, req, StepFailover, lineNames{broken: names.broken},
-				fmt.Errorf("увести трафик на запасной VPN-туннель «%s» не вышло: %w", names.backup, err))
+			cause := fmt.Errorf("увести трафик на запасной VPN-туннель «%s» не вышло: %w", names.backup, err)
+			d.finishFail(ctx, jobID, req, th, StepFailover, lineNames{broken: names.broken}, cause, "")
 			return
 		}
-		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через «"+names.backup+"»")
+		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
+		log = append(log, textMovedTo(names.backup))
 	} else {
-		d.step(jobID, StepFailover, provision.StepDone, "резерва нет — чиним как есть")
+		d.step(jobID, StepFailover, provision.StepDone, "запасного VPN-туннеля нет — чиним как есть")
 	}
 
-	// Шаг 2. Замена конфига теми же параметрами, что были у упавшей линии.
-	provider, option, ok := d.Origin.Get(req.RouterID, sc.TunnelID)
-	if !ok {
-		d.fail(ctx, jobID, req, replace.StepIssue, names, ErrUnknownOrigin)
+	// Ступень 1. Поднять.
+	th.Progress(ctx, progressText(names, log, "перезапускаю VPN-туннель «"+names.broken+"»"))
+	if d.tryRestart(ctx, jobID, req, sc, names) {
+		d.skip(jobID, "не понадобилось", StepReissue, StepRecreate)
+		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRestarted))
 		return
 	}
-	// Мастер замены внутри починки МОЛЧИТ. Его текст говорит про «замену
-	// конфига» языком инженера, а движок уже рассказывает ту же историю
-	// по-человечески: два сообщения об одном событии -- это не забота, а шум.
-	inner := d.Replace
-	inner.Notify = nil
-	err = inner.RunOnJob(ctx, jobID, replace.StartReq{
-		RouterID: req.RouterID, Nickname: req.Nickname,
-		Provider: provider, OptionID: option,
-		OldTunnelID: sc.TunnelID, PolicyName: pol.Name,
-		AgentVersion: req.AgentVersion,
+	log = append(log, textRestartNoHelp)
+	if d.aborted(ctx, jobID, req, th, names, log) {
+		return
+	}
+
+	// Ступени 2-3 требуют агент с target_id и источник.
+	if !agentCanLadder(req.AgentVersion) {
+		d.skip(jobID, "агент роутера не умеет заменять конфиг на месте", StepReissue, StepRecreate)
+		d.finishNeedHuman(ctx, jobID, req, th, names, log, ActAgentOld)
+		return
+	}
+	if set.Provider == "" || d.Source == nil {
+		d.skip(jobID, "источник не выбран", StepReissue, StepRecreate)
+		d.finishNeedHuman(ctx, jobID, req, th, names, log, ActNoSource)
+		return
+	}
+
+	// Ступень 2. Тот же конфиг на месте.
+	th.Progress(ctx, progressText(names, log, "выпускаю конфиг заново из "+sourceLabel(set.Provider)))
+	ok, nh := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
+		return d.Source.Issue(ctx, req.RouterID, set.Provider, set.Option)
 	})
-	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, err == nil)
+	if ok {
+		d.skip(jobID, "не понадобилось", StepRecreate)
+		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textReissued(set.Provider)))
+		return
 	}
-	if err != nil {
-		// Мастер замены уже пометил свой шаг провалившимся и откатился.
-		// Здесь остаётся сказать это человеку и закрыть задание.
-		d.step(jobID, StepFailback, provision.StepFailed, "VPN-туннель не вернулся")
-		d.Store.Update(jobID, func(j *provision.Job) {
-			j.State = provision.StateFailed
-			j.Hint = err.Error()
-		})
-		d.notifyResult(ctx, req, false, names, err)
+	if nh != nil {
+		d.skip(jobID, "не понадобилось: источник ждёт человека", StepRecreate)
+		d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
+		return
+	}
+	log = append(log, textReissueNoHelp)
+	if d.aborted(ctx, jobID, req, th, names, log) {
 		return
 	}
 
-	// Шаг 3. Мастер замены уже поставил новую линию первым звеном политики --
-	// возврат состоялся. Шаг закрывается фактом, а не ещё одной командой.
-	d.step(jobID, StepFailback, provision.StepDone, "VPN-туннель вернулся на место")
+	// Ступень 3. Пересоздать.
+	ok, nh, used := d.tryRecreate(ctx, jobID, req, sc, names, set, th, log)
+	if ok {
+		if set.Provider != "awg3" && used != "" && used != set.Option && d.SaveOption != nil {
+			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used)
+		}
+		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRecreated(set.Provider, used)))
+		return
+	}
+	if nh != nil {
+		d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
+		return
+	}
+	if d.aborted(ctx, jobID, req, th, names, log) {
+		return
+	}
+	d.finishNeedHuman(ctx, jobID, req, th, names, log, ActServerDead)
+}
+
+// tryRestart -- ступень 1: перезапуск и доказательство.
+func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames) bool {
+	d.step(jobID, StepRestart, provision.StepActive, "перезапускаю VPN-туннель «"+names.broken+"»")
+	if _, err := d.command(ctx, req.RouterID, "tunnel_restart", map[string]any{"tunnel_id": sc.TunnelID}); err != nil {
+		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не прошёл: "+err.Error())
+		return false
+	}
+	verdict, err := d.prove(ctx, req.RouterID, sc.TunnelID, names.broken)
+	if err != nil {
+		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не помог: "+err.Error())
+		return false
+	}
+	d.step(jobID, StepRestart, provision.StepDone, "перезапустил, "+verdict)
+	return true
+}
+
+// prove -- доказательство ступени: свежий обмен ключами и выход через
+// VPN-туннель, отличный от прямого.
+func (d Deps) prove(ctx context.Context, routerID int64, tunnelID, name string) (string, error) {
+	if err := d.Probe.WaitHandshake(ctx, routerID, tunnelID, name); err != nil {
+		if ctx.Err() != nil {
+			return "", errStopped
+		}
+		return "", err
+	}
+	verdict, err := d.Probe.VerifyExit(ctx, routerID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", errStopped
+		}
+		return "", err
+	}
+	return verdict, nil
+}
+
+// errStopped -- бэкенд останавливается: ступень не провалена, её прервали.
+var errStopped = errors.New("починка прервана: бэкенд перезапускается")
+
+// tryIssue -- ступени 2 и 3: выпустить конфиг, проверить, положить в ТОТ ЖЕ
+// VPN-туннель (target_id), доказать. nh != nil -- источник ждёт человека.
+func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc Scenario, names lineNames, issue func() (replace.Issued, error)) (bool, *NeedHuman) {
+	d.step(jobID, step, provision.StepActive, "выпускаю конфиг")
+	issued, err := issue()
+	if err != nil {
+		var nh *NeedHuman
+		if errors.As(err, &nh) {
+			d.logWarn("linkrepair: источник ждёт человека", "step", step, "err", nh.Cause)
+			d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг — "+nh.Action)
+			return false, nh
+		}
+		// Сырые ошибки источника (кабинет, база) -- оператору в лог.
+		d.logWarn("linkrepair: источник не выдал конфиг", "step", step, "err", err)
+		d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг")
+		return false, nil
+	}
+	if len(issued.Conf) == 0 {
+		d.step(jobID, step, provision.StepFailed, "источник вернул пустой конфиг")
+		return false, nil
+	}
+	if detail, _, err := d.Probe.AnalyzeConf(ctx, req.RouterID, issued.Conf); err != nil {
+		d.step(jobID, step, provision.StepFailed, detail)
+		return false, nil
+	}
+	if ctx.Err() != nil {
+		d.step(jobID, step, provision.StepFailed, errStopped.Error())
+		return false, nil
+	}
+	backend := issued.Backend
+	if backend == "" {
+		backend = "nativewg"
+	}
+	d.step(jobID, step, provision.StepActive, "кладу конфиг в VPN-туннель «"+names.broken+"»")
+	if _, err := d.command(ctx, req.RouterID, "tunnel_import", map[string]any{
+		"conf":      base64.StdEncoding.EncodeToString(issued.Conf),
+		"name":      issued.TunnelName,
+		"replace":   true,
+		"backend":   backend,
+		"target_id": sc.TunnelID,
+	}); err != nil {
+		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
+		return false, nil
+	}
+	verdict, err := d.prove(ctx, req.RouterID, sc.TunnelID, names.broken)
+	if err != nil {
+		d.step(jobID, step, provision.StepFailed, "конфиг заменён, но "+err.Error())
+		return false, nil
+	}
+	d.step(jobID, step, provision.StepDone, "конфиг заменён, "+verdict)
+	return true, nil
+}
+
+// tryRecreate -- ступень 3. Свой сервер: новый пир. Кабинет: другая
+// локация -- только если человек разрешил её менять. used -- вариант,
+// который помог.
+func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string) (ok bool, nh *NeedHuman, used string) {
+	if set.Provider == "awg3" {
+		th.Progress(ctx, progressText(names, log, "завожу новое подключение на своём сервере"))
+		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+			return d.Source.Fresh(ctx, req.RouterID, set.Provider, set.Option)
+		})
+		return ok, nh, set.Option
+	}
+	if !set.AllowRelocate {
+		d.skip(jobID, "смена локации не разрешена", StepRecreate)
+		return false, nil, ""
+	}
+	opts, err := d.Source.Options(ctx, req.RouterID, set.Provider)
+	if err != nil {
+		if errors.As(err, &nh) {
+			d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не дал список локаций — "+nh.Action)
+			return false, nh, ""
+		}
+		d.logWarn("linkrepair: варианты кабинета не получены", "err", err)
+		d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не дал список локаций")
+		return false, nil, ""
+	}
+	tried := 0
+	for _, opt := range opts {
+		if opt == "" || opt == set.Option {
+			continue
+		}
+		if tried == maxRelocations || ctx.Err() != nil {
+			break
+		}
+		tried++
+		th.Progress(ctx, progressText(names, log, "пробую локацию «"+opt+"»"))
+		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+			return d.Source.Issue(ctx, req.RouterID, set.Provider, opt)
+		})
+		if ok {
+			return true, nil, opt
+		}
+		if nh != nil {
+			return false, nh, ""
+		}
+	}
+	if tried == 0 {
+		d.step(jobID, StepRecreate, provision.StepFailed, "другой локации у кабинета нет")
+	}
+	return false, nil, ""
+}
+
+// aborted -- бэкенд останавливается: дальше ступени не идут, трафик остаётся
+// там, где он сейчас. Это не вердикт автопочинке, поэтому стоп не ставится.
+func (d Deps) aborted(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	d.skip(jobID, errStopped.Error(), StepRestart, StepReissue, StepRecreate)
+	d.skipFailback(jobID, names)
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = errStopped.Error()
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), "")
+	return true
+}
+
+// finishOK -- ступень доказана: вернуть трафик (если уводили), снять стоп,
+// сказать людям.
+func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Thread, pol wire.RoutePolicySummary, sc Scenario, names lineNames, log []string) {
+	if names.backup != "" {
+		d.step(jobID, StepFailback, provision.StepActive, "возвращаю трафик на VPN-туннель «"+names.broken+"»")
+		if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
+			"policy_name": pol.Name,
+			"tunnel_id":   sc.TunnelID,
+		}); err != nil {
+			// VPN-туннель починен, трафик на рабочем запасном -- это не
+			// провал починки, но человеку сказать надо.
+			d.step(jobID, StepFailback, provision.StepFailed, "вернуть трафик не вышло, он идёт через запасной VPN-туннель «"+names.backup+"»: "+err.Error())
+			names.failbackFailed = true
+		} else {
+			d.step(jobID, StepFailback, provision.StepDone, "трафик снова идёт через VPN-туннель «"+names.broken+"»")
+		}
+	} else {
+		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
+	}
+	if req.Auto {
+		_ = d.Attempts.Record(req.Nickname, req.CheckName, true)
+	} else {
+		_ = d.Attempts.Clear(req.Nickname, req.CheckName)
+	}
 	d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
-	d.notifyResult(ctx, req, true, names, nil)
+	th.Done(context.WithoutCancel(ctx), doneText(names, log))
+}
+
+// finishNeedHuman -- лесенка кончилась без доказанной ступени: трафик
+// остаётся на резерве (если он был), VPN-туннель -- как есть. Ничего не
+// откатывается «назад на сломанный» (D2).
+func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
+	}
+	text := failText(names, log)
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = orID(action, text)
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), text, action)
+}
+
+// finishFail -- провал до лесенки (снимок, увод): шаг step провален с
+// причиной, остальные ступени не начинались.
+func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thread, step string, names lineNames, cause error, action string) {
+	d.step(jobID, step, provision.StepFailed, cause.Error())
+	d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate)
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
+	}
+	text := failText(names, nil)
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = orID(action, cause.Error())
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), text, action)
+}
+
+func (d Deps) skipFailback(jobID string, names lineNames) {
+	if names.backup != "" {
+		d.skip(jobID, "трафик остаётся на запасном VPN-туннеле «"+names.backup+"»", StepFailback)
+		return
+	}
+	d.skip(jobID, "возвращать нечего", StepFailback)
+}
+
+// skip помечает пропущенными шаги, которые ещё не начинались.
+func (d Deps) skip(jobID, detail string, steps ...string) {
+	d.Store.Update(jobID, func(j *provision.Job) {
+		for i := range j.Steps {
+			for _, name := range steps {
+				if j.Steps[i].Name == name && j.Steps[i].Status == provision.StepPending {
+					j.Steps[i].Status = provision.StepSkipped
+					j.Steps[i].Detail = detail
+				}
+			}
+		}
+	})
 }
 
 func (d Deps) now() time.Time {
@@ -284,8 +662,12 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 // каким статусом, что ответил агент), остаётся оператору в логе. Причина
 // провала уходит в личку, и сырому ответу агента там не место.
 func (d Deps) logCommandFailure(action, status, output string) {
+	d.logWarn("linkrepair command failed", "action", action, "status", status, "output", strings.TrimSpace(output))
+}
+
+func (d Deps) logWarn(msg string, args ...any) {
 	if d.Logger != nil {
-		d.Logger.Warn("linkrepair command failed", "action", action, "status", status, "output", strings.TrimSpace(output))
+		d.Logger.Warn(msg, args...)
 	}
 }
 
@@ -299,18 +681,6 @@ func (d Deps) step(jobID, name string, status provision.StepStatus, detail strin
 			}
 		}
 	})
-}
-
-func (d Deps) fail(ctx context.Context, jobID string, req StartReq, step string, names lineNames, cause error) {
-	d.step(jobID, step, provision.StepFailed, cause.Error())
-	d.Store.Update(jobID, func(j *provision.Job) {
-		j.State = provision.StateFailed
-		j.Hint = cause.Error()
-	})
-	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
-	}
-	d.notifyResult(ctx, req, false, names, cause)
 }
 
 // findPolicy ищет политику, в цепочке которой стоит упавшая линия, и
@@ -346,37 +716,4 @@ func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (
 	}
 	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
 	return pol, "", name, ErrNotInAnySet
-}
-
-// notifyResult -- единственное место, где движок говорит с человеком.
-// Машинных имён здесь нет и быть не может: это текст в личку.
-func (d Deps) notifyResult(ctx context.Context, req StartReq, ok bool, names lineNames, cause error) {
-	if d.Notify == nil {
-		return
-	}
-	line := names.broken
-	if line == "" {
-		line = req.CheckName
-	}
-	backup := names.backup
-	var text string
-	switch {
-	case errors.Is(cause, ErrNotInAnySet):
-		// Через такой VPN-туннель правила не идут: пугать владельца
-		// «заблокированное не открывается» -- врать.
-		text = fmt.Sprintf("VPN-туннель «%s» упал. Чинить нечего: он не входит ни в один общий набор правил, и через него ничего не идёт.", line)
-	case names.noSnapshot:
-		// Снимка нет — неизвестно, подхватил ли трафик запасной VPN-туннель.
-		// «Заблокированное не открывается» тут было бы догадкой.
-		text = fmt.Sprintf("VPN-туннель «%s» упал, и поднять его не вышло: %v. Подхватил ли трафик запасной VPN-туннель, роутер не сообщил — это видно в приложении.", line, cause)
-	case ok && backup != "":
-		text = fmt.Sprintf("VPN-туннель «%s» падал. Увёл трафик на запасной VPN-туннель «%s», выпустил новый конфиг и вернул всё обратно — сейчас работает.", line, backup)
-	case ok:
-		text = fmt.Sprintf("VPN-туннель «%s» падал. Выпустил новый конфиг — сейчас работает.", line)
-	case backup != "":
-		text = fmt.Sprintf("VPN-туннель «%s» упал. Увёл трафик на запасной VPN-туннель «%s», обход блокировок работает. Поднять VPN-туннель «%s» не смог: %v", line, backup, line, cause)
-	default:
-		text = fmt.Sprintf("VPN-туннель «%s» упал, и поднять его не вышло: %v. Заблокированное сейчас не открывается.", line, cause)
-	}
-	d.Notify(ctx, req.RouterID, text)
 }

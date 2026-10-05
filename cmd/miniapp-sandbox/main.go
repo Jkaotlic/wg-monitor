@@ -228,20 +228,18 @@ func main() {
 	}
 
 	// Движок починки -- тоже настоящий: подменены только кабинет, очередь
-	// команд и происхождение. Замок у него общий с мастером замены, поэтому
+	// команд и панели своих серверов. Замок у него общий с мастером замены, поэтому
 	// Store один на двоих -- ровно как в проде.
 	repairEngine := &linkrepair.Deps{
 		Store:      replaceEngine.Store,
-		Replace:    *replaceEngine,
-		Origin:     backend.LinkRepairOrigin(d),
+		Probe:      *replaceEngine,
+		Source:     backend.RepairSource(cabinet, awg3Panels, d),
+		Settings:   backend.LinkRepairSettings(d, nil),
+		SaveOption: backend.LinkRepairSaveOption(d, nil),
 		Attempts:   linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(routerID int64) bool { on, _ := d.RepairSettings().AutoRepair(routerID); return on },
 		Commands:   sink,
-		Notify: func(_ context.Context, routerID int64, text string) {
-			slog.Info("песочница: отчёт о починке", "router_id", routerID, "text", text)
-		},
-		BaseCtx:   context.Background(),
-		AwaitStep: 20 * time.Second,
+		BaseCtx:    context.Background(),
+		AwaitStep:  20 * time.Second,
 	}
 
 	deps := backend.Deps{

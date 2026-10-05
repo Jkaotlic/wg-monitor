@@ -230,30 +230,25 @@ func main() {
 		Logger:  logger.With("component", "replace"),
 	}
 
-	// Движок починки линии. Store общий с мастером замены: замок один на
-	// двоих, иначе починка и замена столкнулись бы на одном роутере.
+	// Свои VPN-серверы (awg3-панели): один сервис на мини-апп и на источник
+	// автопочинки.
+	awg3Panels := newAwg3PanelService(cfg.SelfHostedAmnezia, logger)
+
+	// Движок починки VPN-туннеля -- лесенка v0.54. Store общий с мастером
+	// замены: замок один на двоих, иначе починка и замена столкнулись бы на
+	// одном роутере. Проверки (обмен ключами, выход, анализ конфига) -- те же,
+	// что у мастера. Report пока nil: говорить с людьми будет notify (Task 6).
 	repairEngine := &linkrepair.Deps{
-		Store:    provisionStore,
-		Replace:  *replaceEngine,
-		Origin:   backend.LinkRepairOrigin(d),
-		Attempts: linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(routerID int64) bool {
-			on, err := d.RepairSettings().WithDefault(cfg.Repair.AutoDefault).AutoRepair(routerID)
-			if err != nil {
-				logger.Warn("linkrepair: настройка не прочиталась", "router_id", routerID, "err", err)
-				return false
-			}
-			return on
-		},
-		Commands: cmdQueue,
-		Notify: func(ctx context.Context, routerID int64, text string) {
-			if err := cb.NotifyRouterTopic(ctx, routerID, text); err != nil {
-				logger.Warn("linkrepair: notify failed", "router_id", routerID, "err", err)
-			}
-		},
-		BaseCtx: ctx,
-		Now:     time.Now,
-		Logger:  logger.With("component", "linkrepair"),
+		Store:      provisionStore,
+		Probe:      *replaceEngine,
+		Source:     backend.RepairSource(cb, awg3Panels, d),
+		Settings:   backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
+		SaveOption: backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
+		Attempts:   linkrepair.Attempts{KV: d.KV()},
+		Commands:   cmdQueue,
+		BaseCtx:    ctx,
+		Now:        time.Now,
+		Logger:     logger.With("component", "linkrepair"),
 	}
 
 	mux := backend.NewMux(backend.Deps{
@@ -274,7 +269,7 @@ func main() {
 		VPNCabinetKeys: cb,
 		// Свои VPN-серверы -- только админу в мини-аппе.
 		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
-		Awg3Panels:          newAwg3PanelService(cfg.SelfHostedAmnezia, logger),
+		Awg3Panels:          awg3Panels,
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,

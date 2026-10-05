@@ -45,6 +45,10 @@ const (
 	StepActive  StepStatus = "active"
 	StepDone    StepStatus = "done"
 	StepFailed  StepStatus = "failed"
+	// StepSkipped -- шаг не понадобился или его нечем выполнить (лесенка
+	// автопочинки: «источник не выбран», «не понадобилось»). Клиент мини-аппа
+	// этот статус уже понимает.
+	StepSkipped StepStatus = "skipped"
 )
 
 // Step is one entry in a Job's checklist. Name is a stable id (matched

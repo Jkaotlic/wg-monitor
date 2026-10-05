@@ -153,3 +153,73 @@ func TestRepairSource_OptionsNotConnectedNeedsHuman(t *testing.T) {
 		t.Fatalf("ждали NeedHuman с ActHideMyCode, получили %v", err)
 	}
 }
+
+func repairDB(t *testing.T) (*db.DB, int64) {
+	t.Helper()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	id, err := d.Users().Insert("дача", "tok-repair-wiring", "", "")
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	return d, id
+}
+
+// Движок видит настройку туннеля из таблицы; строки нет -- выключено.
+func TestLinkRepairSettings_ReadsTable(t *testing.T) {
+	d, id := repairDB(t)
+	get := LinkRepairSettings(d, nil)
+	if _, ok := get(id, "awg12"); ok {
+		t.Fatal("строки нет -- настройки нет")
+	}
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: id, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, UpdatedBy: 77,
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, ok := get(id, "awg12")
+	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}
+	if !ok || got != want {
+		t.Fatalf("настройка %+v ok=%v, ждали %+v", got, ok, want)
+	}
+}
+
+// Удачная смена локации: новый вариант -- в настройку туннеля (остальное не
+// трогается) и в происхождение конфига.
+func TestLinkRepairSaveOption_UpdatesSettingAndOrigin(t *testing.T) {
+	d, id := repairDB(t)
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: id, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, UpdatedBy: 77,
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	LinkRepairSaveOption(d, nil)(id, "awg12", "amnezia", "de")
+
+	s, ok, err := d.TunnelRepairSettings().Get(id, "awg12")
+	if err != nil || !ok {
+		t.Fatalf("Get: %v %v", ok, err)
+	}
+	if s.Option != "de" || !s.Enabled || s.Provider != "amnezia" || !s.AllowRelocate || s.UpdatedBy != 77 {
+		t.Fatalf("настройка после смены локации: %+v", s)
+	}
+	o, ok, err := d.TunnelOrigins().Get(id, "awg12")
+	if err != nil || !ok || o.Provider != "amnezia" || o.Variant != "de" {
+		t.Fatalf("происхождение: %+v ok=%v err=%v", o, ok, err)
+	}
+}
+
+// Настройку успели выключить, пока шла починка: вариант в происхождение
+// пишется (конфиг на роутере уже новый), а тумблер не включается обратно.
+func TestLinkRepairSaveOption_DoesNotReenable(t *testing.T) {
+	d, id := repairDB(t)
+	LinkRepairSaveOption(d, nil)(id, "awg12", "amnezia", "de")
+	if _, ok, _ := d.TunnelRepairSettings().Get(id, "awg12"); ok {
+		t.Fatal("строки настройки не было -- и не появилось")
+	}
+	if o, ok, _ := d.TunnelOrigins().Get(id, "awg12"); !ok || o.Variant != "de" {
+		t.Fatalf("происхождение: %+v %v", o, ok)
+	}
+}

@@ -93,3 +93,26 @@ func (a Attempts) Record(nickname, checkName string, ok bool) error {
 	}
 	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
 }
+
+// Blocked -- то же, что Allow, глазами экрана: стоит ли автопочинка и почему.
+func (a Attempts) Blocked(nickname, checkName string) (bool, string) {
+	ok, why := a.Allow(nickname, checkName)
+	return !ok, why
+}
+
+// Clear снимает стоп после провала (D1): удачная ручная починка, возврат
+// VPN-туннеля в норму, повторное включение тумблера. Окно попыток остаётся:
+// флапающий VPN-туннель, который каждый раз чинится, всё равно упирается в
+// потолок за 6 часов.
+func (a Attempts) Clear(nickname, checkName string) error {
+	log := a.load(nickname, checkName)
+	if !log.Failed {
+		return nil
+	}
+	log.Failed = false
+	raw, err := json.Marshal(log)
+	if err != nil {
+		return err
+	}
+	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
+}

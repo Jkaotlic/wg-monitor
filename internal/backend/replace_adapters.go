@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -37,13 +38,19 @@ func (o replaceOrigin) Record(routerID int64, tunnelID, tunnelName, provider, op
 	return o.db.TunnelOrigins().Record(routerID, tunnelID, tunnelName, provider, option, issuedAt, 0)
 }
 
+// RepairOriginReader -- чем был поднят VPN-туннель (tunnel_config_origin).
+// Движок починки его больше не читает (источник -- настройка автопочинки
+// туннеля); остаётся для подсказки источника при включении.
+type RepairOriginReader interface {
+	Get(routerID int64, tunnelID string) (provider, option string, ok bool)
+}
+
 type linkRepairOrigin struct{ db *db.DB }
 
-// LinkRepairOrigin читает происхождение конфига для движка починки: чем была
-// поднята упавшая линия, тем её и перевыпускаем. Отсутствие строки -- это
+// LinkRepairOrigin читает происхождение конфига. Отсутствие строки -- это
 // «система не помнит», а не ошибка: у линий, заведённых руками или до мастера
 // замены, происхождения нет, и выдумать его нечем.
-func LinkRepairOrigin(database *db.DB) linkrepair.OriginReader { return linkRepairOrigin{db: database} }
+func LinkRepairOrigin(database *db.DB) RepairOriginReader { return linkRepairOrigin{db: database} }
 
 func (o linkRepairOrigin) Get(routerID int64, tunnelID string) (string, string, bool) {
 	got, ok, err := o.db.TunnelOrigins().Get(routerID, tunnelID)
@@ -51,4 +58,53 @@ func (o linkRepairOrigin) Get(routerID int64, tunnelID string) (string, string, 
 		return "", "", false
 	}
 	return got.Provider, got.Variant, true
+}
+
+// LinkRepairSettings -- настройка автопочинки туннеля глазами движка. Ошибка
+// чтения -- «выключено»: починка без явного согласия хуже, чем её отсутствие.
+func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID string) (linkrepair.Setting, bool) {
+	return func(routerID int64, tunnelID string) (linkrepair.Setting, bool) {
+		s, ok, err := database.TunnelRepairSettings().Get(routerID, tunnelID)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("linkrepair: настройка не прочиталась", "router_id", routerID, "tunnel_id", tunnelID, "err", err)
+			}
+			return linkrepair.Setting{}, false
+		}
+		if !ok {
+			return linkrepair.Setting{}, false
+		}
+		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate}, true
+	}
+}
+
+// LinkRepairSaveOption -- удачная смена локации: новый вариант запоминается
+// в настройке туннеля (остальные поля как были; строки нет -- не заводится,
+// тумблер сам не включается) и в происхождении конфига -- на роутере теперь
+// конфиг этого варианта.
+func LinkRepairSaveOption(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID, provider, option string) {
+	warn := func(msg string, err error, routerID int64, tunnelID string) {
+		if logger != nil {
+			logger.Warn(msg, "router_id", routerID, "tunnel_id", tunnelID, "err", err)
+		}
+	}
+	return func(routerID int64, tunnelID, provider, option string) {
+		repo := database.TunnelRepairSettings()
+		s, ok, err := repo.Get(routerID, tunnelID)
+		if err != nil {
+			warn("linkrepair: настройка не прочиталась", err, routerID, tunnelID)
+		} else if ok && s.Provider == provider {
+			s.Option = option
+			if err := repo.Put(s); err != nil {
+				warn("linkrepair: новая локация не записалась в настройку", err, routerID, tunnelID)
+			}
+		}
+		name := ""
+		if o, found, err := database.TunnelOrigins().Get(routerID, tunnelID); err == nil && found {
+			name = o.TunnelName
+		}
+		if err := database.TunnelOrigins().Record(routerID, tunnelID, name, provider, option, time.Now(), 0); err != nil {
+			warn("linkrepair: происхождение конфига не записалось", err, routerID, tunnelID)
+		}
+	}
 }
