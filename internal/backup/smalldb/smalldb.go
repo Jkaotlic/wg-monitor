@@ -30,6 +30,7 @@ var CopyTables = []string{
 	"router_operators",
 	"tunnel_config_origin",
 	"router_repair_settings",
+	"tunnel_repair_settings",
 	"router_notify_mutes",
 	"telegram_unreachable",
 	"router_versions",
