@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
@@ -353,5 +354,22 @@ func TestLinkRepairSaveUnconfirmed(t *testing.T) {
 	LinkRepairSaveOption(d, nil)(id, "awg12", "amnezia", "de")
 	if o, _, _ := d.TunnelOrigins().Get(id, "awg12"); o.Unconfirmed {
 		t.Fatalf("подтверждённая запись не сняла отметку: %+v", o)
+	}
+}
+
+// Отказ панели своего сервера: человеку -- общее действие без причины
+// (пароль, сертификат, пауза -- дело админа), причина -- только в Cause для
+// журнала.
+func TestRepairSource_Awg3PanelCauseNotInAction(t *testing.T) {
+	const secret = "пароль панели не принят — пересохраните учётные данные"
+	panels := &fakeAwg3{routerErr: &awg3panel.Error{Kind: awg3panel.KindBadPassword, Msg: secret}}
+	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
+	_, err := src.Issue(context.Background(), id, "awg3", "main/awg1")
+	var nh *linkrepair.NeedHuman
+	if !errors.As(err, &nh) {
+		t.Fatalf("ждали NeedHuman, получили %v", err)
+	}
+	if strings.Contains(nh.Action, "пароль") || strings.Contains(nh.Action, "пересохраните") {
+		t.Fatalf("причина панели в действии для владельца: %q", nh.Action)
 	}
 }

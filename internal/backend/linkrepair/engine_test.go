@@ -2007,3 +2007,32 @@ func TestLadder_RelocationTextsUseLabelNotID(t *testing.T) {
 		})
 	}
 }
+
+// Причина отказа панели своего сервера (пароль, сертификат, пауза) -- дело
+// админа: в ход, шаги и итог починки, которые читает владелец, она не
+// попадает -- только общее действие. Подробности -- в журнал.
+func TestLadder_PanelCauseNeverReachesOwner(t *testing.T) {
+	const secret = "пароль панели не принят — пересохраните учётные данные (HTTP 401 https://panel.example.com/api)"
+	e := newLadder(t, &Setting{Enabled: true, Provider: "awg3", Option: "main/awg1"})
+	e.src.errs = map[string]error{
+		"issue:awg3:main/awg1": &NeedHuman{Cause: errors.New(secret), Action: ActVPSPanel("Main")},
+		"fresh:awg3:main/awg1": &NeedHuman{Cause: errors.New(secret), Action: ActVPSPanel("Main")},
+	}
+	job, final := e.run(t, ladderReq())
+	texts := []string{job.Hint, final.Text, final.Action}
+	for _, s := range job.Steps {
+		texts = append(texts, s.Detail)
+	}
+	_, calls := e.rep.snapshot()
+	for _, c := range calls {
+		texts = append(texts, c.Text, c.Action)
+	}
+	for _, s := range texts {
+		if strings.Contains(s, "пароль") || strings.Contains(s, "HTTP 401") || strings.Contains(s, "panel.example.com") {
+			t.Fatalf("причина отказа панели дошла до владельца: %q", s)
+		}
+	}
+	if final.Action != ActVPSPanel("Main") {
+		t.Fatalf("действие: %q", final.Action)
+	}
+}
