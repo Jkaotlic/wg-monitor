@@ -330,12 +330,12 @@ func TestUploadCommandBuildersQuoteRemotePath(t *testing.T) {
 }
 
 func TestRunWithStdinTimeoutClosesHangingSession(t *testing.T) {
-	addr, stop := startHangingSSHServer(t)
+	addr, hostKey, stop := startHangingSSHServer(t)
 	defer stop()
 
 	cfg := &ssh.ClientConfig{
 		User:            "test",
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: ssh.FixedHostKey(hostKey),
 		Timeout:         time.Second,
 	}
 	c, err := ssh.Dial("tcp", addr, cfg)
@@ -361,7 +361,7 @@ func TestRunWithStdinTimeoutClosesHangingSession(t *testing.T) {
 	}
 }
 
-func startHangingSSHServer(t *testing.T) (string, func()) {
+func startHangingSSHServer(t *testing.T) (string, ssh.PublicKey, func()) {
 	t.Helper()
 	signer, err := genTestSigner()
 	if err != nil {
@@ -413,7 +413,7 @@ func startHangingSSHServer(t *testing.T) (string, func()) {
 		close(done)
 		_ = ln.Close()
 	}
-	return ln.Addr().String(), stop
+	return ln.Addr().String(), signer.PublicKey(), stop
 }
 
 // TestProgressDots_SilentBelowThreshold verifies no output is emitted for
