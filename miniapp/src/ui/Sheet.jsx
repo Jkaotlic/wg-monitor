@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
-import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
+import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs, commandName } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
 import { plainHyphens } from '../text.js'
 import { Chip } from './Chip.jsx'
@@ -169,7 +169,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
             {!local && (
               <div class="sheet-command">
                 <span class="sheet-command-label">команда</span>
-                <span class="sheet-command-value">{sheet.commandLabel || sheet.action}</span>
+                <span class="sheet-command-value">{sheet.commandLabel || commandName(sheet.action)}</span>
               </div>
             )}
             {fields.length > 0 && (

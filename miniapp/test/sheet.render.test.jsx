@@ -52,6 +52,17 @@ describe('лист команды', () => {
     root.remove()
   })
 
+  it('без commandLabel лист не показывает имя действия -- берёт человеческое', async () => {
+    mocks.sent = []
+    mocks.sendReply = { cmd_id: 'c9' }
+    mocks.result = null
+    const root = await mount(confirmSheet({ routerID: 2, title: 't', body: 'b', action: 'tunnel_restart', args: { tunnel_id: 'x' } }))
+    expect(root.querySelector('.sheet-command-value').textContent).toBe('перезапуск VPN-туннеля')
+    expect(root.textContent).not.toContain('tunnel_restart')
+    render(null, root)
+    root.remove()
+  })
+
   it('роутер спит -- во время ожидания лист называет окно', async () => {
     mocks.sent = []
     mocks.sendReply = { cmd_id: 'c2', router_asleep: true, wake_window_min: 10 }

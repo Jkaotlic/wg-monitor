@@ -163,10 +163,10 @@ export function feedDisableSheet({ routerID, feed, asleep = false, onResult }) {
   return confirmSheet({
     routerID,
     title: `Отключить источник пакетов ${feed.host}?`,
-    body: `Источник не отвечает, и из-за него обновление пакетов идёт не целиком. Роутер закомментирует его в настройках и проверит обновления заново. Адрес: ${feed.url}`,
+    body: `Источник не отвечает, и из-за него обновление пакетов идёт не целиком. Роутер отключит его в своих настройках и проверит обновления заново. Адрес: ${feed.url}`,
     action: 'opkg_feed_disable',
     args: { url: feed.url },
-    buttonLabel: 'Отключить фид',
+    buttonLabel: 'Отключить источник',
     commandLabel: 'отключение источника пакетов',
     asleep,
     onResult,
@@ -365,6 +365,35 @@ const ERROR_CODES = {
   agent_too_old: 'Эта кнопка заработает после обновления агента на роутере.',
   confirm_mismatch: 'Имя роутера набрано неверно — команда не отправлена.',
   reboot_cooldown: 'Роутер уже перезагружается — повторить можно через пять минут.',
+  // wizard_handler.go: имя службы вне списка / адрес источника пакетов не http(s).
+  invalid_service: 'Эту службу из приложения перезапустить нельзя — команда не отправлена.',
+  invalid_feed_url: 'Адрес источника пакетов не подошёл — команда не отправлена.',
+}
+
+// Имена команд для строки «команда» на листе, когда экран не дал своё
+// (commandLabel): имя действия вроде tunnel_restart человеку не показываем.
+const COMMAND_NAMES = {
+  tunnel_restart: 'перезапуск VPN-туннеля',
+  tunnel_power: 'включение или выключение VPN-туннеля',
+  pingcheck_toggle: 'слежение роутера за VPN-туннелем',
+  dns_reset: 'сброс DNS',
+  route_add: 'добавление правила',
+  route_delete: 'удаление правила',
+  route_rebind: 'перенос правил',
+  route_policy_promote: 'смена главного VPN-туннеля',
+  update_agent_config: 'изменение настроек агента',
+  router_doctor: 'проверка роутера',
+  version_audit: 'сверка версий',
+  service_restart: 'перезапуск службы',
+  firmware_install: 'установка прошивки',
+  awgm_update: 'обновление awg-manager',
+  hrneo_update: 'обновление HydraRoute Neo',
+  opkg_upgrade: 'обновление пакетов Entware',
+  opkg_feed_disable: 'отключение источника пакетов',
+}
+
+export function commandName(action) {
+  return COMMAND_NAMES[action] ?? 'команда роутеру'
 }
 
 export function commandErrorText(code) {
