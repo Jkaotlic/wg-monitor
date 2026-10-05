@@ -1202,6 +1202,20 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// Ответ до агента не дошёл -- команда обратно в очередь: иначе она
+		// потеряна, а self_update ещё и держит место в раздаче (12 минут).
+		undelivered := func(reason string, err error) {
+			if rq, ok := d.CommandSink.(interface {
+				ReturnUndelivered(userID int64, cmd wire.Command)
+			}); ok {
+				rq.ReturnUndelivered(uid, *c)
+			}
+			d.Logger.Warn("cmd undelivered", "nickname", nick, "cmd_id", c.ID, "action", c.Action, "reason", reason, "err", err)
+		}
+		if err := r.Context().Err(); err != nil {
+			undelivered("client gone", err)
+			return
+		}
 		body, err := json.Marshal(c)
 		if err != nil {
 			d.Logger.Error("cmd marshal", "err", err)
@@ -1210,7 +1224,10 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		if _, err := w.Write(body); err != nil {
+			undelivered("write failed", err)
+			return
+		}
 		incCmdEnqueued()
 		d.Logger.Info("cmd dispatched",
 			"nickname", nick, "cmd_id", c.ID, "action", c.Action,
