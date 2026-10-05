@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS router_repair_settings (
 CREATE TABLE IF NOT EXISTS tunnel_repair_settings (
     user_id        INTEGER NOT NULL,
     tunnel_id      TEXT    NOT NULL,
+    -- tunnel_name -- имя VPN-туннеля при включении: id awg-manager
+    -- переиспользует, и другое имя под тем же id -- уже чужой туннель.
+    tunnel_name    TEXT    NOT NULL DEFAULT '',
     enabled        INTEGER NOT NULL DEFAULT 0,
     provider       TEXT    NOT NULL DEFAULT '',
     option         TEXT    NOT NULL DEFAULT '',

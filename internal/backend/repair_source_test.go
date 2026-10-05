@@ -184,12 +184,12 @@ func TestLinkRepairSettings_ReadsTable(t *testing.T) {
 		t.Fatal("строки нет -- настройки нет")
 	}
 	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
-		UserID: id, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, UpdatedBy: 77,
+		UserID: id, TunnelID: "awg12", TunnelName: "Дача", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, UpdatedBy: 77,
 	}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	got, ok := get(id, "awg12")
-	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}
+	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Дача"}
 	if !ok || got != want {
 		t.Fatalf("настройка %+v ok=%v, ждали %+v", got, ok, want)
 	}
@@ -254,5 +254,17 @@ func TestAutoRepairHint(t *testing.T) {
 	}
 	if hint(id, "tunnel_awg12") {
 		t.Fatal("выключенная автопочинка видна как включённая")
+	}
+}
+
+// Чужая настройка (имя VPN-туннеля под этим id другое) удаляется движком.
+func TestLinkRepairDropSetting(t *testing.T) {
+	d, id := repairDB(t)
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: true}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	LinkRepairDropSetting(d, nil)(id, "awg12")
+	if _, ok, _ := d.TunnelRepairSettings().Get(id, "awg12"); ok {
+		t.Fatal("настройка осталась")
 	}
 }

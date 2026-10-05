@@ -1306,6 +1306,18 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
+		// Агент подтвердил удаление VPN-туннеля -- его настройка автопочинки
+		// уходит вместе с ним: id awg-manager может отдать новому туннелю, а
+		// согласие на автопочинку к нему не переходит.
+		if d.DB != nil {
+			if cmd, found := d.CommandSink.CommandByID(uid, res.ID); found && cmd.Action == "tunnel_delete" && res.Status == "ok" {
+				if tid := deletedTunnelID(cmd.Args); tid != "" {
+					if err := d.DB.TunnelRepairSettings().Delete(uid, tid); err != nil {
+						d.Logger.Warn("tunnel_delete: настройка автопочинки не удалилась", "nickname", nick, "tunnel_id", tid, "err", err)
+					}
+				}
+			}
+		}
 		// Кнопок в боте больше нет (цикл 5): итог команды забирает тот, кто её
 		// поставил, -- мини-апп своим опросом. Пересылать его в Telegram
 		// некуда и незачем.

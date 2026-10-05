@@ -105,6 +105,10 @@ type Deps struct {
 	HandshakeTries int
 	HandshakeWait  time.Duration
 	Sleep          func(context.Context, time.Duration)
+	// Retired -- прежний VPN-туннель списан (выключен и остался на роутере).
+	// Его настройка автопочинки больше ни к чему не относится. nil -- никого
+	// не звать.
+	Retired func(routerID int64, tunnelID string)
 }
 
 type StartReq struct {
@@ -343,6 +347,9 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		return nil
 	}
 	d.step(jobID, StepRetire, provision.StepDone, "прежний VPN-туннель выключен и остался на роутере")
+	if d.Retired != nil {
+		d.Retired(req.RouterID, req.OldTunnelID)
+	}
 	return nil
 }
 

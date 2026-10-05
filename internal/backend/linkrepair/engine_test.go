@@ -259,6 +259,7 @@ func (t recThread) NeedHuman(_ context.Context, text, action string) {
 	t.r.add(recCall{"need", text, action})
 }
 func (t recThread) NotStarted(_ context.Context, why string) { t.r.add(recCall{"notstarted", why, ""}) }
+func (t recThread) Quiet(context.Context)                    { t.r.add(recCall{"quiet", "", ""}) }
 
 // final ждёт итогового вызова нити (done или need): движок закрывает
 // задание и говорит с людьми не одним действием.
@@ -285,12 +286,19 @@ type savedOption struct {
 }
 
 type ladderEnv struct {
-	d     Deps
-	cmd   *scriptCommander
-	src   *fakeSource
-	rep   *recReporter
-	mu    sync.Mutex
-	saved []savedOption
+	d       Deps
+	cmd     *scriptCommander
+	src     *fakeSource
+	rep     *recReporter
+	mu      sync.Mutex
+	saved   []savedOption
+	dropped []string
+}
+
+func (e *ladderEnv) droppedSettings() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.dropped...)
 }
 
 func newLadder(t *testing.T, set *Setting) *ladderEnv {
@@ -314,6 +322,11 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.saved = append(e.saved, savedOption{routerID, tunnelID, provider, option})
+		},
+		DropSetting: func(routerID int64, tunnelID string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.dropped = append(e.dropped, fmt.Sprint(routerID, "/", tunnelID))
 		},
 		Attempts:  Attempts{KV: newSafeKV()},
 		Commands:  e.cmd,
@@ -1126,6 +1139,101 @@ func TestStart_NotStartedWhenLockedOrOldAgent(t *testing.T) {
 	}
 	if e2.cmd.count() != 0 {
 		t.Fatalf("старому агенту ушло %d команд", e2.cmd.count())
+	}
+}
+
+// Настройка записана для VPN-туннеля с другим именем: id переиспользован
+// (старый удалён, новый получил тот же id). Чужая настройка -- не согласие:
+// автозапуск молчит, роутеру ни одной команды, строка удаляется.
+func TestStart_StaleSettingAutoSilent(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
+	req := ladderReq()
+	req.TunnelName = "Дача"
+	_, err := e.d.Start(req)
+	if !errors.Is(err, ErrAutoDisabled) {
+		t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
+	}
+	if e.cmd.count() != 0 {
+		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+	}
+	if begins, _ := e.rep.snapshot(); len(begins) != 0 {
+		t.Fatalf("чужая настройка заговорила: %v", begins)
+	}
+	if got := e.droppedSettings(); len(got) != 1 || got[0] != "1/awg12" {
+		t.Fatalf("чужая настройка не удалена: %v", got)
+	}
+}
+
+// Имя от запускающего не пришло -- сверка по снимку роутера. Расхождение:
+// дальше снимка ничего не идёт, людям ни слова.
+func TestLadder_StaleSettingBySnapshotAutoSilent(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
+
+	id, err := e.d.Start(ladderReq())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitDone(t, e.d, id)
+	if job.State != provision.StateFailed {
+		t.Fatalf("state=%s", job.State)
+	}
+	for _, c := range e.cmd.all() {
+		if c.Action != "route_status" {
+			t.Fatalf("после снимка ушла команда %s", c.Action)
+		}
+	}
+	// Дождаться, пока нить закроется (Quiet), и проверить, что слов не было.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(e.droppedSettings()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, calls := e.rep.snapshot()
+	for _, c := range calls {
+		if c.Kind != "quiet" {
+			t.Fatalf("чужая настройка заговорила: %+v", calls)
+		}
+	}
+	if got := e.droppedSettings(); len(got) != 1 {
+		t.Fatalf("чужая настройка не удалена: %v", got)
+	}
+	ownerTextsClean(t, job, e.rep)
+}
+
+// Ручной запуск с чужой настройкой: человек просил починить -- чиним, но без
+// чужого источника (только перезапуск), строка удаляется.
+func TestLadder_StaleSettingManualRestartOnly(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
+	req := ladderReq()
+	req.Auto = false
+	req.TunnelName = "Дача"
+
+	job, final := e.run(t, req)
+
+	if final.Action != ActNoSource || job.State != provision.StateFailed {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if got := e.src.got(); len(got) != 0 {
+		t.Fatalf("чужой источник спрошен: %v", got)
+	}
+	if got := e.droppedSettings(); len(got) != 1 {
+		t.Fatalf("чужая настройка не удалена: %v", got)
+	}
+}
+
+// Имя совпало -- настройка своя, лесенка как обычно.
+func TestLadder_SettingNameMatches(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Дача"})
+	fixOn(e.cmd, "tunnel_import", 1, true)
+	req := ladderReq()
+	req.TunnelName = "Дача"
+
+	job, final := e.run(t, req)
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if got := e.droppedSettings(); len(got) != 0 {
+		t.Fatalf("своя настройка удалена: %v", got)
 	}
 }
 

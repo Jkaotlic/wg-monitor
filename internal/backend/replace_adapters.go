@@ -90,7 +90,18 @@ func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int6
 		if !ok {
 			return linkrepair.Setting{}, false
 		}
-		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate}, true
+		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate, TunnelName: s.TunnelName}, true
+	}
+}
+
+// LinkRepairDropSetting удаляет настройку автопочинки VPN-туннеля: он удалён,
+// списан заменой или под его id теперь другой туннель. Ошибка -- только в лог:
+// худшее, что останется, -- строка, которую движок снова сочтёт чужой.
+func LinkRepairDropSetting(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID string) {
+	return func(routerID int64, tunnelID string) {
+		if err := database.TunnelRepairSettings().Delete(routerID, tunnelID); err != nil && logger != nil {
+			logger.Warn("linkrepair: настройка не удалилась", "router_id", routerID, "tunnel_id", tunnelID, "err", err)
+		}
 	}
 }
 
@@ -123,4 +134,17 @@ func LinkRepairSaveOption(database *db.DB, logger *slog.Logger) func(routerID in
 			warn("linkrepair: происхождение конфига не записалось", err, routerID, tunnelID)
 		}
 	}
+}
+
+// deletedTunnelID -- какой VPN-туннель удаляла команда tunnel_delete: по
+// tunnel_id или (мастер) по проверке tunnel_<id>.
+func deletedTunnelID(args map[string]any) string {
+	if tid, _ := args["tunnel_id"].(string); strings.TrimSpace(tid) != "" {
+		return strings.TrimSpace(tid)
+	}
+	check, _ := args["check_name"].(string)
+	if tid, ok := strings.CutPrefix(strings.TrimSpace(check), "tunnel_"); ok {
+		return strings.TrimSpace(tid)
+	}
+	return ""
 }

@@ -309,3 +309,22 @@ func TestRepairAutoRouteRemoved(t *testing.T) {
 		t.Fatalf("PUT /repair/auto: код %d, хотим 404/405", rec.Code)
 	}
 }
+
+// Включение запоминает имя VPN-туннеля: под этим id потом может оказаться
+// другой туннель, и движок обязан это заметить.
+func TestAutorepair_PutStoresTunnelName(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
+		`{"enabled":true,"provider":"amnezia","option":"nl"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	s, ok, err := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	if s.TunnelName != "Дача" {
+		t.Fatalf("имя VPN-туннеля в настройке %q, ждали «Дача»", s.TunnelName)
+	}
+}

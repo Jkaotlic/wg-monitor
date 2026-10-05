@@ -52,6 +52,11 @@ type Setting struct {
 	Provider      string
 	Option        string
 	AllowRelocate bool
+	// TunnelName -- имя VPN-туннеля, для которого настройку включали. id
+	// туннеля awg-manager переиспользует: удалили «Дачу», завели «Работу» --
+	// у неё может оказаться тот же id. Другое имя в снимке -- настройка чужая.
+	// Пусто -- имя не записано (старые строки), сверять не с чем.
+	TunnelName string
 }
 
 // Reporter -- как движок говорит с людьми по ходу починки. Реализация живёт
@@ -69,6 +74,9 @@ type Thread interface {
 	NeedHuman(ctx context.Context, text, action string)
 	// NotStarted -- правка «Автопочинка не запускалась: …».
 	NotStarted(ctx context.Context, why string)
+	// Quiet -- нить кончилась без слов: починка оказалась не нужна людям
+	// (настройка чужая). Закрытие проверки снимается, ничего не пишется.
+	Quiet(ctx context.Context)
 }
 
 // nopThread -- нить без людей: Report не задан.
@@ -78,6 +86,7 @@ func (nopThread) Progress(context.Context, string)          {}
 func (nopThread) Done(context.Context, string)              {}
 func (nopThread) NeedHuman(context.Context, string, string) {}
 func (nopThread) NotStarted(context.Context, string)        {}
+func (nopThread) Quiet(context.Context)                     {}
 
 type Deps struct {
 	Store *provision.Store
@@ -90,6 +99,9 @@ type Deps struct {
 	Settings func(routerID int64, tunnelID string) (Setting, bool)
 	// SaveOption -- удачная смена локации запоминается в настройке туннеля.
 	SaveOption func(routerID int64, tunnelID, provider, option string)
+	// DropSetting удаляет настройку, оказавшуюся чужой (имя VPN-туннеля с
+	// этим id другое). nil -- не удалять.
+	DropSetting func(routerID int64, tunnelID string)
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
 	Commands replace.Commander
@@ -116,6 +128,19 @@ type StartReq struct {
 	// роутера. Нужно, когда снимок не пришёл и имени взять больше неоткуда.
 	// Пустое -- не знает.
 	TunnelName string
+}
+
+// foreign -- настройка записана для VPN-туннеля с другим именем. Не знаем
+// одного из имён -- сверять не с чем, настройка считается своей.
+func (s Setting) foreign(current string) bool {
+	stored, cur := strings.TrimSpace(s.TunnelName), strings.TrimSpace(current)
+	return stored != "" && cur != "" && stored != cur
+}
+
+func (d Deps) dropSetting(routerID int64, tunnelID string) {
+	if d.DropSetting != nil {
+		d.DropSetting(routerID, tunnelID)
+	}
 }
 
 // pickBackup выбирает линию, которой отдать трафик. Список интерфейсов
@@ -251,6 +276,17 @@ func (d Deps) Start(req StartReq) (string, error) {
 			set = s
 		}
 	}
+	// Настройка записана для VPN-туннеля с другим именем -- id переиспользован,
+	// и согласия на автопочинку ЭТОГО туннеля никто не давал. Автозапуск
+	// молчит: тревога ушла, а про чужую настройку людям сказать нечего.
+	// Ручной запуск чинит без чужого источника.
+	if set.foreign(req.TunnelName) {
+		d.dropSetting(req.RouterID, sc.TunnelID)
+		if req.Auto {
+			return "", fmt.Errorf("%w: настройка записана для другого VPN-туннеля", ErrAutoDisabled)
+		}
+		set = Setting{}
+	}
 	// notStarted -- при автозапуске люди уже получили тревогу; почему
 	// починка не пошла, дописывается к ней. Ручному запуску ответ виден на
 	// экране сразу.
@@ -306,6 +342,20 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 		}
 		d.finishFail(ctx, jobID, req, th, StepFailover, names, err, action)
 		return
+	}
+	// Сверка по снимку -- когда запускающий имени не знал.
+	if set.foreign(brokenName) {
+		d.dropSetting(req.RouterID, sc.TunnelID)
+		if req.Auto {
+			d.skip(jobID, "настройка автопочинки была записана для другого VPN-туннеля", StepFailover, StepRestart, StepReissue, StepRecreate, StepFailback)
+			d.Store.Update(jobID, func(j *provision.Job) {
+				j.State = provision.StateFailed
+				j.Hint = "настройка автопочинки была записана для другого VPN-туннеля"
+			})
+			th.Quiet(context.WithoutCancel(ctx))
+			return
+		}
+		set = Setting{}
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
 	names.carrier = carrier

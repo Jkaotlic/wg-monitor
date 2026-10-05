@@ -363,9 +363,12 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 			if !miniappAutorepairCheckSource(r.Context(), d, w, tg, routerID, req) {
 				return
 			}
+			// Имя -- из тех же событий роутера, что и подсказка источника:
+			// по нему движок узнает, что под этим id уже другой VPN-туннель.
 			if err := repo.Put(db.TunnelRepairSetting{
 				UserID: routerID, TunnelID: tid, Enabled: true,
-				Provider: req.Provider, Option: req.Option, AllowRelocate: req.AllowRelocate,
+				TunnelName: miniappTunnelNameForCheck(d, routerID, miniappTunnelPrefix+tid),
+				Provider:   req.Provider, Option: req.Option, AllowRelocate: req.AllowRelocate,
 				UpdatedBy: tg,
 			}); err != nil {
 				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "settings not saved")
