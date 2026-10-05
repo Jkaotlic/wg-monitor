@@ -5,6 +5,7 @@
 
 import { placeText } from './places.js'
 import { pluralRu } from './labels.js'
+import { whenText } from './when.js'
 
 export const INSTANCE_ID_RE = /^[a-z][a-z0-9_-]{1,15}$/
 
@@ -226,23 +227,35 @@ export function deleteInstanceSheetText(inst) {
 
 // Ключ своего сервера (v0.55, B2): отпечаток запоминает первый удачный вход,
 // смена ключа -- отказ входа. Блок только у сервера с адресом SSH.
+// C1 (v0.56): отказанный ключ сервер помнит ожидающим -- карточка показывает
+// «было» и «сейчас», админ подтверждает именно его; сброса больше нет.
 export const HOSTKEY_TEXTS = {
   label: 'Ключ сервера',
   unknown: 'Ещё не запомнен: запомнится при следующем входе.',
-  trustButton: 'Доверять новому ключу',
-  trusted: 'Старый ключ забыт. Нажмите «Проверить подключение» — новый ключ запомнится.',
+  changed: 'Сервер предъявил другой ключ — входы на сервер остановлены, пока вы не подтвердите его.',
+  was: 'Было',
+  now: 'Сервер сейчас предъявляет',
+  confirmed: 'Новый ключ сервера подтверждён — входы на сервер снова идут.',
 }
 
-export function hostKeyView(inst) {
+export function hostKeyConfirmLabel(fingerprint) {
+  return `Подтвердить ключ сервера ${fingerprint}`
+}
+
+export function hostKeyView(inst, { now, timeZone } = {}) {
   if (!inst?.ssh_host) return null
-  const fingerprint = typeof inst.ssh_host_key === 'string' ? inst.ssh_host_key : ''
-  return { fingerprint, canTrust: fingerprint !== '' }
+  const str = (v) => (typeof v === 'string' ? v.trim() : '')
+  const fingerprint = str(inst.ssh_host_key)
+  const pending = str(inst.ssh_host_key_pending)
+  const seenAt = pending ? whenText(inst.ssh_host_key_pending_at, { now, timeZone }) : ''
+  return { fingerprint, pending, seenText: seenAt ? `Замечен ${seenAt}` : '' }
 }
 
-export function trustHostKeySheetText(inst) {
+export function confirmHostKeySheetText(inst) {
+  const view = hostKeyView(inst) || { fingerprint: '', pending: '' }
   return {
-    title: `Доверять новому ключу сервера «${deleteConfirmPhrase(inst)}»?`,
-    body: 'Запомненный ключ сервера будет забыт, и следующий вход запомнит тот ключ, что предъявит сервер. Делайте это, только если сервер переустанавливали: иначе смена ключа может значить, что отвечает чужая машина.',
+    title: `Подтвердить новый ключ сервера «${deleteConfirmPhrase(inst)}»?`,
+    body: `Было: «${view.fingerprint}», сейчас: «${view.pending}». Подтверждайте, только если сервер переустанавливали и отпечаток совпадает с тем, что показывает сам сервер: иначе смена ключа может значить, что отвечает чужая машина.`,
   }
 }
 
@@ -299,6 +312,7 @@ const SELFHOSTED_ERRORS = {
   confirm_mismatch: 'Название сервера набрано не так.',
   not_found: 'Такого сервера больше нет — вернитесь к списку.',
   instance_not_found: 'Такого сервера больше нет — вернитесь к списку.',
+  host_key_not_pending: 'Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново',
   instance_exists: 'Сервер с таким коротким именем уже есть.',
 }
 

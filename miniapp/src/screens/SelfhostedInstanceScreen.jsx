@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted, trustSelfhostedHostKey, fetchSelfhostedClients, revokeSelfhostedClient } from '../api.js'
+import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted, confirmSelfhostedHostKey, fetchSelfhostedClients, revokeSelfhostedClient } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
   SELFHOSTED_GROUPS,
@@ -24,7 +24,8 @@ import {
   SSH_CHANGED_TEXT,
   HOSTKEY_TEXTS,
   hostKeyView,
-  trustHostKeySheetText,
+  hostKeyConfirmLabel,
+  confirmHostKeySheetText,
   CLIENTS_TEXTS,
   clientRows,
   revokeSheetText,
@@ -241,6 +242,24 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
       .catch((err) => {
         if (alive.current) setCheck({ tone: 'bad', text: selfhostedErrorText(err) })
       })
+      .finally(refreshHostKey)
+  }
+
+  // Вход мог запомнить первый ключ или отказанный ожидающим (C1): подтянуть
+  // только отпечатки -- набранное в форме не трогается, в отличие от reload.
+  function refreshHostKey() {
+    fetchSelfhosted()
+      .then((resp) => {
+        if (!alive.current) return
+        const found = (resp?.instances ?? []).find((i) => String(i.id) === instanceId)
+        if (!found) return
+        setInst((prev) =>
+          prev
+            ? { ...prev, ssh_host_key: found.ssh_host_key, ssh_host_key_pending: found.ssh_host_key_pending, ssh_host_key_pending_at: found.ssh_host_key_pending_at }
+            : prev,
+        )
+      })
+      .catch(() => {})
   }
 
   function toggle() {
@@ -281,27 +300,30 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
     )
   }
 
-  // «Доверять новому ключу»: набором названия, как удаление. После --
-  // перечитать сервер: отпечатка больше нет, новый запомнит вход.
-  function trustHostKey() {
-    const text = trustHostKeySheetText(inst)
+  // «Подтвердить ключ сервера SHA256:…» (C1): набором названия, как удаление.
+  // Уходит именно тот отпечаток, что админ видит в карточке; бэкенд сверяет
+  // его с ожидающим. После -- перечитать сервер.
+  function confirmHostKey() {
+    const fingerprint = hostKeyView(inst)?.pending || ''
+    if (!fingerprint) return
+    const text = confirmHostKeySheetText(inst)
     openSheet(
       localSheet({
         title: text.title,
         body: text.body,
-        buttonLabel: HOSTKEY_TEXTS.trustButton,
+        buttonLabel: 'Подтвердить',
         busyLabel: 'Сохраняем…',
         danger: true,
         confirmPhrase: deleteConfirmPhrase(inst),
         confirmStrict: true,
         errorText: selfhostedErrorText,
-        perform: (typed) => trustSelfhostedHostKey(instanceId, typed),
+        perform: (typed) => confirmSelfhostedHostKey(instanceId, typed, fingerprint),
         onDone: () => {
           if (!alive.current) return
-          setInst((prev) => ({ ...prev, ssh_host_key: '' }))
+          setInst((prev) => ({ ...prev, ssh_host_key: fingerprint, ssh_host_key_pending: '', ssh_host_key_pending_at: undefined }))
           setCheck(null)
           setError('')
-          setNotice(HOSTKEY_TEXTS.trusted)
+          setNotice(HOSTKEY_TEXTS.confirmed)
           reload()
         },
       }),
@@ -382,15 +404,26 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                   {hostKey && (
                     <div class="selfhosted-hostkey">
                       <p class="selfhosted-hostkey-label">{HOSTKEY_TEXTS.label}</p>
-                      {hostKey.fingerprint ? (
+                      {hostKey.pending ? (
+                        <>
+                          <p class="selfhosted-hostkey-changed selfhosted-check-bad" role="status">{HOSTKEY_TEXTS.changed}</p>
+                          <div class="selfhosted-hostkey-row">
+                            <p class="selfhosted-hostkey-label">{HOSTKEY_TEXTS.was}</p>
+                            <code class="selfhosted-hostkey-value">{hostKey.fingerprint}</code>
+                          </div>
+                          <div class="selfhosted-hostkey-row">
+                            <p class="selfhosted-hostkey-label">{HOSTKEY_TEXTS.now}</p>
+                            <code class="selfhosted-hostkey-value">{hostKey.pending}</code>
+                          </div>
+                          {hostKey.seenText && <p class="field-hint">{hostKey.seenText}</p>}
+                          <button type="button" class="btn btn-ghost cabinet-danger selfhosted-hostkey-confirm" onClick={confirmHostKey}>
+                            {hostKeyConfirmLabel(hostKey.pending)}
+                          </button>
+                        </>
+                      ) : hostKey.fingerprint ? (
                         <code class="selfhosted-hostkey-value">{hostKey.fingerprint}</code>
                       ) : (
                         <p class="field-hint">{HOSTKEY_TEXTS.unknown}</p>
-                      )}
-                      {hostKey.canTrust && (
-                        <button type="button" class="btn btn-ghost cabinet-danger" onClick={trustHostKey}>
-                          {HOSTKEY_TEXTS.trustButton}
-                        </button>
                       )}
                     </div>
                   )}

@@ -479,10 +479,12 @@ export function checkSelfhosted(id) {
   return request(`/selfhosted/${encodeURIComponent(id)}/check`, { method: 'POST' })
 }
 
-// «Доверять новому ключу» (v0.55, B2): сервер забывает запомненный отпечаток
-// ключа своего сервера; confirm -- набранное название, сервер сверяет его сам.
-export function trustSelfhostedHostKey(id, confirm) {
-  return request(`/selfhosted/${encodeURIComponent(id)}/trust-host-key`, { method: 'POST', body: JSON.stringify({ confirm }) })
+// «Подтвердить ключ сервера» (v0.56, C1): fingerprint -- отпечаток, который
+// админ видел в карточке как предъявленный сервером; confirm -- набранное
+// название. Сервер сверяет и то, и другое сам: опоздавшее подтверждение
+// (сервер успел предъявить другой ключ) -- 409 host_key_not_pending.
+export function confirmSelfhostedHostKey(id, confirm, fingerprint) {
+  return request(`/selfhosted/${encodeURIComponent(id)}/confirm-host-key`, { method: 'POST', body: JSON.stringify({ confirm, fingerprint }) })
 }
 
 // Выданные подключения своего сервера (v0.55, B3). Список читает сам сервер по
