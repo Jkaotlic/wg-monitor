@@ -22,6 +22,11 @@ type TunnelRepairSetting struct {
 	Provider      string // "" | amnezia | hidemyname | awg3
 	Option        string
 	AllowRelocate bool
+	// RelocateSpent -- страна, которую автопочинка уже выпустила при смене
+	// локации (место в подписке «Amnezia Premium»). Ставится только
+	// SpendRelocation; Put её не меняет -- повторное включение отметку не
+	// снимает.
+	RelocateSpent string
 	UpdatedBy     int64
 	UpdatedAt     time.Time
 }
@@ -36,10 +41,10 @@ func (d *DB) TunnelRepairSettings() *TunnelRepairSettingsRepo {
 // есть автопочинка выключена; это ответ, а не ошибка.
 func (r *TunnelRepairSettingsRepo) Get(userID int64, tunnelID string) (TunnelRepairSetting, bool, error) {
 	row := r.d.db.QueryRow(
-		`SELECT user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, updated_by, updated_at
+		`SELECT user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, relocate_spent, updated_by, updated_at
 		   FROM tunnel_repair_settings WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID)
 	var s TunnelRepairSetting
-	if err := row.Scan(&s.UserID, &s.TunnelID, &s.TunnelName, &s.Enabled, &s.Provider, &s.Option, &s.AllowRelocate, &s.UpdatedBy, &s.UpdatedAt); err != nil {
+	if err := row.Scan(&s.UserID, &s.TunnelID, &s.TunnelName, &s.Enabled, &s.Provider, &s.Option, &s.AllowRelocate, &s.RelocateSpent, &s.UpdatedBy, &s.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return TunnelRepairSetting{}, false, nil
 		}
@@ -51,7 +56,7 @@ func (r *TunnelRepairSettingsRepo) Get(userID int64, tunnelID string) (TunnelRep
 // List возвращает только включённые настройки роутера, по tunnel_id.
 func (r *TunnelRepairSettingsRepo) List(userID int64) ([]TunnelRepairSetting, error) {
 	rows, err := r.d.db.Query(
-		`SELECT user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, updated_by, updated_at
+		`SELECT user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, relocate_spent, updated_by, updated_at
 		   FROM tunnel_repair_settings WHERE user_id = ? AND enabled = 1 ORDER BY tunnel_id`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("tunnel_repair_settings.List: %w", err)
@@ -60,7 +65,7 @@ func (r *TunnelRepairSettingsRepo) List(userID int64) ([]TunnelRepairSetting, er
 	var out []TunnelRepairSetting
 	for rows.Next() {
 		var s TunnelRepairSetting
-		if err := rows.Scan(&s.UserID, &s.TunnelID, &s.TunnelName, &s.Enabled, &s.Provider, &s.Option, &s.AllowRelocate, &s.UpdatedBy, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.UserID, &s.TunnelID, &s.TunnelName, &s.Enabled, &s.Provider, &s.Option, &s.AllowRelocate, &s.RelocateSpent, &s.UpdatedBy, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("tunnel_repair_settings.List scan: %w", err)
 		}
 		out = append(out, s)
@@ -69,13 +74,15 @@ func (r *TunnelRepairSettingsRepo) List(userID int64) ([]TunnelRepairSetting, er
 }
 
 // Put записывает настройку (upsert); UpdatedAt ставится сейчас, в UTC.
+// relocate_spent у существующей строки не трогается: отметку ставит только
+// SpendRelocation, и снять её включением заново нельзя.
 func (r *TunnelRepairSettingsRepo) Put(s TunnelRepairSetting) error {
 	if s.TunnelID == "" {
 		return errors.New("tunnel_repair_settings: tunnel_id is required")
 	}
 	_, err := r.d.db.Exec(
-		`INSERT INTO tunnel_repair_settings(user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, updated_by, updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?)
+		`INSERT INTO tunnel_repair_settings(user_id, tunnel_id, tunnel_name, enabled, provider, option, allow_relocate, relocate_spent, updated_by, updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(user_id, tunnel_id) DO UPDATE SET
 		   tunnel_name    = excluded.tunnel_name,
 		   enabled        = excluded.enabled,
@@ -84,7 +91,7 @@ func (r *TunnelRepairSettingsRepo) Put(s TunnelRepairSetting) error {
 		   allow_relocate = excluded.allow_relocate,
 		   updated_by     = excluded.updated_by,
 		   updated_at     = excluded.updated_at`,
-		s.UserID, s.TunnelID, s.TunnelName, s.Enabled, s.Provider, s.Option, s.AllowRelocate, s.UpdatedBy, time.Now().UTC(),
+		s.UserID, s.TunnelID, s.TunnelName, s.Enabled, s.Provider, s.Option, s.AllowRelocate, s.RelocateSpent, s.UpdatedBy, time.Now().UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("tunnel_repair_settings.Put: %w", err)
@@ -97,6 +104,29 @@ func (r *TunnelRepairSettingsRepo) Put(s TunnelRepairSetting) error {
 func (r *TunnelRepairSettingsRepo) Delete(userID int64, tunnelID string) error {
 	if _, err := r.d.db.Exec(`DELETE FROM tunnel_repair_settings WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
 		return fmt.Errorf("tunnel_repair_settings.Delete: %w", err)
+	}
+	return nil
+}
+
+// SpendRelocation ставит отметку «новая страна выпущена» (option), если её
+// ещё нет. Строки нет или отметка уже стоит -- ошибка: вторую новую страну
+// выпускать нельзя, это ещё одно место в подписке.
+func (r *TunnelRepairSettingsRepo) SpendRelocation(userID int64, tunnelID, option string) error {
+	if option == "" {
+		return errors.New("tunnel_repair_settings: option is required")
+	}
+	res, err := r.d.db.Exec(
+		`UPDATE tunnel_repair_settings SET relocate_spent = ?
+		  WHERE user_id = ? AND tunnel_id = ? AND relocate_spent = ''`, option, userID, tunnelID)
+	if err != nil {
+		return fmt.Errorf("tunnel_repair_settings.SpendRelocation: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("tunnel_repair_settings.SpendRelocation: %w", err)
+	}
+	if n == 0 {
+		return errors.New("tunnel_repair_settings: настройки нет или новая страна уже выпускалась")
 	}
 	return nil
 }

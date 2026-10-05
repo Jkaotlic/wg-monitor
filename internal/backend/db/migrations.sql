@@ -127,6 +127,10 @@ CREATE TABLE IF NOT EXISTS tunnel_repair_settings (
     provider       TEXT    NOT NULL DEFAULT '',
     option         TEXT    NOT NULL DEFAULT '',
     allow_relocate INTEGER NOT NULL DEFAULT 0,
+    -- relocate_spent -- страна «Amnezia Premium», которую автопочинка уже
+    -- выпустила при смене локации (место в подписке): одна на настройку
+    -- навсегда, повторное включение её не снимает. Пусто -- не выпускала.
+    relocate_spent TEXT    NOT NULL DEFAULT '',
     updated_by     INTEGER NOT NULL DEFAULT 0,
     updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, tunnel_id),

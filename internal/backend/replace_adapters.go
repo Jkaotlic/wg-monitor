@@ -90,7 +90,7 @@ func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int6
 		if !ok {
 			return linkrepair.Setting{}, false
 		}
-		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate, TunnelName: s.TunnelName}, true
+		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate, TunnelName: s.TunnelName, RelocateSpent: s.RelocateSpent}, true
 	}
 }
 
@@ -102,6 +102,14 @@ func LinkRepairDropSetting(database *db.DB, logger *slog.Logger) func(routerID i
 		if err := database.TunnelRepairSettings().Delete(routerID, tunnelID); err != nil && logger != nil {
 			logger.Warn("linkrepair: настройка не удалилась", "router_id", routerID, "tunnel_id", tunnelID, "err", err)
 		}
+	}
+}
+
+// LinkRepairSpendRelocation -- отметка «новая страна выпущена» в настройке
+// VPN-туннеля. Ошибка -- движок страну не выпускает.
+func LinkRepairSpendRelocation(database *db.DB) func(routerID int64, tunnelID, option string) error {
+	return func(routerID int64, tunnelID, option string) error {
+		return database.TunnelRepairSettings().SpendRelocation(routerID, tunnelID, option)
 	}
 }
 

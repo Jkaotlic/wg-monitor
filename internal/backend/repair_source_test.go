@@ -188,8 +188,11 @@ func TestLinkRepairSettings_ReadsTable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
+	if err := d.TunnelRepairSettings().SpendRelocation(id, "awg12", "de"); err != nil {
+		t.Fatalf("SpendRelocation: %v", err)
+	}
 	got, ok := get(id, "awg12")
-	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Дача"}
+	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Дача", RelocateSpent: "de"}
 	if !ok || got != want {
 		t.Fatalf("настройка %+v ok=%v, ждали %+v", got, ok, want)
 	}
@@ -266,5 +269,27 @@ func TestLinkRepairDropSetting(t *testing.T) {
 	LinkRepairDropSetting(d, nil)(id, "awg12")
 	if _, ok, _ := d.TunnelRepairSettings().Get(id, "awg12"); ok {
 		t.Fatal("настройка осталась")
+	}
+}
+
+// Отметка о новой стране пишется в настройку; вторая -- ошибка, и движок
+// тогда страну не выпускает.
+func TestLinkRepairSpendRelocation(t *testing.T) {
+	d, id := repairDB(t)
+	spend := LinkRepairSpendRelocation(d)
+	if err := spend(id, "awg12", "de"); err == nil {
+		t.Fatal("настройки нет -- ждали ошибку")
+	}
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := spend(id, "awg12", "de"); err != nil {
+		t.Fatalf("spend: %v", err)
+	}
+	if err := spend(id, "awg12", "se"); err == nil {
+		t.Fatal("вторая отметка -- ждали ошибку")
+	}
+	if s, _, _ := d.TunnelRepairSettings().Get(id, "awg12"); s.RelocateSpent != "de" {
+		t.Fatalf("отметка: %+v", s)
 	}
 }

@@ -60,6 +60,11 @@ type Setting struct {
 	// у неё может оказаться тот же id. Другое имя в снимке -- настройка чужая.
 	// Пусто -- имя не записано (старые строки), сверять не с чем.
 	TunnelName string
+	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка этой
+	// настройки уже выпустила при смене локации. Новая страна -- место в
+	// подписке, поэтому она одна на настройку навсегда: не пусто -- смены
+	// локации больше нет. Повторное включение отметку не снимает (это деньги).
+	RelocateSpent string
 }
 
 // Reporter -- как движок говорит с людьми по ходу починки. Реализация живёт
@@ -102,6 +107,10 @@ type Deps struct {
 	Settings func(routerID int64, tunnelID string) (Setting, bool)
 	// SaveOption -- удачная смена локации запоминается в настройке туннеля.
 	SaveOption func(routerID int64, tunnelID, provider, option string)
+	// SpendRelocation записывает, что для настройки выпущена новая страна
+	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
+	// уже стоит. Ошибка (или nil) -- страна не выпускается.
+	SpendRelocation func(routerID int64, tunnelID, option string) error
 	// DropSetting удаляет настройку, оказавшуюся чужой (имя VPN-туннеля с
 	// этим id другое). nil -- не удалять.
 	DropSetting func(routerID int64, tunnelID string)
@@ -578,11 +587,12 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 	return true, nil
 }
 
-// relocateOnlyIssued -- у кабинета новый вариант занимает место в подписке
-// («Amnezia Premium»: каждая выпущенная страна -- слот). Тогда смена локации
-// берёт только уже выпущенные варианты: автопочинка не тратит то, за что
-// человек платит. У «HideMy.name» код открывает все серверы разом.
-func relocateOnlyIssued(provider string) bool { return provider == "amnezia" }
+// relocateNewOnce -- у кабинета выпущенная страна -- это ключ, который уже
+// стоит на другом устройстве или в другом VPN-туннеле («Amnezia Premium»):
+// поставить его сюда -- сломать оба места. Смена локации берёт только ещё
+// не выпущенную страну, а она -- место в подписке, поэтому одна на настройку
+// навсегда. У «HideMy.name» код открывает все серверы разом.
+func relocateNewOnce(provider string) bool { return provider == "amnezia" }
 
 // tryRecreate -- ступень 3. Свой сервер: новый пир. Кабинет: другая
 // локация -- только если человек разрешил её менять. used -- вариант,
@@ -609,21 +619,17 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 		d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не дал список локаций")
 		return false, nil, Option{}
 	}
+	if relocateNewOnce(set.Provider) {
+		return d.tryNewCountry(ctx, jobID, req, sc, names, set, th, log, opts)
+	}
 	var cands []Option
 	for _, o := range opts {
 		if o.ID == "" || o.ID == set.Option {
 			continue
 		}
-		if relocateOnlyIssued(set.Provider) && !o.Issued {
-			continue
-		}
 		cands = append(cands, o)
 	}
 	if len(cands) == 0 {
-		if relocateOnlyIssued(set.Provider) {
-			d.step(jobID, StepRecreate, provision.StepFailed, "другой уже выпущенной страны в кабинете нет, а новая заняла бы место в подписке")
-			return false, &NeedHuman{Cause: errors.New("нет другой выпущенной страны"), Action: ActIssueOther}, Option{}
-		}
 		d.step(jobID, StepRecreate, provision.StepFailed, "другой локации у кабинета нет")
 		return false, nil, Option{}
 	}
@@ -647,6 +653,52 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 		}
 	}
 	return false, lastNH, Option{}
+}
+
+// tryNewCountry -- смена локации у «Amnezia Premium»: одна ещё не выпущенная
+// страна, один раз на настройку. Отметка пишется до выпуска; не записалась --
+// страна не выпускается (иначе следующая починка выпустила бы ещё одну).
+func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string, opts []Option) (bool, *NeedHuman, Option) {
+	if spent := strings.TrimSpace(set.RelocateSpent); spent != "" {
+		label := spent
+		for _, o := range opts {
+			if o.ID == spent {
+				label = optionLabel(o)
+			}
+		}
+		d.step(jobID, StepRecreate, provision.StepFailed,
+			"новую страну («"+label+"») автопочинка уже выпускала — вторую не выпускаю: это ещё одно место в подписке")
+		return false, &NeedHuman{Cause: errors.New("новая страна уже выпускалась"), Action: ActRelocateSpent}, Option{}
+	}
+	var opt Option
+	for _, o := range opts {
+		if o.ID != "" && o.ID != set.Option && !o.Issued {
+			opt = o
+			break
+		}
+	}
+	if opt.ID == "" {
+		d.step(jobID, StepRecreate, provision.StepFailed,
+			"все страны уже выпущены — их ключи стоят в других местах, а один ключ в двух местах ломает оба")
+		return false, &NeedHuman{Cause: errors.New("невыпущенной страны нет"), Action: ActNoNewCountry}, Option{}
+	}
+	if d.SpendRelocation == nil {
+		d.step(jobID, StepRecreate, provision.StepFailed, "отметку о новой стране записать некуда — новую страну не выпускаю")
+		return false, nil, Option{}
+	}
+	if err := d.SpendRelocation(req.RouterID, sc.TunnelID, opt.ID); err != nil {
+		d.logWarn("linkrepair: отметка о новой стране не записалась", "err", err)
+		d.step(jobID, StepRecreate, provision.StepFailed, "отметка о новой стране не записалась — новую страну не выпускаю")
+		return false, nil, Option{}
+	}
+	th.Progress(ctx, progressText(names, log, "выпускаю новую страну «"+optionLabel(opt)+"»"))
+	ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+		return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
+	})
+	if ok {
+		return true, nil, opt
+	}
+	return false, nh, Option{}
 }
 
 // optionLabel -- как вариант кабинета называется для человека.

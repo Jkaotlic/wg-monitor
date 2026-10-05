@@ -308,6 +308,15 @@ type ladderEnv struct {
 	mu      sync.Mutex
 	saved   []savedOption
 	dropped []string
+	// spent -- отметки «новая страна выпущена»; spendErr -- отметка не пишется.
+	spent    []string
+	spendErr error
+}
+
+func (e *ladderEnv) spentMarks() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.spent...)
 }
 
 func (e *ladderEnv) droppedSettings() []string {
@@ -337,6 +346,15 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.saved = append(e.saved, savedOption{routerID, tunnelID, provider, option})
+		},
+		SpendRelocation: func(routerID int64, tunnelID, option string) error {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.spendErr != nil {
+				return e.spendErr
+			}
+			e.spent = append(e.spent, fmt.Sprint(routerID, "/", tunnelID, "/", option))
+			return nil
 		},
 		DropSetting: func(routerID int64, tunnelID string) {
 			e.mu.Lock()
@@ -536,7 +554,7 @@ func TestLadder_RelocateOnlyWhenAllowed(t *testing.T) {
 }
 
 func TestLadder_RelocateTriesNextOption(t *testing.T) {
-	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e := newLadder(t, &Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true})
 	e.src.options = issuedOpts("nl", "de", "fi")
 	fixOn(e.cmd, "tunnel_import", 2, true)
 
@@ -546,23 +564,28 @@ func TestLadder_RelocateTriesNextOption(t *testing.T) {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
 	got := e.src.got()
-	want := []string{"issue:amnezia:nl", "options:amnezia", "issue:amnezia:de"}
+	want := []string{"issue:hidemyname:nl", "options:hidemyname", "issue:hidemyname:de"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("источник: %v, ждали %v", got, want)
 	}
-	if s := e.savedOptions(); len(s) != 1 || s[0] != (savedOption{1, "awg12", "amnezia", "de"}) {
+	if s := e.savedOptions(); len(s) != 1 || s[0] != (savedOption{1, "awg12", "hidemyname", "de"}) {
 		t.Fatalf("удачная локация не записана: %+v", s)
 	}
 	if !strings.Contains(final.Text, "«DE»") {
 		t.Fatalf("итог не называет локацию подписью кабинета: %q", final.Text)
 	}
+	if sp := e.spentMarks(); len(sp) != 0 {
+		t.Fatalf("у «HideMy.name» отметка о новой стране не ставится: %v", sp)
+	}
 }
 
-// «Amnezia Premium»: новая страна занимает место в подписке, поэтому смена
-// локации берёт только уже выпущенные страны.
-func TestLadder_RelocateAmneziaOnlyIssued(t *testing.T) {
+// «Amnezia Premium»: уже выпущенная страна стоит на другом устройстве или в
+// другом VPN-туннеле -- один ключ в двух местах ломает оба. Поэтому смена
+// локации берёт только НЕ выпущенную страну, и только одну на настройку:
+// это место в подписке. Отметка ставится до выпуска.
+func TestLadder_RelocateAmneziaNewCountryOnce(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
-	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия", Issued: true}}
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "fi", Label: "Финляндия", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "se", Label: "Швеция"}}
 	fixOn(e.cmd, "tunnel_import", 2, true)
 
 	job, final := e.run(t, ladderReq())
@@ -570,30 +593,87 @@ func TestLadder_RelocateAmneziaOnlyIssued(t *testing.T) {
 	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	want := []string{"issue:amnezia:nl", "options:amnezia", "issue:amnezia:fi"}
+	want := []string{"issue:amnezia:nl", "options:amnezia", "issue:amnezia:de"}
 	if got := e.src.got(); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("источник: %v, ждали %v -- невыпущенная страна тратит место", got, want)
+		t.Fatalf("источник: %v, ждали %v -- выпущенная страна занята в другом месте", got, want)
 	}
-	if !strings.Contains(final.Text, "«Финляндия»") {
+	if sp := e.spentMarks(); len(sp) != 1 || sp[0] != "1/awg12/de" {
+		t.Fatalf("отметка о новой стране: %v", sp)
+	}
+	if s := e.savedOptions(); len(s) != 1 || s[0] != (savedOption{1, "awg12", "amnezia", "de"}) {
+		t.Fatalf("удачная страна не записана: %+v", s)
+	}
+	if !strings.Contains(final.Text, "«Германия»") {
 		t.Fatalf("итог: %q", final.Text)
 	}
 }
 
-func TestLadder_RelocateAmneziaNoneIssuedNeedsHuman(t *testing.T) {
+// Новая страна не помогла: вторую не выпускаем -- место уже потрачено.
+func TestLadder_RelocateAmneziaNewCountryFailsNoSecond(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
-	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "se", Label: "Швеция"}}
 
 	job, final := e.run(t, ladderReq())
 
-	if final.Kind != "need" || final.Action != ActIssueOther {
-		t.Fatalf("итог %+v, ждали need с ActIssueOther", final)
+	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRelocateNoHelp {
+		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	if job.Hint != ActIssueOther {
+	for _, c := range e.src.got() {
+		if c == "issue:amnezia:se" {
+			t.Fatal("выпущена вторая новая страна -- второе место в подписке")
+		}
+	}
+	if sp := e.spentMarks(); len(sp) != 1 || sp[0] != "1/awg12/de" {
+		t.Fatalf("отметка о новой стране: %v", sp)
+	}
+	if s := e.savedOptions(); len(s) != 0 {
+		t.Fatalf("неудачная страна записана: %+v", s)
+	}
+}
+
+// Новую страну эта настройка уже выпускала: больше никогда, нужен человек.
+func TestLadder_RelocateAmneziaSpentNeedsHuman(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "de", AllowRelocate: true, RelocateSpent: "de"})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия", Issued: true}, {ID: "se", Label: "Швеция"}}
+
+	job, final := e.run(t, ladderReq())
+
+	if final.Kind != "need" || final.Action != ActRelocateSpent {
+		t.Fatalf("итог %+v, ждали need с ActRelocateSpent", final)
+	}
+	if job.Hint != ActRelocateSpent {
 		t.Fatalf("подсказка %q", job.Hint)
 	}
 	for _, c := range e.src.got() {
-		if c == "issue:amnezia:de" {
-			t.Fatal("выпущена новая страна -- это место в подписке")
+		if c == "issue:amnezia:se" || c == "issue:amnezia:nl" {
+			t.Fatalf("после потраченной отметки выпущена страна: %v", e.src.got())
+		}
+	}
+	if sp := e.spentMarks(); len(sp) != 0 {
+		t.Fatalf("отметка поставлена ещё раз: %v", sp)
+	}
+	st := stepOf(job, StepRecreate)
+	if st.Status != provision.StepFailed || !strings.Contains(st.Detail, "«Германия»") {
+		t.Fatalf("ступень 3: %+v", st)
+	}
+}
+
+// Все страны подписки уже выпущены -- брать чужой ключ нельзя, нужен человек.
+func TestLadder_RelocateAmneziaAllIssuedNeedsHuman(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "fi", Label: "Финляндия", Issued: true}}
+
+	job, final := e.run(t, ladderReq())
+
+	if final.Kind != "need" || final.Action != ActNoNewCountry {
+		t.Fatalf("итог %+v, ждали need с ActNoNewCountry", final)
+	}
+	if job.Hint != ActNoNewCountry {
+		t.Fatalf("подсказка %q", job.Hint)
+	}
+	for _, c := range e.src.got() {
+		if c == "issue:amnezia:fi" {
+			t.Fatal("выпущенная страна взята -- её ключ уже стоит в другом месте")
 		}
 	}
 	if st := stepOf(job, StepRecreate); st.Status != provision.StepFailed {
@@ -601,12 +681,31 @@ func TestLadder_RelocateAmneziaNoneIssuedNeedsHuman(t *testing.T) {
 	}
 }
 
-// Отказ кабинета по одной стране не конец: пробуем следующую. Человек нужен,
+// Отметка не записалась -- новую страну не выпускаем: иначе следующая
+// починка выпустила бы ещё одну.
+func TestLadder_RelocateAmneziaSpendNotSavedNoIssue(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.spendErr = errors.New("база занята")
+
+	job, _ := e.run(t, ladderReq())
+
+	for _, c := range e.src.got() {
+		if c == "issue:amnezia:de" {
+			t.Fatal("страна выпущена без записанной отметки")
+		}
+	}
+	if st := stepOf(job, StepRecreate); st.Status != provision.StepFailed {
+		t.Fatalf("ступень 3: %+v", st)
+	}
+}
+
+// Отказ кабинета по одной локации не конец: пробуем следующую. Человек нужен,
 // только если не помогла ни одна, и тогда -- действие последнего отказа.
 func TestLadder_RelocateNeedHumanTriesNext(t *testing.T) {
-	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e := newLadder(t, &Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true})
 	e.src.options = issuedOpts("de", "fi")
-	e.src.errs = map[string]error{"issue:amnezia:de": &NeedHuman{Cause: errors.New("страна закрыта"), Action: ActAmneziaKey}}
+	e.src.errs = map[string]error{"issue:hidemyname:de": &NeedHuman{Cause: errors.New("сервер закрыт"), Action: ActHideMyCode}}
 	fixOn(e.cmd, "tunnel_import", 2, true)
 
 	job, final := e.run(t, ladderReq())
@@ -614,18 +713,18 @@ func TestLadder_RelocateNeedHumanTriesNext(t *testing.T) {
 	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	if got := e.src.got(); got[len(got)-1] != "issue:amnezia:fi" {
-		t.Fatalf("следующая страна не пробована: %v", got)
+	if got := e.src.got(); got[len(got)-1] != "issue:hidemyname:fi" {
+		t.Fatalf("следующая локация не пробована: %v", got)
 	}
 
-	e2 := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e2 := newLadder(t, &Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true})
 	e2.src.options = issuedOpts("de", "fi")
 	e2.src.errs = map[string]error{
-		"issue:amnezia:de": &NeedHuman{Cause: errors.New("страна закрыта"), Action: "первое"},
-		"issue:amnezia:fi": &NeedHuman{Cause: errors.New("страна закрыта"), Action: ActAmneziaKey},
+		"issue:hidemyname:de": &NeedHuman{Cause: errors.New("сервер закрыт"), Action: "первое"},
+		"issue:hidemyname:fi": &NeedHuman{Cause: errors.New("сервер закрыт"), Action: ActHideMyCode},
 	}
 	_, final2 := e2.run(t, ladderReq())
-	if final2.Kind != "need" || final2.Action != ActAmneziaKey {
+	if final2.Kind != "need" || final2.Action != ActHideMyCode {
 		t.Fatalf("итог %+v, ждали действие последнего отказа", final2)
 	}
 }
@@ -649,7 +748,7 @@ func TestLadder_RelocateHideMyAnyServer(t *testing.T) {
 // Больше двух других локаций не пробуем: третья смена страны подряд --
 // уже не починка, а перебор.
 func TestLadder_RelocateAtMostTwo(t *testing.T) {
-	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e := newLadder(t, &Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true})
 	e.src.options = issuedOpts("de", "nl", "fi", "se")
 
 	job, final := e.run(t, ladderReq())
@@ -660,7 +759,7 @@ func TestLadder_RelocateAtMostTwo(t *testing.T) {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
 	got := e.src.got()
-	want := []string{"issue:amnezia:nl", "options:amnezia", "issue:amnezia:de", "issue:amnezia:fi"}
+	want := []string{"issue:hidemyname:nl", "options:hidemyname", "issue:hidemyname:de", "issue:hidemyname:fi"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("источник: %v, ждали %v", got, want)
 	}

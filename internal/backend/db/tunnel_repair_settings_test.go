@@ -116,3 +116,39 @@ func TestTunnelRepairSettings_Delete(t *testing.T) {
 		t.Fatalf("удаление несуществующей строки -- не ошибка: %v", err)
 	}
 }
+
+// Отметка «новая страна выпущена» ставится один раз и не снимается ни
+// перезаписью настройки (повторное включение), ни выключением: это деньги.
+func TestTunnelRepairSettings_RelocateSpentOnceAndKept(t *testing.T) {
+	d, userID := originDB(t)
+	r := d.TunnelRepairSettings()
+	if err := r.SpendRelocation(userID, "awg12", "de"); err == nil {
+		t.Fatal("строки нет -- отметке ставиться некуда, ждали ошибку")
+	}
+	if err := r.Put(TunnelRepairSetting{UserID: userID, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SpendRelocation(userID, "awg12", "de"); err != nil {
+		t.Fatalf("первая отметка: %v", err)
+	}
+	if err := r.SpendRelocation(userID, "awg12", "se"); err == nil {
+		t.Fatal("вторая новая страна записана -- ждали ошибку")
+	}
+	// Выключили и включили заново, со своим RelocateSpent в записи -- отметка та же.
+	for _, en := range []bool{false, true} {
+		if err := r.Put(TunnelRepairSetting{UserID: userID, TunnelID: "awg12", Enabled: en, Provider: "amnezia", Option: "fi", AllowRelocate: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, err := r.Get(userID, "awg12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RelocateSpent != "de" || got.Option != "fi" {
+		t.Fatalf("после перезаписи: %+v", got)
+	}
+	list, err := r.List(userID)
+	if err != nil || len(list) != 1 || list[0].RelocateSpent != "de" {
+		t.Fatalf("List: %+v %v", list, err)
+	}
+}

@@ -246,17 +246,18 @@ func main() {
 	// строкой в консоли), а «восстановилось» гасить некому.
 	repairs := notify.NewRepairs(notify.NewFanout(d, tgToLog{}, slog.Default(), 0), tgToLog{}, d, nil, time.Now)
 	repairEngine := &linkrepair.Deps{
-		Store:       replaceEngine.Store,
-		Probe:       *replaceEngine,
-		Source:      backend.RepairSource(cabinet, awg3Panels, d),
-		Settings:    backend.LinkRepairSettings(d, nil),
-		SaveOption:  backend.LinkRepairSaveOption(d, nil),
-		DropSetting: backend.LinkRepairDropSetting(d, nil),
-		Attempts:    linkrepair.Attempts{KV: d.KV()},
-		Commands:    sink,
-		Report:      repairs,
-		BaseCtx:     context.Background(),
-		AwaitStep:   20 * time.Second,
+		Store:           replaceEngine.Store,
+		Probe:           *replaceEngine,
+		Source:          backend.RepairSource(cabinet, awg3Panels, d),
+		Settings:        backend.LinkRepairSettings(d, nil),
+		SaveOption:      backend.LinkRepairSaveOption(d, nil),
+		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		DropSetting:     backend.LinkRepairDropSetting(d, nil),
+		Attempts:        linkrepair.Attempts{KV: d.KV()},
+		Commands:        sink,
+		Report:          repairs,
+		BaseCtx:         context.Background(),
+		AwaitStep:       20 * time.Second,
 	}
 
 	deps := backend.Deps{

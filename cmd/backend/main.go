@@ -251,18 +251,19 @@ func main() {
 	disp.SetCovered(repairs.TakeCovered)
 	disp.SetHardHook(repairs.Uncover)
 	repairEngine := &linkrepair.Deps{
-		Store:       provisionStore,
-		Probe:       *replaceEngine,
-		Source:      backend.RepairSource(cb, awg3Panels, d),
-		Settings:    backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
-		SaveOption:  backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
-		DropSetting: backend.LinkRepairDropSetting(d, logger.With("component", "linkrepair")),
-		Attempts:    linkrepair.Attempts{KV: d.KV()},
-		Commands:    cmdQueue,
-		Report:      repairs,
-		BaseCtx:     ctx,
-		Now:         time.Now,
-		Logger:      logger.With("component", "linkrepair"),
+		Store:           provisionStore,
+		Probe:           *replaceEngine,
+		Source:          backend.RepairSource(cb, awg3Panels, d),
+		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
+		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
+		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		DropSetting:     backend.LinkRepairDropSetting(d, logger.With("component", "linkrepair")),
+		Attempts:        linkrepair.Attempts{KV: d.KV()},
+		Commands:        cmdQueue,
+		Report:          repairs,
+		BaseCtx:         ctx,
+		Now:             time.Now,
+		Logger:          logger.With("component", "linkrepair"),
 	}
 
 	mux := backend.NewMux(backend.Deps{
