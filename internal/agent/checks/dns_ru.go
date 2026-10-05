@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -52,9 +51,14 @@ type DNSRu struct {
 	// проба plain-апстрима с привязкой к интерфейсу VPN-туннеля читает свежую
 	// карту интерфейсов, как у проверки dns (DNS.PrepareProbe).
 	PrepareProbe func(ctx context.Context) func(ctx context.Context, ep keenetic.DNSEndpoint, name string) error
-	// Resolve спрашивает имя у конкретного сервера (здесь -- у dns-proxy
-	// роутера).
-	Resolve func(ctx context.Context, server, name string) ([]string, error)
+	// LocalProbe спрашивает A-запись имени у dns-proxy роутера; nil или
+	// ServerAnswered(err) -- ответил. Только A: обычный резолвер Go шлёт A и
+	// AAAA и при нестрогих ошибках выбрасывает провал одного из них, так что
+	// отказ на A при пустом AAAA от самого dns-proxy читался бы «такого имени
+	// нет» (ревью 05.10). Боевая -- PlainAProbe.
+	LocalProbe func(ctx context.Context, server, name string) error
+	// LocalResolver -- адрес dns-proxy роутера; пусто -- 127.0.0.1:53.
+	LocalResolver string
 	// ForeignName -- заграничное имя, ПОД которым строится новое имя для
 	// вопроса «роутер вообще резолвит» (wgm-<случайное>.example.com): голое
 	// имя dns-proxy отдал бы из кеша при мёртвых апстримах.
@@ -81,6 +85,9 @@ type DNSRu struct {
 	// переживает перезапуск агента (StatePath).
 	hadRU       bool
 	hadRULoaded bool
+	// savedOK/savedHadRU -- что лежит на диске по последней УДАЧНОЙ записи.
+	savedOK    bool
+	savedHadRU bool
 }
 
 type dnsRuState struct {
@@ -104,29 +111,51 @@ func (c *DNSRu) loadHadRU() {
 	var st dnsRuState
 	if json.Unmarshal(body, &st) == nil {
 		c.hadRU = st.HadRU
+		c.savedOK, c.savedHadRU = true, st.HadRU
 	}
 }
 
-// setHadRU запоминает свежее знание и пишет его на диск, только когда оно
-// поменялось. Вызывается под c.mu.
+// setHadRU запоминает свежее знание и пишет его на диск, когда записанное
+// значение другое или прошлая запись не удалась (тогда -- повтор на
+// следующем отчёте). Вызывается под c.mu.
 func (c *DNSRu) setHadRU(v bool) {
 	c.loadHadRU()
-	if c.hadRU == v {
-		return
-	}
 	c.hadRU = v
-	if c.StatePath == "" {
+	if c.StatePath == "" || (c.savedOK && c.savedHadRU == v) {
 		return
 	}
-	body, _ := json.Marshal(dnsRuState{HadRU: v})
-	tmp := c.StatePath + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		slog.Warn("dns_ru: state not saved", "path", c.StatePath, "err", err)
+	if err := writeFileSynced(c.StatePath, dnsRuState{HadRU: v}); err != nil {
+		slog.Warn("dns_ru: state not saved, will retry", "path", c.StatePath, "err", err)
+		c.savedOK = false
 		return
 	}
-	if err := os.Rename(tmp, c.StatePath); err != nil {
-		slog.Warn("dns_ru: state not saved", "path", c.StatePath, "err", err)
+	c.savedOK, c.savedHadRU = true, v
+}
+
+// writeFileSynced -- запись через временный файл с fsync до переименования:
+// после сбоя питания на месте остаётся либо старое, либо новое целиком.
+func writeFileSynced(path string, v any) error {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return err
 	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (c *DNSRu) Group() string { return DNSRuName }
@@ -299,17 +328,26 @@ func (c *DNSRu) Run(ctx context.Context, _ Deps) []wire.Check {
 // и dns-proxy обязан спросить свои общие апстримы. «Такого имени нет» --
 // апстрим ответил; отказ или молчание -- роутер не резолвит.
 func (c *DNSRu) routerResolves(ctx context.Context) bool {
-	if c.Resolve == nil || c.ForeignName == "" {
+	if c.LocalProbe == nil || c.ForeignName == "" {
 		return false
+	}
+	server := c.LocalResolver
+	if server == "" {
+		server = localResolver
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
 	defer cancel()
-	addrs, err := c.Resolve(ctx, localResolver, uniqueName(c.ForeignName))
-	if err == nil {
-		return len(addrs) > 0
+	err := c.LocalProbe(ctx, server, uniqueName(c.ForeignName))
+	return err == nil || ServerAnswered(err)
+}
+
+// PlainAProbe -- боевая LocalProbe: один A-запрос обычным DNS, без AAAA и без
+// кеша резолвера Go.
+func PlainAProbe(timeout time.Duration) func(ctx context.Context, server, name string) error {
+	return func(ctx context.Context, server, name string) error {
+		_, err := ProbePlainDNS(ctx, server, name, nil, timeout)
+		return err
 	}
-	var de *net.DNSError
-	return errors.As(err, &de) && de.IsNotFound
 }
 
 // uniqueName -- имя, которого нет ни в одном кеше.

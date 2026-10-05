@@ -16,7 +16,7 @@ import (
 func TestBuildDNSRuCheck_Wired(t *testing.T) {
 	cfg := &agent.Config{}
 	cfg.Checks.DNS.TestDomain = "example.com"
-	c := buildDNSRuCheck(cfg, awgmgr.New("http://127.0.0.1:1"), nil)
+	c := buildDNSRuCheck(cfg, awgmgr.New("http://127.0.0.1:1"))
 	if c == nil {
 		t.Fatal("проверка не собрана")
 	}
@@ -32,8 +32,8 @@ func TestBuildDNSRuCheck_Wired(t *testing.T) {
 	if c.ConfigInterval != dnsSplitInterval {
 		t.Errorf("ConfigInterval = %v, хотим %v", c.ConfigInterval, dnsSplitInterval)
 	}
-	if c.Endpoints == nil || c.PrepareProbe == nil || c.Resolve == nil {
-		t.Error("Endpoints, PrepareProbe или Resolve не проведены")
+	if c.Endpoints == nil || c.PrepareProbe == nil || c.LocalProbe == nil {
+		t.Error("Endpoints, PrepareProbe или LocalProbe не проведены")
 	}
 }
 
@@ -41,7 +41,7 @@ func TestBuildDNSRuCheck_Wired(t *testing.T) {
 // она пробовала бы апстримы, которых на роутере уже нет.
 func TestDNSChangedHook_InvalidatesDNSRu(t *testing.T) {
 	list := buildSingleChecks(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
-	ru := buildDNSRuCheck(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
+	ru := buildDNSRuCheck(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"))
 	var reads int
 	ru.Endpoints = func(context.Context) ([]keenetic.DNSEndpoint, error) { reads++; return nil, nil }
 	ru.ConfigInterval = time.Hour

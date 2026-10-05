@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -50,12 +51,12 @@ func newDNSRu(eps []keenetic.DNSEndpoint, p *probeRecorder, routerResolves bool)
 	return &DNSRu{
 		Endpoints: endpointsOf(eps...),
 		Probe:     p.probe,
-		Resolve: func(_ context.Context, _ string, name string) ([]string, error) {
+		LocalProbe: func(context.Context, string, string) error {
 			if !routerResolves {
-				return nil, errors.New("server misbehaving")
+				return &DNSReplyError{RCode: dnsmessage.RCodeServerFailure}
 			}
 			// Уникального имени нет -- честный ответ «такого имени нет».
-			return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+			return &DNSReplyError{RCode: dnsmessage.RCodeNameError}
 		},
 		ForeignName: "example.com",
 	}
@@ -239,15 +240,15 @@ func TestDNSRu_CachedAnswerDoesNotCountAsResolving(t *testing.T) {
 	p := &probeRecorder{dead: map[string]bool{testYandexHost: true, "9.9.9.9": true, "1.1.1.1": true}}
 	c := newDNSRu(ruRouterConfig(), p, true)
 	var asked []string
-	c.Resolve = func(_ context.Context, server, name string) ([]string, error) {
+	c.LocalProbe = func(_ context.Context, server, name string) error {
 		asked = append(asked, name)
 		if server != "127.0.0.1:53" {
 			t.Errorf("спросили %q, а не dns-proxy роутера", server)
 		}
 		if strings.TrimSuffix(name, ".") == "example.com" {
-			return []string{"198.51.100.7"}, nil // из кеша
+			return nil // из кеша
 		}
-		return nil, errors.New("server misbehaving") // свежего ответа нет
+		return &DNSReplyError{RCode: dnsmessage.RCodeServerFailure} // свежего ответа нет
 	}
 	got := onlyCheck(t, c.Run(context.Background(), Deps{}))
 	if got.Status == "fail" {
@@ -377,5 +378,89 @@ func TestDNSRu_SkippedInterfaceIsNotFail(t *testing.T) {
 	got := onlyCheck(t, c.Run(context.Background(), Deps{}))
 	if got.Status == "fail" || got.Details["unverified"] != true {
 		t.Fatalf("пропущенный апстрим стал провалом: %+v", got)
+	}
+}
+
+// Ревью, раунд 2: обычный резолвер Go спрашивает A и AAAA и при нестрогих
+// ошибках выбрасывает временный провал одного из них. dns-proxy с мёртвыми
+// апстримами отвечает на A отказом, а на AAAA -- сам пустым ответом, и
+// LookupHost говорил «такого имени нет» -- то есть «роутер резолвит».
+// Боевая проба спрашивает только A.
+func TestDNSRu_LocalProbeAOnlyIgnoresEmptyAAAA(t *testing.T) {
+	addr := startRcodeDNS(t, map[dnsmessage.Type]dnsmessage.RCode{
+		dnsmessage.TypeA:    dnsmessage.RCodeServerFailure,
+		dnsmessage.TypeAAAA: dnsmessage.RCodeSuccess,
+	})
+	c := newDNSRu(ruRouterConfig(), &probeRecorder{dead: map[string]bool{testYandexHost: true}}, true)
+	c.LocalProbe = PlainAProbe(200 * time.Millisecond)
+	c.LocalResolver = addr
+	got := onlyCheck(t, c.Run(context.Background(), Deps{}))
+	if got.Details["router_resolves"] != false || got.Status == "fail" {
+		t.Fatalf("A -- отказ, AAAA -- пусто: роутер не резолвит, а получили %+v", got)
+	}
+
+	nx := startRcodeDNS(t, map[dnsmessage.Type]dnsmessage.RCode{dnsmessage.TypeA: dnsmessage.RCodeNameError})
+	c.LocalResolver = nx
+	got = onlyCheck(t, c.Run(context.Background(), Deps{}))
+	if got.Details["router_resolves"] != true || got.Status != "fail" {
+		t.Fatalf("A -- «такого имени нет»: роутер резолвит, а получили %+v", got)
+	}
+}
+
+// startRcodeDNS -- UDP-сервер имён, отвечающий на каждый тип вопроса своим
+// кодом без записей. Тип, которого нет в карте, -- без ответа.
+func startRcodeDNS(t *testing.T, codes map[dnsmessage.Type]dnsmessage.RCode) string {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, raddr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			var msg dnsmessage.Message
+			if msg.Unpack(buf[:n]) != nil || len(msg.Questions) == 0 {
+				continue
+			}
+			rc, ok := codes[msg.Questions[0].Type]
+			if !ok {
+				continue
+			}
+			resp := dnsmessage.Message{
+				Header:    dnsmessage.Header{ID: msg.Header.ID, Response: true, RecursionAvailable: true, RCode: rc},
+				Questions: msg.Questions,
+			}
+			out, err := resp.Pack()
+			if err == nil {
+				_, _ = conn.WriteToUDP(out, raddr)
+			}
+		}
+	}()
+	return conn.LocalAddr().String()
+}
+
+// Ревью, раунд 2: запись состояния, которая не удалась, не считается
+// сделанной -- следующий отчёт пробует снова.
+func TestDNSRu_StateWriteRetriedAfterFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/sub/dns-ru-state.json" // каталога нет -- запись провалится
+	c := newDNSRu(ruRouterConfig(), &probeRecorder{}, true)
+	c.StatePath = path
+	c.Run(context.Background(), Deps{})
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("setup: файл не должен был записаться")
+	}
+	if err := os.Mkdir(dir+"/sub", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c.Run(context.Background(), Deps{})
+	body, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(body), `"had_ru":true`) {
+		t.Fatalf("запись не повторена: %q %v", body, err)
 	}
 }

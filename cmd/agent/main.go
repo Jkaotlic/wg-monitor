@@ -108,7 +108,7 @@ func main() {
 		},
 		// Серверы имён русских сайтов (v0.55, C): MultiCheck, потому что без
 		// ру-апстримов в настройках строки проверки нет вовсе.
-		buildDNSRuCheck(cfg, awgClient, logger),
+		buildDNSRuCheck(cfg, awgClient),
 	}
 
 	deps := checks.Deps{Runner: checks.OSExec{}}
@@ -300,11 +300,13 @@ func dnsChangedHook(list []checks.Check, multi []checks.MultiCheck) func() {
 // апстрима (ру или нет) и имя пробы по зоне -- из эталона dnsref; проба -- та
 // же сборка, что у проверки dns; заграничное имя, под которым строится
 // вопрос «роутер вообще резолвит», -- то же, что у dns.
-func buildDNSRuCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) *checks.DNSRu {
+func buildDNSRuCheck(cfg *agent.Config, awgClient *awgmgr.Client) *checks.DNSRu {
 	return &checks.DNSRu{
-		Endpoints:       readDNSEndpoints,
-		PrepareProbe:    dnsProbeBase(awgClient, logger).PrepareProbe,
-		Resolve:         resolveVia,
+		Endpoints: readDNSEndpoints,
+		// Без журнала: о недоступной карте интерфейсов в том же отчёте уже
+		// пишет проверка dns -- одной строки в журнале на отчёт достаточно.
+		PrepareProbe:    dnsProbeBase(awgClient, nil).PrepareProbe,
+		LocalProbe:      checks.PlainAProbe(3 * time.Second),
 		ForeignName:     cfg.Checks.DNS.TestDomain,
 		StatePath:       cfg.State.DNSRuStatePath(),
 		PerProbeTimeout: 3 * time.Second,
