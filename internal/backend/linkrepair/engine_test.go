@@ -46,6 +46,7 @@ type scriptCommander struct {
 	reserve     bool                                       // awg12 -- резерв: первым в цепочке стоит живой awg10
 	carrierDown bool                                       // вместе с reserve: первое звено awg10 тоже лежит
 	snapshot    string                                     // ответ route_status вместо обычного
+	extra       []wire.RoutePolicySummary                  // наборы правил сверх основного
 	silent      map[string]bool                            // действия, на которые роутер молчит
 	refuse      map[string]bool                            // действия, которым агент отказывает
 	on          map[string]func(c *scriptCommander, n int) // крючок на n-й вызов действия (под замком)
@@ -127,7 +128,7 @@ func (c *scriptCommander) snapshotLocked() string {
 			ifaces[0].Role, ifaces[0].Available = "unavailable", false
 		}
 	}
-	snap.Policies = []wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}
+	snap.Policies = append([]wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}, c.extra...)
 	b, _ := json.Marshal(snap)
 	return string(b)
 }
@@ -1856,5 +1857,80 @@ func TestLadder_RelocateAmneziaRoomUnknownKeepsAttempt(t *testing.T) {
 	}
 	if sp := e.spentMarks(); len(sp) != 0 {
 		t.Fatalf("без ответа о месте отметка поставлена: %v", sp)
+	}
+}
+
+// promotes -- увод/возврат по наборам: «набор:туннель» по порядку.
+func (c *scriptCommander) promotes() []string {
+	var out []string
+	for _, s := range c.actions("route_policy_promote") {
+		out = append(out, fmt.Sprint(s.Args["policy_name"], ":", s.Args["tunnel_id"]))
+	}
+	return out
+}
+
+// A4.5: VPN-туннель -- активное звено в двух наборах правил: трафик уводится
+// и возвращается в обоих. Набор, где он резерв, и набор без него не трогаются.
+func TestLadder_FailoverEveryPolicyWhereActive(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.cmd.extra = []wire.RoutePolicySummary{
+		{Name: "Policy0", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "active", Available: false, Order: 1},
+			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "fallback", Available: true, Order: 2},
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "fallback", Available: true, Order: 3},
+		}},
+		{Name: "Policy1", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "active", Available: true, Order: 1},
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "unavailable", Available: false, Order: 2},
+		}},
+		{Name: "Policy2", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "active", Available: true, Order: 1},
+		}},
+	}
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	want := []string{"HydraRoute:awg10", "Policy0:awg10", "HydraRoute:awg12", "Policy0:awg12"}
+	if got := e.cmd.promotes(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("увод/возврат: %v, ждали %v", got, want)
+	}
+	if !strings.Contains(final.Text, "«Работа»") {
+		t.Fatalf("итог без запасного: %q", final.Text)
+	}
+}
+
+// A4.5: возврат не удался в одном из наборов -- человеку сказано, что трафик
+// остался на запасном.
+func TestLadder_FailbackPartialFailure(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.cmd.extra = []wire.RoutePolicySummary{
+		{Name: "Policy0", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "active", Available: false, Order: 1},
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "fallback", Available: true, Order: 2},
+		}},
+	}
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	// Четвёртый promote (возврат во втором наборе) роутер отклоняет: крючок
+	// срабатывает при постановке команды, до чтения ответа на неё.
+	e.cmd.on["route_policy_promote"] = func(c *scriptCommander, n int) {
+		if n == 4 {
+			c.refuse = map[string]bool{"route_policy_promote": true}
+		}
+	}
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess {
+		t.Fatalf("state=%s", job.State)
+	}
+	if !strings.Contains(final.Text, "вернуть на него трафик не вышло") || !strings.Contains(final.Text, "«Склад»") {
+		t.Fatalf("итог: %q", final.Text)
+	}
+	if st := stepOf(job, StepFailback); st.Status != provision.StepFailed {
+		t.Fatalf("шаг возврата: %+v", st)
 	}
 }
