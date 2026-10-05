@@ -72,6 +72,7 @@ func main() {
 	latest := flag.String("latest", "", "последний выпуск, который «видит» бэкенд: пусто -- настоящий поход на GitHub; версия (v0.34.0) -- без сети: Парк предлагает раскатку бэкенда до неё, переустановка агента ставит её")
 	hrneoStopped := flag.String("hrneo-stopped", "", "роутер, на котором HydraRoute Neo засеян остановленным (лист «Запустить»), например дача-северная; пусто -- запущен на всех")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
+	brokenAgent := flag.String("broken-agent", "", "версия агента sandbox-broken (по умолчанию из seed, v0.18.5 -- лесенка автопочинки кончается перезапуском; v0.54.0 -- лесенка целиком)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
@@ -184,6 +185,11 @@ func main() {
 	}
 	if *homeAgent != "" {
 		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-home"], *homeAgent); err != nil {
+			fatal(err)
+		}
+	}
+	if *brokenAgent != "" {
+		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-broken"], *brokenAgent); err != nil {
 			fatal(err)
 		}
 	}

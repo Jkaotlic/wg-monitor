@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // seed набивает базу парком, на котором видно все состояния мини-аппа: живой
@@ -141,6 +143,9 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 			}
 		}
 		if s.nick == "sandbox-broken" {
+			if err := seedAutorepair(d, uid, tgUserID); err != nil {
+				return nil, err
+			}
 			hardSince := now.Add(-2 * time.Hour)
 			lastAlert := now.Add(-30 * time.Minute)
 			if err := d.State().Save(uid, "tunnel_awg12", db.IncidentState{
@@ -189,6 +194,15 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"vpn-de","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true}`},
 	}
 	if broken {
+		// VPN-туннель со своего сервера -- под именем, каким его заводит
+		// выпуск с awg3-панели: по нему экран автопочинки подсказывает
+		// источник «свой сервер».
+		rows = append(rows, struct {
+			name    string
+			status  string
+			details string
+		}{"tunnel_" + sandboxAwg3TunnelID, "ok", `{"tunnel_id":"` + sandboxAwg3TunnelID + `","tunnel_name":"` + sandboxAwg3TunnelName() +
+			`","status":"running","enabled":true,"handshake_age_sec":30,"ping_check_status":"ok","active_default_known":true}`})
 		rows[5].status = "fail"
 		rows[5].details = tunnelBad
 		rows[1].status = "fail"
@@ -285,4 +299,26 @@ func seedHistory(d *db.DB, uid int64, now time.Time, nick string) error {
 		// Тихая неделя -- тоже состояние экрана, и его надо видеть.
 		return nil
 	}
+}
+
+// sandboxAwg3TunnelID -- VPN-туннель sandbox-broken, выпущенный со своего
+// сервера (панель «main», интерфейс awg1 песочницы).
+const sandboxAwg3TunnelID = "awg15"
+
+func sandboxAwg3TunnelName() string { return awg3panel.TunnelName("main", "awg1") }
+
+// seedAutorepair -- sandbox-broken под лесенку автопочинки (v0.54): у
+// упавшего awg12 автопочинка включена с источником из происхождения
+// (amnezia, nl), запасной awg10 стоит в общем наборе правил, а рядом --
+// VPN-туннель со своего сервера, тоже запасным звеном того же набора.
+func seedAutorepair(d *db.DB, uid, tgUserID int64) error {
+	addRouterTunnel(uid, wire.TunnelMeta{
+		ID: sandboxAwg3TunnelID, Name: sandboxAwg3TunnelName(), Iface: "opkgtun15", Type: "managed",
+		Enabled: true, Available: true, Status: "up",
+		HasHandshake: true, HandshakeAge: 30, PingStatus: "ok", RestartMethod: "control",
+	})
+	return d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: uid, TunnelID: "awg12", Enabled: true,
+		Provider: "amnezia", Option: "nl", UpdatedBy: tgUserID,
+	})
 }
