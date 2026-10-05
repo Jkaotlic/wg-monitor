@@ -7,6 +7,8 @@
 // имя, если VPN-туннель переименовали после включения), can_edit. Запасного
 // VPN-туннеля бэкенд не знает (снимок наборов правил живёт на роутере), поэтому
 // резерв считается здесь из снимка, который экран и так держит.
+// option_unconfirmed -- вариант настройки стоит на роутере, но проверку не
+// прошёл (смена локации без доказательства).
 //
 // Правило текстов владельцу: латиница вне «ёлочек» -- только «VPN». Имена
 // кабинетов («Amnezia Premium», «HideMy.name») и панелей приходят от сервера
@@ -59,6 +61,12 @@ export function autorepairRow(resp) {
     } else if (r.blocked) value = `стоит: ${r.blocked}`
     else if (!r.provider || !r.option) value = 'только перезапуск'
     else value = `включена · из ${sourceLabel(r.sources, r.provider, r.option)}`
+    // Смена локации легла на роутер, но проверку не прошла (v0.55, A4.3):
+    // на роутере теперь она, и сказать это надо прямо.
+    if (r.option_unconfirmed && !r.rename_pending && r.option && r.provider !== 'awg3') {
+      const opt = (findSource(r.sources, r.provider)?.options ?? []).find((o) => o.id === r.option)
+      hint = `На роутере сейчас локация ${quote(opt?.label || r.option)} — её поставила автопочинка, но проверку она не прошла: не подтверждена.`
+    }
   }
   return { title: 'Автопочинка', value, hint }
 }

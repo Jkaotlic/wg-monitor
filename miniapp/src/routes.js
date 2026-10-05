@@ -308,6 +308,8 @@ export function tunnelRows(snapshot) {
       live: tunnelLive(t),
       // Проверка провалена при поднятом на роутере (withCheckVerdict): слово «работает» нельзя.
       checkFailed: Boolean(t.check_failed),
+      // Проверка пришла, но ничего не проверила: «работает» тоже нельзя.
+      checkUnverified: Boolean(t.check_unverified),
       type: t.type ?? '',
       total: own + viaPolicy.dns,
       policyRules: viaPolicy.dns,
@@ -491,6 +493,7 @@ export function promoteTargets(snapshot, activeTunnelID) {
         tunnelName: t?.name || link.name || link.tunnel_id,
         live: t ? tunnelLive(t) : 'unknown',
         checkFailed: Boolean(t?.check_failed),
+        checkUnverified: Boolean(t?.check_unverified),
       })
     }
   }

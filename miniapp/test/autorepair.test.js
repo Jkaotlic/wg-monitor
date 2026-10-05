@@ -299,3 +299,18 @@ describe('латиница только в ёлочках', () => {
     }
   })
 })
+
+// A4.3: смена локации легла на роутер, но проверку не прошла -- экран
+// говорит, что стоит на роутере и что это не подтверждено.
+describe('autorepairRow: локация не подтверждена', () => {
+  it('называет локацию подписью кабинета и «не подтверждена»', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', option_unconfirmed: true }))
+    expect(r.value).toBe('включена · из «Amnezia Premium»')
+    expect(r.hint).toBe('На роутере сейчас локация «Нидерланды» — её поставила автопочинка, но проверку она не прошла: не подтверждена.')
+    expect(latinOutside(r.hint)).toEqual([])
+  })
+  it('без отметки -- прежняя подсказка', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl' }))
+    expect(r.hint).not.toContain('не подтверждена')
+  })
+})

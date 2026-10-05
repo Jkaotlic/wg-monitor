@@ -227,3 +227,16 @@ describe('tunnelStateLabel: проверка главнее', () => {
     expect(tunnelStateLabel({ enabled: false, status: 'fail' })).toBe('выключен')
   })
 })
+
+// Выбор цели в «Маршрутах» и «Добавить сайт»: проверка пришла, но ничего не
+// проверила -- «работает» сказать нельзя, слово то же, что в удалении
+// VPN-туннеля.
+describe('tunnelTargetLabel: непроверенное состояние', () => {
+  it('поднят, проверка не проверила -- «поднят, не проверено»', async () => {
+    const { tunnelTargetLabel } = await import('../src/labels.js')
+    expect(tunnelTargetLabel({ live: 'up', checkUnverified: true })).toBe('поднят, не проверено')
+    expect(tunnelTargetLabel({ live: 'up' })).toBe('работает')
+    expect(tunnelTargetLabel({ live: 'up', checkFailed: true, checkUnverified: true })).toBe('поднят, но не отвечает')
+    expect(tunnelTargetLabel({ live: 'down', checkUnverified: true })).toBe('выключен')
+  })
+})

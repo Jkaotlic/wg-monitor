@@ -506,9 +506,13 @@ export const TUNNEL_LIVE_LABEL = {
 }
 
 // Слово о цели в списках выбора (перенос, главный, «Добавить сайт»): проверка
-// главнее состояния роутера (A1.1).
+// главнее состояния роутера (A1.1). Проверка пришла, но ничего не проверила
+// (check_unverified) -- «работает» сказать нельзя: то же слово, что в
+// удалении VPN-туннеля (tunnelDelete.js).
 export function tunnelTargetLabel(t) {
-  return t?.checkFailed ? 'поднят, но не отвечает' : tunnelLiveLabel(t?.live)
+  if (t?.checkFailed) return 'поднят, но не отвечает'
+  if (t?.checkUnverified && t?.live === 'up') return 'поднят, не проверено'
+  return tunnelLiveLabel(t?.live)
 }
 
 export function tunnelLiveLabel(live) {
