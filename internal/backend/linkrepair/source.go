@@ -40,4 +40,6 @@ const (
 )
 
 // ActVPSPanel -- действие, когда не ответила панель своего сервера.
-func ActVPSPanel(panel string) string { return "проверьте свой сервер «" + panel + "»" }
+func ActVPSPanel(panel string) string {
+	return "проверьте свой сервер «" + panel + "»"
+}
