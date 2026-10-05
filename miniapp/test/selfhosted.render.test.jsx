@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   deleteReply: null,
   checkReply: null,
   trustReply: null,
+  clients: [],
+  clientsFail: null,
+  revokeReply: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -59,6 +62,15 @@ vi.mock('../src/api.js', async (importOriginal) => {
     checkSelfhosted: (id) => {
       log('check', id)
       return reply(mocks.checkReply, { ok: true, message: '' })
+    },
+    fetchSelfhostedClients: (id) => {
+      log('clients', id)
+      return mocks.clientsFail ? Promise.reject(mocks.clientsFail) : Promise.resolve({ clients: structuredClone(mocks.clients) })
+    },
+    revokeSelfhostedClient: (id, clientId, confirm) => {
+      log('revoke', id, clientId, confirm)
+      if (!mocks.revokeReply) mocks.clients = mocks.clients.filter((c) => c.id !== clientId)
+      return reply(mocks.revokeReply, null)
     },
     trustSelfhostedHostKey: (id, confirm) => {
       log('trust', id, confirm)
@@ -141,6 +153,9 @@ beforeEach(() => {
   mocks.deleteReply = null
   mocks.checkReply = null
   mocks.trustReply = null
+  mocks.clients = []
+  mocks.clientsFail = null
+  mocks.revokeReply = null
 })
 
 describe('«Серверы»: список', () => {
@@ -522,6 +537,69 @@ describe('v0.50: форма сервера без простыни (спека �
     const row = root.querySelector('.selfhosted-actions')
     expect(row.className).toContain('action-row-pair')
     expect([...row.querySelectorAll('button')].map((b) => b.textContent.trim())).toEqual(['Выключить', 'Проверить подключение'])
+    cleanup(root)
+  })
+})
+
+
+describe('«Выданные подключения» (B3)', () => {
+  const LIVE = { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home' } }
+  const OTHER = { id: 'KEY-B', name: 'Phone of Ann', address: '10.8.1.4/32', in_use: null }
+
+  it('сервер не читается, пока не нажали: вход на SSH -- по кнопке', async () => {
+    mocks.clients = [LIVE, OTHER]
+    const { root } = await mountInstance('ams')
+    expect(calls('clients')).toEqual([])
+    expect(root.querySelector('.selfhosted-clients')).toBeTruthy()
+    expect(root.querySelectorAll('.selfhosted-client')).toHaveLength(0)
+    await click(button(root, 'Показать выданные подключения'))
+    expect(calls('clients')).toEqual([['clients', 'ams']])
+    expect(root.querySelectorAll('.selfhosted-client')).toHaveLength(2)
+    const first = root.querySelector('.selfhosted-client')
+    expect(first.textContent).toContain('wgmon-home-20261003-120000')
+    expect(first.textContent).toContain('10.8.1.3/32')
+    expect(first.querySelector('.selfhosted-client-warn').textContent).toContain('Этим подключением живёт VPN-туннель «ams_home» роутера «home»')
+    expect(root.querySelectorAll('.selfhosted-client-warn')).toHaveLength(1)
+    cleanup(root)
+  })
+
+  it('у выключенного сервера и у нового раздела нет', async () => {
+    let { root } = await mountInstance('spare')
+    expect(root.querySelector('.selfhosted-clients')).toBeFalsy()
+    cleanup(root)
+    ;({ root } = await mountInstance(''))
+    expect(root.querySelector('.selfhosted-clients')).toBeFalsy()
+    cleanup(root)
+  })
+
+  it('«Отозвать»: лист с набором названия сервера, после -- список перечитан', async () => {
+    mocks.clients = [LIVE, OTHER]
+    const { root, seen } = await mountInstance('ams')
+    await click(button(root, 'Показать выданные подключения'))
+    await click(root.querySelector('.selfhosted-client button'))
+    expect(seen.sheets[0]).toMatchObject({ title: 'Отозвать подключение «wgmon-home-20261003-120000»?', danger: true, confirmPhrase: 'Амстердам', confirmStrict: true })
+    expect(seen.sheets[0].body).toContain('роутера «home»')
+    const sheetRoot = await mountNode(<Sheet sheet={seen.sheets[0]} asleep={false} onClose={() => {}} />)
+    const primary = () => [...sheetRoot.querySelectorAll('.sheet-actions button')].pop()
+    await fill(sheetRoot, 'sheet-confirm-input', 'ams')
+    expect(primary().disabled).toBe(true)
+    await fill(sheetRoot, 'sheet-confirm-input', 'Амстердам')
+    await click(primary())
+    expect(calls('revoke')).toEqual([['revoke', 'ams', 'KEY-A', 'Амстердам']])
+    await flush()
+    expect(root.querySelectorAll('.selfhosted-client')).toHaveLength(1)
+    expect(root.querySelector('.selfhosted-client').textContent).toContain('Phone of Ann')
+    cleanup(sheetRoot)
+    cleanup(root)
+  })
+
+  it('пустой список и отказ чтения -- словами', async () => {
+    const { root } = await mountInstance('ams')
+    await click(button(root, 'Показать выданные подключения'))
+    expect(root.querySelector('.selfhosted-clients').textContent).toContain('Выданных подключений нет.')
+    mocks.clientsFail = new ApiError(409, 'selfhosted_host_key_changed', 'x', 'Ключ сервера «Амстердам» изменился — если вы переустанавливали сервер, подтвердите новый ключ в карточке')
+    await click(button(root, 'Обновить список'))
+    expect(root.querySelector('.selfhosted-clients .state-error').textContent).toContain('Ключ сервера «Амстердам» изменился')
     cleanup(root)
   })
 })

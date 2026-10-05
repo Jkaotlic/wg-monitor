@@ -25,6 +25,9 @@ import {
   sshAddressChanged,
   sshHostWarning,
   SELFHOSTED_TEXTS,
+  CLIENTS_TEXTS,
+  clientRows,
+  revokeSheetText,
 } from '../src/selfhostedForm.js'
 import { ApiError } from '../src/api.js'
 
@@ -300,3 +303,48 @@ describe('смена адреса SSH', () => {
   })
 })
 
+
+// B3 (v0.55): выданные подключения и отзыв.
+describe('выданные подключения: строки и лист отзыва', () => {
+  const inst = { id: 'ams', label: 'Амстердам' }
+  const resp = {
+    clients: [
+      { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home' } },
+      { id: 'KEY-B', name: 'Phone of Ann', address: '10.8.1.4/32', in_use: null },
+    ],
+  }
+
+  it('строки: имя, адрес, дата, предупреждение только у того, чем живёт туннель', () => {
+    const rows = clientRows(resp)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', date: '03.10.2026' })
+    expect(rows[0].inUse).toBe('Этим подключением живёт VPN-туннель «ams_home» роутера «home»: после отзыва он перестанет работать.')
+    expect(rows[1].date).toBe('')
+    expect(rows[1].inUse).toBe('')
+    expect(clientRows(null)).toEqual([])
+    expect(clientRows({ clients: 'x' })).toEqual([])
+  })
+
+  it('лист отзыва: набор названия сервера; предупреждение с роутером и туннелем только когда подключение живое', () => {
+    const [live, plain] = clientRows(resp)
+    const a = revokeSheetText(inst, live)
+    expect(a.title).toBe('Отозвать подключение «wgmon-home-20261003-120000»?')
+    expect(a.body).toContain('перестанет работать')
+    expect(a.body).toContain('Этим подключением живёт VPN-туннель «ams_home» роутера «home»')
+    const b = revokeSheetText(inst, plain)
+    expect(b.body).not.toContain('живёт VPN-туннель')
+    expect(b.body).toContain('больше не сможет им пользоваться')
+  })
+
+  it('тексты без латиницы вне «VPN» и ёлочек', () => {
+    const [live] = clientRows(resp)
+    const all = [...Object.values(CLIENTS_TEXTS), live.inUse, revokeSheetText(inst, live).body].join(' ')
+    const stripped = all.replace(/«[^»]*»/g, '').replace(/VPN/g, '')
+    expect(stripped).not.toMatch(/[A-Za-z]/)
+  })
+
+  it('ошибки отзыва: слова сервера, иначе известный код', () => {
+    expect(selfhostedErrorText(new ApiError(404, 'client_not_found', 'x', 'Подключения уже нет на сервере — обновите список'))).toBe('Подключения уже нет на сервере — обновите список')
+    expect(selfhostedErrorText({ code: 'client_not_found' })).toBe('Подключения уже нет на сервере — обновите список.')
+  })
+})

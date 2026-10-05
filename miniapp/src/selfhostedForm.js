@@ -246,7 +246,53 @@ export function trustHostKeySheetText(inst) {
   }
 }
 
+// Выданные подключения (v0.55, B3): список читается с сервера по кнопке,
+// отзыв -- листом с набором названия сервера.
+export const CLIENTS_TEXTS = {
+  title: 'Выданные подключения',
+  hint: 'Список читается с самого сервера: бот заходит на него только когда вы нажмёте кнопку.',
+  show: 'Показать выданные подключения',
+  refresh: 'Обновить список',
+  loading: 'Читаем список с сервера…',
+  empty: 'Выданных подключений нет.',
+  revoke: 'Отозвать',
+  revoking: 'Отзываем…',
+  revoked: 'Подключение отозвано.',
+}
+
+function clientDate(iso) {
+  const t = typeof iso === 'string' ? new Date(iso) : null
+  if (!t || Number.isNaN(t.getTime())) return ''
+  return t.toLocaleDateString('ru-RU', { timeZone: 'UTC', day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+function inUseText(c) {
+  const u = c?.in_use
+  if (!u || !u.router || !u.tunnel) return ''
+  return `Этим подключением живёт VPN-туннель «${u.tunnel}» роутера «${u.router}»: после отзыва он перестанет работать.`
+}
+
+export function clientRows(resp) {
+  const list = Array.isArray(resp?.clients) ? resp.clients : []
+  return list.map((c) => ({
+    id: String(c.id ?? ''),
+    name: String(c.name || c.address || ''),
+    address: String(c.address ?? ''),
+    date: clientDate(c.created_at),
+    inUse: inUseText(c),
+  }))
+}
+
+export function revokeSheetText(inst, client) {
+  const base = 'Подключение будет убрано с сервера, и устройство или роутер, которому оно выдано, больше не сможет им пользоваться. Вернуть его нельзя — можно только выдать новое.'
+  return {
+    title: `Отозвать подключение «${client.name}»?`,
+    body: client.inUse ? `${client.inUse} ${base}` : base,
+  }
+}
+
 const SELFHOSTED_ERRORS = {
+  client_not_found: 'Подключения уже нет на сервере — обновите список.',
   confirm_mismatch: 'Название сервера набрано не так.',
   not_found: 'Такого сервера больше нет — вернитесь к списку.',
   instance_not_found: 'Такого сервера больше нет — вернитесь к списку.',

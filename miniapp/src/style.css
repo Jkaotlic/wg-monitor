@@ -4178,6 +4178,26 @@ body {
   margin-bottom: var(--sp-2);
 }
 
+/* Выданные подключения (B3): строка на подключение, предупреждение о живом
+   VPN-туннеле -- цветом тревоги, имя клиента длинное -- переносится. */
+.selfhosted-client {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.selfhosted-client-name {
+  margin: 0 0 var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.selfhosted-client-warn {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
 .field-error input {
   border-color: var(--danger);
 }
