@@ -411,14 +411,7 @@ func main() {
 		}
 	}()
 
-	rp := realert.NewPoller(d, tgClient, realert.Config{
-		RealertEvery:       time.Duration(cfg.State.RealertEverySec) * time.Second,
-		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
-		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
-		MiniAppBaseURL:     cfg.PublicBaseURL,
-		AdminUserID:        cfg.Telegram.AdminUserID,
-		BypassLeakEnabled:  cfg.Alerts.BypassLeak.Enabled,
-	})
+	rp := realert.NewPoller(d, tgClient, realertConfig(cfg))
 	go func() {
 		if err := rp.Run(ctx); err != nil {
 			logger.Error("realert poller exited", "err", err)
@@ -491,4 +484,17 @@ func parseLevel(s string) slog.Level {
 		return slog.LevelError
 	}
 	return slog.LevelInfo
+}
+
+// realertConfig -- настройки напоминаний из конфига бэкенда. Отдельной
+// функцией, чтобы проводку флага bypass_leak проверял тест (ревью v0.56, M4).
+func realertConfig(cfg *backend.Config) realert.Config {
+	return realert.Config{
+		RealertEvery:       time.Duration(cfg.State.RealertEverySec) * time.Second,
+		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
+		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
+		MiniAppBaseURL:     cfg.PublicBaseURL,
+		AdminUserID:        cfg.Telegram.AdminUserID,
+		BypassLeakEnabled:  cfg.Alerts.BypassLeak.Enabled,
+	}
 }
