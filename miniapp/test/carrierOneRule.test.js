@@ -102,13 +102,27 @@ describe.each(CARRIER_SCENARIOS)('B1: $title', (s) => {
 })
 
 describe('B1: снимок маршрутов для экрана «Роутер»', () => {
-  it('недавний снимок отдаётся, устаревший (старше 10 минут) -- нет', async () => {
+  it('недавний снимок отдаётся, устаревший (старше 2 минут) -- нет', async () => {
     const { rememberRouteSnapshot, recentRouteSnapshot } = await import('../src/routes.js')
     const snap = { tunnels: [], policies: [] }
     rememberRouteSnapshot(91, snap, 1_000)
-    expect(recentRouteSnapshot(91, 1_000 + 9 * 60_000)).toBe(snap)
-    expect(recentRouteSnapshot(91, 1_000 + 11 * 60_000)).toBeNull()
+    expect(recentRouteSnapshot(91, 1_000 + 110_000)).toBe(snap)
+    expect(recentRouteSnapshot(91, 1_000 + 130_000)).toBeNull()
     expect(recentRouteSnapshot(92, 1_000)).toBeNull()
+  })
+
+  it('опоздавший ответ прошлого роутера ложится под его id, не под открытый', async () => {
+    const { rememberCommandSnapshot, recentRouteSnapshot } = await import('../src/routes.js')
+    const old = { tunnels: [{ id: 'awg1' }], policies: [] }
+    // Открыт роутер 95, а ответ пришёл на вопрос, заданный роутеру 94.
+    const shown = rememberCommandSnapshot(95, { status: 'ok', for_router: 94 }, old, 5_000)
+    expect(shown).toBe(false)
+    expect(recentRouteSnapshot(94, 5_000)).toBe(old)
+    expect(recentRouteSnapshot(95, 5_000)).toBeNull()
+    // Ответ про открытый роутер -- под его id и на экран.
+    const fresh = { tunnels: [], policies: [] }
+    expect(rememberCommandSnapshot(95, { status: 'ok', for_router: 95 }, fresh, 6_000)).toBe(true)
+    expect(recentRouteSnapshot(95, 6_000)).toBe(fresh)
   })
 
   it('сервер знает несущего -- снимок его не перебивает', () => {

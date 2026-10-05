@@ -67,8 +67,10 @@ export function useCommand(routerID) {
         const res = await fetchCommandResult(routerID, id, Math.min(waitSec, remainingSec))
         if (!aliveRef.current) return null
         if (res) {
-          setResult(res)
-          return res
+          // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
+          const tagged = { ...res, for_router: routerID }
+          setResult(tagged)
+          return tagged
         }
       }
       if (aliveRef.current) {

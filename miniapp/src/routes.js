@@ -79,12 +79,22 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
 // спрашивает -- это команда роутеру; но когда сервер несущего не знает, он
 // берёт активное звено из недавнего снимка, чтобы назвать того же, что
 // вкладка (B1, withSnapshotCarrier).
-const ROUTE_SNAPSHOT_MAX_AGE_MS = 10 * 60_000
+const ROUTE_SNAPSHOT_MAX_AGE_MS = 2 * 60_000
 const routeSnapshots = new Map()
 
 export function rememberRouteSnapshot(routerID, snapshot, now = Date.now()) {
   if (routerID == null || !snapshot) return
   routeSnapshots.set(String(routerID), { snapshot, at: now })
+}
+
+// Ответ route_status ложится в кеш под роутером, ДЛЯ КОТОРОГО его спрашивали
+// (useCommand ставит его в result.for_router), а не под открытый сейчас:
+// опоздавший ответ прошлого роутера иначе лёг бы под id нового. Возвращает
+// true, если ответ -- про открытый сейчас роутер и его можно показывать.
+export function rememberCommandSnapshot(currentRouterID, result, snapshot, now = Date.now()) {
+  const owner = result?.for_router ?? currentRouterID
+  rememberRouteSnapshot(owner, snapshot, now)
+  return String(owner) === String(currentRouterID)
 }
 
 export function recentRouteSnapshot(routerID, now = Date.now()) {

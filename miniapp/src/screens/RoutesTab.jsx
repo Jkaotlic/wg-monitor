@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
   parseRouteSnapshot,
-  rememberRouteSnapshot,
+  rememberCommandSnapshot,
   snapshotState,
   routingVerdict,
   defaultDestination,
@@ -95,8 +95,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   useEffect(() => {
     if (result?.status !== 'ok') return
     const snap = parseRouteSnapshot(result.output)
-    rememberRouteSnapshot(routerID, snap)
-    setSnapshot(snap)
+    if (rememberCommandSnapshot(routerID, result, snap)) setSnapshot(snap)
   }, [result])
 
   useEffect(() => {
