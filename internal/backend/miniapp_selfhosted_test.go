@@ -30,7 +30,7 @@ func TestMiniappSelfHostedAdminOnly(t *testing.T) {
 		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/toggle", `{"enabled":true}`},
 		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/check", ""},
 		{http.MethodDelete, "/v1/miniapp/selfhosted/dacha", `{"confirm":"нет"}`},
-		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/trust-host-key", `{"confirm":"нет"}`},
+		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/confirm-host-key", `{"confirm":"нет","fingerprint":"SHA256:x"}`},
 	}
 	for _, rt := range routes {
 		for _, who := range []int64{cabStranger, cabOperator, cabOwner} {
@@ -274,31 +274,51 @@ func TestMiniappSelfHostedUpdateNewSSHTargetNeedsPassword(t *testing.T) {
 	}
 }
 
-// B2 (v0.55): отпечаток ключа хоста виден админу в карточке, «Доверять
-// новому ключу» -- с подтверждением именем, смена ключа при выпуске --
+// B2 (v0.55) + C1 (v0.56): доверенный и ожидающий отпечатки видны админу в
+// карточке; подтверждается именно ожидающий -- набором имени сервера и самим
+// отпечатком, сверка на бэкенде; «Сбросить» нет; смена ключа при выпуске --
 // словами с именем сервера.
 func TestMiniappSelfHostedHostKey(t *testing.T) {
 	env := newCabinetEnv(t)
 	seedVPS(env)
 	const fp = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
+	const pending = "SHA256:Zm9yLXRlc3Qtb25seS1hbm90aGVyLWhvc3Qta2V5LXg"
+	at := time.Date(2026, 10, 6, 9, 30, 0, 0, time.UTC)
 	env.vps.instances[0].SSHHostKey = fp
+	env.vps.instances[0].SSHHostKeyPending = pending
+	env.vps.instances[0].SSHHostKeyPendingAt = at
 	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ssh_host_key":"`+fp+`"`) {
-		t.Fatalf("отпечатка нет в карточке: %d %s", rec.Code, rec.Body.String())
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"ssh_host_key":"`+fp+`"`) ||
+		!strings.Contains(body, `"ssh_host_key_pending":"`+pending+`"`) ||
+		!strings.Contains(body, `"ssh_host_key_pending_at":"2026-10-06T09:30:00Z"`) {
+		t.Fatalf("отпечатков нет в карточке: %d %s", rec.Code, body)
 	}
 
-	const trust = "/v1/miniapp/selfhosted/dacha/trust-host-key"
-	rec = env.do(t, cabAdmin, http.MethodPost, trust, `{"confirm":"dacha"}`)
+	// Сброса больше нет.
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/trust-host-key", `{"confirm":"Дом"}`)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("старый сброс жив: %d %s", rec.Code, rec.Body.String())
+	}
+
+	const confirm = "/v1/miniapp/selfhosted/dacha/confirm-host-key"
+	rec = env.do(t, cabAdmin, http.MethodPost, confirm, `{"confirm":"dacha","fingerprint":"`+pending+`"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || env.vps.instances[0].SSHHostKey != fp {
-		t.Fatalf("доверие без верного имени: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("подтверждение без верного имени: %d %s", rec.Code, rec.Body.String())
 	}
-	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/nope/trust-host-key", `{"confirm":"Дом"}`)
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/nope/confirm-host-key", `{"confirm":"Дом","fingerprint":"`+pending+`"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "instance_not_found" {
-		t.Fatalf("доверие несуществующему: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("подтверждение несуществующему: %d %s", rec.Code, rec.Body.String())
 	}
-	rec = env.do(t, cabAdmin, http.MethodPost, trust, `{"confirm":" дом "}`)
-	if rec.Code != http.StatusNoContent || env.vps.instances[0].SSHHostKey != "" {
-		t.Fatalf("доверие: %d %s ключ=%q", rec.Code, rec.Body.String(), env.vps.instances[0].SSHHostKey)
+	// Не тот отпечаток (сервер успел предъявить другой) -- отказ, ничего не меняется.
+	rec = env.do(t, cabAdmin, http.MethodPost, confirm, `{"confirm":"Дом","fingerprint":"`+fp+`"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "host_key_not_pending" ||
+		msg != miniappCabinetErrorText("host_key_not_pending") || env.vps.instances[0].SSHHostKeyPending != pending {
+		t.Fatalf("чужой отпечаток: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabAdmin, http.MethodPost, confirm, `{"confirm":" дом ","fingerprint":"`+pending+`"}`)
+	if rec.Code != http.StatusNoContent || env.vps.instances[0].SSHHostKey != pending || env.vps.instances[0].SSHHostKeyPending != "" {
+		t.Fatalf("подтверждение: %d %s %+v", rec.Code, rec.Body.String(), env.vps.instances[0])
 	}
 
 	env.vps.issueErr = &selfhostedamnezia.HostKeyChangedError{Label: "Дом"}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -31,9 +32,14 @@ func (e *HostKeyChangedError) Error() string {
 
 func (e *HostKeyChangedError) Unwrap() error { return ErrHostKeyChanged }
 
+// ErrHostKeyNotPending -- подтверждают не тот отпечаток, что сервер
+// предъявил последним (или ожидающего нет вовсе): доверие не меняется.
+var ErrHostKeyNotPending = errors.New("host key fingerprint is not the pending one")
+
 // HostKeyPolicy -- чего ждать от ключа хоста. Known -- запомненный отпечаток
 // («SHA256:…»); пусто -- первый вход, предъявленный ключ запоминает Remember,
-// но только после удачного входа по паролю.
+// но только после удачного входа по паролю. Refused -- куда записать
+// отпечаток, получивший отказ (ожидающий подтверждения, v0.56, C1).
 //
 // Один раннер -- несколько входов (выпуск читает четыре файла, каждый --
 // отдельный вход). pinned -- общий для копий политики отпечаток, который
@@ -42,6 +48,7 @@ func (e *HostKeyChangedError) Unwrap() error { return ErrHostKeyChanged }
 type HostKeyPolicy struct {
 	Known    string
 	Remember func(fingerprint string) error
+	Refused  func(fingerprint string) error
 	pinned   *pinnedHostKey
 }
 
@@ -78,6 +85,7 @@ type hostKeyCheck struct {
 	policy  HostKeyPolicy
 	known   string
 	seen    string
+	offered string // отказанный отпечаток при смене ключа
 	changed bool
 	refused bool
 }
@@ -89,6 +97,7 @@ func (c *hostKeyCheck) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
 	switch {
 	case known != "" && fp != known:
 		c.changed = true
+		c.offered = fp
 		return ErrHostKeyChanged
 	case known == "" && c.policy.Remember == nil:
 		c.refused = true
@@ -117,6 +126,9 @@ func (s *Service) hostKeyPolicy(inst Instance) HostKeyPolicy {
 		pinned: &pinnedHostKey{},
 		Remember: func(fp string) error {
 			return s.rememberHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
+		},
+		Refused: func(fp string) error {
+			return s.rememberPendingHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
 		},
 	}
 }
@@ -150,17 +162,56 @@ func (s *Service) rememberHostKey(id, host string, port int, fp string) error {
 	return err
 }
 
-// TrustNewHostKey -- «Доверять новому ключу»: запомненный отпечаток
-// сбрасывается, следующий удачный вход запомнит тот ключ, что предъявит
-// сервер. Право и подтверждение именем -- на стороне обработчика.
-func (s *Service) TrustNewHostKey(id string) error {
+// rememberPendingHostKey записывает отказанный отпечаток как ожидающий
+// подтверждения. Файл пишется, только если ожидающий изменился и адрес с
+// портом SSH те же: каждый выпуск, проверка или автопочинка на сменённом
+// ключе иначе переписывали бы файл раз за разом. Совпал с доверенным (его
+// успели подтвердить, пока шёл вход) -- ожидающим он не становится.
+func (s *Service) rememberPendingHostKey(id, host string, port int, fp string) error {
+	fp = strings.TrimSpace(fp)
+	if fp == "" {
+		return nil
+	}
+	err := s.update(func(st *Store) error {
+		for i := range st.Instances {
+			inst := &st.Instances[i]
+			if inst.ID != id {
+				continue
+			}
+			if inst.SSHHost != host || inst.SSHPort != port || inst.SSHHostKey == "" || inst.SSHHostKey == fp || inst.SSHHostKeyPending == fp {
+				return errUnchanged
+			}
+			inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = fp, s.now().UTC()
+			return nil
+		}
+		return errUnchanged
+	})
+	if errors.Is(err, errUnchanged) {
+		return nil
+	}
+	return err
+}
+
+// ConfirmHostKey -- «Подтвердить ключ сервера SHA256:…» (v0.56, C1): админ
+// подтверждает именно тот отпечаток, что видел в карточке. Он должен совпасть
+// с ожидающим -- тогда становится доверенным, ожидающий стирается. Иначе
+// ErrHostKeyNotPending и ничего не меняется. Право и подтверждение именем --
+// на стороне обработчика.
+func (s *Service) ConfirmHostKey(id, fingerprint string) error {
 	id = strings.ToLower(strings.TrimSpace(id))
+	fingerprint = strings.TrimSpace(fingerprint)
 	return s.update(func(st *Store) error {
 		for i := range st.Instances {
-			if st.Instances[i].ID == id {
-				st.Instances[i].SSHHostKey = ""
-				return nil
+			inst := &st.Instances[i]
+			if inst.ID != id {
+				continue
 			}
+			if inst.SSHHostKeyPending == "" || fingerprint != inst.SSHHostKeyPending {
+				return ErrHostKeyNotPending
+			}
+			inst.SSHHostKey = fingerprint
+			inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", time.Time{}
+			return nil
 		}
 		return ErrInstanceNotFound
 	})

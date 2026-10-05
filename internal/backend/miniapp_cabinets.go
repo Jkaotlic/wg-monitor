@@ -55,6 +55,7 @@ var miniappCabinetTexts = map[string]string{
 	"dm_failed":                 "Telegram не принял файл — повторите позже",
 	"selfhosted_not_configured": "Свои серверы на этом сервере не настроены",
 	"instance_not_found":        "Свой сервер не найден — обновите экран",
+	"host_key_not_pending":      "Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново",
 	"instance_exists":           "Сервер с таким именем уже есть",
 	"instance_disabled":         "Свой сервер выключен — включите его и повторите",
 	"instance_not_ready":        "У своего сервера не заполнены адрес и порт для клиентов",
