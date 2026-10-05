@@ -128,7 +128,7 @@ describe('agent_heartbeat говорит по-человечески', () => {
   })
 
   it('в легенде на корпусе', () => {
-    expect(legendLabel('agent_heartbeat')).toBe('отчёты агента')
+    expect(legendLabel('agent_heartbeat')).toBe('Отчёты от роутера')
   })
 
   it('в карточке тревоги -- последствием, а не именем механизма', () => {

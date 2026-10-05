@@ -9,27 +9,10 @@
 // below is a plain function or constant so later screens can pull in exactly
 // the label they need.
 
-const CHECK_LABELS = {
-  dns: 'Определение адресов сайтов',
-  external_reach: 'Доступ в интернет',
-  hydraroute: 'Обход блокировок',
-  awg_manager: 'Панель управления роутером',
-  tunnels: 'Связь с панелью роутера',
-  // Эту проверку агент присылает в каждом отчёте (internal/agent/reporter.go),
-  // так что без подписи она попадалась человеку чаще остальных -- и всюду
-  // сырым идентификатором.
-  agent_heartbeat: 'Отчёты от роутера',
-  // Сторож своего DNS-сервера (спека dns-watchdog). Бот зовёт его так же
-  // (checkHumanName в alerts/format.go).
-  resolver_guard: 'Свой DNS-сервер',
-  // Читающая проверка раздельного DNS (кому отданы русские зоны). Свой раздел
-  // на экране «Проверки».
-  dns_split: 'Раздельный DNS',
-  // Серверы имён, которым роутер отдал русские зоны (v0.55, спека C). Бот
-  // зовёт её так же (checkHumanName в alerts/format.go). Строки нет вовсе,
-  // когда отдельного сервера для русских зон в настройках роутера нет.
-  dns_ru: 'Сервер имён для русских сайтов',
-}
+// Одна таблица подписей проверок -- общий файл с ботом (alerts/check_names.json,
+// тест «ровно одна запись на ключ проверки агента» -- check_names_test.go).
+// Имена существительными; своих словарей у экранов нет (B4, v0.56).
+import CHECK_LABELS from '../../internal/backend/alerts/check_names.json'
 
 // Check names are identifiers, not prose. Anything we don't have a human name
 // for is shown as-is rather than mangled -- an honest unknown beats a wrong guess.
@@ -495,20 +478,9 @@ export function statusLabel(status) {
   return STATUS_LABEL[status] ?? status
 }
 
-// Подписи для легенды панели: на корпусе лампа подписана четырьмя буквами, и
-// рядом нужна расшифровка в два-три слова, а не полное имя проверки -- иначе
-// легенда перестаёт быть легендой и превращается во второй список проверок.
-const LEGEND_LABEL = {
-  dns: 'адреса сайтов',
-  external_reach: 'интернет',
-  hydraroute: 'обход блокировок',
-  awg_manager: 'панель роутера',
-  tunnels: 'связь с ботом',
-  agent_heartbeat: 'отчёты агента',
-}
-
+// Подпись легенды панели -- та же из общей таблицы: второго словаря у легенды нет.
 export function legendLabel(name) {
-  return LEGEND_LABEL[name] ?? checkLabel(name)
+  return checkLabel(name)
 }
 
 // Русское числительное с существительным: 1 правило, 2 правила, 5 правил.

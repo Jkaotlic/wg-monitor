@@ -295,15 +295,6 @@ function tunnelsRow(check, tunnels, clock, incidents) {
   }
 }
 
-const ROW_TITLES = {
-  dns: 'Сайты открываются по имени',
-  dns_ru: 'Русские сайты открываются по имени',
-  external_reach: 'Сайты снаружи отвечают',
-  hydraroute: 'Обход блокировок работает',
-  awg_manager: 'Панель роутера отвечает',
-  tunnels: 'VPN-туннели на связи',
-  agent_heartbeat: 'Роутер отчитался о себе',
-}
 
 export function checkRows({ checks = [], tunnels = [], incidents = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
   const clock = { clockOffsetMs, nowMs }
@@ -318,7 +309,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
       const age = router?.last_seen_age_sec
       rows.push({
         key,
-        title: ROW_TITLES[key],
+        title: checkLabel(key),
         code: 'agent_heartbeat',
         answer: silent ? 'нет' : 'да',
         tone: silent ? 'danger' : 'ok',
@@ -343,7 +334,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({
       key,
-      title: ROW_TITLES[key] ?? key,
+      title: checkLabel(key),
       code: key,
       answer,
       tone,

@@ -43,7 +43,7 @@ function codes(root) {
 describe('v0.48: машинные имена на «Проверках»', () => {
   it('не админу -- ни одного', async () => {
     const root = await mount({})
-    expect(root.textContent).toContain('Сайты открываются по имени')
+    expect(root.textContent).toContain('Определение адресов сайтов')
     expect(codes(root)).toEqual([])
     render(null, root)
     root.remove()
@@ -62,7 +62,7 @@ describe('v0.48: машинные имена на «Проверках»', () =>
     expect(consequence).not.toBeNull()
     const group = consequence.parentElement
     expect(group.classList.contains('data-row-group')).toBe(true)
-    expect(group.querySelector('.data-row').textContent).toContain('Сайты открываются по имени')
+    expect(group.querySelector('.data-row').textContent).toContain('Определение адресов сайтов')
     render(null, root)
     root.remove()
   })
