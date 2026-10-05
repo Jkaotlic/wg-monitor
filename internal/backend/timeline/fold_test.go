@@ -197,3 +197,52 @@ func TestFoldDoesNotMutateInput(t *testing.T) {
 		t.Errorf("вход изменён: %+v", rows)
 	}
 }
+
+// Сторож выключили правкой файла посреди аварии: проверка resolver_guard
+// пропала из отчётов, а отчёты (agent_heartbeat) идут. Идущей аварии, которую
+// никто уже не обновит, быть не может -- она кончилась, когда проверка исчезла.
+func TestFoldResolverGuardGoneFromReportsClosesTheIncident(t *testing.T) {
+	got := Fold([]db.EventRow{
+		row("agent_heartbeat", "ok", 0),
+		row("resolver_guard", "fail", 0),
+		row("agent_heartbeat", "ok", time.Minute),
+		row("resolver_guard", "fail", time.Minute),
+		row("agent_heartbeat", "ok", 2*time.Minute),
+		row("agent_heartbeat", "ok", 3*time.Minute),
+	}, base.Add(time.Hour))
+
+	var guard []Incident
+	for _, inc := range got {
+		if inc.CheckName == "resolver_guard" {
+			guard = append(guard, inc)
+		}
+	}
+	if len(guard) != 1 {
+		t.Fatalf("хотим одно происшествие сторожа, получили %+v", got)
+	}
+	if guard[0].Ongoing {
+		t.Errorf("авария не должна идти: проверка пропала из отчётов: %+v", guard[0])
+	}
+	if guard[0].To != base.Add(2*time.Minute) {
+		t.Errorf("конец -- первый отчёт без проверки (09:02), получили %v", guard[0].To)
+	}
+	if guard[0].DownSec != 120 {
+		t.Errorf("длилась %d с, хотим 120", guard[0].DownSec)
+	}
+}
+
+// Пока проверка в отчётах, авария идёт; отчёт без отчётов-сердцебиений
+// (нет agent_heartbeat после последней строки) ничего не закрывает.
+func TestFoldResolverGuardStillReportedStaysOngoing(t *testing.T) {
+	got := Fold([]db.EventRow{
+		row("agent_heartbeat", "ok", 0),
+		row("resolver_guard", "fail", 0),
+		row("agent_heartbeat", "ok", time.Minute),
+		row("resolver_guard", "fail", time.Minute),
+	}, base.Add(time.Hour))
+	for _, inc := range got {
+		if inc.CheckName == "resolver_guard" && !inc.Ongoing {
+			t.Errorf("авария идёт: %+v", inc)
+		}
+	}
+}
