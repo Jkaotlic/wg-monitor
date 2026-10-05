@@ -100,3 +100,24 @@ func TestSandboxSeedForAutorepair(t *testing.T) {
 		}
 	}
 }
+
+// Песочница v0.55: у sandbox-broken есть строка dns_ru, а sandbox-car спит.
+func TestSandboxSeedDNSRuAndSleeper(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "sandbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ids, err := seed(d, 4242)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, ok, err := d.Events().LatestEvent(ids["sandbox-broken"], "dns_ru")
+	if err != nil || !ok || row.Status != "fail" || !strings.Contains(row.DetailsJSON, `"ru_upstreams":2`) {
+		t.Fatalf("dns_ru у sandbox-broken: %+v %v %v", row, ok, err)
+	}
+	u, err := d.Users().GetByID(ids["sandbox-car"])
+	if err != nil || time.Since(*u.LastSeenAt) < time.Hour {
+		t.Fatalf("sandbox-car должен спать (давний отчёт): %+v %v", u, err)
+	}
+}

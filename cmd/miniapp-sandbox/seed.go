@@ -90,7 +90,8 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 		if err := d.Users().UpdateLastSeen(uid); err != nil {
 			return nil, err
 		}
-		if s.nick == "sandbox-off" || s.nick == "sandbox-bronya" {
+		if s.nick == "sandbox-off" || s.nick == "sandbox-bronya" || s.nick == "sandbox-car" {
+			// (sandbox-car -- мобильный в спячке: «спят» в плитке и чипах видно сразу.)
 			// UpdateLastSeen выше ставит «сейчас»; выключенному нужен старый
 			// отчёт, иначе сводка посчитает его живым.
 			if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, seen.UTC().Format(time.RFC3339), uid); err != nil {
@@ -208,6 +209,13 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		rows[5].details = tunnelBad
 		rows[1].status = "fail"
 		rows[1].details = `{"endpoints":4,"failed_count":2,"rkn_probed":true,"rkn_suspect":true}`
+		// Сервер имён для русских сайтов молчит, заграничные отвечают
+		// (проверка dns_ru агента v0.55): строка на вкладке «Проверки».
+		rows = append(rows, struct {
+			name    string
+			status  string
+			details string
+		}{"dns_ru", "fail", `{"ru_upstreams":2,"ru_failed":2,"router_resolves":true,"endpoints_detail":[{"type":"dot","target":"common.dot.dns.yandex.net:853","reachable":false,"err":"i/o timeout"}]}`})
 	}
 	// Несколько срезов во времени, иначе лента событий и график состоят из
 	// одной точки, а именно на ленте ломается вёрстка длинных списков.

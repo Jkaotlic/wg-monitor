@@ -267,7 +267,9 @@ func main() {
 		VPNCabinet:  cabinet,
 		// Кабинеты роутера (ключи, коды, отзыв), свои серверы и личка --
 		// фейки: приёмка экранов кабинета без кабинетов, VPS и Telegram.
-		VPNCabinetKeys:        cabinet,
+		VPNCabinetKeys: cabinet,
+		// Предупреждение в карточке «Бэкенд» Парка (v0.55, B1): видно глазами.
+		CabinetSealWarning:    "Ключи кабинетов на диске сервера не защищены паролем — задайте ключ шифрования",
 		SelfHosted:            newSandboxSelfHosted(),
 		Awg3Panels:            awg3Panels,
 		MiniappDocs:           sandboxDocs{unreachable: *dm == "unreachable"},
