@@ -55,10 +55,11 @@ type Setting struct {
 	Provider      string
 	Option        string
 	AllowRelocate bool
-	// TunnelName -- имя VPN-туннеля, для которого настройку включали. id
-	// туннеля awg-manager переиспользует: удалили «Дачу», завели «Работу» --
-	// у неё может оказаться тот же id. Другое имя в снимке -- настройка чужая.
-	// Пусто -- имя не записано (старые строки), сверять не с чем.
+	// TunnelName -- имя VPN-туннеля, для которого настройку включали. Другое
+	// имя под тем же id -- VPN-туннель переименовали (или под id уже другой):
+	// перезапуск идёт, а выпуск конфига ждёт, пока человек подтвердит
+	// автопочинку в приложении (оно и перепишет имя). Пусто -- имя не
+	// записано, сверять не с чем.
 	TunnelName string
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка этой
 	// настройки уже выпустила при смене локации. Новая страна -- место в
@@ -82,9 +83,6 @@ type Thread interface {
 	NeedHuman(ctx context.Context, text, action string)
 	// NotStarted -- правка «Автопочинка не запускалась: …».
 	NotStarted(ctx context.Context, why string)
-	// Quiet -- нить кончилась без слов: починка оказалась не нужна людям
-	// (настройка чужая). Закрытие проверки снимается, ничего не пишется.
-	Quiet(ctx context.Context)
 }
 
 // nopThread -- нить без людей: Report не задан.
@@ -94,7 +92,6 @@ func (nopThread) Progress(context.Context, string)          {}
 func (nopThread) Done(context.Context, string)              {}
 func (nopThread) NeedHuman(context.Context, string, string) {}
 func (nopThread) NotStarted(context.Context, string)        {}
-func (nopThread) Quiet(context.Context)                     {}
 
 type Deps struct {
 	Store *provision.Store
@@ -111,9 +108,6 @@ type Deps struct {
 	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
 	SpendRelocation func(routerID int64, tunnelID, option string) error
-	// DropSetting удаляет настройку, оказавшуюся чужой (имя VPN-туннеля с
-	// этим id другое). nil -- не удалять.
-	DropSetting func(routerID int64, tunnelID string)
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
 	Commands replace.Commander
@@ -142,17 +136,11 @@ type StartReq struct {
 	TunnelName string
 }
 
-// foreign -- настройка записана для VPN-туннеля с другим именем. Не знаем
+// renamed -- настройка записана для VPN-туннеля с другим именем. Не знаем
 // одного из имён -- сверять не с чем, настройка считается своей.
-func (s Setting) foreign(current string) bool {
+func (s Setting) renamed(current string) bool {
 	stored, cur := strings.TrimSpace(s.TunnelName), strings.TrimSpace(current)
 	return stored != "" && cur != "" && stored != cur
-}
-
-func (d Deps) dropSetting(routerID int64, tunnelID string) {
-	if d.DropSetting != nil {
-		d.DropSetting(routerID, tunnelID)
-	}
 }
 
 // pickBackup выбирает линию, которой отдать трафик. Список интерфейсов
@@ -288,16 +276,12 @@ func (d Deps) Start(req StartReq) (string, error) {
 			set = s
 		}
 	}
-	// Настройка записана для VPN-туннеля с другим именем -- id переиспользован,
-	// и согласия на автопочинку ЭТОГО туннеля никто не давал. Автозапуск
-	// молчит: тревога ушла, а про чужую настройку людям сказать нечего.
-	// Ручной запуск чинит без чужого источника.
-	if set.foreign(req.TunnelName) {
-		d.dropSetting(req.RouterID, sc.TunnelID)
-		if req.Auto {
-			return "", fmt.Errorf("%w: настройка записана для другого VPN-туннеля", ErrAutoDisabled)
-		}
-		set = Setting{}
+	// Настройка записана для VPN-туннеля с другим именем: переименовали (или
+	// id достался другому). Настройка остаётся, перезапуск идёт как обычно;
+	// выпуск конфига ждёт подтверждения человека (см. run).
+	renamedTo := ""
+	if set.renamed(req.TunnelName) {
+		renamedTo = strings.TrimSpace(req.TunnelName)
 	}
 	// notStarted -- при автозапуске люди уже получили тревогу; почему
 	// починка не пошла, дописывается к ней. Ручному запуску ответ виден на
@@ -342,11 +326,13 @@ func (d Deps) Start(req StartReq) (string, error) {
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
 	th := d.begin(ctx, req)
-	go d.run(job.ID, req, sc, set, th)
+	go d.run(job.ID, req, sc, set, renamedTo, th)
 	return job.ID, nil
 }
 
-func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Thread) {
+// run -- лесенка. renamedTo -- новое имя VPN-туннеля, если запускающий уже
+// знает, что его переименовали; иначе сверка по снимку.
+func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedTo string, th Thread) {
 	defer d.Store.Unlock(req.Nickname)
 	ctx := d.baseCtx()
 
@@ -366,16 +352,8 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 		return
 	}
 	// Сверка по снимку -- когда запускающий имени не знал.
-	if set.foreign(brokenName) {
-		d.dropSetting(req.RouterID, sc.TunnelID)
-		if req.Auto {
-			d.step(jobID, StepFailover, provision.StepFailed, "настройка автопочинки была записана для другого VPN-туннеля")
-			d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate, StepFailback)
-			d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateFailed })
-			th.Quiet(context.WithoutCancel(ctx))
-			return
-		}
-		set = Setting{}
+	if renamedTo == "" && set.renamed(brokenName) {
+		renamedTo = brokenName
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
 	names.carrier = carrier
@@ -414,6 +392,15 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 	}
 	log = append(log, textRestartNoHelp)
 	if d.aborted(ctx, jobID, req, th, names, log) {
+		return
+	}
+
+	// VPN-туннель переименовали: согласие на выпуск конфига давали другому
+	// имени. Перезапуск ничего не тратит и уже прошёл; выпуск -- после
+	// подтверждения в приложении.
+	if renamedTo != "" {
+		d.skip(jobID, "VPN-туннель теперь называется «"+renamedTo+"» — выпуск конфига ждёт подтверждения автопочинки в приложении", StepReissue, StepRecreate)
+		d.finishNeedHuman(ctx, jobID, req, th, names, log, ActRenamed(renamedTo))
 		return
 	}
 

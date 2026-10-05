@@ -259,7 +259,6 @@ func (t recThread) NeedHuman(_ context.Context, text, action string) {
 	t.r.add(recCall{"need", text, action})
 }
 func (t recThread) NotStarted(_ context.Context, why string) { t.r.add(recCall{"notstarted", why, ""}) }
-func (t recThread) Quiet(context.Context)                    { t.r.add(recCall{"quiet", "", ""}) }
 
 // final ждёт итогового вызова нити (done или need): движок закрывает
 // задание и говорит с людьми не одним действием.
@@ -301,13 +300,12 @@ type savedOption struct {
 }
 
 type ladderEnv struct {
-	d       Deps
-	cmd     *scriptCommander
-	src     *fakeSource
-	rep     *recReporter
-	mu      sync.Mutex
-	saved   []savedOption
-	dropped []string
+	d     Deps
+	cmd   *scriptCommander
+	src   *fakeSource
+	rep   *recReporter
+	mu    sync.Mutex
+	saved []savedOption
 	// spent -- отметки «новая страна выпущена»; spendErr -- отметка не пишется.
 	spent    []string
 	spendErr error
@@ -317,12 +315,6 @@ func (e *ladderEnv) spentMarks() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]string(nil), e.spent...)
-}
-
-func (e *ladderEnv) droppedSettings() []string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]string(nil), e.dropped...)
 }
 
 func newLadder(t *testing.T, set *Setting) *ladderEnv {
@@ -355,11 +347,6 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 			}
 			e.spent = append(e.spent, fmt.Sprint(routerID, "/", tunnelID, "/", option))
 			return nil
-		},
-		DropSetting: func(routerID int64, tunnelID string) {
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			e.dropped = append(e.dropped, fmt.Sprint(routerID, "/", tunnelID))
 		},
 		Attempts:  Attempts{KV: newSafeKV()},
 		Commands:  e.cmd,
@@ -1284,66 +1271,55 @@ func TestStart_NotStartedWhenLockedOrOldAgent(t *testing.T) {
 	}
 }
 
-// Настройка записана для VPN-туннеля с другим именем: id переиспользован
-// (старый удалён, новый получил тот же id). Чужая настройка -- не согласие:
-// автозапуск молчит, роутеру ни одной команды, строка удаляется.
-func TestStart_StaleSettingAutoSilent(t *testing.T) {
-	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
+// VPN-туннель переименовали (id тот же, имя в настройке другое): настройка
+// остаётся, перезапуск идёт сразу, а выпуск и пересоздание ждут, пока человек
+// подтвердит автопочинку в приложении. Людям -- громко, что сделать.
+func wantRenamedAsks(t *testing.T, e *ladderEnv, job provision.Job, final recCall) {
+	t.Helper()
+	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRenamed("Дача") {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if job.Hint != ActRenamed("Дача") {
+		t.Fatalf("подсказка %q", job.Hint)
+	}
+	if n := len(e.cmd.actions("tunnel_restart")); n != 1 {
+		t.Fatalf("перезапусков %d, ждали 1", n)
+	}
+	if got := e.src.got(); len(got) != 0 {
+		t.Fatalf("источник спрошен до подтверждения: %v", got)
+	}
+	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
+		t.Fatalf("tunnel_import до подтверждения: %d", n)
+	}
+	for _, st := range []string{StepReissue, StepRecreate} {
+		got := stepOf(job, st)
+		if got.Status != provision.StepSkipped || !strings.Contains(got.Detail, "«Дача»") {
+			t.Fatalf("шаг %s: %+v", st, got)
+		}
+	}
+}
+
+func TestStart_RenamedAutoRestartsThenAsks(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Старый"})
 	req := ladderReq()
 	req.TunnelName = "Дача"
-	_, err := e.d.Start(req)
-	if !errors.Is(err, ErrAutoDisabled) {
-		t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
-	}
-	if e.cmd.count() != 0 {
-		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
-	}
-	if begins, _ := e.rep.snapshot(); len(begins) != 0 {
-		t.Fatalf("чужая настройка заговорила: %v", begins)
-	}
-	if got := e.droppedSettings(); len(got) != 1 || got[0] != "1/awg12" {
-		t.Fatalf("чужая настройка не удалена: %v", got)
-	}
+
+	job, final := e.run(t, req)
+
+	wantRenamedAsks(t, e, job, final)
 }
 
-// Имя от запускающего не пришло -- сверка по снимку роутера. Расхождение:
-// дальше снимка ничего не идёт, людям ни слова.
-func TestLadder_StaleSettingBySnapshotAutoSilent(t *testing.T) {
+// Имя от запускающего не пришло -- сверка по снимку роутера.
+func TestLadder_RenamedBySnapshotRestartsThenAsks(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
 
-	id, err := e.d.Start(ladderReq())
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	job := waitDone(t, e.d, id)
-	if job.State != provision.StateFailed {
-		t.Fatalf("state=%s", job.State)
-	}
-	for _, c := range e.cmd.all() {
-		if c.Action != "route_status" {
-			t.Fatalf("после снимка ушла команда %s", c.Action)
-		}
-	}
-	// Дождаться, пока нить закроется (Quiet), и проверить, что слов не было.
-	deadline := time.Now().Add(5 * time.Second)
-	for len(e.droppedSettings()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	_, calls := e.rep.snapshot()
-	for _, c := range calls {
-		if c.Kind != "quiet" {
-			t.Fatalf("чужая настройка заговорила: %+v", calls)
-		}
-	}
-	if got := e.droppedSettings(); len(got) != 1 {
-		t.Fatalf("чужая настройка не удалена: %v", got)
-	}
-	ownerTextsClean(t, job, e.rep)
+	job, final := e.run(t, ladderReq())
+
+	wantRenamedAsks(t, e, job, final)
 }
 
-// Ручной запуск с чужой настройкой: человек просил починить -- чиним, но без
-// чужого источника (только перезапуск), строка удаляется.
-func TestLadder_StaleSettingManualRestartOnly(t *testing.T) {
+// Ручной запуск -- то же: согласие на выпуск давали другому имени.
+func TestLadder_RenamedManualRestartsThenAsks(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
 	req := ladderReq()
 	req.Auto = false
@@ -1351,14 +1327,18 @@ func TestLadder_StaleSettingManualRestartOnly(t *testing.T) {
 
 	job, final := e.run(t, req)
 
-	if final.Action != ActNoSource || job.State != provision.StateFailed {
+	wantRenamedAsks(t, e, job, final)
+}
+
+// Перезапуск помог -- починка удалась, переименование ей не мешает.
+func TestLadder_RenamedRestartFixes(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", TunnelName: "Старый"})
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
-	}
-	if got := e.src.got(); len(got) != 0 {
-		t.Fatalf("чужой источник спрошен: %v", got)
-	}
-	if got := e.droppedSettings(); len(got) != 1 {
-		t.Fatalf("чужая настройка не удалена: %v", got)
 	}
 }
 
@@ -1374,9 +1354,6 @@ func TestLadder_SettingNameMatches(t *testing.T) {
 	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	if got := e.droppedSettings(); len(got) != 0 {
-		t.Fatalf("своя настройка удалена: %v", got)
-	}
 }
 
 // blockingReporter -- Telegram, который не отвечает: NotStarted висит, пока
@@ -1390,7 +1367,6 @@ func (b *blockingReporter) Begin(context.Context, int64, string) Thread { return
 func (b *blockingReporter) Progress(context.Context, string)            {}
 func (b *blockingReporter) Done(context.Context, string)                {}
 func (b *blockingReporter) NeedHuman(context.Context, string, string)   {}
-func (b *blockingReporter) Quiet(context.Context)                       {}
 func (b *blockingReporter) NotStarted(ctx context.Context, _ string) {
 	dl, _ := ctx.Deadline()
 	b.deadline <- dl

@@ -94,9 +94,9 @@ func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int6
 	}
 }
 
-// LinkRepairDropSetting удаляет настройку автопочинки VPN-туннеля: он удалён,
-// списан заменой или под его id теперь другой туннель. Ошибка -- только в лог:
-// худшее, что останется, -- строка, которую движок снова сочтёт чужой.
+// LinkRepairDropSetting удаляет настройку автопочинки VPN-туннеля: он удалён
+// или списан заменой. Ошибка -- только в лог: худшее, что останется, --
+// строка, у которой имя не совпадёт, и движок попросит подтвердить её заново.
 func LinkRepairDropSetting(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID string) {
 	return func(routerID int64, tunnelID string) {
 		if err := database.TunnelRepairSettings().Delete(routerID, tunnelID); err != nil && logger != nil {

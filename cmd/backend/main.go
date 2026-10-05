@@ -257,7 +257,6 @@ func main() {
 		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
-		DropSetting:     backend.LinkRepairDropSetting(d, logger.With("component", "linkrepair")),
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        cmdQueue,
 		Report:          repairs,

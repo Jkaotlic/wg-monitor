@@ -328,3 +328,55 @@ func TestAutorepair_PutStoresTunnelName(t *testing.T) {
 		t.Fatalf("имя VPN-туннеля в настройке %q, ждали «Дача»", s.TunnelName)
 	}
 }
+
+// VPN-туннель переименовали после включения: GET называет прежнее имя
+// (rename_pending), список ставит «стоит» с причиной, а PUT включения
+// переписывает имя -- и расхождение уходит.
+func TestAutorepair_RenamePendingUntilConfirmed(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Старый", Enabled: true, Provider: "amnezia", Option: "nl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	rec := env.do(t, cabOwner, http.MethodGet, path, "")
+	if r := decodeAutorepair(t, rec.Body.Bytes()); r.RenamePending != "Старый" || !r.Enabled {
+		t.Fatalf("расхождение имени не видно: %+v", r)
+	}
+
+	var list struct {
+		Tunnels map[string]string `json:"tunnels"`
+		Reasons map[string]string `json:"reasons"`
+	}
+	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/autorepair", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Tunnels["awg12"] != "blocked" || !strings.Contains(list.Reasons["awg12"], "подтвердите") {
+		t.Fatalf("список: %+v", list)
+	}
+	if words := latinOutsideGuillemets(list.Reasons["awg12"]); len(words) > 0 {
+		t.Fatalf("латиница в причине: %v", words)
+	}
+
+	rec = env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"nl"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	if r := decodeAutorepair(t, rec.Body.Bytes()); r.RenamePending != "" {
+		t.Fatalf("после подтверждения расхождение осталось: %+v", r)
+	}
+	if s, _, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12"); s.TunnelName != "Дача" {
+		t.Fatalf("имя не переписано: %+v", s)
+	}
+	list.Tunnels, list.Reasons = nil, nil
+	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/autorepair", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Tunnels["awg12"] != "on" || list.Reasons["awg12"] != "" {
+		t.Fatalf("список после подтверждения: %+v", list)
+	}
+}

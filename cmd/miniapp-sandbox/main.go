@@ -252,7 +252,6 @@ func main() {
 		Settings:        backend.LinkRepairSettings(d, nil),
 		SaveOption:      backend.LinkRepairSaveOption(d, nil),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
-		DropSetting:     backend.LinkRepairDropSetting(d, nil),
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        sink,
 		Report:          repairs,

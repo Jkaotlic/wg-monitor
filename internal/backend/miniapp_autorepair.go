@@ -28,6 +28,10 @@ type miniappAutorepairResp struct {
 	// Blocked -- почему автопочинка включена, но стоит (лимит попыток,
 	// провал до человека). Пусто -- не стоит.
 	Blocked string `json:"blocked,omitempty"`
+	// RenamePending -- прежнее имя VPN-туннеля, если после включения его
+	// переименовали: перезапуск идёт, а выпуск конфига ждёт, пока человек
+	// подтвердит автопочинку (PUT включения перепишет имя). Пусто -- имя то же.
+	RenamePending string `json:"rename_pending,omitempty"`
 	// HasBackup -- есть ли у VPN-туннеля запасной в общем наборе правил.
 	// Снимок наборов правил живёт на роутере и бэкендом не хранится, а
 	// спрашивать роутер из GET нельзя -- поэтому пока всегда nil: «не знаем».
@@ -124,6 +128,16 @@ func miniappAutorepairBlocked(d Deps, nickname, tunnelID string) string {
 	}
 	return ""
 }
+
+// miniappAutorepairRenamed -- настройку включали для VPN-туннеля с другим
+// именем (то же правило, что у движка: не знаем одного из имён -- своя).
+func miniappAutorepairRenamed(stored, current string) bool {
+	stored, current = strings.TrimSpace(stored), strings.TrimSpace(current)
+	return stored != "" && current != "" && stored != current
+}
+
+// miniappAutorepairRenameReason -- причина стопа в списке меток.
+const miniappAutorepairRenameReason = "VPN-туннель переименован — подтвердите автопочинку на его экране"
 
 // miniappAutorepairAwg3 -- панели своих серверов, с которых этот человек
 // может выпускать на этот роутер, тем же отбором, что экран выпуска.
@@ -268,6 +282,10 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 	}
 	if resp.Enabled {
 		resp.Blocked = miniappAutorepairBlocked(d, u.Nickname, tunnelID)
+		cur := miniappTunnelNameForCheck(d, u.ID, miniappTunnelPrefix+tunnelID)
+		if miniappAutorepairRenamed(s.TunnelName, cur) {
+			resp.RenamePending = strings.TrimSpace(s.TunnelName)
+		}
 	}
 	panels := miniappAutorepairAwg3(ctx, d, tg, u.ID)
 	resp.Sources = miniappAutorepairSources(ctx, d, tg, u.ID, panels)
@@ -443,15 +461,25 @@ func miniappAutorepairListHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "settings not read")
 			return
 		}
+		// Reasons -- почему VPN-туннель «стоит», когда причина не в счётчике
+		// попыток (переименован и ждёт подтверждения).
 		resp := struct {
 			Tunnels map[string]string `json:"tunnels"`
-		}{Tunnels: map[string]string{}}
+			Reasons map[string]string `json:"reasons,omitempty"`
+		}{Tunnels: map[string]string{}, Reasons: map[string]string{}}
+		var names map[string]string
 		for _, s := range list {
 			if !s.Enabled {
 				continue
 			}
+			if strings.TrimSpace(s.TunnelName) != "" && names == nil {
+				names = miniappTunnelNames(d, routerID)
+			}
 			state := autorepairStateOn
 			switch {
+			case miniappAutorepairRenamed(s.TunnelName, names[miniappTunnelPrefix+s.TunnelID]):
+				state = autorepairStateBlocked
+				resp.Reasons[s.TunnelID] = miniappAutorepairRenameReason
 			case miniappAutorepairBlocked(d, u.Nickname, s.TunnelID) != "":
 				state = autorepairStateBlocked
 			case s.Provider == "":

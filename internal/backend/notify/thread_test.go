@@ -545,20 +545,6 @@ func TestThread_EditFitsTelegramLimit(t *testing.T) {
 	}
 }
 
-// Quiet -- нить кончилась без слов: ни правки, ни сообщения, закрытие снято.
-func TestThread_QuietSaysNothingAndUncovers(t *testing.T) {
-	d, router := threadSetup(t)
-	tgc := &threadTG{}
-	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
-	r.Begin(context.Background(), router, threadCheck).Quiet(context.Background())
-	if len(tgc.edits)+len(tgc.sends) != 0 {
-		t.Fatalf("Quiet заговорил: %+v %+v", tgc.edits, tgc.sends)
-	}
-	if r.TakeCovered(router, threadCheck) {
-		t.Fatal("после Quiet «восстановилось» обязано уйти")
-	}
-}
-
 // Блок починки длиной 3997-3998 знаков: места под тревогу нет, а резать блок
 // по maxEditRunes-1 нельзя -- он короче: срез за длину (паника или мусор).
 func TestWithRepairBlock_LongBlockNoPanic(t *testing.T) {

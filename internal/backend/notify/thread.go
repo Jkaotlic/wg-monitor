@@ -262,12 +262,6 @@ func (t *repairThread) NotStarted(ctx context.Context, why string) {
 	t.say(ctx, "Автопочинка не запускалась: "+strings.TrimRight(strings.TrimSpace(why), ".")+".")
 }
 
-// Quiet -- нить кончилась без слов: закрытие проверки снимается, и
-// «восстановилось» уйдёт как обычно.
-func (t *repairThread) Quiet(context.Context) {
-	t.r.finish(t.key, t.gen, false)
-}
-
 // NeedHuman -- итог правкой и, если человеку есть что сделать, ответ со
 // звуком на тревогу: правка беззвучна, и то, ради чего человек нужен, не
 // может жить только в ней.

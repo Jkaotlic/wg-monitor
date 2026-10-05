@@ -260,7 +260,7 @@ func TestAutoRepairHint(t *testing.T) {
 	}
 }
 
-// Чужая настройка (имя VPN-туннеля под этим id другое) удаляется движком.
+// Настройка удалённого или списанного заменой VPN-туннеля удаляется.
 func TestLinkRepairDropSetting(t *testing.T) {
 	d, id := repairDB(t)
 	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: true}); err != nil {
