@@ -661,3 +661,21 @@ func TestLastKnownCheckOtherChecksTakeLatestRow(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// Напоминание bypass_leak называет запасной VPN-туннель так же, как первая
+// тревога: соседи -- VPN-туннели роутера, кроме несущего.
+func TestNeighborsFor_BypassLeakExcludesCarrier(t *testing.T) {
+	d, uid := newTestDB(t)
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	now := time.Now().UTC()
+	if err := d.Events().Insert(uid, "tunnel_awg12", "ok", `{"tunnel_name":"Франкфурт"}`, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_awg10", "ok", `{"tunnel_name":"Амстердам"}`, now); err != nil {
+		t.Fatal(err)
+	}
+	got := p.neighborsFor(uid, "bypass_leak", map[string]any{"tunnel_id": "awg12"})
+	if len(got) != 1 || got[0].CheckName != "tunnel_awg10" {
+		t.Fatalf("want только tunnel_awg10, got %+v", got)
+	}
+}

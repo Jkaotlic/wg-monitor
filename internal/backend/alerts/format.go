@@ -91,7 +91,9 @@ func FormatHard(a HardArgs) string {
 	}
 	// «Без ответа» -- неправда для запасных, не снявшихся рядом со своим: свой
 	// DNS-сервер при этом может и отвечать.
-	if a.ConsecFails > 0 && !(checkCategory(a.CheckName) == "resolver_guard" && resolverGuardForeignLeftover(a.Check.Details)) {
+	// У bypass_leak ответ был -- адрес не тот; порог бэкенд отсчитал сам.
+	if a.ConsecFails > 0 && checkCategory(a.CheckName) != "bypass_leak" &&
+		!(checkCategory(a.CheckName) == "resolver_guard" && resolverGuardForeignLeftover(a.Check.Details)) {
 		meta = append(meta, fmt.Sprintf("проверок подряд без ответа: %d", a.ConsecFails))
 	}
 	if !a.HardSince.IsZero() {
@@ -341,6 +343,13 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 		if total >= 3 && len(failed)*2 < total {
 			return "🟡"
 		}
+	case "bypass_leak":
+		// Сервисы через обход открываются (или их не проверяли) -- «обратить
+		// внимание»: может, VPN-сервер просто выходит в интернет через того же
+		// провайдера. Красный -- только когда сервисы и правда не открываются.
+		if strOrEmpty(d, "external_reach") != "fail" {
+			return "🟡"
+		}
 	case "resolver_guard":
 		// Запасные DNS-серверы работают -- сайты открываются, это «обратить
 		// внимание», а не пожар. Запасных нет -- тревога. Запасные не снялись
@@ -408,6 +417,8 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		return resolverGuardHeadline(d)
 	case "dns_ru":
 		return dnsRuHeadline
+	case "bypass_leak":
+		return fmt.Sprintf(bypassLeakHeadline, quotedTunnelName(d))
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineHeadline
@@ -456,6 +467,8 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 			return dnsRuGoneHeadline
 		}
 		return dnsRuRecoveredHeadline
+	case "bypass_leak":
+		return fmt.Sprintf(bypassLeakRecoveredHeadline, quotedTunnelName(d))
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineRecovered
@@ -491,6 +504,8 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns [
 		writeResolverGuardWhatBroke(b, d)
 	case "dns_ru":
 		writeDNSRuWhatBroke(b, d)
+	case "bypass_leak":
+		b.WriteString(bypassLeakWhatBroke + "\n")
 	default:
 		writeGenericWhatBroke(b, d)
 	}
@@ -1147,6 +1162,12 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		return adviseExternalReach(d, ns)
 	case "dns_ru":
 		return dnsRuAdvice
+	case "bypass_leak":
+		// Про запасной -- только когда он и правда на связи.
+		if spare, ok := liveSpare(ns); ok {
+			return bypassLeakAdvice + " " + fmt.Sprintf(bypassLeakSpare, spareHumanName(spare))
+		}
+		return bypassLeakAdvice
 	case "resolver_guard":
 		switch {
 		case resolverGuardNoFallback(d):
@@ -1287,6 +1308,8 @@ func checkHumanName(check string) string {
 		return "свой DNS-сервер"
 	case "dns_ru":
 		return dnsRuHumanName
+	case "bypass_leak":
+		return bypassLeakHumanName
 	}
 	if check == "agent_heartbeat" {
 		return "отчёты роутера"
@@ -1408,6 +1431,8 @@ func checkCategory(name string) string {
 		return "resolver_guard"
 	case name == "dns_ru":
 		return "dns_ru"
+	case name == "bypass_leak":
+		return "bypass_leak"
 	}
 	return "generic"
 }
@@ -1641,3 +1666,15 @@ func writeDNSRuWhatBroke(b *strings.Builder, d map[string]any) {
 // когда строка проверки пропала из свежего отчёта: ру-апстримов в настройках
 // роутера больше нет (или агент откатили).
 const DNSRuGoneReason = "ru_upstreams_gone"
+
+// Трафик мимо VPN-туннеля (вердикт бэкенда bypass_leak, v0.56, спека A):
+// правила уводят сайты в VPN-туннель, а адрес в интернете с ним тот же, что
+// и без него.
+const (
+	bypassLeakHumanName         = "смена адреса через VPN-туннель"
+	bypassLeakHeadline          = "VPN-туннель %s работает, но не меняет ваш адрес"
+	bypassLeakWhatBroke         = "Роутер отправляет через этот VPN-туннель сайты из ваших правил, но в интернете вы выходите с тем же адресом, что и без него. Заблокированные сайты, скорее всего, не откроются. Если всё открывается — это особенность вашего VPN-сервера, делать ничего не нужно."
+	bypassLeakAdvice            = "Проверьте VPN-туннель на экране роутера и при необходимости замените конфиг."
+	bypassLeakSpare             = "Запасной VPN-туннель «%s» на связи — правила можно перевести на него."
+	bypassLeakRecoveredHeadline = "VPN-туннель %s снова меняет ваш адрес"
+)

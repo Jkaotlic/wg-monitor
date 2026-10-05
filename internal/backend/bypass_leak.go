@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -26,7 +27,7 @@ import (
 // Пока alerts.bypass_leak.enabled=false (по умолчанию), автомат тревог эту
 // строку не ведёт, а экраны её не показывают: неделю копим вердикты и
 // считаем, сколько тревог было бы (bypassLeakWeeklySQL).
-const bypassLeakCheck = "bypass_leak"
+const bypassLeakCheck = alerts.BypassLeakCheck
 
 // Что показал отчёт про несущий VPN-туннель.
 const (
