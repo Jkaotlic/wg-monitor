@@ -124,8 +124,7 @@
   margin: 0 0 var(--sp-2);
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -342,8 +341,7 @@
 .field label {
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -810,8 +808,7 @@ body {
   margin: 0;
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -1713,8 +1710,7 @@ body {
   display: block;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--dim);
 }
 
