@@ -516,3 +516,45 @@ func TestThread_FallbackSkipsMuted(t *testing.T) {
 		}
 	}
 }
+
+// Telegram не примет текст длиннее 4096 знаков: длинная тревога плюс блок
+// починки ужимаются за счёт тревоги, блок остаётся целым -- он и есть
+// новость.
+func TestThread_EditFitsTelegramLimit(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{}
+	long := threadAlert + "\n" + strings.Repeat("правило «Видео» ушло мимо VPN-туннеля\n", 200)
+	r := newTestRepairs(d, tgc, fakeTexts{long, alertKB(), true}, nil)
+	block := "Чиню: " + strings.Repeat("перезапуск не помог · ", 40) + "сейчас: выпускаю конфиг заново…"
+
+	r.Begin(context.Background(), router, threadCheck).Progress(context.Background(), block)
+
+	if len(tgc.edits) != 2 {
+		t.Fatalf("правок=%d", len(tgc.edits))
+	}
+	for _, e := range tgc.edits {
+		if n := len([]rune(e.text)); n > 4000 {
+			t.Fatalf("правка длиной %d знаков", n)
+		}
+		if !strings.HasSuffix(e.text, "\n\n"+block) {
+			t.Fatalf("блок починки обрезан:\n%s", e.text[len(e.text)-200:])
+		}
+		if !strings.HasPrefix(e.text, threadAlert) {
+			t.Fatalf("голова тревоги потерялась")
+		}
+	}
+}
+
+// Quiet -- нить кончилась без слов: ни правки, ни сообщения, закрытие снято.
+func TestThread_QuietSaysNothingAndUncovers(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	r.Begin(context.Background(), router, threadCheck).Quiet(context.Background())
+	if len(tgc.edits)+len(tgc.sends) != 0 {
+		t.Fatalf("Quiet заговорил: %+v %+v", tgc.edits, tgc.sends)
+	}
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("после Quiet «восстановилось» обязано уйти")
+	}
+}

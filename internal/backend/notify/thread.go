@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
@@ -330,7 +331,7 @@ func (t *repairThread) send(ctx context.Context, text string) {
 // новое сообщение, и дальше правится уже оно. cur -- получатели сейчас
 // (nil -- неизвестно): кто выпал из них, тому ни правки, ни нового сообщения.
 func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]bool) {
-	full := t.base + "\n\n" + block
+	full := withRepairBlock(t.base, block)
 	f := t.r.fanout
 	for i := range t.targets {
 		tgt := &t.targets[i]
@@ -356,6 +357,31 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		f.noteSuccess(tgt.chatID)
 		tgt.messageID = mid
 	}
+}
+
+// maxEditRunes -- потолок правки с запасом до лимита Telegram в 4096 знаков.
+const maxEditRunes = 4000
+
+// withRepairBlock -- тревога и блок починки одним текстом. Не влезает в
+// лимит -- ужимается тревога (хвост, голова остаётся), блок целым: он и
+// есть новость. Блок сам длиннее лимита (не бывает: лесенка короткая) --
+// режется и он.
+func withRepairBlock(base, block string) string {
+	const sep, cut = "\n\n", "…"
+	full := base + sep + block
+	if utf8.RuneCountInString(full) <= maxEditRunes {
+		return full
+	}
+	room := maxEditRunes - utf8.RuneCountInString(sep+block) - utf8.RuneCountInString(cut)
+	if room <= 0 {
+		b := []rune(block)
+		return string(b[:maxEditRunes-1]) + cut
+	}
+	head := []rune(base)
+	if len(head) > room {
+		head = head[:room]
+	}
+	return strings.TrimRight(string(head), " \n") + cut + sep + block
 }
 
 // appKeyboard -- одна кнопка «открыть роутер в приложении»; адреса нет --
