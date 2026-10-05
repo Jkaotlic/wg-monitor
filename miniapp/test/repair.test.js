@@ -150,6 +150,22 @@ describe('repairView: лесенка автопочинки', () => {
     expect(v.steps[1].state).toBe('active')
   })
 
+  it('шагов ещё нет (задание грузится) -- подписи лесенки, а не старое «Выпускаю новый конфиг…»', () => {
+    for (const job of [null, { state: 'running', running: true, steps: [] }, { state: 'running', running: true }]) {
+      const v = repairView(job)
+      expect(v.steps.map((s) => s.label)).toEqual(['Увожу трафик на запасной VPN-туннель', 'Поднимаю VPN-туннель', 'Возвращаю всё на место'])
+    }
+  })
+
+  it('прерванная лесенка показывает, что делать', () => {
+    const v = repairView(
+      { state: 'failed', check_name: 'tunnel_awg12', hint: 'починка прервана — бэкенд перезапускался; запустите её ещё раз', steps: ladder(['done', 'skipped', 'skipped', 'skipped', 'skipped']) },
+      { checkName: 'tunnel_awg12' },
+    )
+    expect(v.title).toBe('Не получилось')
+    expect(v.action).toBe('починка прервана — бэкенд перезапускался; запустите её ещё раз')
+  })
+
   it('skipped в старой свёртке не рушит стадию', () => {
     const v = repairView({ state: 'success', steps: [{ name: 'failover', status: 'skipped' }, { name: 'issue', status: 'done' }, { name: 'retire', status: 'skipped' }, { name: 'failback', status: 'skipped' }] })
     expect(v.steps[1].state).toBe('done')

@@ -86,7 +86,10 @@ export function repairView(job, { checkName = '', ownJobID = '', pollFailed = fa
   const idle = empty || foreignDone
   const steps = foreignDone ? [] : (job?.steps ?? [])
   const done = !foreignDone && (job?.state === 'success' || job?.state === 'failed')
-  const ladder = steps.some((s) => s.name === 'restart')
+  // Шагов ещё нет (задание грузится) -- подписи лесенки: старые задания
+  // мастера замены после выкатки v0.54 уже не заводятся, и мелькнувшее
+  // «Выпускаю новый конфиг…» было бы неправдой.
+  const ladder = steps.length === 0 || steps.some((s) => s.name === 'restart')
   // Лесенка: провал ступени -- ещё не итог; причину называем, когда задание
   // кончилось неудачей (последний провал -- самой верхней ступени).
   const failed = ladder
