@@ -204,6 +204,12 @@ func TestRevokePartialFailuresAreCompletedByRetry(t *testing.T) {
 			if _, _, err := s.Revoke(context.Background(), "home", pubA); err == nil {
 				t.Fatal("ждали ошибку записи")
 			}
+			_, _, werr := s.Revoke(context.Background(), "home", pubA)
+			var partial *RevokePartialError
+			if !errors.As(werr, &partial) {
+				t.Fatalf("сбой после снятия с интерфейса должен быть RevokePartialError: %v", werr)
+			}
+			r.wg = r.wg[:1]
 			if len(r.wg) != 1 {
 				t.Fatalf("wg до сбоя записи должен пройти: %v", r.wg)
 			}

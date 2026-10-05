@@ -149,6 +149,7 @@ func miniappSelfHostedRevokeHandler(d Deps) http.HandlerFunc {
 // прочее (SSH, контейнер) -- 502 с кодом failCode, текст сбоя наружу не идёт.
 func miniappSelfHostedClientsError(d Deps, w http.ResponseWriter, op, failCode string, err error) {
 	var hk *selfhostedamnezia.HostKeyChangedError
+	var partial *selfhostedamnezia.RevokePartialError
 	switch {
 	case errors.As(err, &hk):
 		miniappCabinetLogger(d).Warn("свой сервер: ключ хоста сменился, "+op+" отказан", "instance_label", hk.Label)
@@ -157,6 +158,10 @@ func miniappSelfHostedClientsError(d Deps, w http.ResponseWriter, op, failCode s
 		writeMiniappCabinetError(w, http.StatusNotFound, "client_not_found")
 	case errors.Is(err, selfhostedamnezia.ErrInstanceNotFound), errors.Is(err, selfhostedamnezia.ErrInstanceDisabled), errors.Is(err, selfhostedamnezia.ErrInstanceNotReady):
 		writeMiniappSelfHostedError(d, w, op, err)
+	case errors.As(err, &partial):
+		// Подключение уже снято с интерфейса -- «не отозвал» было бы неправдой.
+		miniappCabinetLogger(d).Warn("свой сервер: "+op+" прерван после снятия с интерфейса", "err", err)
+		writeMiniappCabinetError(w, http.StatusBadGateway, "selfhosted_revoke_partial")
 	default:
 		// Текст сбоя -- в журнал (в нём может быть открытый ключ подключения из
 		// команды; секретов там нет), наружу он не идёт.

@@ -143,6 +143,17 @@ func (s *Service) Clients(ctx context.Context, id string) ([]Client, Instance, e
 	return out, inst, nil
 }
 
+// RevokePartialError -- отзыв упал ПОСЛЕ того, как подключение снято с
+// работающего интерфейса: оно уже не работает, но запись на сервере не
+// дочищена. Повтор безопасен и дочистит запись.
+type RevokePartialError struct{ Err error }
+
+func (e *RevokePartialError) Error() string {
+	return "отзыв прерван после снятия с интерфейса: " + e.Err.Error()
+}
+
+func (e *RevokePartialError) Unwrap() error { return e.Err }
+
 // Revoke отзывает подключение по ключу: сначала с работающего интерфейса (оно
 // перестаёт работать сразу), затем из серверного конфига и таблицы клиентов.
 // Сбой после первого шага -- повтор безопасен: «удалить пира» для отсутствующего
@@ -198,9 +209,18 @@ func (s *Service) Revoke(ctx context.Context, id, publicKey string) (Client, Ins
 	if _, err := runner.Run(ctx, []string{"wg", "set", cfg.Interface, "peer", publicKey, "remove"}, nil); err != nil {
 		return fail(err)
 	}
+	// Дальше подключение уже снято с интерфейса: сбой -- «частичный».
+	failLate := func(err error) (Client, Instance, error) {
+		c, i, e := fail(err)
+		var hk *HostKeyChangedError
+		if errors.As(e, &hk) {
+			return c, i, e
+		}
+		return c, i, &RevokePartialError{Err: e}
+	}
 	if inConf {
 		if err := writeAtomic(ctx, runner, cfg.ConfigPath, []byte(nextConf)); err != nil {
-			return fail(err)
+			return failLate(err)
 		}
 	}
 	if inTable {
@@ -212,7 +232,7 @@ func (s *Service) Revoke(ctx context.Context, id, publicKey string) (Client, Ins
 			return Client{}, Instance{}, err
 		}
 		if err := writeAtomic(ctx, runner, cfg.ClientsPath, body); err != nil {
-			return fail(err)
+			return failLate(err)
 		}
 	}
 	return entry, inst, nil

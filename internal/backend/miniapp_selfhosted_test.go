@@ -467,6 +467,11 @@ func TestMiniappSelfHostedRevokeFailuresAreWords(t *testing.T) {
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "selfhosted_revoke_failed" || strings.Contains(rec.Body.String(), "ПОДРОБНОСТЬ") || msg == "" {
 		t.Fatalf("сбой сервера: %d %s", rec.Code, rec.Body.String())
 	}
+	env.vps.revokeErr = &selfhostedamnezia.RevokePartialError{Err: errors.New("disk full ПОДРОБНОСТЬ")}
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":"Дом"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "selfhosted_revoke_partial" || !strings.Contains(msg, "уже отключено") || strings.Contains(rec.Body.String(), "ПОДРОБНОСТЬ") {
+		t.Fatalf("частичный отзыв: %d %s", rec.Code, rec.Body.String())
+	}
 	env.vps.listErr = selfhostedamnezia.ErrInstanceDisabled
 	rec = env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients", "")
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "instance_disabled" {
