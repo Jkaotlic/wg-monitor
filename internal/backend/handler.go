@@ -975,7 +975,9 @@ func reportHandler(d Deps) http.HandlerFunc {
 				continue
 			}
 			if c.Name == bypassLeakCheck && !d.AlertPolicy.BypassLeakEnabled {
-				// Тихий режим: строка пишется, тревоги нет.
+				// Тихий режим: строка пишется, тревоги нет. Открытая с тех
+				// пор, как флаг был включён, тревога закрывается молча.
+				bypassLeakCloseQuiet(d, uid)
 				continue
 			}
 			if !reportIsFresh {

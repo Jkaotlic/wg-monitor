@@ -75,6 +75,24 @@ func bypassLeakHidden(d Deps, checkName string) bool {
 	return checkName == bypassLeakCheck && !d.AlertPolicy.BypassLeakEnabled
 }
 
+// bypassLeakCloseQuiet -- в тихом режиме закрывает открытую тревогу
+// bypass_leak без сообщения (Fix 3 v0.56). Она осталась с тех пор, как
+// alerts.bypass_leak.enabled был включён; автомат строк больше не получает и
+// сам её не закроет, а экраны показывали бы её вечно. Сообщение «починилось»
+// было бы неправдой: проверку просто выключили. Тишина и квитирование
+// сбрасываются вместе с тревогой.
+func bypassLeakCloseQuiet(d Deps, uid int64) {
+	st, err := d.DB.State().Get(uid, bypassLeakCheck)
+	if err != nil || ((st.CurrentStatus == "" || st.CurrentStatus == "ok") && st.ConsecutiveFails == 0) {
+		return
+	}
+	if err := d.DB.State().Save(uid, bypassLeakCheck, db.IncidentState{UserID: uid, CheckName: bypassLeakCheck, CurrentStatus: "ok"}); err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("bypass_leak: тихое закрытие тревоги не сохранилось", "user_id", uid, "err", err)
+		}
+	}
+}
+
 // bypassLeakObs -- что показал один отчёт.
 type bypassLeakObs struct {
 	Kind       string

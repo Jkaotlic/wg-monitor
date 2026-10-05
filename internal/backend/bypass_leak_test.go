@@ -657,3 +657,33 @@ func TestBypassLeakWeeklyManualSQL_ProductionTSFormat(t *testing.T) {
 		}
 	}
 }
+
+// Fix 3 (v0.56): флаг выключили, а HARD bypass_leak осталась открытой с тех
+// пор, как он был включён. Её никто не закроет (автомат строк не получает),
+// и экраны показывали бы тревогу вечно. Первый же отчёт закрывает её молча:
+// ни сообщения, ни строки автомату.
+func TestReportBypassLeakQuietModeClosesOpenHardSilently(t *testing.T) {
+	h := newLeakHarness(t, false)
+	since := time.Now().UTC().Add(-3 * time.Hour)
+	last := since
+	if err := h.d.State().Save(h.uid(), bypassLeakCheck, db.IncidentState{
+		UserID: h.uid(), CheckName: bypassLeakCheck, CurrentStatus: "hard",
+		ConsecutiveFails: 3, HardSince: &since, LastAlertAt: &last,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	leakReport(h, time.Now().UTC().Add(-30*time.Minute), "ok", true)
+	st, err := h.d.State().Get(h.uid(), bypassLeakCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.CurrentStatus != "ok" || st.HardSince != nil || st.ConsecutiveFails != 0 {
+		t.Fatalf("тихий режим: открытая тревога не закрылась: %+v", st)
+	}
+	if n := h.leakDispatches(); n != 0 {
+		t.Fatalf("закрытие должно быть молчаливым, автомат получил %d строк", n)
+	}
+	if active, _ := h.d.State().ActiveHardForUserStatus(h.uid()); len(active) != 0 {
+		t.Fatalf("экраны всё ещё видят тревогу: %+v", active)
+	}
+}
