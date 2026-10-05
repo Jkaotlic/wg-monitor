@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
@@ -834,7 +836,56 @@ func confirmAmbiguousTarget(state *State, ag *AgentState, hostname, mac, existin
 	return true
 }
 
+// hostKeyAcceptEnv -- неинтерактивное подтверждение смены ключа: значение
+// несёт сам ожидаемый отпечаток нового ключа (WG_YES_TO_ALL его не заменяет).
+const hostKeyAcceptEnv = "WG_ACCEPT_HOSTKEY"
+
+// fingerprintMatches: ввод совпадает с отпечатком целиком или своим хвостом
+// не короче 8 символов (префикс «SHA256:» необязателен).
+func fingerprintMatches(input, fp string) bool {
+	input = strings.TrimPrefix(strings.TrimSpace(input), "SHA256:")
+	fp = strings.TrimPrefix(fp, "SHA256:")
+	if input == "" {
+		return false
+	}
+	if input == fp {
+		return true
+	}
+	return len(input) >= 8 && strings.HasSuffix(fp, input)
+}
+
+// confirmHostKeyRotation просит подтвердить новый ключ вводом его отпечатка.
+// Общий флаг «да на всё» не годится: подтверждает только значение
+// WG_ACCEPT_HOSTKEY, равное отпечатку, или ввод оператора.
+func confirmHostKeyRotation(nick, oldFP, newFP string, ask func(prompt, def string) string) bool {
+	PrintWarn("ключ SSH у «" + nick + "» изменился.")
+	if oldFP == "" {
+		PrintInfo("старый отпечаток: не найден в known_hosts")
+	} else {
+		PrintInfo("старый отпечаток: " + oldFP)
+	}
+	PrintInfo("новый отпечаток:  " + newFP)
+	if env := strings.TrimSpace(os.Getenv(hostKeyAcceptEnv)); env != "" {
+		if fingerprintMatches(env, newFP) {
+			PrintOK(hostKeyAcceptEnv + " совпал с новым отпечатком")
+			return true
+		}
+		PrintFail(hostKeyAcceptEnv + " не совпал с новым отпечатком, отказ")
+		return false
+	}
+	answer := ask("Чтобы принять новый ключ, введи его отпечаток (целиком или последние 8+ символов)", "")
+	if !fingerprintMatches(answer, newFP) {
+		PrintFail("отпечаток не подтверждён, ключ не принят")
+		return false
+	}
+	return true
+}
+
 func connectAgentSSHManaged(state *State, ag *AgentState, pass string, kh *KnownHosts, op string) (*SSH, error) {
+	return connectAgentSSHManagedAsk(state, ag, pass, kh, op, Ask)
+}
+
+func connectAgentSSHManagedAsk(state *State, ag *AgentState, pass string, kh *KnownHosts, op string, ask func(prompt, def string) string) (*SSH, error) {
 	port := portOrDefault(ag.Port, 222)
 	user := userOrDefault(ag.User, "root")
 	s, err := ConnectSSH(ag.Host, port, user, pass, kh, ag.Nickname)
@@ -842,43 +893,70 @@ func connectAgentSSHManaged(state *State, ag *AgentState, pass string, kh *Known
 		return s, err
 	}
 
-	PrintWarn("SSH host key для " + ag.Nickname + " изменился. Запускаю managed double-check вместо ручного known-hosts forget.")
-	probe, pub, probeErr := ConnectSSHInsecureCaptureKey(ag.Host, port, user, pass)
+	PrintWarn("SSH host key для " + ag.Nickname + " изменился. Снимаю новый ключ без отправки пароля.")
+	pub, probeErr := CaptureHostKey(ag.Host, port)
 	if probeErr != nil {
 		return nil, fmt.Errorf("host-key double-check probe failed: %w", probeErr)
 	}
-	defer probe.Close()
+	oldFP := ""
+	if old := kh.SavedHostKey(ag.Nickname); old != nil {
+		oldFP = ssh.FingerprintSHA256(old)
+	}
+	if !confirmHostKeyRotation(ag.Nickname, oldFP, ssh.FingerprintSHA256(pub), ask) {
+		return nil, fmt.Errorf("host-key rotation cancelled: новый ключ не подтверждён")
+	}
+
+	snap, err := kh.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("read known_hosts for %s: %w", ag.Nickname, err)
+	}
+	rollback := func(cause error) (*SSH, error) {
+		if rerr := kh.Restore(snap); rerr != nil {
+			return nil, fmt.Errorf("%w (и known_hosts откатить не удалось: %v)", cause, rerr)
+		}
+		PrintWarn("known_hosts возвращён к прежнему состоянию для " + ag.Nickname)
+		return nil, cause
+	}
+	if err := kh.ReplaceHostKey(ag.Nickname, pub); err != nil {
+		return rollback(fmt.Errorf("replace known_hosts for %s: %w", ag.Nickname, err))
+	}
+	// Обычный вход с проверкой ключа: пароль уходит только на подтверждённый ключ.
+	probe, err := ConnectSSH(ag.Host, port, user, pass, kh, ag.Nickname)
+	if err != nil {
+		return rollback(err)
+	}
 
 	hostname := strings.TrimSpace(stepReadOrEmpty(probe, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
 	mac := stepDetectPrimaryMAC(probe)
 	existingNick := stepReadExistingAgentNickname(probe)
 	PrintInfo(fmt.Sprintf("double-check probe: hostname=%q mac=%s existing_agent=%q", emptyAsQuestion(hostname), emptyAsQuestion(mac), existingNick))
 
+	fail := func(cause error) (*SSH, error) {
+		probe.Close()
+		return rollback(cause)
+	}
 	if ag.ExpectedMAC != "" {
 		actual := extractMAC(mac)
 		want := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(ag.ExpectedMAC, ":", ""), "-", ""))
 		if actual == "" {
-			return nil, fmt.Errorf("host key changed and expected_mac is pinned, but router MAC is unreadable")
+			return fail(fmt.Errorf("host key changed and expected_mac is pinned, but router MAC is unreadable"))
 		}
 		if actual != want {
-			return nil, fmt.Errorf("host key changed and MAC mismatch: got %s, expected %s", actual, want)
+			return fail(fmt.Errorf("host key changed and MAC mismatch: got %s, expected %s", actual, want))
 		}
 		PrintOK("host-key double-check: MAC совпадает с pinned")
 	}
 	if existingNick != "" && existingNick != ag.Nickname {
-		return nil, fmt.Errorf("host key changed, but router already hosts agent %q, expected %q", existingNick, ag.Nickname)
+		return fail(fmt.Errorf("host key changed, but router already hosts agent %q, expected %q", existingNick, ag.Nickname))
 	}
-	if !confirmAmbiguousTarget(state, ag, hostname, mac, existingNick, op+" host-key rotation", Ask) {
-		return nil, fmt.Errorf("host-key rotation cancelled")
+	if !confirmAmbiguousTarget(state, ag, hostname, mac, existingNick, op+" host-key rotation", ask) {
+		return fail(fmt.Errorf("host-key rotation cancelled"))
 	}
 	if ag.ExpectedMAC == "" && existingNick == "" {
-		PrintWarn("нет ни expected_mac, ни existing agent.nickname — принимаю новый host key только по ручному double-check")
-	}
-	if err := kh.ReplaceHostKey(ag.Nickname, pub); err != nil {
-		return nil, fmt.Errorf("replace known_hosts for %s: %w", ag.Nickname, err)
+		PrintWarn("нет ни expected_mac, ни existing agent.nickname — принят новый host key по подтверждению отпечатка")
 	}
 	PrintOK("known_hosts обновлён для " + ag.Nickname)
-	return ConnectSSH(ag.Host, port, user, pass, kh, ag.Nickname)
+	return probe, nil
 }
 
 func agentsWithSameTarget(state *State, ag *AgentState) []string {
