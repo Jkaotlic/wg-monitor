@@ -866,7 +866,7 @@ func confirmHostKeyRotation(nick, oldFP, newFP string, ask func(prompt, def stri
 	}
 	PrintInfo("новый отпечаток:  " + newFP)
 	if env := strings.TrimSpace(os.Getenv(hostKeyAcceptEnv)); env != "" {
-		if fingerprintMatches(env, newFP) {
+		if strings.TrimPrefix(env, "SHA256:") == strings.TrimPrefix(newFP, "SHA256:") {
 			PrintOK(hostKeyAcceptEnv + " совпал с новым отпечатком")
 			return true
 		}

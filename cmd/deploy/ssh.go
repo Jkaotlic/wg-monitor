@@ -173,7 +173,16 @@ func (k *KnownHosts) Snapshot() ([]byte, error) {
 func (k *KnownHosts) Restore(data []byte) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	return os.WriteFile(k.path, data, 0o600)
+	tmp := k.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, k.path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func isHostKeyChangedErr(err error) bool {

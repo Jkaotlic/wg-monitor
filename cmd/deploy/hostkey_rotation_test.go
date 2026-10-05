@@ -17,6 +17,7 @@ type rotSrv struct {
 	port      int
 	pub       ssh.PublicKey
 	passTries int32
+	authTries int32
 	mac       string
 }
 
@@ -28,6 +29,7 @@ func startRotSrv(t *testing.T, mac string) *rotSrv {
 	}
 	rs := &rotSrv{pub: signer.PublicKey(), mac: mac}
 	cfg := &ssh.ServerConfig{
+		AuthLogCallback: func(ssh.ConnMetadata, string, error) { atomic.AddInt32(&rs.authTries, 1) },
 		PasswordCallback: func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
 			atomic.AddInt32(&rs.passTries, 1)
 			return nil, nil
@@ -121,6 +123,9 @@ func TestCaptureHostKey_NoPasswordSent(t *testing.T) {
 	if n := atomic.LoadInt32(&srv.passTries); n != 0 {
 		t.Fatalf("пароль отправлен %d раз", n)
 	}
+	if n := atomic.LoadInt32(&srv.authTries); n != 0 {
+		t.Fatalf("попыток аутентификации любым методом: %d", n)
+	}
 }
 
 func TestHostKeyRotation_RefusedWithoutConfirmation_NoPassword(t *testing.T) {
@@ -207,5 +212,16 @@ func TestHostKeyRotation_MACMismatchRollsBack(t *testing.T) {
 	}
 	if got := kh.SavedHostKey("r1"); got == nil || ssh.FingerprintSHA256(got) != ssh.FingerprintSHA256(oldKey) {
 		t.Fatal("после отката старый ключ не на месте")
+	}
+}
+
+func TestHostKeyRotation_EnvTailRejected(t *testing.T) {
+	kh, ag, nw, fp := rotFixture(t, "aa:bb:cc:dd:ee:ff")
+	t.Setenv(hostKeyAcceptEnv, fp[len(fp)-8:])
+	if _, err := connectAgentSSHManagedAsk(&State{}, ag, "pw", kh, "t", noAsk(t)); err == nil {
+		t.Fatal("хвост в флаге принят")
+	}
+	if atomic.LoadInt32(&nw.passTries) != 0 || atomic.LoadInt32(&nw.authTries) != 0 {
+		t.Fatal("на неподтверждённый ключ ушла аутентификация")
 	}
 }
