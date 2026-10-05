@@ -170,6 +170,18 @@ export function routingVerdict(snapshot) {
     // Претенденты есть, но все выключены. Трафик при этом действительно идёт
     // напрямую -- и назвать причину важнее, чем повторить общий вывод: иначе
     // оператор ищет поломку маршрутизации там, где просто выключен туннель.
+    // Слова те же, что на плашке строки (routeBadge): включённый, но не
+    // отвечающий -- «не отвечает», и только снятый настройкой -- «выключен».
+    const silent = claiming.filter((t) => !tunnelSwitchedOff(t))
+    if (silent.length > 0) {
+      const sNames = silent.map((t) => t.name || t.id).join(', ')
+      return {
+        mode: 'unknown',
+        partial,
+        title: silent.length > 1 ? 'Главные VPN-туннели не отвечают' : `Главный VPN-туннель «${sNames}» не отвечает`,
+        detail: `Основным ${silent.length > 1 ? 'назначены' : 'назначен'} «${sNames}», но ${silent.length > 1 ? 'они не отвечают' : 'он не отвечает'} — обход сейчас не работает.`,
+      }
+    }
     const names = claiming.map((t) => t.name || t.id).join(', ')
     return {
       mode: 'direct',

@@ -199,9 +199,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
 
   const phase = snapshotState({ busy, error, result, snapshot })
 
-  const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
   const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
+  // Заголовок говорит то же, что плашки: по снимку с вердиктом проверок.
+  const verdict = shown ? routingVerdict(shown) : null
   const rows = tunnelRows(shown)
   const tunnels = visibleTunnelRows(rows)
   const groups = rulesByBind(snapshot)

@@ -108,3 +108,27 @@ describe('A1.1, раунд 2: плашка основного и «включё�
   })
 })
 
+
+describe('заголовок «Маршрутов» говорит то же, что плашка', () => {
+  it('главный поднят, но проверка упала -- «не отвечает», не «Обход идёт»', async () => {
+    const root = await mount('routes', {})
+    expect(root.textContent).toContain('назначен основным, но не отвечает')
+    expect(root.textContent).toContain('Главный VPN-туннель «old-home» не отвечает')
+    expect(root.textContent).not.toContain('Обход идёт через «old-home»')
+    render(null, root)
+  })
+
+  it('главный включён, но не поднялся -- «не отвечает», не «выключен»', async () => {
+    const snap = { ...SNAP, tunnels: SNAP.tunnels.map((t) => (t.id === 'nwg3' ? { ...t, status: 'down' } : t)) }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    mocks.snap = snap
+    mocks.checks = { tunnels: [] }
+    await act(async () => render(<RoutesTab routerID={7} asleep={false} openSheet={() => {}} layer="routes" layerParams={{}} openLayer={() => {}} closeLayer={() => {}} />, root))
+    for (let i = 0; i < 3; i++) await flush()
+    expect(root.textContent).toContain('назначен основным, но не отвечает')
+    expect(root.textContent).toContain('Главный VPN-туннель «old-home» не отвечает')
+    expect(root.textContent).not.toContain('но он выключен')
+    render(null, root)
+  })
+})
