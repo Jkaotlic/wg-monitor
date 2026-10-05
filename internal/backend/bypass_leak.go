@@ -39,6 +39,7 @@ const (
 
 // Почему вердикт «не проверено». Каждое -- исключение спеки A: тревога в этих
 // случаях была бы ложной или не на чем основанной.
+// #nosec G101 -- не секрет: коды причин вердикта
 const (
 	bypassLeakReasonSingbox         = "singbox"          // sing-box выбирает маршрут сам
 	bypassLeakReasonRulesUnreadable = "rules_unreadable" // правила не прочитаны
@@ -432,6 +433,7 @@ func bypassLeakReportCheck(d Deps, uid int64, rep *wire.Report, ts time.Time) wi
 // считается. Все подзапросы идут по индексу (user_id, check_name, ts):
 // полный проход по горячей events недопустим. Копия для ручного прогона --
 // docs/operations (вне git).
+// #nosec G101 -- не секрет: текст SQL с именем проверки
 const bypassLeakWeeklySQL = `
 SELECT u.nickname,
   (SELECT COUNT(*) FROM events e
