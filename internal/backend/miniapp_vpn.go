@@ -305,7 +305,7 @@ func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser,
 	}
 	rc, err := d.Awg3Panels.ConfigForRouter(r.Context(), instID, iface, u.Nickname)
 	if err != nil {
-		writeMiniappAwg3Error(d, w, "выпуск на роутер", err)
+		writeMiniappAwg3ErrorFor(d, w, "выпуск на роутер", err, miniappIsAdmin(tgUser, d.TelegramAdminUserID))
 		return
 	}
 	tunnelName := awg3panel.TunnelName(instID, iface)

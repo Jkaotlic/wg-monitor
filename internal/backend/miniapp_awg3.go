@@ -225,6 +225,19 @@ type miniappAwg3ErrorBody struct {
 // writeMiniappAwg3Error -- отказ словами. Текст ошибки панели -- только в
 // журнал (в нём нет секретов, но есть внутренности); человеку -- таблица.
 func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) {
+	writeMiniappAwg3ErrorFor(d, w, op, err, true)
+}
+
+// miniappAwg3IssuerText -- единственный текст допущенному не админу: что
+// именно не так с панелью (пароль, сертификат, адрес, пауза), ему не про что
+// знать и нечем чинить -- это дело админа.
+const miniappAwg3IssuerText = "Выпуск с этого сервера сейчас недоступен — сообщите администратору"
+
+// writeMiniappAwg3ErrorFor -- то же по роли. Не админ (допущенный к выпуску)
+// получает общий русский текст и код awg3_unavailable: ни причины замка, ни
+// времени паузы, ни просьбы пересохранить учётные данные. Подробности остаются
+// в журнале.
+func writeMiniappAwg3ErrorFor(d Deps, w http.ResponseWriter, op string, err error, admin bool) {
 	var fe *awg3panel.FieldError
 	var pe *awg3panel.Error
 	switch {
@@ -235,6 +248,11 @@ func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) 
 	case errors.Is(err, awg3panel.ErrInstanceExists):
 		writeMiniappCabinetError(w, http.StatusConflict, "awg3_exists")
 	case errors.Is(err, awg3panel.ErrInstanceDisabled):
+		if !admin {
+			miniappCabinetLogger(d).Warn("awg3-панель: "+op+" не удалось", "err", err)
+			writeMiniappCabinetJSON(w, http.StatusConflict, miniappAwg3ErrorBody{Code: "awg3_unavailable", Error: "awg3_unavailable", Message: miniappAwg3IssuerText})
+			return
+		}
 		writeMiniappCabinetError(w, http.StatusConflict, "awg3_disabled")
 	case errors.Is(err, awg3panel.ErrIfaceNotFound):
 		writeMiniappCabinetError(w, http.StatusNotFound, "awg3_iface_not_found")
@@ -252,7 +270,9 @@ func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) 
 			status = http.StatusNotFound
 		}
 		body := miniappAwg3ErrorBody{Code: code, Error: code, Message: miniappCabinetErrorText(code)}
-		if !pe.Until.IsZero() {
+		if !admin {
+			body = miniappAwg3ErrorBody{Code: "awg3_unavailable", Error: "awg3_unavailable", Message: miniappAwg3IssuerText}
+		} else if !pe.Until.IsZero() {
 			body.RetryAt = rfc3339(pe.Until)
 		}
 		miniappCabinetLogger(d).Warn("awg3-панель: "+op+" не удалось", "kind", pe.Kind, "status", pe.Status, "err", pe.Error())
