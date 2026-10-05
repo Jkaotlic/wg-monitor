@@ -10,9 +10,15 @@ why **full-disk encryption (LUKS) is a deployment requirement**, not optional.
 | Telegram bot token | `/etc/wg-monitor/bot-token.txt` | `0640 root:wgmonitor` |
 | Wizard API token | `/etc/wg-monitor/wizard-token.txt` | `0640 root:wgmonitor` |
 | Agent tokens (hashed), per-router AWGM auth | `state.db` (SQLite) | `0600 wgmonitor` |
-| Amnezia Premium VPN keys / `vpn://` URIs | `/var/lib/wg-monitor/amnezia-premium.json` | `0600`, dir `0700` |
-| HideMyName access codes | `/var/lib/wg-monitor/hidemyname.json` | `0600`, dir `0700` |
-| Self-hosted VPN servers: SSH passwords | `/var/lib/wg-monitor/amnezia-selfhosted.json` | `0600`, dir `0700` |
+| Amnezia Premium VPN keys / `vpn://` URIs | `amnezia-premium.json` next to `db_path` | `0600`, dir `0700`, encrypted with `revive.key` (v0.55) |
+| HideMyName access codes | `hidemyname.json` next to `db_path` | `0600`, dir `0700`, encrypted with `revive.key` (v0.55) |
+| Self-hosted VPN servers: SSH passwords | `amnezia-selfhosted.json` next to `db_path` | `0600`, dir `0700`, encrypted with `revive.key` (v0.55) |
+| awg3 panels: panel password, client certificate and private key from the `.p12` | `awg3-panels.json` next to `amnezia-selfhosted.json` | `0600`, dir `0700`, encrypted with `revive.key` (v0.55) |
+| Root passwords / awg-manager logins for agent revive | `state.db`, table `revive_secrets` / `router_credentials` | AES-256-GCM with `revive.key`, AAD = router id |
+
+Until v0.52.2 the four JSON stores defaulted to `/var/lib/wg-monitor/`; since
+then they default to the directory of `db_path` (the Docker volume) and are
+moved there once on startup.
 
 File permissions are enforced in code (`amnezia_secrets.go`, `hidemy_secrets.go`, `selfhostedamnezia/provider.go`
 create the dir `0700` and write the file `0600` atomically; the SQLite DB is
@@ -51,19 +57,64 @@ Known limits of the chat guard (not fixed in v0.38):
 - The guard sees only chats the bot is in; a secret sent anywhere else is
   outside its reach.
 
-Backlog (not in v0.38): encrypt these JSON files with the AES-GCM key already
-used by agent revive; pin the self-hosted SSH host key (TOFU) instead of
+## Cabinet stores encrypted with `revive.key` (v0.55)
+
+Operator decision 05.10.2026: the four cabinet JSON stores are encrypted with
+**the same key that protects saved root passwords** (`revive.key_file`,
+`revive.Box`). No separate key, no new cryptography:
+
+- **Cipher:** AES-256-GCM from `revive.Box` (`SealBlob`/`OpenBlob`). The AAD
+  is `wg-monitor-file:` + the store's canonical name (`amnezia-premium.json`,
+  `hidemyname.json`, `amnezia-selfhosted.json`, `awg3-panels.json`), so the
+  ciphertext of one store cannot be swapped in for another, and can never be
+  confused with a root-password record (whose AAD is the bare router id).
+  The root-password format is unchanged.
+- **File format:** first line `wg-monitor-sealed v1`, then one line of
+  base64(nonce ‖ ciphertext). Plain JSON starts with `{` or whitespace, so the
+  two are told apart unambiguously; a future `wg-monitor-sealed v2` is still
+  recognised as "encrypted, unknown version" rather than as broken JSON.
+  Code: `internal/backend/sealedfile`.
+- **Writes:** temp file `0600` in the same directory → `fsync` → `rename` →
+  `chmod 0600` → `fsync` of the directory. With the key every write is
+  encrypted.
+- **First start with the key** re-encrypts plain stores in place, before
+  anything opens them (`backend.SealCabinetStores` in `cmd/backend/main.go`).
+  A second start finds them encrypted and leaves them byte-for-byte as they
+  are. Plain files are still readable with the key present (before migration,
+  or if a re-encryption failed — the log says which store).
+- **No key** (`revive.key_file` unset or unreadable): the backend starts as
+  before, stores stay plain JSON, the log gets a warning and the Park screen
+  shows it in the "Бэкенд" card (`/v1/miniapp/fleet` → `backend.secrets_warning`).
+  If there are no store files at all, there is nothing to warn about.
+- **Encrypted store, key missing or wrong:** the cabinet screens say so in
+  words ("ключ шифрования не найден" / "ключ шифрования не тот"; codes
+  `cabinet_key_missing` / `cabinet_key_wrong`, HTTP 503) instead of "key not
+  saved", and **no write goes over an encrypted file without the key** — the
+  file is left untouched. Bring the old `revive.key` back and restart.
+- **Backup:** encrypted stores go into the archive as they are. The key stays
+  **out** of the archive (variant A, `includeReviveKey = false`): a leaked
+  archive decrypts neither root passwords nor cabinet keys. `backup verify`
+  decrypts the archived stores with this machine's key and checks the JSON
+  inside; without a key it passes but prints that after a restore the cabinet
+  keys cannot be read until the old `revive.key` is put back; with a different
+  key it fails. **Keep a copy of `revive.key` outside the server and outside
+  the backups** — losing it means re-entering every cabinet key, code and
+  password.
+
+Remaining backlog: pin the self-hosted SSH host key (TOFU) instead of
 `InsecureIgnoreHostKey`; revoke a peer on a self-hosted server.
 
-## Why no application-level encryption
+## What application-level encryption does and does not buy
 
 The relevant threat is read access to the VPS filesystem (LFI, a backup leak, a
 stolen disk image, a compromised co-tenant). Encrypting these files *with a key
-that also lives on the same VPS* does not defend against that threat — the
-attacker who can read the ciphertext can read the key. It would add complexity
-and a migration risk while providing only the appearance of protection.
+that also lives on the same VPS* does not defend against an attacker who can
+read the whole disk — the key is readable too. What it does buy: a backup
+archive, a copied data volume or a stray copy of a store file no longer
+carries the cabinet secrets in clear — the key is never in the archives, and
+as long as `revive.key_file` points outside the data volume, not on it either. The full-disk threat still needs:
 
-The correct mitigation is **encryption of the volume itself**, where the key is
+The correct mitigation for that is **encryption of the volume itself**, where the key is
 supplied at boot and never written to the protected disk:
 
 - **Full-disk / volume encryption (LUKS)** on the partition holding
@@ -77,6 +128,7 @@ supplied at boot and never written to the protected disk:
 - [ ] Backend VPS root/data volume is LUKS-encrypted (or provider volume encryption with an externally-held key).
 - [ ] No unencrypted off-host copies of `state.db` / the JSON secret files exist (use the wizard's encrypted backup).
 - [ ] Only `root` and the `wgmonitor` service user can read `/etc/wg-monitor` and `/var/lib/wg-monitor`.
+- [ ] `revive.key_file` is set, points outside the data volume, and a copy of the key is kept off the server (not in the backups). The Park "Бэкенд" card shows no cabinet-keys warning.
 
 > Audit reference: SEC-03 (`docs/audit-2026-06-18.md`). App-level perms are in
 > place and verified; this requirement closes the residual at-rest exposure.
