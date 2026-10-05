@@ -68,7 +68,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
   function askAutorepair() {
     const target = card
     const backup = backupFor(snapshot, target.id)
-    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null)
+    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier)
     openSheet(
       localSheet({
         title: text.title,

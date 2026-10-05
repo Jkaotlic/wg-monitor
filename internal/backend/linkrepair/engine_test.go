@@ -43,6 +43,7 @@ type scriptCommander struct {
 	via string // ответ check_via_tunnel
 
 	noBackup bool                                       // в наборе только awg12
+	reserve  bool                                       // awg12 -- резерв: первым в цепочке стоит живой awg10
 	snapshot string                                     // ответ route_status вместо обычного
 	silent   map[string]bool                            // действия, на которые роутер молчит
 	refuse   map[string]bool                            // действия, которым агент отказывает
@@ -115,6 +116,12 @@ func (c *scriptCommander) snapshotLocked() string {
 	}
 	if !c.noBackup {
 		ifaces = append(ifaces, wire.RoutePolicyInterface{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "fallback", Available: true, Order: 2})
+	}
+	if c.reserve {
+		ifaces = []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "active", Available: true, Order: 1},
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "unavailable", Available: false, Order: 2},
+		}
 	}
 	snap.Policies = []wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}
 	b, _ := json.Marshal(snap)
@@ -715,6 +722,41 @@ func TestLadder_NoBackupRestartFixes(t *testing.T) {
 	}
 	if strings.Contains(final.Text, "вернул") {
 		t.Fatalf("возвращать было нечего: %q", final.Text)
+	}
+}
+
+// Упал резерв, а трафик идёт через первое звено цепочки: уводить нечего и
+// возвращать некуда. Ни одного route_policy_promote -- иначе починка резерва
+// переставила бы цепочку и сделала его первым.
+func TestLadder_ReserveBrokenNoPromote(t *testing.T) {
+	for _, fixed := range []bool{true, false} {
+		t.Run(fmt.Sprint("починен=", fixed), func(t *testing.T) {
+			e := newLadder(t, &Setting{Enabled: true})
+			e.cmd.reserve = true
+			if fixed {
+				fixOn(e.cmd, "tunnel_restart", 1, true)
+			}
+
+			job, final := e.run(t, ladderReq())
+
+			if n := len(e.cmd.actions("route_policy_promote")); n != 0 {
+				t.Fatalf("резерв упал, а набор правил переставлен %d раз: %v", n, e.cmd.promotedTo())
+			}
+			if st := stepOf(job, StepFailover); st.Status != provision.StepDone || !strings.Contains(st.Detail, "трафик и так идёт через «Работа»") {
+				t.Fatalf("ступень 0: %+v", st)
+			}
+			for _, bad := range []string{"увёл трафик", "вернул на него", "Заблокированное"} {
+				if strings.Contains(final.Text, bad) {
+					t.Fatalf("итог врёт про трафик (%q): %q", bad, final.Text)
+				}
+			}
+			if !fixed && !strings.Contains(final.Text, "«Работа»") {
+				t.Fatalf("провал не говорит, где идёт трафик: %q", final.Text)
+			}
+			if fixed && (job.State != provision.StateSuccess || final.Kind != "done") {
+				t.Fatalf("state=%s final=%+v", job.State, final)
+			}
+		})
 	}
 }
 

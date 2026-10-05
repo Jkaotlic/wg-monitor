@@ -18,6 +18,11 @@ func textMovedTo(backup string) string {
 	return "увёл трафик на запасной VPN-туннель «" + backup + "»"
 }
 
+// textCarrier -- упал резерв: трафик и так идёт через первое звено цепочки.
+func textCarrier(carrier string) string {
+	return "трафик и так идёт через «" + carrier + "»"
+}
+
 // sourceLabel -- откуда выпускается конфиг, в родительном падеже после «из».
 func sourceLabel(provider string) string {
 	switch provider {
@@ -88,6 +93,8 @@ func failText(n lineNames, log []string) string {
 	}
 	text += "."
 	switch {
+	case n.carrier != "":
+		text += " Трафик и так идёт через «" + n.carrier + "»."
 	case n.noSnapshot:
 		// Снимка нет -- неизвестно, подхватил ли трафик запасной VPN-туннель.
 		text += " Подхватил ли трафик запасной VPN-туннель, роутер не сообщил — это видно в приложении."

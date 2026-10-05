@@ -58,23 +58,35 @@ export function autorepairRow(resp) {
 // Запасной VPN-туннель из снимка роутера: первый доступный другой туннель в
 // наборе, где стоит этот. Снимок неизвестен -- known:false (фразу о резерве
 // лист опускает); известен, но резерва нет -- known:true и пустое имя.
+//
+// Уводит трафик бэкенд только с первого звена цепочки: оно и несёт трафик,
+// пока живо. Этот VPN-туннель стоит в цепочке не первым -- он сам резерв:
+// carrier -- имя звена, через которое трафик идёт сейчас, и обещать «уведу
+// на запасной» нельзя.
 function linkAvailable(i) {
   if (typeof i.available === 'boolean') return i.available
-  return Boolean(i.role) && i.role !== 'unavailable'
+  return Boolean(i.role) && i.role !== 'unavailable' && i.role !== 'down'
 }
 
 export function backupFor(snapshot, tunnelID) {
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
-  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '' }
+  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '', carrier: '' }
+  const nameOf = (link) => {
+    const meta = tunnels.find((t) => link.tunnel_id && t.id === link.tunnel_id)
+    return String(meta?.name || link.name || link.tunnel_id || link.bind || '').trim()
+  }
   for (const p of snapshot.policies) {
     const links = Array.isArray(p.interfaces) ? p.interfaces : []
     if (!links.some((i) => i.tunnel_id === tunnelID) && p.active_tunnel_id !== tunnelID) continue
+    if (links.length > 0 && links[0].tunnel_id !== tunnelID && links.some((i) => i.tunnel_id === tunnelID)) {
+      const active = links.find((i) => i.role === 'active' && i.tunnel_id !== tunnelID) || links[0]
+      return { known: true, name: '', carrier: nameOf(active) }
+    }
     const other = links.find((i) => i.tunnel_id && i.tunnel_id !== tunnelID && linkAvailable(i))
     if (!other) continue
-    const meta = tunnels.find((t) => t.id === other.tunnel_id)
-    return { known: true, name: String(meta?.name || other.name || other.tunnel_id).trim() }
+    return { known: true, name: nameOf(other), carrier: '' }
   }
-  return { known: true, name: '' }
+  return { known: true, name: '', carrier: '' }
 }
 
 function okSources(resp) {
@@ -101,16 +113,20 @@ function initialPick(resp) {
 }
 
 // name -- имя этого VPN-туннеля, backup -- имя запасного: строка, '' (нет
-// запасного) или null (не знаем).
-export function enableSheetText(resp, tunnelName, backup) {
+// запасного) или null (не знаем). carrier -- этот VPN-туннель сам резерв, и
+// трафик идёт через carrier (см. backupFor).
+//
+// Источник человек выбирает в поле ниже и может сменить его до нажатия, а
+// текст листа от поля не зависит: поэтому источник здесь не называется.
+export function enableSheetText(resp, tunnelName, backup, carrier = '') {
   const sources = okSources(resp)
   const start = initialPick(resp)
-  const [sp, so] = splitPick(start)
-  const from = start ? sourceLabel(resp.sources, sp, so) : sources.length > 0 ? 'выбранного ниже источника' : ''
   const name = `«${tunnelName}»`
-  const reissue = from ? `, а если не поможет — выпущу конфиг заново из ${from} и заменю его на роутере` : ''
+  const reissue = sources.length > 0 ? ', а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере' : ''
   let what
-  if (backup === null || backup === undefined) {
+  if (carrier) {
+    what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной: трафик и так идёт через «${carrier}», и его я не трогаю.`
+  } else if (backup === null || backup === undefined) {
     what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}.`
   } else if (backup) {
     what = `Если VPN-туннель ${name} упадёт, я уведу трафик на запасной VPN-туннель «${backup}», перезапущу ${name}${reissue}.`
@@ -119,7 +135,7 @@ export function enableSheetText(resp, tunnelName, backup) {
   }
   const costs = []
   if (sources.some((s) => CABINETS.includes(s.provider))) {
-    costs.push('Повторный выпуск того же конфига место в кабинете не тратит. Смена локации меняет страну, через которую видны сайты.')
+    costs.push('Повторный выпуск того же конфига место в кабинете не тратит. Смена локации берёт только уже выпущенные конфиги других стран и новое место в подписке не занимает; она меняет страну, через которую видны сайты.')
   }
   if (sources.some((s) => s.provider === 'awg3')) {
     costs.push('Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.')

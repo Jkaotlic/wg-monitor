@@ -13,8 +13,8 @@ function latinOutside(s) {
   return String(s).replace(/«[^«»]*»/g, '').replace(/VPN/g, '').match(/[A-Za-z]+/g) ?? []
 }
 
-function allSheetStrings(resp, name, backup) {
-  const t = enableSheetText(resp, name, backup)
+function allSheetStrings(resp, name, backup, carrier) {
+  const t = enableSheetText(resp, name, backup, carrier)
   const out = [t.title, t.note, ...t.sections.flatMap((s) => [s.h, s.text])]
   for (const f of enableFields(resp)) {
     out.push(f.label)
@@ -64,11 +64,19 @@ describe('backupFor', () => {
     ],
   }
   it('первый доступный другой туннель того же набора', () => {
-    expect(backupFor(snap, 'a')).toEqual({ known: true, name: 'reserve' })
+    expect(backupFor(snap, 'a')).toEqual({ known: true, name: 'reserve', carrier: '' })
   })
   it('недоступное звено не резерв', () => {
     const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', role: 'unavailable' }] }] }
-    expect(backupFor(s, 'a')).toEqual({ known: true, name: '' })
+    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: '' })
+  })
+  it('звено в роли down не резерв', () => {
+    const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', role: 'down' }] }] }
+    expect(backupFor(s, 'a').name).toBe('')
+  })
+  it('не первое звено цепочки -- резерв сам: трафик и так идёт через активное', () => {
+    const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'b', role: 'active', available: true }, { tunnel_id: 'a', role: 'unavailable' }, { tunnel_id: 'c', role: 'fallback', available: true }] }] }
+    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: 'reserve' })
   })
   it('available: false не резерв, available: true резерв', () => {
     const s = (av) => ({ ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', available: av }] }] })
@@ -76,11 +84,11 @@ describe('backupFor', () => {
     expect(backupFor(s(true), 'a').name).toBe('reserve')
   })
   it('набор без этого туннеля не считается', () => {
-    expect(backupFor(snap, 'c')).toEqual({ known: true, name: '' })
+    expect(backupFor(snap, 'c')).toEqual({ known: true, name: '', carrier: '' })
   })
   it('нет снимка -- не знаем', () => {
-    expect(backupFor(null, 'a')).toEqual({ known: false, name: '' })
-    expect(backupFor({ tunnels: [] }, 'a')).toEqual({ known: false, name: '' })
+    expect(backupFor(null, 'a')).toEqual({ known: false, name: '', carrier: '' })
+    expect(backupFor({ tunnels: [] }, 'a')).toEqual({ known: false, name: '', carrier: '' })
   })
 })
 
@@ -96,8 +104,21 @@ describe('enableSheetText', () => {
   it('с резервом', () => {
     const r = RESP({ suggested: { provider: 'amnezia', option: 'nl', why: 'так он был выпущен' } })
     expect(sec(enableSheetText(r, 'vpn-nl', 'reserve'), 'Что будет делать')).toBe(
-      'Если VPN-туннель «vpn-nl» упадёт, я уведу трафик на запасной VPN-туннель «reserve», перезапущу «vpn-nl», а если не поможет — выпущу конфиг заново из «Amnezia Premium» и заменю его на роутере.',
+      'Если VPN-туннель «vpn-nl» упадёт, я уведу трафик на запасной VPN-туннель «reserve», перезапущу «vpn-nl», а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере.',
     )
+  })
+  it('источник можно сменить в поле -- текст его не называет', () => {
+    const r = RESP({ suggested: { provider: 'amnezia', option: 'nl', why: 'x' } })
+    const w = sec(enableSheetText(r, 'vpn-nl', 'reserve'), 'Что будет делать')
+    expect(w).not.toContain('Amnezia')
+    expect(w).not.toContain('Свой сервер')
+    expect(w).toContain('ниже выбран источник')
+  })
+  it('VPN-туннель -- резерв: трафик не уводится, обещания увести нет', () => {
+    const w = sec(enableSheetText(RESP(), 'vpn-nl', '', 'main'), 'Что будет делать')
+    expect(w).not.toContain('уведу')
+    expect(w).not.toContain('Запасного VPN-туннеля нет')
+    expect(w).toContain('трафик и так идёт через «main»')
   })
   it('без резерва', () => {
     const w = sec(enableSheetText(RESP(), 'vpn-nl', ''), 'Что будет делать')
@@ -111,7 +132,9 @@ describe('enableSheetText', () => {
   })
   it('цена по доступным источникам', () => {
     const cost = sec(enableSheetText(RESP(), 'x', ''), 'Чего стоит')
-    expect(cost).toContain('Повторный выпуск того же конфига место в кабинете не тратит. Смена локации меняет страну, через которую видны сайты.')
+    expect(cost).toContain('Повторный выпуск того же конфига место в кабинете не тратит.')
+    expect(cost).toContain('Смена локации берёт только уже выпущенные конфиги других стран и новое место в подписке не занимает')
+    expect(cost).toContain('меняет страну, через которую видны сайты')
     expect(cost).toContain('Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.')
     const only = sec(enableSheetText(RESP({ sources: [SOURCES[2]] }), 'x', ''), 'Чего стоит')
     expect(only).not.toContain('Повторный выпуск')
@@ -170,11 +193,12 @@ describe('латиница только в ёлочках', () => {
     ['без резерва', RESP(), ''],
     ['неизвестно', RESP(), null],
     ['без источников', RESP({ sources: [SOURCES[1]] }), 'r'],
+    ['резерв сам', RESP(), '', 'main'],
     ['настоящие подписи кабинетов', RESP({ suggested: { provider: 'hidemyname', option: 'de', why: 'x' }, sources: SOURCES.map((s) => ({ ...s, ok: true })) }), 'r'],
   ]
-  for (const [name, resp, backup] of variants) {
+  for (const [name, resp, backup, carrier] of variants) {
     it(`лист: ${name}`, () => {
-      const bad = allSheetStrings(resp, 'vpn-nl', backup).flatMap(latinOutside)
+      const bad = allSheetStrings(resp, 'vpn-nl', backup, carrier).flatMap(latinOutside)
       expect(bad).toEqual([])
     })
   }
