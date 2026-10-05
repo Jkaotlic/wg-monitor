@@ -1384,6 +1384,11 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					if err := d.DB.TunnelRepairSettings().Delete(uid, tid); err != nil {
 						d.Logger.Warn("tunnel_delete: настройка автопочинки не удалилась", "nickname", nick, "tunnel_id", tid, "err", err)
 					}
+					// Происхождение конфига и отметка «не подтверждена» -- тоже
+					// про удалённый туннель: новый с тем же id их не наследует.
+					if err := d.DB.TunnelOrigins().Delete(uid, tid); err != nil {
+						d.Logger.Warn("tunnel_delete: происхождение конфига не удалилось", "nickname", nick, "tunnel_id", tid, "err", err)
+					}
 				}
 			}
 		}

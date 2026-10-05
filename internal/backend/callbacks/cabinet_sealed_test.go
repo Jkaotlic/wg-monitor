@@ -106,6 +106,9 @@ func TestMiniappCabinet_SealedWithoutKeySpeaksAboutKey(t *testing.T) {
 		if !strings.Contains(acc.Note, "ключ шифрования не найден") {
 			t.Fatalf("%s: note = %q", provider, acc.Note)
 		}
+		if acc.KeyProblem != "cabinet_key_missing" {
+			t.Fatalf("%s: key_problem = %q", provider, acc.KeyProblem)
+		}
 		if _, err := r.IssueConfig(t.Context(), 7, provider, "de"); !errors.Is(err, sealedfile.ErrKeyMissing) {
 			t.Fatalf("%s: выпуск err = %v", provider, err)
 		}

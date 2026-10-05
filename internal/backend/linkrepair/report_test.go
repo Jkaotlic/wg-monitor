@@ -33,7 +33,7 @@ func TestReport_TextsSpeakOwnerVocabulary(t *testing.T) {
 		texts["textReissued "+p] = textReissued(p)
 		texts["textRecreated "+p] = textRecreated(p, "de")
 	}
-	for _, a := range []string{ActAmneziaKey, ActHideMyCode, ActNoSource, ActServerDead, ActTooOften, ActAgentOld, ActVPSPanel("vps1")} {
+	for _, a := range []string{ActAmneziaKey, ActHideMyCode, ActNoSource, ActServerDead, ActTooOften, ActAgentOld, ActCabinetKeyLocked, ActVPSPanel("vps1")} {
 		texts["действие "+a] = a
 	}
 	for name, text := range texts {

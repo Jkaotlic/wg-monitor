@@ -62,6 +62,9 @@ type miniappAutorepairSrc struct {
 	Options  []miniappAutorepairOpt `json:"options"`
 	OK       bool                   `json:"ok"`
 	Note     string                 `json:"note,omitempty"`
+	// Code -- код сбоя ключа шифрования кабинетов (cabinet_key_missing /
+	// cabinet_key_wrong); пусто -- причина другая.
+	Code string `json:"code,omitempty"`
 }
 
 type miniappAutorepairReq struct {
@@ -184,6 +187,8 @@ func miniappAutorepairSources(ctx context.Context, d Deps, tg, routerID int64, p
 					d.Logger.Warn("autorepair: кабинет не ответил", "provider", c.provider, "err", err)
 				}
 				src.Note = "кабинет не ответил — попробуйте позже"
+			case acc.KeyProblem != "":
+				src.Code, src.Note = acc.KeyProblem, miniappCabinetErrorText(acc.KeyProblem)
 			case !acc.Connected:
 				src.Note = strings.TrimSpace(acc.Note)
 				if src.Note == "" {
@@ -526,6 +531,10 @@ func miniappAutorepairCheckSource(ctx context.Context, d Deps, w http.ResponseWr
 			return false
 		}
 		acc, err := d.VPNCabinet.Account(ctx, routerID, req.Provider)
+		if err == nil && acc.KeyProblem != "" {
+			writeMiniappCabinetError(w, http.StatusServiceUnavailable, acc.KeyProblem)
+			return false
+		}
 		if err != nil || !acc.Connected {
 			writeJSONError(w, http.StatusConflict, "source_not_connected", "кабинет не подключён")
 			return false

@@ -47,6 +47,11 @@ type VPNAccount struct {
 	// Note — почему список пуст, если он пуст. Пустой список без объяснения
 	// читается как поломка приложения.
 	Note string `json:"note,omitempty"`
+	// KeyProblem -- код сбоя хранилища кабинета из-за ключа шифрования
+	// (cabinet_key_missing / cabinet_key_wrong); пусто -- причина другая.
+	// Нужен фоновым путям (автопочинка): они не должны выдавать такой сбой
+	// за «ключ не сохранён».
+	KeyProblem string `json:"key_problem,omitempty"`
 }
 
 type VPNOption struct {

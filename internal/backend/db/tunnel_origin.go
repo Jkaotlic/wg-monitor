@@ -69,6 +69,19 @@ func (r *TunnelOriginRepo) RecordUnconfirmed(userID int64, tunnelID, tunnelName,
 	return nil
 }
 
+// Delete забывает происхождение удалённого туннеля вместе с отметкой «не
+// подтверждена»: awg-manager может отдать тот же id новому туннелю, и чужая
+// история не должна к нему прилипнуть. Нет строки -- не ошибка.
+func (r *TunnelOriginRepo) Delete(userID int64, tunnelID string) error {
+	if _, err := r.d.db.Exec(`DELETE FROM tunnel_config_origin WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+		return fmt.Errorf("tunnel_origin.Delete: %w", err)
+	}
+	if _, err := r.d.db.Exec(`DELETE FROM tunnel_origin_unconfirmed WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+		return fmt.Errorf("tunnel_origin.Delete: %w", err)
+	}
+	return nil
+}
+
 // Get возвращает происхождение одного туннеля. Второе значение false --
 // «система этого не помнит», а не ошибка.
 func (r *TunnelOriginRepo) Get(userID int64, tunnelID string) (TunnelOrigin, bool, error) {

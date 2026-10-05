@@ -84,7 +84,7 @@ func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (
 	acc := backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium"}
 	key, err := r.getAmneziaKeyByID(routerID, "")
 	if note := sealedStoreNote(err); note != "" {
-		acc.Note = note
+		acc.Note, acc.KeyProblem = note, sealedKeyProblem(err)
 		return acc, nil
 	}
 	if err != nil || key == "" {
@@ -133,7 +133,7 @@ func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (
 func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
 	acc := backend.VPNAccount{Provider: providerHideMy, Label: "HideMy.name"}
 	if _, err := r.listHideMyCodes(routerID); sealedStoreNote(err) != "" {
-		acc.Note = sealedStoreNote(err)
+		acc.Note, acc.KeyProblem = sealedStoreNote(err), sealedKeyProblem(err)
 		return acc, nil
 	}
 	stored, ok := r.hideMyStoredCode(routerID, "")
@@ -175,6 +175,17 @@ func (r *Router) NotifyRouterTopic(ctx context.Context, routerID int64, text str
 // человек завёл бы ключ заново, а прежние лежат целыми в файле.
 func isSealedStoreError(err error) bool {
 	return errors.Is(err, sealedfile.ErrKeyMissing) || errors.Is(err, sealedfile.ErrUnreadable)
+}
+
+// sealedKeyProblem -- код сбоя ключа для API (те же, что у экрана кабинетов).
+func sealedKeyProblem(err error) string {
+	switch {
+	case errors.Is(err, sealedfile.ErrKeyMissing):
+		return "cabinet_key_missing"
+	case errors.Is(err, sealedfile.ErrUnreadable):
+		return "cabinet_key_wrong"
+	}
+	return ""
 }
 
 // sealedStoreNote -- строка экрана кабинета для такой ошибки; "" -- причина другая.

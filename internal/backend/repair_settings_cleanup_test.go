@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
@@ -30,7 +31,11 @@ func TestCmdResultTunnelDeleteDropsRepairSetting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	when := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	for _, tid := range []string{"awg12", "awg13", "awg14"} {
+		if err := d.TunnelOrigins().RecordUnconfirmed(uid, tid, "amnezia_"+tid, "amnezia", "nl", when); err != nil {
+			t.Fatal(err)
+		}
 		if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: uid, TunnelID: tid, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -74,6 +79,17 @@ func TestCmdResultTunnelDeleteDropsRepairSetting(t *testing.T) {
 		}
 		if ok != want {
 			t.Errorf("настройка %s есть=%v, ждали %v", tid, ok, want)
+		}
+		// происхождение и отметка «не подтверждена» уходят вместе с туннелем
+		o, found, err := d.TunnelOrigins().Get(uid, tid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found != want {
+			t.Errorf("происхождение %s есть=%v, ждали %v", tid, found, want)
+		}
+		if want && !o.Unconfirmed {
+			t.Errorf("происхождение %s потеряло отметку «не подтверждена»", tid)
 		}
 	}
 }
