@@ -210,6 +210,19 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("update_agent_config: rename: %w", err)
 	}
+	// Гонка «проверка записи -> перезапуск через 2 с»: пока файл писался, сторож
+	// мог уйти на запасные, а перезапуск в выключенный или перенесённый блок
+	// оставил бы роутер там до перезагрузки. Запись читается заново; если
+	// теперь она держит роутер -- прежний файл возвращается и перезапуска нет.
+	if watchdogEditNeedsHold(before, check) {
+		afterWatchdogConfigWritten()
+		if err := refuseStrandingWatchdog(before, check, watchdogStatePath); err != nil {
+			if werr := os.WriteFile(tmp, raw, 0600); werr == nil {
+				_ = os.Rename(tmp, configPath)
+			}
+			return "", err
+		}
+	}
 	scheduleURLUpdateRestart()
 	return "config updated (" + strings.Join(applied, ", ") + "); restarting agent", nil
 }
@@ -259,6 +272,23 @@ func awgmBaseURLChangeAllowed(current, next string) error {
 	return fmt.Errorf("update_agent_config: awgm_base_url may only move to the same host, loopback or a private network — the awg-manager password is sent there; change it in config.yaml on the router")
 }
 
+// watchdogEditNeedsHold: правка выключает работавший сторож или переносит его
+// на другой endpoint -- ровно те правки, которым нужна чистая запись.
+func watchdogEditNeedsHold(before, after agentConfigFile) bool {
+	wasOn := before.DNSWatchdog.Enabled &&
+		dnswatchcfg.ValidateEndpoint(strings.TrimSpace(before.DNSWatchdog.Endpoint)) == nil &&
+		dnswatchcfg.ValidateBootstrapIP(before.DNSWatchdog.BootstrapIP) == nil &&
+		dnswatchcfg.ValidateCanary(before.DNSWatchdog.CanaryDomain) == nil
+	turnsOff := wasOn && !after.DNSWatchdog.Enabled
+	moves := wasOn && after.DNSWatchdog.Enabled &&
+		strings.TrimSpace(before.DNSWatchdog.Endpoint) != strings.TrimSpace(after.DNSWatchdog.Endpoint)
+	return turnsOff || moves
+}
+
+// afterWatchdogConfigWritten -- шов для теста: сторож работает, пока правка
+// ложится на диск, и может уйти на запасные между проверкой записи и записью.
+var afterWatchdogConfigWritten = func() {}
+
 // refuseStrandingWatchdog: the watchdog's switches live only in the router's
 // running config. Switched off while it holds the router — on the fallback
 // resolvers, mid-switch or with its lines unsettled — it would leave the router
@@ -270,14 +300,7 @@ func refuseStrandingWatchdog(before, after agentConfigFile, statePath string) er
 	// (dnsWatchdogConfigProblem) switches an unusable block off on load and only
 	// logs it. "Was on" has to mirror exactly what LoadConfig checks, or a
 	// config LoadConfig would already refuse locks every edit here forever.
-	wasOn := before.DNSWatchdog.Enabled &&
-		dnswatchcfg.ValidateEndpoint(strings.TrimSpace(before.DNSWatchdog.Endpoint)) == nil &&
-		dnswatchcfg.ValidateBootstrapIP(before.DNSWatchdog.BootstrapIP) == nil &&
-		dnswatchcfg.ValidateCanary(before.DNSWatchdog.CanaryDomain) == nil
-	turnsOff := wasOn && !after.DNSWatchdog.Enabled
-	moves := wasOn && after.DNSWatchdog.Enabled &&
-		strings.TrimSpace(before.DNSWatchdog.Endpoint) != strings.TrimSpace(after.DNSWatchdog.Endpoint)
-	if !turnsOff && !moves {
+	if !watchdogEditNeedsHold(before, after) {
 		return nil
 	}
 	hold, err := dnswatchcfg.Hold(statePath)
