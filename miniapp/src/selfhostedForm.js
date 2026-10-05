@@ -239,7 +239,7 @@ export const HOSTKEY_TEXTS = {
 }
 
 export function hostKeyConfirmLabel(fingerprint) {
-  return `Подтвердить ключ сервера ${fingerprint}`
+  return `Подтвердить ключ сервера «${fingerprint}»`
 }
 
 export function hostKeyView(inst, { now, timeZone } = {}) {
@@ -313,6 +313,7 @@ const SELFHOSTED_ERRORS = {
   not_found: 'Такого сервера больше нет — вернитесь к списку.',
   instance_not_found: 'Такого сервера больше нет — вернитесь к списку.',
   host_key_not_pending: 'Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново',
+  host_key_nothing_pending: 'Подтверждать нечего — ключ сервера уже доверенный или сменился адрес',
   instance_exists: 'Сервер с таким коротким именем уже есть.',
 }
 

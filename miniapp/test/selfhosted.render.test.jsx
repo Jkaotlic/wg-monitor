@@ -396,7 +396,7 @@ describe('экран сервера', () => {
     const rows = [...key.querySelectorAll('.selfhosted-hostkey-row')].map((r) => [r.querySelector('.selfhosted-hostkey-label').textContent, r.querySelector('code').textContent])
     expect(rows).toEqual([['Было', OLD], ['Сервер сейчас предъявляет', NEW]])
     expect(key.textContent).toContain('Замечен 4 мар 2025')
-    await click(button(root, `Подтвердить ключ сервера ${NEW}`))
+    await click(button(root, `Подтвердить ключ сервера «${NEW}»`))
     expect(seen.sheets[0]).toMatchObject({ title: 'Подтвердить новый ключ сервера «Амстердам»?', danger: true, confirmPhrase: 'Амстердам', confirmStrict: true })
     expect(seen.sheets[0].body).toContain(`Было: «${OLD}»`)
     expect(seen.sheets[0].body).toContain(`сейчас: «${NEW}»`)
@@ -411,7 +411,7 @@ describe('экран сервера', () => {
     await flush()
     expect(root.querySelector('.selfhosted-hostkey code').textContent).toBe(NEW)
     expect(root.querySelector('.selfhosted-hostkey').textContent).not.toContain('Было')
-    expect(button(root, `Подтвердить ключ сервера ${NEW}`)).toBeFalsy()
+    expect(button(root, `Подтвердить ключ сервера «${NEW}»`)).toBeFalsy()
     expect(root.querySelector('.connection-notice').textContent).toBe('Новый ключ сервера подтверждён — входы на сервер снова идут.')
     cleanup(sheetRoot)
     cleanup(root)
@@ -428,7 +428,7 @@ describe('экран сервера', () => {
     mocks.instances[0].ssh_host_key_pending = NEW
     await click(button(root, 'Проверить подключение'))
     await flush()
-    expect(button(root, `Подтвердить ключ сервера ${NEW}`)).toBeTruthy()
+    expect(button(root, `Подтвердить ключ сервера «${NEW}»`)).toBeTruthy()
     expect(root.querySelector('#sh-label').value).toBe('Амстердам-2')
     cleanup(root)
   })
@@ -439,9 +439,24 @@ describe('экран сервера', () => {
     mocks.confirmKeyReply = new ApiError(409, 'host_key_not_pending', 'x', 'Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново')
     const { root, seen } = await mountInstance('ams')
     expect(root.querySelector('.selfhosted-hostkey').textContent).not.toContain('Замечен')
-    await click(button(root, `Подтвердить ключ сервера ${NEW}`))
+    await click(button(root, `Подтвердить ключ сервера «${NEW}»`))
     expect(seen.sheets[0].errorText(mocks.confirmKeyReply)).toBe('Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново')
+    // После отказа листа карточка сама подтягивает отпечатки: сервер успел
+    // предъявить третий ключ -- кнопка уже про него.
+    const NEWER = 'SHA256:dGhpcmQtdGVzdC1vbmx5LWhvc3Qta2V5LXZhbHVlLXg'
+    mocks.instances[0].ssh_host_key_pending = NEWER
+    await act(async () => {
+      await seen.sheets[0].perform('Амстердам').catch(() => {})
+    })
+    await flush()
+    expect(calls('confirmKey')).toEqual([['confirmKey', 'ams', 'Амстердам', NEW]])
+    expect(button(root, `Подтвердить ключ сервера «${NEWER}»`)).toBeTruthy()
     cleanup(root)
+  })
+
+  it('ключ сервера: подтверждать нечего -- свои слова', async () => {
+    const { selfhostedErrorText } = await import('../src/selfhostedForm.js')
+    expect(selfhostedErrorText(new ApiError(409, 'host_key_nothing_pending', 'x', ''))).toBe('Подтверждать нечего — ключ сервера уже доверенный или сменился адрес')
   })
 
   it('ключ сервера: без адреса SSH блока нет; не запомнен -- слова без кнопки', async () => {

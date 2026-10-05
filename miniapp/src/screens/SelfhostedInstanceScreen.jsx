@@ -300,7 +300,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
     )
   }
 
-  // «Подтвердить ключ сервера SHA256:…» (C1): набором названия, как удаление.
+  // «Подтвердить ключ сервера «SHA256:…»» (C1): набором названия, как удаление.
   // Уходит именно тот отпечаток, что админ видит в карточке; бэкенд сверяет
   // его с ожидающим. После -- перечитать сервер.
   function confirmHostKey() {
@@ -317,7 +317,13 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
         confirmPhrase: deleteConfirmPhrase(inst),
         confirmStrict: true,
         errorText: selfhostedErrorText,
-        perform: (typed) => confirmSelfhostedHostKey(instanceId, typed, fingerprint),
+        // Отказ (сервер успел предъявить другой ключ или ожидающего уже нет) --
+        // карточка сама подтягивает отпечатки, слова отказа -- в листе.
+        perform: (typed) =>
+          confirmSelfhostedHostKey(instanceId, typed, fingerprint).catch((err) => {
+            refreshHostKey()
+            throw err
+          }),
         onDone: () => {
           if (!alive.current) return
           setInst((prev) => ({ ...prev, ssh_host_key: fingerprint, ssh_host_key_pending: '', ssh_host_key_pending_at: undefined }))
