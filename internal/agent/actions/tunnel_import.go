@@ -268,9 +268,12 @@ func tunnelBackend(t awgmgr.Tunnel) string {
 // confB64 is base64-encoded .conf content.
 // replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
 // replace=false → ImportConf (creates new tunnel, enabled=false).
+// targetID != "" → конфиг заменяется ровно в туннеле с этим id (имя и бэкенд
+// берутся у самого туннеля); не найден -- ошибка, ничего не создаётся и не
+// удаляется. Этим пользуется автопочинка: поиск по имени ей не годится.
 // Restarts HydraRoute daemon if installed.
-func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sleep func(context.Context, time.Duration) error, confB64, name string, replace bool, requestedBackend string) (string, error) {
-	slog.Info("tunnel import", "name", name, "replace", replace)
+func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sleep func(context.Context, time.Duration) error, confB64, name string, replace bool, requestedBackend, targetID string) (string, error) {
+	slog.Info("tunnel import", "name", name, "replace", replace, "target_id", targetID)
 	confData, err := base64.StdEncoding.DecodeString(confB64)
 	if err != nil {
 		slog.Warn("tunnel import failed", "name", name, "stage", "decode", "err", err)
@@ -291,7 +294,33 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 
 	var result strings.Builder
 	var newID string
-	if replace {
+	if targetID != "" {
+		all, err := client.TunnelsAll(ctx)
+		if err != nil {
+			slog.Warn("tunnel import failed", "target_id", targetID, "stage", "list", "err", err)
+			return "", fmt.Errorf("list tunnels: %w", err)
+		}
+		var target *awgmgr.Tunnel
+		for _, t := range all.Tunnels {
+			if t.ID == targetID {
+				t := t
+				target = &t
+				break
+			}
+		}
+		if target == nil {
+			slog.Warn("tunnel import failed", "target_id", targetID, "stage", "target")
+			return "", fmt.Errorf("tunnel_import: target tunnel %s not found", targetID)
+		}
+		// Имя и бэкенд -- у самого туннеля: пересоздания под другой бэкенд нет.
+		newTun, err := client.ReplaceConf(ctx, target.ID, rawConf, target.Name, tunnelBackend(*target))
+		if err != nil {
+			slog.Warn("tunnel import failed", "target_id", targetID, "stage", "replace", "err", err)
+			return "", fmt.Errorf("replace tunnel: %w", err)
+		}
+		newID = newTun.ID
+		fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", target.Name, newTun.ID)
+	} else if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
 			slog.Warn("tunnel import failed", "name", name, "stage", "list", "err", err)

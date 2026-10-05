@@ -209,7 +209,7 @@ func TestImportTunnelAddsLiveTunnelToHydraRoutePolicy(t *testing.T) {
 	}
 	noSleep := func(context.Context, time.Duration) error { return nil }
 	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
-	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "selfhosted-home", false, "nativewg")
+	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "selfhosted-home", false, "nativewg", "")
 	if err != nil {
 		t.Fatalf("ImportTunnel: %v\n%s", err, out)
 	}
@@ -221,5 +221,93 @@ func TestImportTunnelAddsLiveTunnelToHydraRoutePolicy(t *testing.T) {
 	}
 	if len(execs) != 1 || execs[0] != "/opt/etc/init.d/S99hrneo restart" {
 		t.Fatalf("expected one HR restart, got %+v", execs)
+	}
+}
+
+// targetFake -- фальшивый awg-manager для замены по target_id: пишет, какие
+// ручки дёрнули, и что ушло в replace.
+type targetFake struct {
+	calls       []string
+	replaceName string
+	replaceBack string
+}
+
+func newTargetFake(t *testing.T, tunnelsJSON string) (*targetFake, *httptest.Server) {
+	t.Helper()
+	f := &targetFake{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":` + tunnelsJSON + `}}`))
+	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		f.calls = append(f.calls, "replace?id="+r.URL.Query().Get("id"))
+		var body struct{ Name, Backend string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.replaceName, f.replaceBack = body.Name, body.Backend
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"` + r.URL.Query().Get("id") + `","name":"` + body.Name + `"}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		f.calls = append(f.calls, "import/conf")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg-created","name":"x"}}`))
+	})
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		f.calls = append(f.calls, "delete")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func importWithTarget(srv *httptest.Server, name, backend, target string) (string, error) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil }
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	return ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, name, true, backend, target)
+}
+
+func TestImportTunnel_TargetIDReplacesInPlace(t *testing.T) {
+	f, srv := newTargetFake(t, `[
+		{"id":"awg12","name":"Нидерланды","interfaceName":"opkgtun12","enabled":true,"status":"running","backend":"kernel"},
+		{"id":"awg13","name":"Швеция","interfaceName":"opkgtun13","enabled":true,"status":"running","backend":"kernel"}]`)
+	out, err := importWithTarget(srv, "amnezia_nl", "", "awg12")
+	if err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	if len(f.calls) != 1 || f.calls[0] != "replace?id=awg12" {
+		t.Fatalf("calls = %v, want только replace?id=awg12", f.calls)
+	}
+	if f.replaceName != "Нидерланды" {
+		t.Fatalf("имя в replace = %q, want Нидерланды", f.replaceName)
+	}
+	if !strings.Contains(out, "id=awg12") {
+		t.Fatalf("ответ без id=awg12: %s", out)
+	}
+}
+
+func TestImportTunnel_TargetIDNeverCreates(t *testing.T) {
+	f, srv := newTargetFake(t, `[{"id":"awg12","name":"Нидерланды","backend":"kernel"}]`)
+	_, err := importWithTarget(srv, "Нидерланды", "", "awg99")
+	if err == nil || !strings.Contains(err.Error(), "tunnel_import: target tunnel awg99 not found") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("ничего не должно вызываться, calls = %v", f.calls)
+	}
+}
+
+func TestImportTunnel_TargetIDKeepsBackend(t *testing.T) {
+	f, srv := newTargetFake(t, `[{"id":"awg12","name":"Нидерланды","backend":"kernel"}]`)
+	if out, err := importWithTarget(srv, "Нидерланды", "nativewg", "awg12"); err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	if len(f.calls) != 1 || f.calls[0] != "replace?id=awg12" {
+		t.Fatalf("calls = %v, пересоздания быть не должно", f.calls)
+	}
+	if f.replaceBack != "kernel" {
+		t.Fatalf("бэкенд в replace = %q, want kernel", f.replaceBack)
 	}
 }
