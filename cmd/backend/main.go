@@ -417,6 +417,7 @@ func main() {
 		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
 		MiniAppBaseURL:     cfg.PublicBaseURL,
 		AdminUserID:        cfg.Telegram.AdminUserID,
+		BypassLeakEnabled:  cfg.Alerts.BypassLeak.Enabled,
 	})
 	go func() {
 		if err := rp.Run(ctx); err != nil {

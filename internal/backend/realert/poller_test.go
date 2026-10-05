@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -677,5 +678,38 @@ func TestNeighborsFor_BypassLeakExcludesCarrier(t *testing.T) {
 	got := p.neighborsFor(uid, "bypass_leak", map[string]any{"tunnel_id": "awg12"})
 	if len(got) != 1 || got[0].CheckName != "tunnel_awg10" {
 		t.Fatalf("want только tunnel_awg10, got %+v", got)
+	}
+}
+
+// Ревью v0.56, M4: пока alerts.bypass_leak.enabled=false (тихий режим),
+// напоминаний по bypass_leak нет -- как нет и первой тревоги (handler.go).
+// Открытая HARD-строка могла остаться с тех пор, как флаг был включён.
+func TestTickBypassLeakRealertOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		d, uid := newTestDB(t)
+		f := &fakeTG{}
+		p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second, BypassLeakEnabled: enabled})
+		hardSince := time.Now().Add(-7 * time.Hour)
+		lastAlert := time.Now().Add(-7 * time.Hour)
+		for _, name := range []string{alerts.BypassLeakCheck, "awg_handshake"} {
+			if err := d.State().Save(uid, name, db.IncidentState{
+				UserID: uid, CheckName: name, CurrentStatus: "hard",
+				ConsecutiveFails: 3, HardSince: &hardSince, LastAlertAt: &lastAlert,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p.tick(context.Background())
+		want := 1
+		if enabled {
+			want = 2
+		}
+		if len(f.sent) != want {
+			t.Fatalf("enabled=%v: напоминаний %d, ждали %d: %q", enabled, len(f.sent), want, f.sent)
+		}
+		st, _ := d.State().Get(uid, alerts.BypassLeakCheck)
+		if !enabled && st.LastAlertAt != nil && time.Since(*st.LastAlertAt) < time.Minute {
+			t.Fatal("тихий режим: LastAlertAt по bypass_leak сдвинут, будто напоминание ушло")
+		}
 	}
 }
