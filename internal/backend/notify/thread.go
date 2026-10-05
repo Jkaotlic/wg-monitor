@@ -350,7 +350,14 @@ func (t *repairThread) send(ctx context.Context, text string) {
 func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]bool) {
 	full := withRepairBlock(t.base, block)
 	f := t.r.fanout
-	budget := editRetryBudget
+	// Потолок -- реальное время правки (сами попытки тоже идут: таймаут
+	// HTTP-клиента Telegram 15 с), а не сумма пауз. Повторы и паузы идут под
+	// rctx со сроком: он обрывает их и тогда, когда нить получила ctx без
+	// отмены (Done, NeedHuman -- context.WithoutCancel), и бэкенд
+	// останавливается. Первая попытка каждому получателю -- под ctx.
+	deadline := t.r.now().Add(editRetryBudget)
+	rctx, cancel := context.WithTimeout(ctx, editRetryBudget)
+	defer cancel()
 	for i := range t.targets {
 		tgt := &t.targets[i]
 		if cur != nil && !cur[tgt.chatID] {
@@ -360,7 +367,7 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		if f.isAdmin(tgt.chatID) {
 			kb = withAdminMuteRow(kb, t.key.routerID)
 		}
-		err := t.tryEdit(ctx, tgt, full, kb, &budget)
+		err := t.tryEdit(ctx, rctx, deadline, tgt, full, kb)
 		if err == nil {
 			continue
 		}
@@ -382,20 +389,21 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 	}
 }
 
-// editRetryBudget -- сколько всего одна правка (все получатели вместе)
-// может ждать повторов. Движок починки ждёт нить: дольше -- и ход починки
-// встаёт из-за флуд-контроля Telegram.
+// editRetryBudget -- сколько реального времени одна правка (все получатели
+// вместе) может тратить на повторы. Движок починки ждёт нить под замком
+// роутера: дольше -- и ход починки встаёт из-за флуд-контроля Telegram.
 const editRetryBudget = 30 * time.Second
 
 // editBackoffStart -- первая пауза, когда Telegram не сказал, сколько ждать.
 const editBackoffStart = time.Second
 
-// tryEdit правит одно сообщение, повторяя временные ошибки, пока хватает
-// общего запаса ожидания budget. Возвращает последнюю ошибку.
-func (t *repairThread) tryEdit(ctx context.Context, tgt *threadTarget, full string, kb *tg.InlineKeyboardMarkup, budget *time.Duration) error {
+// tryEdit правит одно сообщение. Первая попытка -- под ctx; временные
+// ошибки повторяются под rctx, пока пауза с запасом укладывается до
+// deadline (часы Repairs.now). Возвращает последнюю ошибку.
+func (t *repairThread) tryEdit(ctx, rctx context.Context, deadline time.Time, tgt *threadTarget, full string, kb *tg.InlineKeyboardMarkup) error {
 	backoff := editBackoffStart
+	err := t.r.editor.EditMessageText(ctx, tgt.chatID, tgt.messageID, full, "", kb)
 	for {
-		err := t.r.editor.EditMessageText(ctx, tgt.chatID, tgt.messageID, full, "", kb)
 		if err == nil || editErrorKind(err) != editTransient {
 			return err
 		}
@@ -405,13 +413,13 @@ func (t *repairThread) tryEdit(ctx context.Context, tgt *threadTarget, full stri
 		} else {
 			backoff *= 2
 		}
-		if wait > *budget {
+		if !t.r.now().Add(wait).Before(deadline) {
 			return err
 		}
-		*budget -= wait
-		if sErr := t.r.sleep(ctx, wait); sErr != nil {
+		if sErr := t.r.sleep(rctx, wait); sErr != nil {
 			return err
 		}
+		err = t.r.editor.EditMessageText(rctx, tgt.chatID, tgt.messageID, full, "", kb)
 	}
 }
 

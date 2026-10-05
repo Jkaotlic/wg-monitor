@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -673,9 +674,10 @@ func TestThread_EditRetryCeiling30s(t *testing.T) {
 		seq[i] = tooMany(7 * time.Second)
 	}
 	tgc := &threadTG{editSeq: map[int64][]error{1001: seq}}
-	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	clock := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, clock.now)
 	sl := &sleepRec{}
-	r.sleep = sl.sleep
+	r.sleep = func(ctx context.Context, dur time.Duration) error { clock.add(dur); return sl.sleep(ctx, dur) }
 
 	th := r.Begin(context.Background(), router, threadCheck)
 	th.Progress(context.Background(), "Чиню: перезапускаю…")
@@ -750,5 +752,63 @@ func TestThread_EditLoudDuplicateOnlyForGoneMessage(t *testing.T) {
 				t.Fatalf("постоянная ошибка не повторяется, а ждали %v", sl.waits)
 			}
 		})
+	}
+}
+
+// slowTG -- Telegram, у которого каждая правка идёт 15 с (таймаут HTTP-клиента)
+// и кончается сетевой ошибкой: время двигают поддельные часы.
+type slowTG struct {
+	*threadTG
+	clock *fakeClock
+	tries int
+}
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func (s *slowTG) EditMessageText(_ context.Context, chatID, _ int64, _, _ string, _ *tg.InlineKeyboardMarkup) error {
+	s.clock.add(15 * time.Second)
+	if chatID == 1001 {
+		s.tries++
+	}
+	return errors.New("tg editMessageText: context deadline exceeded")
+}
+
+// Fix round 1: потолок 30 с -- реальное время правки, а не сумма пауз.
+// Правка, которая сама идёт 15 с, за 30 с успевает не больше двух попыток;
+// первая попытка следующему получателю всё равно делается.
+func TestThread_EditRetryCeilingCountsRealTime(t *testing.T) {
+	d, router := threadSetup(t)
+	clock := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	base := &threadTG{}
+	slow := &slowTG{threadTG: base, clock: clock}
+	f := NewFanout(d, base, quietLogger(), 0)
+	r := NewRepairs(f, slow, d, fakeTexts{threadAlert, alertKB(), true}, clock.now)
+	r.sleep = func(ctx context.Context, dur time.Duration) error { clock.add(dur); return ctx.Err() }
+
+	start := clock.now()
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню…")
+	// Два получателя: на первого не больше 30 с (с запасом на одну правку,
+	// начатую до потолка), второму -- одна попытка.
+	if slow.tries > 2 {
+		t.Fatalf("первому получателю %d попыток по 15 с -- потолок не держит реальное время", slow.tries)
+	}
+	if spent := clock.now().Sub(start); spent > 30*time.Second+2*15*time.Second {
+		t.Fatalf("правка заняла %v", spent)
 	}
 }
