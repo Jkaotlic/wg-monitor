@@ -22,7 +22,7 @@ func autorepairEnv(t *testing.T) *cabinetEnv {
 	})
 	env.cab.accounts = map[string]VPNAccount{
 		"amnezia": {Provider: "amnezia", Label: "Amnezia Premium", Connected: true,
-			Options: []VPNOption{{ID: "nl", Label: "Нидерланды"}, {ID: "de", Label: "Германия"}}},
+			Options: []VPNOption{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия", Issued: true}, {ID: "fi", Label: "Финляндия"}}},
 	}
 	env.awg3.issuable = []awg3panel.IssuablePanel{{ID: "main", Label: "Main (Амстердам)",
 		Ifaces: []awg3panel.Iface{{ID: "awg1", Title: "main"}, {ID: "awg2", Title: "reserve"}}}}
@@ -378,5 +378,54 @@ func TestAutorepair_RenamePendingUntilConfirmed(t *testing.T) {
 	}
 	if list.Tunnels["awg12"] != "on" || list.Reasons["awg12"] != "" {
 		t.Fatalf("список после подтверждения: %+v", list)
+	}
+}
+
+// «Amnezia Premium»: источник автопочинки -- только уже выпущенная страна.
+// Это конфиг самого VPN-туннеля; невыпущенная страна при «выпустить заново»
+// заняла бы новое место в подписке.
+func TestAutorepair_AmneziaOnlyIssuedCountries(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "amnezia_fi")
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	resp := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
+	for _, src := range resp.Sources {
+		if src.Provider != "amnezia" {
+			continue
+		}
+		if len(src.Options) != 2 || src.Options[0].ID != "nl" || src.Options[1].ID != "de" {
+			t.Fatalf("варианты «Amnezia Premium»: %+v", src.Options)
+		}
+	}
+	if resp.Suggested != nil {
+		t.Fatalf("подсказана невыпущенная страна по имени: %+v", resp.Suggested)
+	}
+	if err := env.d.TunnelOrigins().Record(env.ownedID, "awg12", "amnezia_fi", "amnezia", "fi", time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	resp = decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
+	if resp.Suggested != nil && resp.Suggested.Option == "fi" {
+		t.Fatalf("подсказана невыпущенная страна из происхождения: %+v", resp.Suggested)
+	}
+
+	rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"fi"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "эта страна ещё не выпущена в кабинете — выберите выпущенную") {
+		t.Fatalf("PUT невыпущенной страны: код %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12"); ok {
+		t.Fatal("настройка с невыпущенной страной записана")
+	}
+	if rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"nl"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT выпущенной страны: код %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Ни одной выпущенной -- источник недоступен, с объяснением.
+	env.cab.accounts["amnezia"] = VPNAccount{Provider: "amnezia", Label: "Amnezia Premium", Connected: true,
+		Options: []VPNOption{{ID: "fi", Label: "Финляндия"}}}
+	resp = decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
+	for _, src := range resp.Sources {
+		if src.Provider == "amnezia" && (src.OK || len(src.Options) != 0 || src.Note == "") {
+			t.Fatalf("кабинет без выпущенных стран: %+v", src)
+		}
 	}
 }

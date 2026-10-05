@@ -51,8 +51,9 @@ func (s repairSource) Fresh(ctx context.Context, routerID int64, provider, optio
 }
 
 // Options -- варианты кабинета с подписью и отметкой «уже выпущен»: смена
-// локации у «Amnezia Premium» берёт только выпущенные страны (новая заняла бы
-// место в подписке), а человеку локация называется подписью кабинета.
+// локации у «Amnezia Premium» берёт только ещё НЕ выпущенную страну (ключ
+// выпущенной уже стоит в другом месте) и одну на настройку -- это место в
+// подписке; человеку локация называется подписью кабинета.
 func (s repairSource) Options(ctx context.Context, routerID int64, provider string) ([]linkrepair.Option, error) {
 	if provider == RepairProviderAwg3 {
 		return nil, nil

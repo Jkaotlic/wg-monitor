@@ -189,9 +189,19 @@ func miniappAutorepairSources(ctx context.Context, d Deps, tg, routerID int64, p
 					src.Label = l
 				}
 				for _, o := range acc.Options {
+					// «Amnezia Premium»: только выпущенные страны -- это конфиг
+					// самого VPN-туннеля. Невыпущенная при «выпустить заново»
+					// заняла бы новое место в подписке.
+					if c.provider == RepairProviderAmnezia && !o.Issued {
+						continue
+					}
 					if id := strings.TrimSpace(o.ID); id != "" {
 						src.Options = append(src.Options, miniappAutorepairOpt{ID: id, Label: o.Label})
 					}
+				}
+				if c.provider == RepairProviderAmnezia && len(src.Options) == 0 {
+					src.OK = false
+					src.Note = "в кабинете нет выпущенных стран — выпустите конфиг во вкладке «Управление»"
 				}
 			}
 		}
@@ -231,10 +241,28 @@ func miniappAutorepairSources(ctx context.Context, d Deps, tg, routerID int64, p
 // Порядок -- спека §2: происхождение, имя своего сервера, имя кабинета.
 // Подсказка режим не включает: подтверждает человек.
 func miniappAutorepairSuggest(d Deps, routerID int64, tunnelID string, panels []awg3panel.IssuablePanel, sources []miniappAutorepairSrc) *miniappAutorepairPick {
+	// offered -- у «Amnezia Premium» подсказывается только страна из списка
+	// (выпущенная): иначе подсказка вела бы к новому месту в подписке.
+	offered := func(provider, option string) bool {
+		if provider != RepairProviderAmnezia {
+			return true
+		}
+		for _, s := range sources {
+			if s.Provider != provider {
+				continue
+			}
+			for _, o := range s.Options {
+				if o.ID == option {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	if o, ok, err := d.DB.TunnelOrigins().Get(routerID, tunnelID); err == nil && ok {
 		switch o.Provider {
 		case RepairProviderAmnezia, RepairProviderHideMy, RepairProviderAwg3:
-			if strings.TrimSpace(o.Variant) != "" {
+			if strings.TrimSpace(o.Variant) != "" && offered(o.Provider, o.Variant) {
 				return &miniappAutorepairPick{Provider: o.Provider, Option: o.Variant, Why: "так он был выпущен"}
 			}
 		}
@@ -263,7 +291,7 @@ func miniappAutorepairSuggest(d Deps, routerID int64, tunnelID string, panels []
 		{"amnezia_", RepairProviderAmnezia},
 		{"hidemy_", RepairProviderHideMy},
 	} {
-		if rest, ok := strings.CutPrefix(name, c.prefix); ok && rest != "" && connected(c.provider) {
+		if rest, ok := strings.CutPrefix(name, c.prefix); ok && rest != "" && connected(c.provider) && offered(c.provider, rest) {
 			return &miniappAutorepairPick{Provider: c.provider, Option: rest,
 				Why: "так называются VPN-туннели из кабинета"}
 		}
@@ -442,6 +470,20 @@ func miniappAutorepairCheckSource(ctx context.Context, d Deps, w http.ResponseWr
 		if err != nil || !acc.Connected {
 			writeJSONError(w, http.StatusConflict, "source_not_connected", "кабинет не подключён")
 			return false
+		}
+		// «Amnezia Premium»: источник -- только выпущенная страна, иначе уже
+		// ступень «выпустить заново» займёт новое место в подписке.
+		if req.Provider == RepairProviderAmnezia {
+			issued := false
+			for _, o := range acc.Options {
+				if strings.TrimSpace(o.ID) == req.Option && o.Issued {
+					issued = true
+				}
+			}
+			if !issued {
+				writeJSONError(w, http.StatusConflict, "option_not_issued", "эта страна ещё не выпущена в кабинете — выберите выпущенную")
+				return false
+			}
 		}
 		return true
 	}
