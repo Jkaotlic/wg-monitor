@@ -83,6 +83,15 @@ describe('строка о бэкенде', () => {
     expect(row.value).toBe('v0.31.0')
     expect(row.sub).toBe('')
   })
+
+  // v0.55 (B1): ключи кабинетов на диске без ключа шифрования -- строкой в
+  // карточке «Бэкенд», текстом сервера как есть.
+  it('предупреждение о ключах кабинетов -- отдельной строкой', () => {
+    const text = 'Ключи кабинетов лежат на диске открытыми: на сервере не задан ключ шифрования'
+    const row = backendRow({ backend: { version: 'v0.55.0', secrets_warning: text } })
+    expect(row.secretsWarning).toBe(text)
+    expect(backendRow({ backend: { version: 'v0.55.0' } }).secretsWarning).toBe('')
+  })
 })
 
 describe('строки роутеров', () => {
