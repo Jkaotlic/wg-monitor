@@ -145,7 +145,10 @@ function rulesThrough(snapshot, tunnelID) {
 // несущем то же, что «Роутер» и «VPN-туннели». Без traffic.carrier_basis
 // (бэкенд старше v0.56, проверки не загрузились) -- прежний вывод по
 // настройке «основной маршрут» из снимка.
-export function routingVerdict(snapshot, traffic) {
+// incidents -- открытые тревоги из того же ответа, что у «Роутера»
+// (fetchRouterChecksWithIncidents): несущий с открытой тревогой по нему --
+// не «обход идёт», как и на «Роутере» (carrierAlive, I1).
+export function routingVerdict(snapshot, traffic, incidents = []) {
   const partial = Boolean(snapshot?.warnings?.length)
 
   // Порядок важен: sing-box выбирает маршрут для каждого адреса отдельно,
@@ -172,7 +175,8 @@ export function routingVerdict(snapshot, traffic) {
     const t = tr.carrier_tunnel_id ? tunnels.find((x) => x.id === tr.carrier_tunnel_id) : null
     if (t) {
       const name = t.name || t.id
-      if (tr.carrier_alive === false || tunnelLive(t) === 'down') {
+      const alarmed = (incidents ?? []).some((i) => i?.check_name === `tunnel_${t.id}`)
+      if (tr.carrier_alive === false || tunnelLive(t) === 'down' || alarmed) {
         return {
           mode: 'unknown',
           partial,

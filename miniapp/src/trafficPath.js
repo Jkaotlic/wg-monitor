@@ -38,13 +38,26 @@ export function carrierDeadByServer(traffic) {
 // B1). Политик через VPN несколько -- та, что несёт больше правил, как у
 // сервера. sing-box и «напрямую» не трогаем: там несущего нет. Живость
 // сервер не сказал (carrier_alive не задан) -- её решают проверки туннеля.
+// Считаются только ИСПОЛНЯЕМЫЕ правила, как у сервера (miniappPolicyExecuted):
+// правила HydraRoute Neo -- лишь при запущенном HydraRoute Neo. Политика без
+// исполняемых правил ничего не несёт, и называть её звено несущим нельзя (M1).
+function executedRules(p, snapshot) {
+  const dns = p?.dns ?? 0
+  return snapshot?.hr_neo?.running === true ? dns : dns - (p?.hr_neo ?? 0)
+}
+
 export function withSnapshotCarrier(traffic, snapshot) {
   if (!traffic || traffic.carrier_basis !== 'none' || traffic.mode === 'singbox' || traffic.mode === 'direct') return traffic
   const ids = new Set((Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []).map((t) => t.id))
   let best = null
+  let bestN = 0
   for (const p of Array.isArray(snapshot?.policies) ? snapshot.policies : []) {
     if (!p?.active_tunnel_id || p.via_vpn === false || !ids.has(p.active_tunnel_id)) continue
-    if (!best || (p.dns ?? 0) > (best.dns ?? 0)) best = p
+    const n = executedRules(p, snapshot)
+    if (n > bestN) {
+      best = p
+      bestN = n
+    }
   }
   if (!best) return traffic
   const { carrier_alive: _alive, ...rest } = traffic

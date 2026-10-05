@@ -6,7 +6,7 @@
 // (miniappTunnelRuleCount -- порт tunnelRows), чтобы не предлагать кнопку,
 // которая заведомо получит отказ, -- и говорит теми же словами, что при отказе.
 import { tunnelRows, tunnelSwitchedOff } from './routes.js'
-import { rulesCount, tunnelLiveLabel, tunnelCountSummary } from './labels.js'
+import { rulesCount, tunnelLiveLabel, tunnelCountSummary, workingTunnelNote } from './labels.js'
 import { commandOutcome } from './commandWait.js'
 
 export const TUNNEL_TEXTS = {
@@ -66,6 +66,20 @@ export function tunnelListSummary(list, incidents = [], checkRows = []) {
     })),
     incidents,
   )
+}
+
+// Счёт и заголовок вкладки «VPN-туннели» -- одной функцией, как их зовёт
+// экран. Тревоги -- из checks.incidents (fetchRouterChecksWithIncidents),
+// те же, что у «Роутера» (I1). Число в заголовке -- показанные строки: под
+// «Все VPN-туннели · 4» стоят четыре строки. Счёт «работают из N» -- по
+// проверкам, как на «Роутере»; разошлись (у VPN-туннеля нет строки проверки
+// или проверка есть, а в снимке его нет) -- подпись говорит это прямо (M2).
+export function tunnelsTabSummary(list, checks) {
+  const rows = list ?? []
+  const counts = tunnelListSummary(rows, checks?.incidents ?? [], checks?.tunnels)
+  const base = workingTunnelNote(counts.working, counts.total, counts.unchecked)
+  const note = counts.total === rows.length ? base : `${base} — по проверкам роутера; в списке ${rows.length}`
+  return { counts, title: `${TUNNEL_TEXTS.listTitle} · ${rows.length}`, note }
 }
 
 // Состояние словами. «Выключен» -- только выключенный настройкой: включённый,
