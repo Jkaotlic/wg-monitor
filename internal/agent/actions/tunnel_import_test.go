@@ -228,6 +228,8 @@ func TestImportTunnelAddsLiveTunnelToHydraRoutePolicy(t *testing.T) {
 // ручки дёрнули, и что ушло в replace.
 type targetFake struct {
 	calls       []string
+	allCalls    int // сколько раз спросили список туннелей
+	allAtRepl   int // ... к моменту replace
 	replaceName string
 	replaceBack string
 }
@@ -237,10 +239,12 @@ func newTargetFake(t *testing.T, tunnelsJSON string) (*targetFake, *httptest.Ser
 	f := &targetFake{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		f.allCalls++
 		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":` + tunnelsJSON + `}}`))
 	})
 	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
 		f.calls = append(f.calls, "replace?id="+r.URL.Query().Get("id"))
+		f.allAtRepl = f.allCalls
 		var body struct{ Name, Backend string }
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.replaceName, f.replaceBack = body.Name, body.Backend
@@ -285,6 +289,20 @@ func TestImportTunnel_TargetIDReplacesInPlace(t *testing.T) {
 	}
 	if !strings.Contains(out, "id=awg12") {
 		t.Fatalf("ответ без id=awg12: %s", out)
+	}
+}
+
+// A4.7: замена по target_id бэкенд по умолчанию не выбирает -- до замены
+// список туннелей спрашивается один раз (найти цель), без лишнего вызова
+// preferredBackend до ветки target_id. После замены список читается для
+// ожидания запуска -- это другое.
+func TestImportTunnel_TargetIDListsTunnelsOnce(t *testing.T) {
+	f, srv := newTargetFake(t, `[{"id":"awg12","name":"Нидерланды","backend":"kernel"}]`)
+	if _, err := importWithTarget(srv, "amnezia_nl", "", "awg12"); err != nil {
+		t.Fatalf("ImportTunnel: %v", err)
+	}
+	if f.allAtRepl != 1 {
+		t.Fatalf("до замены список туннелей спрошен %d раз, ждали 1", f.allAtRepl)
 	}
 }
 
