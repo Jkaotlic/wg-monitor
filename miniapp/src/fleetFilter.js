@@ -4,8 +4,15 @@
 //
 // Состояние в адрес не пишется (спека, п. 11): закладка на «молчащих» через
 // неделю показывала бы других роутеров под тем же словом.
-import { sortByUrgency, routerBucket } from './fleet.js'
+import { sortByUrgency, routerBucket, stateCountLabel } from './fleet.js'
 import { plainHyphens } from './text.js'
+
+// Слово чипа -- из того же словаря, что плитки сводки (fleet.js,
+// stateCountLabel): согласуется по числу, «1 молчит», «2 молчат» (A1.6).
+const CHIP_KIND = { alert: 'attention', sleeping: 'sleeping', silent: 'silent' }
+export function filterChipLabel(f, n = 0) {
+  return CHIP_KIND[f.key] ? stateCountLabel(CHIP_KIND[f.key], n) : f.label
+}
 
 export const FLEET_FILTERS = [
   { key: 'all', label: 'все' },

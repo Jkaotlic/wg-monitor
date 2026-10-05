@@ -33,3 +33,15 @@ describe('плитки «Парка»', () => {
     expect(FLEET_FILTERS.find((f) => f.key === 'silent').label).toBe('молчат')
   })
 })
+
+describe('слова плитки и чипов -- один словарь', () => {
+  it('чип согласуется с числом так же, как плитка', async () => {
+    const { filterChipLabel } = await import('../src/fleetFilter.js')
+    const { stateCountLabel } = await import('../src/fleet.js')
+    for (const [key, kind] of [['alert', 'attention'], ['sleeping', 'sleeping'], ['silent', 'silent']]) {
+      for (const n of [0, 1, 2, 5]) expect(filterChipLabel({ key }, n)).toBe(stateCountLabel(kind, n))
+    }
+    expect(filterChipLabel({ key: 'silent' }, 1)).toBe('молчит')
+    expect(filterChipLabel({ key: 'silent' }, 2)).toBe('молчат')
+  })
+})

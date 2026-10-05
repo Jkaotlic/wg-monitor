@@ -505,6 +505,12 @@ export const TUNNEL_LIVE_LABEL = {
   unknown: 'состояние неизвестно',
 }
 
+// Слово о цели в списках выбора (перенос, главный, «Добавить сайт»): проверка
+// главнее состояния роутера (A1.1).
+export function tunnelTargetLabel(t) {
+  return t?.checkFailed ? 'поднят, но не отвечает' : tunnelLiveLabel(t?.live)
+}
+
 export function tunnelLiveLabel(live) {
   return TUNNEL_LIVE_LABEL[live] ?? live ?? ''
 }

@@ -11,6 +11,7 @@ import {
   rulesByBind,
   defaultRouteBadge,
   tunnelRuleSummary,
+  withCheckVerdict,
   policyRuleSummary,
   ruleBackendLabel,
   visibleTunnelRows,
@@ -22,8 +23,8 @@ import {
   otherSourceSummary,
   rebindSheetText,
 } from '../routes.js'
-import { fetchRouterSettings } from '../api.js'
-import { rulesCount, tunnelLiveLabel } from '../labels.js'
+import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { rulesCount, tunnelTargetLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -75,6 +76,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
     }
   }, [routerID])
   const [snapshot, setSnapshot] = useState(null)
+  // Проверки VPN-туннелей -- для слов в списках выбора цели: проверка главнее
+  // состояния роутера (A1.1). Не загрузились -- состояние поднятых неизвестно.
+  const [checks, setChecks] = useState(null)
+  const [checksFailed, setChecksFailed] = useState(false)
   // Спящий роутер отвечает минутами, и дедлайн у всех команд экрана один:
   // разные сроки на соседних кнопках -- это разное поведение без причины.
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
@@ -89,6 +94,22 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   useEffect(() => {
     if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
   }, [result])
+
+  useEffect(() => {
+    let alive = true
+    fetchRouterChecks(routerID)
+      .then((ev) => {
+        if (!alive) return
+        setChecks(ev)
+        setChecksFailed(false)
+      })
+      .catch(() => {
+        if (alive) setChecksFailed(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [routerID, result])
 
   // Удаление идёт в два шага: сначала агент считает план и говорит, что
   // именно исчезнет, и только потом человек подтверждает. Одношаговое
@@ -180,7 +201,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
 
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
-  const rows = tunnelRows(snapshot)
+  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
+  const rows = tunnelRows(shown)
   const tunnels = visibleTunnelRows(rows)
   const groups = rulesByBind(snapshot)
   const other = otherSourceRow(snapshot)
@@ -208,7 +230,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         return {
           id: dst.id,
           title: dst.name,
-          sub: `${tunnelLiveLabel(dst.live)} · ${tunnelRuleSummary(dst)}`,
+          sub: `${tunnelTargetLabel(dst)} · ${tunnelRuleSummary(dst)}`,
           pick: () =>
             confirmSheet({
               routerID,
@@ -230,7 +252,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   // туннель повысить можно, и порядок сменится, но трафик пойдёт через него
   // не раньше, чем он поднимется -- об этом экран говорит до нажатия.
   const promotePicker = (src) => {
-    const targets = promoteTargets(snapshot, src.id)
+    const targets = promoteTargets(shown, src.id)
     const ruleText = (policyName) => {
       const p = policies.find((row) => row.name === policyName)
       return p ? ` (${policyRuleSummary(p)})` : ''
@@ -241,7 +263,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
       options: targets.map((t) => ({
         id: `${t.policyName}:${t.tunnelID}`,
         title: t.tunnelName,
-        sub: `общий набор «${t.policyName}» · ${tunnelLiveLabel(t.live)}`,
+        sub: `общий набор «${t.policyName}» · ${tunnelTargetLabel(t)}`,
         pick: () =>
           confirmSheet({
             routerID,
@@ -616,7 +638,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         <RouteAddScreen
           routerID={routerID}
           asleep={asleep}
-          snapshot={snapshot}
+          snapshot={shown}
           openSheet={openSheet}
           onClose={closeLayer}
           onApplied={refresh}

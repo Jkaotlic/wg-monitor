@@ -306,6 +306,8 @@ export function tunnelRows(snapshot) {
       name: t.name || t.id,
       defaultRoute: Boolean(t.default_route),
       live: tunnelLive(t),
+      // Проверка провалена при поднятом на роутере (withCheckVerdict): слово «работает» нельзя.
+      checkFailed: Boolean(t.check_failed),
       type: t.type ?? '',
       total: own + viaPolicy.dns,
       policyRules: viaPolicy.dns,
@@ -488,6 +490,7 @@ export function promoteTargets(snapshot, activeTunnelID) {
         tunnelID: link.tunnel_id,
         tunnelName: t?.name || link.name || link.tunnel_id,
         live: t ? tunnelLive(t) : 'unknown',
+        checkFailed: Boolean(t?.check_failed),
       })
     }
   }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'preact/hooks'
-import { FLEET_FILTERS, isFilterShortcut } from '../fleetFilter.js'
+import { FLEET_FILTERS, filterChipLabel, isFilterShortcut } from '../fleetFilter.js'
 
 // Поле поиска и чипы фильтров над списком роутеров. Чипы переносятся на
 // следующую строку, а не прокручиваются вбок: горизонтальной прокрутки в
@@ -43,12 +43,13 @@ export function FleetFilterBar({ query, filter, counts, onQuery, onFilter, short
         {FLEET_FILTERS.map((f) => (
           <button
             key={f.key}
+            data-filter={f.key}
             type="button"
             class={`filter-chip${filter === f.key ? ' filter-chip-active' : ''}`}
             aria-pressed={filter === f.key ? 'true' : 'false'}
             onClick={() => onFilter(f.key)}
           >
-            <span class="filter-chip-label">{f.label}</span>
+            <span class="filter-chip-label">{filterChipLabel(f, counts?.[f.key] ?? 0)}</span>
             <span class="filter-chip-count">{counts?.[f.key] ?? 0}</span>
           </button>
         ))}

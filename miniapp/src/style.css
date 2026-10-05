@@ -922,8 +922,8 @@ body {
 }
 
 /* ---------------- Прочие проверки spoiler (§3.6) ----------------
-   Same visual voice as every other .section-title (small, muted, uppercase,
-   letter-spaced) so a collapsed spoiler reads as just another section header,
+   Same visual voice as every other .section-title (small, muted, bold; since
+   v0.55 no caps) so a collapsed spoiler reads as just another section header,
    not a foreign control -- the marker triangle is the only tell that this one
    is interactive. Plain native <details>/<summary>: since v0.41 only healthy
    checks live inside it, failing ones sit above it in .checks-failing, so
@@ -4352,8 +4352,7 @@ body {
     margin-bottom: calc(-1 * var(--sp-3));
     font-size: var(--fs-xs);
     font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    letter-spacing: 0;
     color: var(--dim);
   }
 
