@@ -8,7 +8,6 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
-	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 )
 
@@ -17,15 +16,15 @@ import (
 func TestBuildDNSRuCheck_Wired(t *testing.T) {
 	cfg := &agent.Config{}
 	cfg.Checks.DNS.TestDomain = "example.com"
-	c := buildDNSRuCheck(cfg)
+	c := buildDNSRuCheck(cfg, awgmgr.New("http://127.0.0.1:1"), nil)
 	if c == nil {
 		t.Fatal("проверка не собрана")
 	}
 	if c.Group() != "dns_ru" {
 		t.Errorf("имя %q", c.Group())
 	}
-	if c.RUName != dnsref.RUCanary() {
-		t.Errorf("RUName %q, хотим %q", c.RUName, dnsref.RUCanary())
+	if c.StatePath != cfg.State.DNSRuStatePath() || c.StatePath == "" {
+		t.Errorf("StatePath %q: «ру-апстримы были» не переживёт перезапуск", c.StatePath)
 	}
 	if c.ForeignName != "example.com" {
 		t.Errorf("ForeignName %q", c.ForeignName)
@@ -33,8 +32,8 @@ func TestBuildDNSRuCheck_Wired(t *testing.T) {
 	if c.ConfigInterval != dnsSplitInterval {
 		t.Errorf("ConfigInterval = %v, хотим %v", c.ConfigInterval, dnsSplitInterval)
 	}
-	if c.Endpoints == nil || c.Probe == nil || c.Resolve == nil {
-		t.Error("Endpoints, Probe или Resolve не проведены")
+	if c.Endpoints == nil || c.PrepareProbe == nil || c.Resolve == nil {
+		t.Error("Endpoints, PrepareProbe или Resolve не проведены")
 	}
 }
 
@@ -42,10 +41,11 @@ func TestBuildDNSRuCheck_Wired(t *testing.T) {
 // она пробовала бы апстримы, которых на роутере уже нет.
 func TestDNSChangedHook_InvalidatesDNSRu(t *testing.T) {
 	list := buildSingleChecks(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
-	ru := buildDNSRuCheck(&agent.Config{})
+	ru := buildDNSRuCheck(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
 	var reads int
 	ru.Endpoints = func(context.Context) ([]keenetic.DNSEndpoint, error) { reads++; return nil, nil }
 	ru.ConfigInterval = time.Hour
+	ru.StatePath = ""
 	ru.Run(context.Background(), checks.Deps{})
 	hook := dnsChangedHook(list, []checks.MultiCheck{ru})
 	if hook == nil {

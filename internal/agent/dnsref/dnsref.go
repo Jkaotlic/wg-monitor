@@ -150,6 +150,27 @@ func PinnedZones() []string { return copyOf(pinnedZones) }
 // PinnedCandidate -- резолвер, несущий PinnedZones, пока он жив.
 func PinnedCandidate() string { return pinnedCandidate }
 
+// zoneCanaries -- известные имена в русских зонах для пробы сервера, которому
+// отдана зона. Для зоны без записи здесь берётся nic.<зона>: проба считает
+// ответ «такого имени нет» живым сервером, так что имя может и не
+// существовать -- важно, чтобы вопрос был из ЭТОЙ зоны.
+var zoneCanaries = map[string]string{
+	"ru":       ruCanary,
+	"xn--p1ai": "xn--d1abbgf6aiiy.xn--p1ai", // президент.рф
+}
+
+// ZoneCanary -- имя для пробы сервера, которому роутер отдал зону.
+func ZoneCanary(zone string) string {
+	z := strings.TrimRight(strings.ToLower(strings.TrimSpace(zone)), ".")
+	if n, ok := zoneCanaries[z]; ok {
+		return n
+	}
+	if z == "" {
+		return ruCanary
+	}
+	return "nic." + z
+}
+
 // RUCanary -- имя для пробы живости раздельного DNS.
 func RUCanary() string { return ruCanary }
 

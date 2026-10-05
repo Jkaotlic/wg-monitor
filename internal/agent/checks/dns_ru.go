@@ -2,7 +2,15 @@ package checks
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,13 +48,20 @@ type DNSRu struct {
 	Endpoints func(ctx context.Context) ([]keenetic.DNSEndpoint, error)
 	// Probe спрашивает имя у самого апстрима (его транспортом), nil -- ответил.
 	Probe func(ctx context.Context, ep keenetic.DNSEndpoint, name string) error
+	// PrepareProbe, если задан, собирает Probe заново на каждый прогон: так
+	// проба plain-апстрима с привязкой к интерфейсу VPN-туннеля читает свежую
+	// карту интерфейсов, как у проверки dns (DNS.PrepareProbe).
+	PrepareProbe func(ctx context.Context) func(ctx context.Context, ep keenetic.DNSEndpoint, name string) error
 	// Resolve спрашивает имя у конкретного сервера (здесь -- у dns-proxy
 	// роутера).
 	Resolve func(ctx context.Context, server, name string) ([]string, error)
-	// RUName -- имя в русской зоне, которым пробуем ру-апстримы.
-	RUName string
-	// ForeignName -- заграничное имя: «роутер вообще резолвит».
+	// ForeignName -- заграничное имя, ПОД которым строится новое имя для
+	// вопроса «роутер вообще резолвит» (wgm-<случайное>.example.com): голое
+	// имя dns-proxy отдал бы из кеша при мёртвых апстримах.
 	ForeignName string
+	// StatePath -- где помнить «ру-апстримы были» между перезапусками агента.
+	// Пусто -- только в памяти.
+	StatePath string
 
 	PerProbeTimeout time.Duration
 	// ConfigInterval -- как долго верить прочитанным настройкам. Чтение
@@ -61,8 +76,57 @@ type DNSRu struct {
 	cfgCached bool
 	// hadRU -- в последних прочитанных настройках ру-апстримы были. Нужен,
 	// когда настройки не прочитались: тогда «не проверено» уместно только
-	// там, где проверка вообще существует.
-	hadRU bool
+	// там, где проверка вообще существует. Пропавшую строку бэкенд считает
+	// «ру-апстримов больше нет» и закрывает тревогу -- поэтому знание
+	// переживает перезапуск агента (StatePath).
+	hadRU       bool
+	hadRULoaded bool
+}
+
+type dnsRuState struct {
+	HadRU bool `json:"had_ru"`
+}
+
+// loadHadRU -- один раз за жизнь процесса поднимает hadRU с диска.
+// Вызывается под c.mu.
+func (c *DNSRu) loadHadRU() {
+	if c.hadRULoaded {
+		return
+	}
+	c.hadRULoaded = true
+	if c.StatePath == "" {
+		return
+	}
+	body, err := os.ReadFile(c.StatePath)
+	if err != nil {
+		return
+	}
+	var st dnsRuState
+	if json.Unmarshal(body, &st) == nil {
+		c.hadRU = st.HadRU
+	}
+}
+
+// setHadRU запоминает свежее знание и пишет его на диск, только когда оно
+// поменялось. Вызывается под c.mu.
+func (c *DNSRu) setHadRU(v bool) {
+	c.loadHadRU()
+	if c.hadRU == v {
+		return
+	}
+	c.hadRU = v
+	if c.StatePath == "" {
+		return
+	}
+	body, _ := json.Marshal(dnsRuState{HadRU: v})
+	tmp := c.StatePath + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		slog.Warn("dns_ru: state not saved", "path", c.StatePath, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, c.StatePath); err != nil {
+		slog.Warn("dns_ru: state not saved", "path", c.StatePath, "err", err)
+	}
 }
 
 func (c *DNSRu) Group() string { return DNSRuName }
@@ -114,7 +178,8 @@ func (c *DNSRu) settings(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
 }
 
 // ruUpstreams -- различные ру-апстримы настроек: строки зон одного сервера
-// (`tls upstream <host> domain ru|su|…`) -- одна проба.
+// (`tls upstream <host> domain ru|su|…`) -- одна проба; имя для неё берётся из
+// зоны первой строки сервера.
 func ruUpstreams(eps []keenetic.DNSEndpoint) []keenetic.DNSEndpoint {
 	var ru []keenetic.DNSEndpoint
 	for _, ep := range eps {
@@ -130,6 +195,7 @@ func (c *DNSRu) Run(ctx context.Context, _ Deps) []wire.Check {
 	eps, err := c.settings(ctx)
 	if err != nil {
 		c.mu.Lock()
+		c.loadHadRU()
 		hadRU := c.hadRU
 		c.mu.Unlock()
 		if !hadRU {
@@ -140,15 +206,21 @@ func (c *DNSRu) Run(ctx context.Context, _ Deps) []wire.Check {
 	}
 	ru := ruUpstreams(eps)
 	c.mu.Lock()
-	c.hadRU = len(ru) > 0
+	c.setHadRU(len(ru) > 0)
 	c.mu.Unlock()
 	if len(ru) == 0 {
 		return nil
 	}
 
+	probe := c.Probe
+	if c.PrepareProbe != nil {
+		probe = c.PrepareProbe(ctx)
+	}
+
 	type epResult struct {
 		Type         string `json:"type"`
 		Target       string `json:"target"`
+		Name         string `json:"name"`
 		Reachable    bool   `json:"reachable"`
 		Inconclusive bool   `json:"inconclusive,omitempty"`
 		Err          string `json:"err,omitempty"`
@@ -160,19 +232,23 @@ func (c *DNSRu) Run(ctx context.Context, _ Deps) []wire.Check {
 		wg.Add(1)
 		go func(i int, ep keenetic.DNSEndpoint) {
 			defer wg.Done()
-			r := epResult{Type: ep.Type, Target: epTarget(ep)}
+			name := dnsref.ZoneCanary(ep.Zone)
+			r := epResult{Type: ep.Type, Target: epTarget(ep), Name: name}
 			pctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
 			defer cancel()
 			var perr error
-			if c.Probe == nil {
+			if probe == nil {
 				perr = fmt.Errorf("probe is not wired")
 			} else {
-				perr = c.Probe(pctx, ep, c.RUName)
+				perr = probe(pctx, ep, name)
 			}
 			switch {
-			case perr == nil:
+			case perr == nil || ServerAnswered(perr):
+				// «Такого имени нет» -- тоже ответ: сервер работает.
 				r.Reachable = true
-			case probeInconclusive(ctx, perr):
+			case errors.Is(perr, ErrProbeSkipped) || probeInconclusive(ctx, perr):
+				// Интерфейса VPN-туннеля сейчас нет (dns такой апстрим тоже
+				// пропускает) или бюджет кончился -- не провал.
 				r.Inconclusive = true
 				r.Err = perr.Error()
 			default:
@@ -218,13 +294,27 @@ func (c *DNSRu) Run(ctx context.Context, _ Deps) []wire.Check {
 		fmt.Sprintf("all %d ru upstreams unreachable", len(ru)), details)}
 }
 
-// routerResolves -- отвечает ли dns-proxy роутера на заграничное имя.
+// routerResolves -- отвечает ли dns-proxy роутера СВЕЖИМ ответом. Имя каждый
+// раз новое (wgm-<случайное>.<ForeignName>): ответ на него из кеша невозможен,
+// и dns-proxy обязан спросить свои общие апстримы. «Такого имени нет» --
+// апстрим ответил; отказ или молчание -- роутер не резолвит.
 func (c *DNSRu) routerResolves(ctx context.Context) bool {
 	if c.Resolve == nil || c.ForeignName == "" {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
 	defer cancel()
-	addrs, err := c.Resolve(ctx, localResolver, c.ForeignName)
-	return err == nil && len(addrs) > 0
+	addrs, err := c.Resolve(ctx, localResolver, uniqueName(c.ForeignName))
+	if err == nil {
+		return len(addrs) > 0
+	}
+	var de *net.DNSError
+	return errors.As(err, &de) && de.IsNotFound
+}
+
+// uniqueName -- имя, которого нет ни в одном кеше.
+func uniqueName(base string) string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return "wgm-" + hex.EncodeToString(b[:]) + "." + strings.TrimSuffix(strings.TrimSpace(base), ".") + "."
 }

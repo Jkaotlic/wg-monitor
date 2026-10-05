@@ -3,12 +3,15 @@ package checks
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 // Настройки роутера: два заграничных апстрима и Яндекс на русских зонах --
@@ -47,13 +50,13 @@ func newDNSRu(eps []keenetic.DNSEndpoint, p *probeRecorder, routerResolves bool)
 	return &DNSRu{
 		Endpoints: endpointsOf(eps...),
 		Probe:     p.probe,
-		Resolve: func(context.Context, string, string) ([]string, error) {
+		Resolve: func(_ context.Context, _ string, name string) ([]string, error) {
 			if !routerResolves {
-				return nil, errors.New("no answer")
+				return nil, errors.New("server misbehaving")
 			}
-			return []string{"198.51.100.7"}, nil
+			// Уникального имени нет -- честный ответ «такого имени нет».
+			return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
 		},
-		RUName:      "ya.ru",
 		ForeignName: "example.com",
 	}
 }
@@ -224,5 +227,155 @@ func TestDNSProbeEndpoint_SameTransportAsDNS(t *testing.T) {
 	}
 	if err := probe(context.Background(), keenetic.DNSEndpoint{Type: "plain", Host: "127.0.0.1", Port: 1}, "ya.ru"); err == nil {
 		t.Fatal("мёртвый апстрим ответил")
+	}
+}
+
+// Ревью, раунд 1: «роутер вообще резолвит» нельзя спрашивать именем, которое
+// dns-proxy держит в кеше, -- все заграничные мертвы, а example.com отдаётся из
+// кеша, и dns_ru поднимала бы вторую тревогу со словами «заграничные
+// отвечают». Имя каждый раз новое; кешированный ответ на голое имя ничего не
+// решает.
+func TestDNSRu_CachedAnswerDoesNotCountAsResolving(t *testing.T) {
+	p := &probeRecorder{dead: map[string]bool{testYandexHost: true, "9.9.9.9": true, "1.1.1.1": true}}
+	c := newDNSRu(ruRouterConfig(), p, true)
+	var asked []string
+	c.Resolve = func(_ context.Context, server, name string) ([]string, error) {
+		asked = append(asked, name)
+		if server != "127.0.0.1:53" {
+			t.Errorf("спросили %q, а не dns-proxy роутера", server)
+		}
+		if strings.TrimSuffix(name, ".") == "example.com" {
+			return []string{"198.51.100.7"}, nil // из кеша
+		}
+		return nil, errors.New("server misbehaving") // свежего ответа нет
+	}
+	got := onlyCheck(t, c.Run(context.Background(), Deps{}))
+	if got.Status == "fail" {
+		t.Fatalf("dns-proxy ответил только из кеша, а dns_ru подняла тревогу: %+v", got.Details)
+	}
+	c.Run(context.Background(), Deps{})
+	if len(asked) != 2 || asked[0] == asked[1] || !strings.HasSuffix(strings.TrimSuffix(asked[0], "."), ".example.com") {
+		t.Errorf("имена проб «роутер резолвит»: %q -- хотим каждый раз новое под example.com", asked)
+	}
+}
+
+// Сервер ответил «такого имени нет» или «записи нет» -- он работает: имя для
+// пробы может и не существовать. Отказ (SERVFAIL, REFUSED) -- не работает.
+func TestDNSRu_NameErrorMeansAnswered(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		fail bool
+	}{
+		{"нет имени", &DNSReplyError{Prefix: "dot: ", RCode: dnsmessage.RCodeNameError}, false},
+		{"нет записи", &DNSReplyError{Prefix: "dot: ", NoAnswer: true}, false},
+		{"отказ", &DNSReplyError{Prefix: "dot: ", RCode: dnsmessage.RCodeServerFailure}, true},
+		{"молчит", errors.New("i/o timeout"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDNSRu(ruRouterConfig(), &probeRecorder{}, true)
+			c.Probe = func(context.Context, keenetic.DNSEndpoint, string) error { return tc.err }
+			got := onlyCheck(t, c.Run(context.Background(), Deps{}))
+			if (got.Status == "fail") != tc.fail {
+				t.Errorf("status %q, хотим fail=%v", got.Status, tc.fail)
+			}
+		})
+	}
+}
+
+// Имя пробы -- из зоны строки: сервер, которому отдана только su, спрашиваем
+// именем в su, а не ya.ru.
+func TestDNSRu_ProbeNameFromLineZone(t *testing.T) {
+	p := &probeRecorder{}
+	eps := []keenetic.DNSEndpoint{
+		{Type: "dot", Host: "9.9.9.9", Port: 853},
+		{Type: "dot", Host: "198.51.100.53", Port: 853, Zone: "su"},
+		{Type: "dot", Host: "203.0.113.53", Port: 853, Zone: "xn--p1ai"},
+		{Type: "dot", Host: testYandexHost, Port: 853, Zone: "ru"},
+	}
+	c := newDNSRu(eps, p, true)
+	c.Run(context.Background(), Deps{})
+	byHost := map[string]string{}
+	for i, ep := range p.asked {
+		byHost[ep.Host] = p.names[i]
+	}
+	if byHost[testYandexHost] != "ya.ru" {
+		t.Errorf("ru: %q", byHost[testYandexHost])
+	}
+	for host, zone := range map[string]string{"198.51.100.53": "su", "203.0.113.53": "xn--p1ai"} {
+		if n := byHost[host]; !strings.HasSuffix(n, "."+zone) {
+			t.Errorf("сервер зоны %s спросили именем %q", zone, n)
+		}
+	}
+}
+
+// Проба с привязкой к интерфейсу собирается на каждый прогон (карта
+// интерфейсов VPN-туннелей читается заново), как у проверки dns.
+func TestDNSRu_PrepareProbePerRun(t *testing.T) {
+	prepared := 0
+	p := &probeRecorder{}
+	c := newDNSRu(ruRouterConfig(), p, true)
+	c.Probe = nil
+	c.PrepareProbe = func(context.Context) func(context.Context, keenetic.DNSEndpoint, string) error {
+		prepared++
+		return p.probe
+	}
+	c.Run(context.Background(), Deps{})
+	c.Run(context.Background(), Deps{})
+	if prepared != 2 || len(p.asked) != 2 {
+		t.Errorf("prepared=%d asked=%d, хотим 2/2", prepared, len(p.asked))
+	}
+}
+
+// Ревью, раунд 1: агент перезапустился, первое чтение настроек не удалось --
+// строка dns_ru не должна пропасть (бэкенд закрыл бы тревогу словами «в
+// настройках больше нет…»). Знание «ру-апстримы были» живёт на диске.
+func TestDNSRu_HadRUSurvivesRestart(t *testing.T) {
+	path := t.TempDir() + "/dns-ru-state.json"
+	first := newDNSRu(ruRouterConfig(), &probeRecorder{}, true)
+	first.StatePath = path
+	onlyCheck(t, first.Run(context.Background(), Deps{}))
+
+	restarted := newDNSRu(nil, &probeRecorder{}, true)
+	restarted.StatePath = path
+	restarted.Endpoints = func(context.Context) ([]keenetic.DNSEndpoint, error) {
+		return nil, errors.New("ndmc недоступен")
+	}
+	got := onlyCheck(t, restarted.Run(context.Background(), Deps{}))
+	if got.Details["unverified"] != true {
+		t.Fatalf("после перезапуска -- «не проверено», а не %+v", got)
+	}
+
+	// Ру-апстримы убрали -- на диске это тоже отражается.
+	restarted.Endpoints = endpointsOf(keenetic.DNSEndpoint{Type: "dot", Host: "9.9.9.9", Port: 853})
+	if got := restarted.Run(context.Background(), Deps{}); len(got) != 0 {
+		t.Fatalf("ру-апстримов нет: %+v", got)
+	}
+	again := newDNSRu(nil, &probeRecorder{}, true)
+	again.StatePath = path
+	again.Endpoints = func(context.Context) ([]keenetic.DNSEndpoint, error) {
+		return nil, errors.New("ndmc недоступен")
+	}
+	if got := again.Run(context.Background(), Deps{}); len(got) != 0 {
+		t.Fatalf("ру-апстримов не было, а строка пришла: %+v", got)
+	}
+}
+
+// Проба собрана как у dns: plain-апстрим, привязанный к интерфейсу
+// VPN-туннеля, которого нет в свежей карте, пропускается -- и для dns_ru это
+// «не проверено», а не «ру не отвечают».
+func TestDNSRu_SkippedInterfaceIsNotFail(t *testing.T) {
+	base := DNS{
+		PerProbeTimeout:  100 * time.Millisecond,
+		IfaceMapProvider: func(context.Context) (map[string]string, error) { return map[string]string{}, nil },
+	}
+	c := newDNSRu([]keenetic.DNSEndpoint{
+		{Type: "plain", Host: "127.0.0.1", Port: 1, NDMSName: "Wireguard3", Zone: "ru"},
+	}, &probeRecorder{}, true)
+	c.Probe = nil
+	c.PrepareProbe = base.PrepareProbe
+	got := onlyCheck(t, c.Run(context.Background(), Deps{}))
+	if got.Status == "fail" || got.Details["unverified"] != true {
+		t.Fatalf("пропущенный апстрим стал провалом: %+v", got)
 	}
 }

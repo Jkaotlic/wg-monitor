@@ -300,7 +300,8 @@ func epTarget(ep keenetic.DNSEndpoint) string {
 }
 
 // ProbeEndpoint -- та же проба живости апстрима, что у проверки dns, для
-// других проверок (dns_ru): второй копии транспортов не заводим.
+// других проверок (dns_ru): второй копии транспортов не заводим. Карта
+// интерфейсов -- та, что лежит в c.IfaceMap; свежую читает PrepareProbe.
 func (c DNS) ProbeEndpoint(ctx context.Context, ep keenetic.DNSEndpoint, domain string) error {
 	if c.PerProbeTimeout <= 0 {
 		c.PerProbeTimeout = 3 * time.Second
@@ -310,6 +311,30 @@ func (c DNS) ProbeEndpoint(ctx context.Context, ep keenetic.DNSEndpoint, domain 
 		httpc = http.DefaultClient
 	}
 	return c.probeOne(ctx, ep, domain, httpc)
+}
+
+// ErrProbeSkipped -- апстрим привязан к интерфейсу VPN-туннеля, которого
+// сейчас нет в карте: проверка dns такой пропускает, и проба -- тоже.
+var ErrProbeSkipped = errors.New("ndms interface is not present in current awg-manager tunnel map")
+
+// PrepareProbe -- проба на один прогон, собранная так же, как в Run проверки
+// dns: карта интерфейсов VPN-туннелей читается через IfaceMapProvider один
+// раз, plain-апстрим с привязкой идёт через свой интерфейс, а апстрим
+// отсутствующего интерфейса пропускается (ErrProbeSkipped).
+func (c DNS) PrepareProbe(ctx context.Context) func(context.Context, keenetic.DNSEndpoint, string) error {
+	fresh := false
+	if c.IfaceMapProvider != nil {
+		if m, err := c.IfaceMapProvider(ctx); err == nil {
+			c.IfaceMap = m
+			fresh = true
+		}
+	}
+	return func(ctx context.Context, ep keenetic.DNSEndpoint, domain string) error {
+		if c.shouldSkipNDMSEndpoint(ep, fresh) {
+			return ErrProbeSkipped
+		}
+		return c.ProbeEndpoint(ctx, ep, domain)
+	}
 }
 
 // probeOne runs the basic reachability A-query for `domain` over `ep`.

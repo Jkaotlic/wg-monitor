@@ -205,3 +205,15 @@ func TestZonePurpose(t *testing.T) {
 		}
 	}
 }
+
+// Имя пробы сервера русской зоны -- из ЭТОЙ зоны.
+func TestZoneCanaryIsInTheZone(t *testing.T) {
+	for _, z := range dnsref.RUZones() {
+		if n := dnsref.ZoneCanary(z); !strings.HasSuffix(n, "."+z) {
+			t.Errorf("зона %s: имя пробы %q не из неё", z, n)
+		}
+	}
+	if dnsref.ZoneCanary("RU.") != dnsref.RUCanary() {
+		t.Errorf("ru: %q", dnsref.ZoneCanary("RU."))
+	}
+}

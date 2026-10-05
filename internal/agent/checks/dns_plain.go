@@ -69,7 +69,7 @@ func ProbePlainDNS(ctx context.Context, server, domain string, dialer *net.Diale
 		return nil, fmt.Errorf("response id mismatch: %d != %d", resp.Header.ID, id)
 	}
 	if resp.Header.RCode != dnsmessage.RCodeSuccess {
-		return nil, fmt.Errorf("rcode %v", resp.Header.RCode)
+		return nil, &DNSReplyError{RCode: resp.Header.RCode}
 	}
 
 	var ips []net.IP

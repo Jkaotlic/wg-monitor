@@ -108,7 +108,7 @@ func main() {
 		},
 		// Серверы имён русских сайтов (v0.55, C): MultiCheck, потому что без
 		// ру-апстримов в настройках строки проверки нет вовсе.
-		buildDNSRuCheck(cfg),
+		buildDNSRuCheck(cfg, awgClient, logger),
 	}
 
 	deps := checks.Deps{Runner: checks.OSExec{}}
@@ -297,18 +297,16 @@ func dnsChangedHook(list []checks.Check, multi []checks.MultiCheck) func() {
 }
 
 // buildDNSRuCheck собирает проверку серверов имён русских сайтов. Роль
-// апстрима (ру или нет) -- из эталона dnsref, русское имя для пробы -- оттуда
-// же; заграничное имя «роутер вообще резолвит» -- то же, что у проверки dns.
-func buildDNSRuCheck(cfg *agent.Config) *checks.DNSRu {
+// апстрима (ру или нет) и имя пробы по зоне -- из эталона dnsref; проба -- та
+// же сборка, что у проверки dns; заграничное имя, под которым строится
+// вопрос «роутер вообще резолвит», -- то же, что у dns.
+func buildDNSRuCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) *checks.DNSRu {
 	return &checks.DNSRu{
-		Endpoints: readDNSEndpoints,
-		Probe: checks.DNS{
-			HTTPClient:      &http.Client{Timeout: 5 * time.Second},
-			PerProbeTimeout: 3 * time.Second,
-		}.ProbeEndpoint,
+		Endpoints:       readDNSEndpoints,
+		PrepareProbe:    dnsProbeBase(awgClient, logger).PrepareProbe,
 		Resolve:         resolveVia,
-		RUName:          dnsref.RUCanary(),
 		ForeignName:     cfg.Checks.DNS.TestDomain,
+		StatePath:       cfg.State.DNSRuStatePath(),
 		PerProbeTimeout: 3 * time.Second,
 		ConfigInterval:  dnsSplitInterval,
 	}
@@ -420,14 +418,23 @@ func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Log
 		endpoints = append(endpoints, ep)
 	}
 
+	c := dnsProbeBase(awgClient, logger)
+	c.Endpoints = endpoints
+	c.EndpointProvider = endpointProvider
+	c.TestDomain = dc.TestDomain
+	c.FailThreshold = dc.FailThreshold
+	c.RKNTestDomains = dc.RKNTestDomains
+	return c
+}
+
+// dnsProbeBase -- как пробуется апстрим: транспорты, таймауты и привязка
+// plain-апстрима к интерфейсу VPN-туннеля. Одна сборка на проверки dns и
+// dns_ru -- иначе одна и та же строка настроек пробовалась бы разными путями.
+func dnsProbeBase(awgClient *awgmgr.Client, logger *slog.Logger) checks.DNS {
 	return checks.DNS{
-		Endpoints:        endpoints,
-		EndpointProvider: endpointProvider,
-		TestDomain:       dc.TestDomain,
-		FailThreshold:    dc.FailThreshold,
-		IfaceDialFn:      checks.IfaceDialer,
-		HTTPClient:       &http.Client{Timeout: 5 * time.Second},
-		PerProbeTimeout:  3 * time.Second,
+		IfaceDialFn:     checks.IfaceDialer,
+		HTTPClient:      &http.Client{Timeout: 5 * time.Second},
+		PerProbeTimeout: 3 * time.Second,
 		IfaceMapProvider: func(ctx context.Context) (map[string]string, error) {
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
@@ -440,7 +447,6 @@ func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Log
 			}
 			return ifaceMap, nil
 		},
-		RKNTestDomains: dc.RKNTestDomains,
 	}
 }
 

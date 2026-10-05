@@ -81,7 +81,7 @@ func ProbeDoH(ctx context.Context, url, domain string, client *http.Client, time
 		return nil, fmt.Errorf("doh: unpack: %w", err)
 	}
 	if msg.Header.RCode != dnsmessage.RCodeSuccess {
-		return nil, fmt.Errorf("doh: rcode %v", msg.Header.RCode)
+		return nil, &DNSReplyError{Prefix: "doh: ", RCode: msg.Header.RCode}
 	}
 	var out []string
 	for _, rr := range msg.Answers {
@@ -90,7 +90,7 @@ func ProbeDoH(ctx context.Context, url, domain string, client *http.Client, time
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("doh: no A answers")
+		return nil, &DNSReplyError{Prefix: "doh: ", NoAnswer: true}
 	}
 	return out, nil
 }
