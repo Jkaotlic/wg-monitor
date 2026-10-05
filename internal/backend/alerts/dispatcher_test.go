@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -789,5 +791,89 @@ func TestDispatcher_RecoverySkippedWhenCovered(t *testing.T) {
 	}
 	if len(sink.replies) != 1 {
 		t.Fatalf("ответов=%v, ждали один -- по незакрытой проверке", sink.replies)
+	}
+}
+
+// editTG -- fakeTG с правками: нить починки правит тревогу.
+type editTG struct {
+	fakeTG
+	edits int
+}
+
+func (e *editTG) EditMessageText(context.Context, int64, int64, string, string, *tg.InlineKeyboardMarkup) error {
+	e.mu.Lock()
+	e.edits++
+	e.mu.Unlock()
+	return nil
+}
+
+// Диспетчер вместе с настоящей нитью починки: закрытие одноразовое,
+// снимается новой тревогой и итогом «сам не смог».
+func TestDispatcher_CoveredWithRealRepairs(t *testing.T) {
+	d := newDB(t)
+	uid, _ := d.Users().Insert("router-d", "4444000000000000000000000000000000000000000000000000000000000000", "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1001); err != nil {
+		t.Fatal(err)
+	}
+	etg := &editTG{}
+	disp := NewDispatcher(d, etg, Config{FailThreshold: 3, RecoveryThreshold: 2})
+	sink := &recordingSink{delivers: 1}
+	disp.SetNotifySink(sink)
+	repairs := notify.NewRepairs(notify.NewFanout(d, etg, slog.Default(), 0), etg, d, disp, time.Now)
+	disp.SetCovered(repairs.TakeCovered)
+	disp.SetHardHook(repairs.Uncover)
+	ctx := context.Background()
+	const check = "tunnel_awg11"
+	recovery := state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok"}}
+	hard := func() {
+		t.Helper()
+		if err := disp.Handle(ctx, uid, "router-d", check, hardTr(), chk(check, "fail", nil)); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.AlertMessages().Put(uid, check, 1001, 77); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recoverNow := func() {
+		t.Helper()
+		if err := disp.Handle(ctx, uid, "router-d", check, recovery, chk(check, "ok", nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. «Восстановилось» раньше Done: ответа нет, правка «Починил» есть.
+	hard()
+	th := repairs.Begin(ctx, uid, check)
+	recoverNow()
+	if len(sink.replies) != 0 {
+		t.Fatalf("ответов=%v, пока идёт починка, «восстановилось» гасится", sink.replies)
+	}
+	th.Done(ctx, "Починил.")
+	if etg.edits == 0 {
+		t.Fatal("итог «Починил» не дописан в тревогу")
+	}
+
+	// 2. Новый случай без починки -- обычный ответ (одноразовость).
+	hard()
+	recoverNow()
+	if len(sink.replies) != 1 {
+		t.Fatalf("ответов=%v, новый случай обязан получить «восстановилось»", sink.replies)
+	}
+
+	// 3. «Сам не смог» -- позже поднялся сам: обычный ответ.
+	hard()
+	repairs.Begin(ctx, uid, check).NeedHuman(ctx, "Починить VPN-туннель «Франкфурт» сам не смог.", "")
+	recoverNow()
+	if len(sink.replies) != 2 {
+		t.Fatalf("ответов=%v, после «сам не смог» ответ обязан уйти", sink.replies)
+	}
+
+	// 4. Done, затем новая тревога до «восстановилось»: метка снята.
+	hard()
+	repairs.Begin(ctx, uid, check).Done(ctx, "Починил.")
+	hard()
+	recoverNow()
+	if len(sink.replies) != 3 {
+		t.Fatalf("ответов=%v, новая тревога не снимает закрытие прежней починки", sink.replies)
 	}
 }

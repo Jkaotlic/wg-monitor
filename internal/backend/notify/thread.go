@@ -36,7 +36,7 @@ const coveredFor = 30 * time.Minute
 // Repairs -- linkrepair.Reporter поверх Fanout: ход починки дописывается в
 // саму тревогу (правка беззвучна), «нужно ваше участие» -- ещё и ответом со
 // звуком. Безопасен для одновременных вызовов: починки разных роутеров идут
-// параллельно, диспетчер спрашивает Covered из своего потока.
+// параллельно, диспетчер спрашивает TakeCovered из своего потока.
 type Repairs struct {
 	fanout *Fanout
 	editor Editor
@@ -46,8 +46,31 @@ type Repairs struct {
 
 	mu         sync.Mutex
 	miniAppURL string
-	// covered -- до какого времени «восстановилось» по проверке не шлётся.
-	covered map[repairKey]time.Time
+	// covered -- по каким проверкам «восстановилось» не шлётся: починка
+	// идёт или кончилась «Починил» меньше 30 минут назад.
+	covered map[repairKey]*coverMark
+	gen     uint64
+}
+
+// coverMark -- закрытие проверки починкой.
+//
+// Пока починка идёт (running), проверка закрыта: лесенка после замены
+// конфига ещё 30-60 с доказывает результат (свежий обмен ключами, выход,
+// возврат трафика), а агент отчитывается раз в минуту -- «восстановилось»
+// обычно доходит до диспетчера РАНЬШЕ «Починил». После Done закрытие живёт
+// 30 минут; NeedHuman и NotStarted снимают его сразу: если VPN-туннель
+// потом поднимется сам, человек обязан получить обычное «восстановилось».
+//
+// Закрытие одноразовое: одна тревога -- одно «восстановилось». Если
+// «восстановилось» погашено, пока починка шла (taken), её Done метку уже не
+// продлевает. Если же она кончится NeedHuman, хотя VPN-туннель уже
+// поднялся, -- итог «сам не смог» останется единственным словом; это
+// принято: ответ «восстановилось» был погашен в расчёте на починку.
+type coverMark struct {
+	gen     uint64 // чья метка: снимает и продлевает только её нить
+	running bool
+	until   time.Time
+	taken   bool
 }
 
 type repairKey struct {
@@ -59,7 +82,7 @@ func NewRepairs(f *Fanout, e Editor, d *db.DB, texts AlertTexts, now func() time
 	if now == nil {
 		now = time.Now
 	}
-	return &Repairs{fanout: f, editor: e, d: d, texts: texts, now: now, covered: map[repairKey]time.Time{}}
+	return &Repairs{fanout: f, editor: e, d: d, texts: texts, now: now, covered: map[repairKey]*coverMark{}}
 }
 
 // SetMiniAppBaseURL -- адрес мини-аппа для кнопки под «нужно ваше участие».
@@ -70,20 +93,39 @@ func (r *Repairs) SetMiniAppBaseURL(base string) {
 	r.mu.Unlock()
 }
 
-// Covered -- починка закрыла эту проверку в последние 30 минут: итог уже
-// дописан в тревогу, и второй ответ «восстановилось» был бы шумом.
-func (r *Repairs) Covered(routerID int64, checkName string) bool {
+// TakeCovered -- одноразовый вопрос диспетчера при «восстановилось»: true --
+// итог уже скажет (или сказала) починка, ответ не шлётся, и метка
+// погашена: следующее «восстановилось» той же проверки уйдёт как обычно.
+func (r *Repairs) TakeCovered(routerID int64, checkName string) bool {
+	key := repairKey{routerID, checkName}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	until, ok := r.covered[repairKey{routerID, checkName}]
+	m, ok := r.covered[key]
 	if !ok {
 		return false
 	}
-	if !r.now().Before(until) {
-		delete(r.covered, repairKey{routerID, checkName})
-		return false
+	switch {
+	case m.running && !m.taken:
+		// Починка ещё идёт: метка остаётся, чтобы её Done знал, что
+		// «восстановилось» уже погашено, и не продлевал закрытие.
+		m.taken = true
+		return true
+	case !m.running && r.now().Before(m.until):
+		delete(r.covered, key)
+		return true
 	}
-	return true
+	if !m.running {
+		delete(r.covered, key)
+	}
+	return false
+}
+
+// Uncover -- новая HARD-тревога той же проверки: прежнее закрытие к ней
+// не относится. Вызывает диспетчер.
+func (r *Repairs) Uncover(routerID int64, checkName string) {
+	r.mu.Lock()
+	delete(r.covered, repairKey{routerID, checkName})
+	r.mu.Unlock()
 }
 
 // Begin вызывается движком синхронно, под замком роутера, поэтому здесь
@@ -91,16 +133,22 @@ func (r *Repairs) Covered(routerID int64, checkName string) bool {
 // сообщений тревоги снимаются один раз: «восстановилось» может очистить
 // таблицу посреди починки, а итог всё равно обязан дописаться в тревогу.
 //
-// Новая починка проверки -- новый случай: прежнее «починил» его
-// «восстановилось» не гасит.
+// С Begin проверка закрыта (см. coverMark). Если по ней уже идёт починка
+// (вторая попытка запуска, которая кончится NotStarted «уже идёт починка»),
+// новая нить меткой не владеет и чужое закрытие не снимает.
 func (r *Repairs) Begin(_ context.Context, routerID int64, checkName string) linkrepair.Thread {
 	key := repairKey{routerID, checkName}
 	r.mu.Lock()
-	delete(r.covered, key)
+	var gen uint64
+	if m, ok := r.covered[key]; !ok || !m.running {
+		r.gen++
+		gen = r.gen
+		r.covered[key] = &coverMark{gen: gen, running: true}
+	}
 	appURL := tg.MiniAppRouterURL(r.miniAppURL, routerID)
 	r.mu.Unlock()
 
-	th := &repairThread{r: r, key: key, appURL: appURL}
+	th := &repairThread{r: r, key: key, gen: gen, appURL: appURL}
 	if r.texts != nil {
 		th.base, th.kb, th.hasBase = r.texts.Last(routerID, checkName)
 	}
@@ -116,10 +164,25 @@ func (r *Repairs) Begin(_ context.Context, routerID int64, checkName string) lin
 	return th
 }
 
-func (r *Repairs) markCovered(key repairKey) {
+// finish -- нить кончилась. done=true -- «Починил»: закрытие на 30 минут,
+// если «восстановилось» ещё не погашено; иначе метка снимается. gen=0 --
+// нить меткой не владеет.
+func (r *Repairs) finish(key repairKey, gen uint64, done bool) {
+	if gen == 0 {
+		return
+	}
 	r.mu.Lock()
-	r.covered[key] = r.now().Add(coveredFor)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	m, ok := r.covered[key]
+	if !ok || m.gen != gen {
+		return
+	}
+	if done && !m.taken {
+		m.running = false
+		m.until = r.now().Add(coveredFor)
+		return
+	}
+	delete(r.covered, key)
 }
 
 func (r *Repairs) warn(msg string, args ...any) {
@@ -133,6 +196,7 @@ func (r *Repairs) warn(msg string, args ...any) {
 type repairThread struct {
 	r       *Repairs
 	key     repairKey
+	gen     uint64
 	appURL  string
 	base    string
 	kb      *tg.InlineKeyboardMarkup
@@ -164,11 +228,12 @@ func (t *repairThread) Progress(ctx context.Context, text string) {
 }
 
 func (t *repairThread) Done(ctx context.Context, text string) {
-	t.r.markCovered(t.key)
+	t.r.finish(t.key, t.gen, true)
 	t.say(ctx, text)
 }
 
 func (t *repairThread) NotStarted(ctx context.Context, why string) {
+	t.r.finish(t.key, t.gen, false)
 	t.say(ctx, "Автопочинка не запускалась: "+strings.TrimRight(strings.TrimSpace(why), ".")+".")
 }
 
@@ -176,6 +241,7 @@ func (t *repairThread) NotStarted(ctx context.Context, why string) {
 // звуком на тревогу: правка беззвучна, и то, ради чего человек нужен, не
 // может жить только в ней.
 func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
+	t.r.finish(t.key, t.gen, false)
 	action = strings.TrimRight(strings.TrimSpace(action), ".")
 	if !t.editable() {
 		if action == "" {

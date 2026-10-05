@@ -59,10 +59,13 @@ type Dispatcher struct {
 	notify notifySink
 
 	// autoHint -- включена ли у проверки автопочинка (строка в тревоге);
-	// nil -- не спрашивать. covered -- починка уже дописала «Починил» в
-	// тревогу, и ответ «восстановилось» не нужен; nil -- никогда.
+	// nil -- не спрашивать. covered -- одноразовый вопрос при
+	// «восстановилось»: итог скажет (или сказала) починка, ответ не нужен;
+	// nil -- никогда. onHard -- новая HARD-тревога: прежнее закрытие
+	// починкой к ней не относится.
 	autoHint func(userID int64, checkName string) bool
 	covered  func(userID int64, checkName string) bool
+	onHard   func(userID int64, checkName string)
 
 	// lastHard -- текст и кнопки последней HARD-тревоги по проверке. Только
 	// в памяти: правка Telegram заменяет текст целиком, и починке, чтобы
@@ -88,10 +91,18 @@ func (di *Dispatcher) SetAutoRepairHint(fn func(userID int64, checkName string) 
 	di.autoHint = fn
 }
 
-// SetCovered -- откуда диспетчер знает, что «восстановилось» уже сказано
-// правкой тревоги (notify.Repairs.Covered). Вызывается до первой тревоги.
+// SetCovered -- откуда диспетчер знает, что «восстановилось» скажет (или
+// сказала) починка правкой тревоги (notify.Repairs.TakeCovered). Вопрос
+// одноразовый: ответ true гасит метку. Вызывается до первой тревоги.
 func (di *Dispatcher) SetCovered(fn func(userID int64, checkName string) bool) {
 	di.covered = fn
+}
+
+// SetHardHook -- что сделать при каждой новой HARD-тревоге до её отправки
+// (notify.Repairs.Uncover: снять устаревшее закрытие). Вызывается до первой
+// тревоги.
+func (di *Dispatcher) SetHardHook(fn func(userID int64, checkName string)) {
+	di.onHard = fn
 }
 
 // Last -- текст и кнопки последней HARD-тревоги по проверке
@@ -167,6 +178,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// LastAlertAt=NULL значит realert poller его не подхватит до
 		// следующего ручного refresh / OK-репорта.
 		next := tr.Next
+		if di.onHard != nil {
+			di.onHard(userID, checkName)
+		}
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
 		}
@@ -257,8 +271,8 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			Check:       check,
 		})
 		di.forgetHard(userID, checkName)
-		// Починка уже дописала «Починил» в саму тревогу -- второе
-		// «восстановилось» ответом было бы шумом.
+		// Починка идёт или уже дописала «Починил» в саму тревогу -- второе
+		// «восстановилось» ответом было бы шумом. Вопрос одноразовый.
 		if di.covered != nil && di.covered(userID, checkName) {
 			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
 				"user_id", userID, "check", checkName)

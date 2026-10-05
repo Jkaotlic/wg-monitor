@@ -246,7 +246,8 @@ func main() {
 		tgClient, d, disp, time.Now)
 	repairs.SetMiniAppBaseURL(cfg.PublicBaseURL)
 	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
-	disp.SetCovered(repairs.Covered)
+	disp.SetCovered(repairs.TakeCovered)
+	disp.SetHardHook(repairs.Uncover)
 	repairEngine := &linkrepair.Deps{
 		Store:      provisionStore,
 		Probe:      *replaceEngine,

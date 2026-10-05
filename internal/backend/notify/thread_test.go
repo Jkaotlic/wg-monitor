@@ -338,32 +338,89 @@ func TestRepairs_CoveredWindow(t *testing.T) {
 	clock := func() time.Time { return now }
 	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, clock)
 
-	if r.Covered(router, threadCheck) {
+	if r.TakeCovered(router, threadCheck) {
 		t.Fatal("до починки проверка не закрыта")
 	}
 	r.Begin(context.Background(), router, threadCheck).Done(context.Background(), "Починил.")
-	if !r.Covered(router, threadCheck) {
-		t.Fatal("после «Починил» ответ «восстановилось» обязан гаситься")
-	}
-	if r.Covered(router, "tunnel_awg12") || r.Covered(router+1, threadCheck) {
+	if r.TakeCovered(router, "tunnel_awg12") || r.TakeCovered(router+1, threadCheck) {
 		t.Fatal("закрыта чужая проверка")
 	}
 	now = now.Add(31 * time.Minute)
-	if r.Covered(router, threadCheck) {
+	if r.TakeCovered(router, threadCheck) {
 		t.Fatal("через 31 минуту закрытие обязано истечь")
 	}
 }
 
-// Новая починка той же проверки -- новый случай: прежнее «починил» больше
-// не гасит его «восстановилось».
-func TestRepairs_BeginResetsCovered(t *testing.T) {
+// Одна тревога -- одно «восстановилось»: после Done гасится первое, второе
+// (новый случай) уходит как обычно.
+func TestRepairs_CoveredConsumeOnce(t *testing.T) {
+	d, router := threadSetup(t)
+	r := newTestRepairs(d, &threadTG{}, fakeTexts{threadAlert, alertKB(), true}, nil)
+	r.Begin(context.Background(), router, threadCheck).Done(context.Background(), "Починил.")
+	if !r.TakeCovered(router, threadCheck) {
+		t.Fatal("после «Починил» первое «восстановилось» обязано гаситься")
+	}
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("закрытие одноразовое: второе «восстановилось» уходит")
+	}
+}
+
+// Частый случай в проде: «восстановилось» приходит, пока лесенка ещё
+// доказывает результат. Ответ гасится, итог «Починил» дописывается правкой,
+// а следующий случай не наследует закрытия.
+func TestRepairs_RecoveryBeforeDone(t *testing.T) {
 	d, router := threadSetup(t)
 	tgc := &threadTG{}
 	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	th := r.Begin(context.Background(), router, threadCheck)
+	if !r.TakeCovered(router, threadCheck) {
+		t.Fatal("пока починка идёт, «восстановилось» обязано гаситься")
+	}
+	th.Done(context.Background(), "Починил.")
+	if len(tgc.edits) != 2 || len(tgc.sends) != 0 {
+		t.Fatalf("правок=%d отправок=%d, ждали только правку «Починил»", len(tgc.edits), len(tgc.sends))
+	}
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("погашенное «восстановилось» не продлевается Done на следующий случай")
+	}
+}
+
+// «Сам не смог» и «не запускалась» закрытия не оставляют: поднимется
+// VPN-туннель сам -- человек получит обычное «восстановилось».
+func TestRepairs_NeedHumanAndNotStartedUncover(t *testing.T) {
+	d, router := threadSetup(t)
+	r := newTestRepairs(d, &threadTG{}, fakeTexts{threadAlert, alertKB(), true}, nil)
+	r.Begin(context.Background(), router, threadCheck).NeedHuman(context.Background(), "Починить VPN-туннель «Франкфурт» сам не смог.", "")
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("после «сам не смог» «восстановилось» обязано уйти")
+	}
+	r.Begin(context.Background(), router, threadCheck).NotStarted(context.Background(), "лимит попыток")
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("после «не запускалась» «восстановилось» обязано уйти")
+	}
+}
+
+// Вторая попытка запуска при идущей починке («уже идёт починка») своим
+// NotStarted не снимает закрытие идущей.
+func TestRepairs_SecondBeginDoesNotStealCover(t *testing.T) {
+	d, router := threadSetup(t)
+	r := newTestRepairs(d, &threadTG{}, fakeTexts{threadAlert, alertKB(), true}, nil)
+	running := r.Begin(context.Background(), router, threadCheck)
+	r.Begin(context.Background(), router, threadCheck).NotStarted(context.Background(), "уже идёт починка или замена конфига")
+	running.Done(context.Background(), "Починил.")
+	if !r.TakeCovered(router, threadCheck) {
+		t.Fatal("чужое NotStarted сняло закрытие идущей починки")
+	}
+}
+
+// Новая HARD-тревога снимает устаревшее закрытие.
+func TestRepairs_UncoverOnNewHard(t *testing.T) {
+	d, router := threadSetup(t)
+	r := newTestRepairs(d, &threadTG{}, fakeTexts{threadAlert, alertKB(), true}, nil)
 	r.Begin(context.Background(), router, threadCheck).Done(context.Background(), "Починил.")
-	r.Begin(context.Background(), router, threadCheck)
-	if r.Covered(router, threadCheck) {
-		t.Fatal("новая починка не сбросила закрытие прежней")
+	r.Uncover(router, threadCheck)
+	if r.TakeCovered(router, threadCheck) {
+		t.Fatal("новая тревога унаследовала закрытие прежней починки")
 	}
 }
 
