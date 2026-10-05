@@ -113,6 +113,15 @@ func TestWaitHandshake_StaleHandshakeIsNotProof(t *testing.T) {
 	}
 }
 
+// A4.4: возраста обмена ключами нет (на проводе 0: агент его не прислал) --
+// это не «только что», а «неизвестно», и доказательством не считается.
+func TestWaitHandshake_MissingAgeIsNotFresh(t *testing.T) {
+	d, _ := probeDeps(t, nil)
+	if err := d.WaitHandshake(context.Background(), 1, "awg41", "ageless"); err == nil {
+		t.Fatal("обмен без возраста принят за свежий")
+	}
+}
+
 // VerifyTunnelExit -- адрес выхода именно через этот VPN-туннель (агентский
 // exit_ip_probe по tunnel_id), а не через активное звено набора правил.
 func TestVerifyTunnelExit(t *testing.T) {

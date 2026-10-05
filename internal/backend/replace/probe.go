@@ -66,9 +66,18 @@ func joinIssues(issues []analyzeIssue) string {
 // FreshHandshakeSec -- обмен ключами не старше этого считается свежим.
 // HasHandshake у агента значит «обмен был когда-нибудь»: упавший VPN-туннель,
 // работавший час назад, несёт его до сих пор. WireGuard повторяет обмен раз
-// в две минуты, пока VPN-туннель живой, отсюда три минуты с запасом. Агент,
-// не присылающий возраст (поле пустое), читается как «свежий» -- как раньше.
+// в две минуты, пока VPN-туннель живой, отсюда три минуты с запасом.
+//
+// Возраст 0 на проводе -- «агент возраста не прислал» (поле omitempty), а не
+// «только что»: такой обмен свежим не считается (v0.55, A4.4). Настоящий
+// обмен в ту же секунду, что и снимок, стоит одного лишнего опроса -- через
+// паузу возраст уже не ноль.
 const FreshHandshakeSec = 180
+
+// freshHandshake -- обмен ключами был и известно, что недавно.
+func freshHandshake(t wire.TunnelMeta) bool {
+	return t.HasHandshake && t.HandshakeAge > 0 && t.HandshakeAge <= FreshHandshakeSec
+}
 
 // WaitHandshake ищет линию в снимке по идентификатору, а в текст для человека
 // кладёт её имя. Отмена ctx (остановка бэкенда) прерывает ожидание сразу.
@@ -96,7 +105,7 @@ func (d Deps) WaitHandshake(ctx context.Context, routerID int64, tunnelID, name 
 			if t.ID != tunnelID {
 				continue
 			}
-			if t.HasHandshake && t.HandshakeAge <= FreshHandshakeSec {
+			if freshHandshake(t) {
 				return nil
 			}
 			last = fmt.Sprintf("VPN-туннель «%s» на роутере есть, но ключами ещё не обменялся", name)

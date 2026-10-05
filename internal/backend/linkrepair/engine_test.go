@@ -108,8 +108,8 @@ func (c *scriptCommander) snapshotLocked() string {
 	}
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
-			{ID: "awg12", Name: "Дача", HasHandshake: c.hs},
-			{ID: "awg10", Name: "Работа", HasHandshake: true},
+			{ID: "awg12", Name: "Дача", HasHandshake: c.hs, HandshakeAge: 4},
+			{ID: "awg10", Name: "Работа", HasHandshake: true, HandshakeAge: 30},
 		},
 	}
 	ifaces := []wire.RoutePolicyInterface{
