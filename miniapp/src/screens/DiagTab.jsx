@@ -84,7 +84,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const tunnelsUnchecked = uncheckedTunnelCount(data.tunnels)
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
   const runRecheck = () => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })
-  const split = dnsSplitView(data.checks, { silent })
+  const split = dnsSplitView(data.checks, { silent, agentVersion: data.router?.agent_version })
 
   return (
     <div class="screen">

@@ -13,11 +13,11 @@ import (
 )
 
 // Предупреждения сводки парка про ключи кабинетов на диске (v0.55, B1).
-// Словами, без путей и имён файлов.
+// Тексты -- по спеке v0.56 (B5); экспортированы, чтобы песочница показывала те же.
 const (
-	cabinetSealWarnOpen       = "Ключи кабинетов лежат на диске открытыми: на сервере не задан ключ шифрования"
-	cabinetSealWarnNoKey      = "Ключи кабинетов не прочитать: ключ шифрования не найден — верните на сервер прежний ключ"
-	cabinetSealWarnWrongKey   = "Ключи кабинетов не расшифровываются: ключ шифрования не тот, которым они записаны"
+	CabinetSealWarnOpen       = "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в DEPLOY.md"
+	CabinetSealWarnNoKey      = "Ключи кабинетов зашифрованы, а файл «revive.key» не найден. Верните прежний файл — добавлять ключи заново не нужно"
+	CabinetSealWarnWrongKey   = "Ключи кабинетов зашифрованы другим файлом «revive.key». Верните прежний, не создавайте новый"
 	cabinetSealWarnPartlyOpen = "Не все ключи кабинетов зашифрованы — подробности в журнале сервера"
 )
 
@@ -58,14 +58,14 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		if len(sealed) > 0 {
 			log.Error("ключи кабинетов зашифрованы, а ключа шифрования нет — кабинеты не работают; файлы не тронуты",
 				"reason", keyErr, "stores", storeNames(sealed))
-			return cabinetSealWarnNoKey
+			return CabinetSealWarnNoKey
 		}
 		if len(present) == 0 {
 			return ""
 		}
 		log.Warn("ключи кабинетов лежат на диске открытыми: ключ шифрования (revive.key_file) не задан или не прочитан",
 			"reason", keyErr, "stores", storeNames(present))
-		return cabinetSealWarnOpen
+		return CabinetSealWarnOpen
 	}
 
 	// Сначала -- что каждое зашифрованное хранилище открывается этим ключом.
@@ -84,7 +84,7 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		sealedfile.SetWrongKey(box)
 		log.Error("хранилища кабинетов не расшифровываются этим ключом — открытые не перешифрованы, файлы не тронуты; верните прежний ключ шифрования",
 			"stores", storeNames(foreign))
-		return cabinetSealWarnWrongKey
+		return CabinetSealWarnWrongKey
 	}
 
 	var warns []string

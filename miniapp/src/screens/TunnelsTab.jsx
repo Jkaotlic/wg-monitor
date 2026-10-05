@@ -11,7 +11,7 @@ import { tunnelList, tunnelListSummary, TUNNEL_TEXTS } from '../tunnelDelete.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
-import { humanAge, workingTunnelNote } from '../labels.js'
+import { humanAge, pluralRu, rulesCount, workingTunnelNote } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -407,7 +407,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                       : 'назад, канал живой'
                 }
               />
-              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
+              <Stat label="несёт" value={view.active.rules} unit={pluralRu(view.active.rules, 'правило', 'правила', 'правил')} note={view.active.rulesNote || undefined} />
             </div>
             {/* Несущий VPN-туннель не managed-типа не попадает в «Все VPN-туннели»,
                 а значит и на свой экран: замена конфига -- здесь (финал п. 1). */}
@@ -544,7 +544,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
           единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
       <ul class="card list-reset tunnels-more" style="margin-top:12px">
-        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? `${view.active.rules} назн.` : undefined} onClick={onOpenRoutes} />
+        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? rulesCount(view.active.rules) : undefined} onClick={onOpenRoutes} />
       </ul>
 
       {layer === 'tunnel' && (

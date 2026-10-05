@@ -248,6 +248,9 @@ func seedWorkChecks(d *db.DB, uid int64, ts time.Time) error {
 	}{
 		{"agent_heartbeat", "ok", `{}`},
 		{"dns", "ok", `{"endpoints":0,"failed_count":0}`},
+		// Раздельный DNS (агент v0.31+): раздел «Проверок» с настоящими данными,
+		// а не «ещё не пришла».
+		{"dns_split", "ok", `{"zones":{"ru":"yandex_dot","xn--p1ai":"yandex_dot","su":"yandex_dot"},"resolves":"ok","route":"direct"}`},
 		{"hydraroute", "ok", `{"running":true,"routes_hrneo":32,"routes_ndms":0,"routes_static":0,"active_backend":"kernel",` +
 			`"policies":[{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":32,"hr_neo":32,` +
 			`"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`},

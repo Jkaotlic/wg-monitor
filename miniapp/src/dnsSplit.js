@@ -7,6 +7,8 @@
 // ответов ничего не различает (прогон 14.09.2026). Поэтому слов уверенности
 // здесь нет, а оговорка стоит рядом с ответом.
 
+import { agentAtLeast } from './agentConfig.js'
+
 // Имена зон так, как их пишет человек, а не роутер (punycode).
 const ZONE_NAMES = {
   'xn--p1ai': 'рф',
@@ -49,17 +51,34 @@ function routeLine(d) {
   }
 }
 
+// Агент, с которого проверка dns_split приходит в отчёте (cmd/agent/main.go
+// подключил её в v0.31.0). Старше -- «появится после обновления»; новее --
+// проверка просто ещё не пришла (v0.56, B2): обновлять агента незачем.
+export const DNS_SPLIT_MIN_VERSION = 'v0.31.0'
+
+export const DNS_SPLIT_TEXTS = {
+  tooOld: 'Эта проверка появится после обновления агента на роутере.',
+  notYet: 'Проверка ещё не пришла: она приходит с каждым отчётом роутера.',
+  unknownAgent: 'Проверка ещё не пришла. Версию агента роутер не сообщил, поэтому сказать, дело в версии или во времени, нельзя.',
+}
+
+// Что сказать, пока проверки нет, -- по версии агента, а не «на всякий случай».
+function missingNote(agentVersion) {
+  if (!agentVersion) return DNS_SPLIT_TEXTS.unknownAgent
+  return agentAtLeast(agentVersion, DNS_SPLIT_MIN_VERSION) ? DNS_SPLIT_TEXTS.notYet : DNS_SPLIT_TEXTS.tooOld
+}
+
 // dnsSplitView(checks, { silent }) -> { missing, note, rows, route, resolves, foot }.
 // rows -- одна строка на группу зон с одинаковым вердиктом:
 // { key, tone, lead, zones, text }.
-export function dnsSplitView(checks, { silent = false } = {}) {
+export function dnsSplitView(checks, { silent = false, agentVersion = '' } = {}) {
   const c = (checks ?? []).find((x) => x.check_name === 'dns_split')
   if (!c) {
     // Старый агент такой проверки не присылает: это не «нет данных», а
-    // «появится после обновления».
+    // «появится после обновления». Новый -- проверка просто ещё не пришла.
     return {
       missing: true,
-      note: 'Эта проверка появится после обновления агента на роутере.',
+      note: missingNote(agentVersion),
       rows: [],
       route: null,
       resolves: null,

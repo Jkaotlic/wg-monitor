@@ -96,7 +96,7 @@ func TestSealCabinetStores_NoKeyWarnsAndLeavesFiles(t *testing.T) {
 	}
 	var log bytes.Buffer
 	w := SealCabinetStores(stores, "", sealLogger(&log))
-	if !strings.Contains(w, "открытыми") {
+	if w != CabinetSealWarnOpen {
 		t.Fatalf("предупреждение сводки: %q", w)
 	}
 	if !strings.Contains(log.String(), "level=WARN") {
@@ -110,7 +110,7 @@ func TestSealCabinetStores_NoKeyWarnsAndLeavesFiles(t *testing.T) {
 		t.Fatal("ключ процесса поставлен без ключа")
 	}
 	// Ключ задан, но файла нет -- то же, что нет ключа.
-	if w := SealCabinetStores(stores, filepath.Join(dir, "missing.key"), sealLogger(&log)); !strings.Contains(w, "открытыми") {
+	if w := SealCabinetStores(stores, filepath.Join(dir, "missing.key"), sealLogger(&log)); w != CabinetSealWarnOpen {
 		t.Fatalf("ключ не прочитан: %q", w)
 	}
 }
@@ -137,7 +137,7 @@ func TestSealCabinetStores_SealedWithoutKey(t *testing.T) {
 	before, _ := os.ReadFile(stores[0].Path)
 	sealedfile.SetKey(nil)
 	w := SealCabinetStores(stores, "", sealLogger(&log))
-	if !strings.Contains(w, "ключ шифрования не найден") {
+	if w != CabinetSealWarnNoKey {
 		t.Fatalf("сводка: %q", w)
 	}
 	after, _ := os.ReadFile(stores[0].Path)
@@ -146,7 +146,7 @@ func TestSealCabinetStores_SealedWithoutKey(t *testing.T) {
 	}
 	// Другой ключ -- «не тот ключ».
 	w = SealCabinetStores(stores, writeSealKeyFile(t, t.TempDir()), sealLogger(&log))
-	if !strings.Contains(w, "не тот") {
+	if w != CabinetSealWarnWrongKey {
 		t.Fatalf("чужой ключ: %q", w)
 	}
 }
@@ -156,9 +156,9 @@ func TestSealCabinetStores_SealedWithoutKey(t *testing.T) {
 func TestMiniappFleetCarriesCabinetSealWarning(t *testing.T) {
 	stubLatestVersion(t, "v0.31.0")
 	d, _, _, _ := seedMiniappFleet(t)
-	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CabinetSealWarning: cabinetSealWarnOpen})
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CabinetSealWarning: CabinetSealWarnOpen})
 	resp := fleetResponse(t, fleetRequest(t, h, 999))
-	if resp.Backend.SecretsWarning != cabinetSealWarnOpen {
+	if resp.Backend.SecretsWarning != CabinetSealWarnOpen {
 		t.Fatalf("secrets_warning = %q", resp.Backend.SecretsWarning)
 	}
 	h = NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
@@ -243,7 +243,7 @@ func TestSealCabinetStores_WrongKeyDoesNotSealPlainStores(t *testing.T) {
 
 	log.Reset()
 	w := SealCabinetStores(stores, keyB, sealLogger(&log))
-	if !strings.Contains(w, "не тот") {
+	if w != CabinetSealWarnWrongKey {
 		t.Fatalf("сводка: %q", w)
 	}
 	if !strings.Contains(log.String(), "level=ERROR") {
@@ -266,8 +266,8 @@ func TestSealCabinetStores_WrongKeyDoesNotSealPlainStores(t *testing.T) {
 
 // Оба предупреждения не затирают друг друга.
 func TestCabinetSealWarningsJoin(t *testing.T) {
-	got := joinSealWarnings([]string{cabinetSealWarnPartlyOpen, cabinetSealWarnWrongKey, cabinetSealWarnPartlyOpen})
-	if !strings.Contains(got, cabinetSealWarnPartlyOpen) || !strings.Contains(got, cabinetSealWarnWrongKey) || strings.Count(got, cabinetSealWarnPartlyOpen) != 1 {
+	got := joinSealWarnings([]string{cabinetSealWarnPartlyOpen, CabinetSealWarnWrongKey, cabinetSealWarnPartlyOpen})
+	if !strings.Contains(got, cabinetSealWarnPartlyOpen) || !strings.Contains(got, CabinetSealWarnWrongKey) || strings.Count(got, cabinetSealWarnPartlyOpen) != 1 {
 		t.Fatalf("got %q", got)
 	}
 	if joinSealWarnings(nil) != "" {
@@ -308,7 +308,7 @@ func TestSealCabinetStores_WrongKeyRuntimeWritesStayPlain(t *testing.T) {
 	SealCabinetStores(stores[:1], keyA, sealLogger(&log))
 	_ = os.WriteFile(stores[3].Path, []byte(`{"version":1}`), 0o600)
 
-	if w := SealCabinetStores(stores, keyB, sealLogger(&log)); !strings.Contains(w, "не тот") {
+	if w := SealCabinetStores(stores, keyB, sealLogger(&log)); w != CabinetSealWarnWrongKey {
 		t.Fatalf("сводка: %q", w)
 	}
 	want := []byte(`{"version":1,"h":2}`)
@@ -329,6 +329,21 @@ func TestSealCabinetStores_WrongKeyRuntimeWritesStayPlain(t *testing.T) {
 	for _, i := range []int{0, 3} {
 		if _, err := sealedfile.ReadFile(stores[i].Path, stores[i].Name); err != nil {
 			t.Fatalf("%s не читается прежним ключом: %v", stores[i].Name, err)
+		}
+	}
+}
+
+// v0.56, B5: предупреждения про ключи кабинетов -- тексты спеки, правдивые:
+// что именно с ключами и что делать, без «ключ шифрования не задан».
+func TestCabinetSealWarningsSpecTexts(t *testing.T) {
+	cases := map[string]struct{ got, want string }{
+		"открыто":    {CabinetSealWarnOpen, "Ключи кабинетов лежат на сервере открытым текстом. Чтобы зашифровать, укажите файл «revive.key» в настройках сервера и перезапустите — инструкция в DEPLOY.md"},
+		"нет файла":  {CabinetSealWarnNoKey, "Ключи кабинетов зашифрованы, а файл «revive.key» не найден. Верните прежний файл — добавлять ключи заново не нужно"},
+		"чужой ключ": {CabinetSealWarnWrongKey, "Ключи кабинетов зашифрованы другим файлом «revive.key». Верните прежний, не создавайте новый"},
+	}
+	for name, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s: %q, ждали %q", name, c.got, c.want)
 		}
 	}
 }

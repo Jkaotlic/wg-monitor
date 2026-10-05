@@ -52,3 +52,13 @@ describe.each(CARRIER_SCENARIOS)('вкладка «VPN-туннели», B1: $ti
     root.remove()
   })
 })
+
+describe('вкладка «VPN-туннели», B5: «правил», а не «назн.»', () => {
+  it('у несущего и в строке «Маршруты» -- слово «правил»', async () => {
+    const root = await mount(CARRIER_SCENARIOS[0])
+    expect(root.textContent).not.toContain('назн.')
+    expect(root.textContent).toMatch(/\d+ правил/)
+    render(null, root)
+    root.remove()
+  })
+})
