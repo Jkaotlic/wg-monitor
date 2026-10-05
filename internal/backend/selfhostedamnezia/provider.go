@@ -21,6 +21,8 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 type Config struct {
@@ -191,7 +193,7 @@ func LoadStore(path string, legacy Config) (Store, error) {
 	if path == "" {
 		path = legacy.StorePathOrDefault()
 	}
-	body, err := os.ReadFile(path)
+	body, err := sealedfile.ReadFile(path, sealedfile.DomainSelfHosted)
 	if os.IsNotExist(err) {
 		st := Store{Version: 1}
 		if inst, ok := legacy.LegacyInstance(); ok {
@@ -229,27 +231,10 @@ func SaveStore(path string, st Store) error {
 		return fmt.Errorf("marshal self-hosted Amnezia store: %w", err)
 	}
 	body = append(body, '\n')
-	tmp, err := os.CreateTemp(dir, ".amnezia-selfhosted-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create self-hosted Amnezia store temp: %w", err)
+	// Атомарно, 0600, с fsync; с ключом шифрования -- шифр (v0.55, B1).
+	if err := sealedfile.WriteFile(path, sealedfile.DomainSelfHosted, body); err != nil {
+		return fmt.Errorf("write self-hosted Amnezia store: %w", err)
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod self-hosted Amnezia store temp: %w", err)
-	}
-	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write self-hosted Amnezia store temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close self-hosted Amnezia store temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace self-hosted Amnezia store: %w", err)
-	}
-	_ = os.Chmod(path, 0o600)
 	return nil
 }
 

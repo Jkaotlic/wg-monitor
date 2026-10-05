@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 const defaultAmneziaSecretsPath = "/var/lib/wg-monitor/amnezia-premium.json" // #nosec G101 -- filesystem path for the secret store, not credential material.
@@ -166,7 +167,7 @@ func (r *Router) deleteAmneziaKey(userID int64, keyID string) error {
 }
 
 func readAmneziaSecrets(path string) (amneziaSecretFile, error) {
-	body, err := os.ReadFile(path)
+	body, err := sealedfile.ReadFile(path, sealedfile.DomainAmnezia)
 	if os.IsNotExist(err) {
 		return emptyAmneziaSecretFile(), nil
 	}
@@ -229,27 +230,10 @@ func writeAmneziaSecrets(path string, env amneziaSecretFile) error {
 		return fmt.Errorf("marshal amnezia secrets: %w", err)
 	}
 	body = append(body, '\n')
-	tmp, err := os.CreateTemp(dir, ".amnezia-premium-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create amnezia secrets temp: %w", err)
+	// Атомарно, 0600, с fsync; с ключом шифрования -- шифр (v0.55, B1).
+	if err := sealedfile.WriteFile(path, sealedfile.DomainAmnezia, body); err != nil {
+		return fmt.Errorf("write amnezia secrets: %w", err)
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod amnezia secrets temp: %w", err)
-	}
-	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write amnezia secrets temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close amnezia secrets temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace amnezia secrets: %w", err)
-	}
-	_ = os.Chmod(path, 0o600)
 	return nil
 }
 
