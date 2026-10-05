@@ -722,7 +722,7 @@ describe('promoteTargets', () => {
   // интерфейса -- другая операция с другим радиусом поражения.
   it('предлагает звенья цепочки, кроме уже активного', () => {
     expect(promoteTargets(SNAP, 'awg11')).toEqual([
-      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down', checkFailed: false, checkUnverified: false },
+      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down', checkFailed: false, checkUnverified: false, switchedOff: false },
     ])
   })
 

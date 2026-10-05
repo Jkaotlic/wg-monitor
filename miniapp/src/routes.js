@@ -308,6 +308,7 @@ export function tunnelRows(snapshot) {
       live: tunnelLive(t),
       // Проверка провалена при поднятом на роутере (withCheckVerdict): слово «работает» нельзя.
       checkFailed: Boolean(t.check_failed),
+      switchedOff: tunnelSwitchedOff(t),
       // Проверка пришла, но ничего не проверила: «работает» тоже нельзя.
       checkUnverified: Boolean(t.check_unverified),
       type: t.type ?? '',
@@ -415,7 +416,9 @@ export function ruleBackendLabel(backend) {
 // пилюля на выключенном туннеле утверждала бы, что трафик идёт через него.
 export function defaultRouteBadge(row) {
   if (!row?.defaultRoute) return null
-  if (row.live === 'down') return { tone: 'muted', text: 'назначен основным, но выключен' }
+  // Проверка главнее (A1.1): поднят на роутере, но не отвечает -- не «выключен».
+  if (row.checkFailed) return { tone: 'muted', text: 'назначен основным, но не отвечает' }
+  if (row.live === 'down') return { tone: 'muted', text: row.switchedOff === false ? 'назначен основным, но не отвечает' : 'назначен основным, но выключен' }
   if (row.live === 'unknown') return { tone: 'muted', text: 'назначен основным' }
   return { tone: 'ok', text: 'основной маршрут' }
 }
@@ -493,6 +496,7 @@ export function promoteTargets(snapshot, activeTunnelID) {
         tunnelName: t?.name || link.name || link.tunnel_id,
         live: t ? tunnelLive(t) : 'unknown',
         checkFailed: Boolean(t?.check_failed),
+        switchedOff: t ? tunnelSwitchedOff(t) : false,
         checkUnverified: Boolean(t?.check_unverified),
       })
     }

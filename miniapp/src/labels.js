@@ -521,6 +521,9 @@ export const TUNNEL_LIVE_LABEL = {
 export function tunnelTargetLabel(t) {
   if (t?.checkFailed) return 'поднят, но не отвечает'
   if (t?.checkUnverified && t?.live === 'up') return 'поднят, не проверено'
+  // Включённый, но не поднявшийся -- «не отвечает», как на вкладке «VPN-туннели»;
+  // «выключен» -- только выключенный настройкой.
+  if (t?.live === 'down' && t.switchedOff === false) return 'не отвечает'
   return tunnelLiveLabel(t?.live)
 }
 

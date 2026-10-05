@@ -2269,7 +2269,7 @@ body {
    есть своя строка, но без карточки: новостью он не является. */
 .day-quiet {
   margin: 0;
-  padding: 2px 14px 6px;
+  padding: 2px 0 6px;
   font-size: var(--fs-sm);
   color: var(--dim);
 }

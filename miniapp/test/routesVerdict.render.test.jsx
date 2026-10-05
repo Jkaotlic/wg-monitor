@@ -37,7 +37,9 @@ const SNAP = {
   default_egress: 'direct',
   tunnels: [
     { id: 'nwg1', name: 'amsterdam', type: 'managed', status: 'running', enabled: true },
-    { id: 'nwg3', name: 'old-home', type: 'managed', status: 'running', enabled: true },
+    { id: 'nwg3', name: 'old-home', type: 'managed', status: 'running', enabled: true, default_route: true },
+    { id: 'nwg4', name: 'vpn-de', type: 'managed', status: 'down', enabled: true },
+    { id: 'nwg5', name: 'off-one', type: 'managed', status: 'disabled', enabled: false },
   ],
   counts: { nwg1: { dns: 1, static: 0, hr_neo: 0 } },
   policies: [
@@ -87,3 +89,22 @@ describe('выбор цели: проверка главнее', () => {
     render(null, root)
   })
 })
+
+describe('A1.1, раунд 2: плашка основного и «включён, но не поднялся»', () => {
+  it('плашка основного у упавшей по проверке -- «не отвечает», а не «выключен»', async () => {
+    const root = await mount('routes', {})
+    expect(root.textContent).toContain('назначен основным, но не отвечает')
+    expect(root.textContent).not.toContain('назначен основным, но выключен')
+    render(null, root)
+  })
+
+  it('лист переноса: включённый, но не поднявшийся -- «не отвечает», выключенный настройкой -- «выключен»', async () => {
+    const root = await mount('routepick', { pick: 'rebind', from: 'nwg1' })
+    const row = (name) => [...root.querySelectorAll('.list-row-btn')].find((b) => b.textContent.includes(name))
+    expect(row('vpn-de').textContent).toContain('не отвечает')
+    expect(row('vpn-de').textContent).not.toContain('выключен')
+    expect(row('off-one').textContent).toContain('выключен')
+    render(null, root)
+  })
+})
+
