@@ -156,7 +156,14 @@ func (r *Repairs) Begin(_ context.Context, routerID int64, checkName string) lin
 	if err != nil {
 		r.warn("починка: номера сообщений тревоги не прочитались", "router_user_id", routerID, "check", checkName, "err", err)
 	}
+	// Снимок -- только тем, кто и сейчас получатель: заглушивший роутер
+	// (админ кнопкой «Не писать мне», оператор) и снятый оператор правок
+	// больше не получают. Таблица alert_messages от выключения не чистится.
+	cur := th.recipients()
 	for chatID, mid := range msgs {
+		if cur != nil && !cur[chatID] {
+			continue
+		}
 		th.targets = append(th.targets, threadTarget{chatID: chatID, messageID: mid})
 	}
 	// Порядок получателей -- по номеру чата: правки идут предсказуемо.
@@ -211,6 +218,23 @@ type threadTarget struct {
 	messageID int64
 }
 
+// recipients -- кто получатель роутера сейчас (RecipientsFor: минус
+// заглушившие и снятые). Перечитывается на каждый вызов нити: выключить
+// уведомления можно и посреди починки. Не прочиталось -- nil, и шлём всем из
+// снимка: итог починки потерять хуже, чем один раз написать лишнему.
+func (t *repairThread) recipients() map[int64]bool {
+	ids, err := RecipientsFor(t.r.d, t.key.routerID, t.r.fanout.adminID)
+	if err != nil {
+		t.r.warn("починка: получатели не прочитались", "router_user_id", t.key.routerID, "check", t.key.checkName, "err", err)
+		return nil
+	}
+	set := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
 // editable -- есть что править: текст тревоги в памяти и номера сообщений.
 // Иначе нить работает новыми сообщениями (см. say).
 func (t *repairThread) editable() bool {
@@ -224,7 +248,7 @@ func (t *repairThread) Progress(ctx context.Context, text string) {
 	if !t.editable() {
 		return
 	}
-	t.edit(ctx, text)
+	t.edit(ctx, text, t.recipients())
 }
 
 func (t *repairThread) Done(ctx context.Context, text string) {
@@ -256,7 +280,8 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 		}
 		return
 	}
-	t.edit(ctx, text)
+	cur := t.recipients()
+	t.edit(ctx, text, cur)
 	if action == "" {
 		return
 	}
@@ -265,6 +290,9 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 	for i := range t.targets {
 		mid := t.targets[i].messageID
 		chatID := t.targets[i].chatID
+		if cur != nil && !cur[chatID] {
+			continue
+		}
 		if _, err := t.r.fanout.sendOne(ctx, chatID, t.key.routerID, reply, "", &mid, kb); err != nil {
 			t.r.fanout.noteFailure(chatID, t.key.routerID, err)
 			continue
@@ -277,7 +305,7 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 // получателям роутера.
 func (t *repairThread) say(ctx context.Context, text string) {
 	if t.editable() {
-		t.edit(ctx, text)
+		t.edit(ctx, text, t.recipients())
 		return
 	}
 	t.send(ctx, text)
@@ -293,12 +321,16 @@ func (t *repairThread) send(ctx context.Context, text string) {
 // что были под ней (админу -- с его рядом «Не писать мне»). Блок заменяет
 // прежний: текст хода от движка уже несёт всё сделанное. Правка не удалась
 // (сообщение удалено, старше лимита Telegram) -- этому получателю уходит
-// новое сообщение, и дальше правится уже оно.
-func (t *repairThread) edit(ctx context.Context, block string) {
+// новое сообщение, и дальше правится уже оно. cur -- получатели сейчас
+// (nil -- неизвестно): кто выпал из них, тому ни правки, ни нового сообщения.
+func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]bool) {
 	full := t.base + "\n\n" + block
 	f := t.r.fanout
 	for i := range t.targets {
 		tgt := &t.targets[i]
+		if cur != nil && !cur[tgt.chatID] {
+			continue
+		}
 		kb := t.kb
 		if f.isAdmin(tgt.chatID) {
 			kb = withAdminMuteRow(kb, t.key.routerID)

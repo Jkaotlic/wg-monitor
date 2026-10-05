@@ -453,3 +453,66 @@ func latinOutsideQuotes(text string) []string {
 	flush()
 	return bad
 }
+
+// Заглушивший роутер (или снятый оператор) правок и ответов больше не
+// получает: ни заглушивший до начала починки, ни посреди неё.
+func TestThread_MutedRecipientsSkipped(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	r.SetMiniAppBaseURL("https://example.com")
+
+	// Заглушил до начала: в снимок не попадает.
+	if err := d.NotifyMutes().SetMuted(1002, router, true); err != nil {
+		t.Fatal(err)
+	}
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню: …")
+	for _, e := range tgc.edits {
+		if e.chatID == 1002 {
+			t.Fatalf("заглушивший до починки получил правку: %+v", e)
+		}
+	}
+
+	// Заглушил посреди починки: дальше ни правок, ни ответа.
+	if err := d.NotifyMutes().SetMuted(1002, router, false); err != nil {
+		t.Fatal(err)
+	}
+	th = r.Begin(context.Background(), router, threadCheck)
+	if err := d.NotifyMutes().SetMuted(1002, router, true); err != nil {
+		t.Fatal(err)
+	}
+	tgc.edits, tgc.sends = nil, nil
+	th.NeedHuman(context.Background(), "Починить VPN-туннель «Франкфурт» сам не смог.", "обновите агента во вкладке «Управление»")
+	for _, e := range tgc.edits {
+		if e.chatID == 1002 {
+			t.Fatalf("заглушивший посреди починки получил правку: %+v", e)
+		}
+	}
+	for _, s := range tgc.sends {
+		if s.chatID == 1002 {
+			t.Fatalf("заглушивший посреди починки получил ответ: %+v", s)
+		}
+	}
+	if len(tgc.sends) != 1 || tgc.sends[0].chatID != 1001 {
+		t.Fatalf("ответы=%+v, ждали один -- владельцу", tgc.sends)
+	}
+}
+
+// Правка не удалась, а получатель тем временем заглушил роутер: полную
+// тревогу заново ему не шлём.
+func TestThread_FallbackSkipsMuted(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{editErr: map[int64]error{1002: errors.New("Bad Request: message to edit not found")}}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	th := r.Begin(context.Background(), router, threadCheck)
+	if err := d.RouterOperators().Remove(router, 1002); err != nil {
+		t.Fatal(err)
+	}
+	th.Done(context.Background(), "Починил.")
+	for _, s := range tgc.sends {
+		if s.chatID == 1002 {
+			t.Fatalf("снятый оператор получил тревогу заново: %+v", s)
+		}
+	}
+}
