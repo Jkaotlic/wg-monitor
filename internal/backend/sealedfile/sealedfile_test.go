@@ -29,9 +29,9 @@ func newBox(t *testing.T) *revive.Box {
 // ключ -- общий для процесса.
 func withKey(t *testing.T, b *revive.Box) {
 	t.Helper()
-	prev := currentBox()
+	prev := state.Load()
 	SetKey(b)
-	t.Cleanup(func() { SetKey(prev) })
+	t.Cleanup(func() { state.Store(prev) })
 }
 
 const secret = "vpn://fixture-secret-3f9a"
@@ -226,5 +226,49 @@ func TestWrite_RefusesOverSealedFileOfOtherKey(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if !bytes.Equal(before, after) {
 		t.Fatal("файл перезаписан чужим ключом")
+	}
+}
+
+// Fix round 2: режим «ключ не тот». Открытые файлы пишутся открытыми (как
+// без ключа), поверх шифра запись отказывает, чтение шифра -- ErrUnreadable.
+func TestWrongKeyMode(t *testing.T) {
+	a := newBox(t)
+	withKey(t, a)
+	dir := t.TempDir()
+	sealedPath := filepath.Join(dir, "amnezia-premium.json")
+	if err := WriteFile(sealedPath, DomainAmnezia, []byte(`{"a":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(sealedPath)
+	plainPath := filepath.Join(dir, "hidemyname.json")
+	_ = os.WriteFile(plainPath, []byte(`{"h":1}`), 0o600)
+
+	SetWrongKey(newBox(t))
+	if Enabled() {
+		t.Fatal("в режиме «ключ не тот» новые записи не шифруются")
+	}
+	if err := WriteFile(plainPath, DomainHideMy, []byte(`{"h":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(plainPath)
+	if string(raw) != `{"h":2}` {
+		t.Fatalf("открытое хранилище зашифровано чужим ключом: %q", raw)
+	}
+	if _, err := ReadFile(sealedPath, DomainAmnezia); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("чтение шифра: err = %v", err)
+	}
+	if err := WriteFile(sealedPath, DomainAmnezia, []byte(`{"a":2}`)); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("запись поверх шифра: err = %v", err)
+	}
+	after, _ := os.ReadFile(sealedPath)
+	if !bytes.Equal(before, after) {
+		t.Fatal("шифр перезаписан")
+	}
+	if changed, err := Reseal(plainPath, DomainHideMy); err != nil || changed {
+		t.Fatalf("Reseal в режиме «ключ не тот»: changed=%v err=%v", changed, err)
+	}
+	SetKey(a)
+	if _, err := ReadFile(sealedPath, DomainAmnezia); err != nil {
+		t.Fatal(err)
 	}
 }

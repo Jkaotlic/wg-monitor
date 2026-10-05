@@ -79,6 +79,9 @@ func SealCabinetStores(stores []StoreFile, keyFile string, logger *slog.Logger) 
 		}
 	}
 	if len(foreign) > 0 {
+		// Режим «ключ не тот» (fix round 2): и рантайм не шифрует открытые
+		// хранилища этим ключом, а запись поверх шифра отказывает.
+		sealedfile.SetWrongKey(box)
 		log.Error("хранилища кабинетов не расшифровываются этим ключом — открытые не перешифрованы, файлы не тронуты; верните прежний ключ шифрования",
 			"stores", storeNames(foreign))
 		return cabinetSealWarnWrongKey

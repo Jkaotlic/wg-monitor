@@ -50,15 +50,51 @@ var ErrKeyMissing = errors.New("ключ шифрования не найден 
 // ErrUnreadable -- файл зашифрован, но не этим ключом (или байты битые).
 var ErrUnreadable = errors.New("ключи кабинетов не расшифровываются: ключ шифрования не тот, которым они записаны")
 
-var box atomic.Pointer[revive.Box]
+// keyState -- ключ процесса. wrong -- режим «ключ не тот» (fix round 2):
+// ключ есть, но не открывает хотя бы одно зашифрованное хранилище. Тогда
+// новые записи идут ОТКРЫТЫМИ (как без ключа), поверх любого шифра запись
+// отказывает, чтение шифра -- ErrUnreadable. Иначе первая же обычная запись
+// зашифровала бы открытое хранилище чужим ключом, и ни один ключ не читал
+// бы все хранилища.
+type keyState struct {
+	box   *revive.Box
+	wrong bool
+}
+
+var state atomic.Pointer[keyState]
 
 // SetKey ставит ключ процесса; nil -- ключа нет.
-func SetKey(b *revive.Box) { box.Store(b) }
+func SetKey(b *revive.Box) {
+	if b == nil {
+		state.Store(nil)
+		return
+	}
+	state.Store(&keyState{box: b})
+}
 
-func currentBox() *revive.Box { return box.Load() }
+// SetWrongKey -- ключ есть, но он не тот, которым записаны хранилища.
+func SetWrongKey(b *revive.Box) {
+	if b == nil {
+		state.Store(nil)
+		return
+	}
+	state.Store(&keyState{box: b, wrong: true})
+}
 
-// Enabled -- есть ли у процесса ключ: новые записи шифруются.
-func Enabled() bool { return currentBox() != nil }
+func currentBox() *revive.Box {
+	if st := state.Load(); st != nil {
+		return st.box
+	}
+	return nil
+}
+
+func wrongKey() bool {
+	st := state.Load()
+	return st != nil && st.wrong
+}
+
+// Enabled -- новые записи шифруются: ключ есть и он не «не тот».
+func Enabled() bool { return currentBox() != nil && !wrongKey() }
 
 // IsSealed -- байты файла начинаются с заголовка шифра (любой версии).
 func IsSealed(body []byte) bool { return bytes.HasPrefix(body, []byte(magicFamily)) }
@@ -101,7 +137,7 @@ func DecodeWith(b *revive.Box, domain string, body []byte) ([]byte, error) {
 // открытые как есть.
 func Encode(domain string, plain []byte) ([]byte, error) {
 	b := currentBox()
-	if b == nil {
+	if b == nil || wrongKey() {
 		return plain, nil
 	}
 	nonce, ct, err := b.SealBlob(domain, plain)
@@ -126,6 +162,9 @@ func ReadFile(path, domain string) ([]byte, error) {
 	return Decode(domain, body)
 }
 
+// В режиме «ключ не тот» (SetWrongKey) запись идёт открытой, а поверх шифра
+// отказывает ErrUnreadable.
+//
 // WriteFile пишет файл атомарно: временный файл 0600 рядом, fsync, rename,
 // fsync каталога; каталог создаётся 0700. С ключом -- шифр. Без ключа
 // существующий зашифрованный файл не перезаписывается (ErrKeyMissing):
@@ -139,6 +178,9 @@ func WriteFile(path, domain string, plain []byte) error {
 		sealed, err := fileIsSealed(path)
 		if err != nil {
 			return err
+		}
+		if sealed && wrongKey() {
+			return ErrUnreadable
 		}
 		if sealed {
 			return ErrKeyMissing

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -291,5 +292,43 @@ func TestSealCabinetStores_RemovesStaleTemps(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatal("чужой файл убран")
+	}
+}
+
+// Fix round 2: после старта с чужим ключом обычная запись в открытое
+// хранилище остаётся открытой; старт с прежним ключом читает оба.
+func TestSealCabinetStores_WrongKeyRuntimeWritesStayPlain(t *testing.T) {
+	t.Cleanup(func() { sealedfile.SetKey(nil) })
+	dir := t.TempDir()
+	keyA := writeSealKeyFile(t, t.TempDir())
+	keyB := writeSealKeyFile(t, t.TempDir())
+	stores := sealTestStores(dir)
+	_ = os.WriteFile(stores[0].Path, []byte(`{"version":1,"a":1}`), 0o600)
+	var log bytes.Buffer
+	SealCabinetStores(stores[:1], keyA, sealLogger(&log))
+	_ = os.WriteFile(stores[3].Path, []byte(`{"version":1}`), 0o600)
+
+	if w := SealCabinetStores(stores, keyB, sealLogger(&log)); !strings.Contains(w, "не тот") {
+		t.Fatalf("сводка: %q", w)
+	}
+	want := []byte(`{"version":1,"h":2}`)
+	if err := sealedfile.WriteFile(stores[3].Path, sealedfile.DomainHideMy, want); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(stores[3].Path)
+	if !bytes.Equal(raw, want) {
+		t.Fatalf("запись в рантайме зашифровала открытое хранилище чужим ключом: %q", raw)
+	}
+	if _, err := sealedfile.ReadFile(stores[0].Path, sealedfile.DomainAmnezia); !errors.Is(err, sealedfile.ErrUnreadable) {
+		t.Fatalf("чтение шифра A ключом B: %v", err)
+	}
+
+	if w := SealCabinetStores(stores, keyA, sealLogger(&log)); w != "" {
+		t.Fatalf("старт с прежним ключом: %q", w)
+	}
+	for _, i := range []int{0, 3} {
+		if _, err := sealedfile.ReadFile(stores[i].Path, stores[i].Name); err != nil {
+			t.Fatalf("%s не читается прежним ключом: %v", stores[i].Name, err)
+		}
 	}
 }

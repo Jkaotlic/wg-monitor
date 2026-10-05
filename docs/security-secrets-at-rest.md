@@ -91,9 +91,12 @@ Operator decision 05.10.2026: the four cabinet JSON stores are encrypted with
   `cabinet_key_missing` / `cabinet_key_wrong`, HTTP 503) instead of "key not
   saved", and **no write goes over an encrypted file without the key** — the
   file is left untouched. With a key that does not open every encrypted
-  store, startup re-encrypts **nothing** (plain stores stay plain), and a
-  write never replaces an encrypted file that the current key cannot open —
-  so one key always reads every store. Bring the old `revive.key` back and
+  store, startup re-encrypts **nothing** and the process switches to
+  "wrong key" mode until restart: writes to plain stores stay plain (as
+  without a key), writes over encrypted stores are refused, and reading an
+  encrypted store shows `cabinet_key_wrong` ("ключ шифрования не тот"). With
+  the right key, a write never replaces an encrypted file that the key cannot
+  open either — so one key always reads every store. Bring the old `revive.key` back and
   restart. Leftover `.<store>.tmp-*` files from an interrupted write are
   removed on startup.
 - **Backup:** encrypted stores go into the archive as they are. The key stays
