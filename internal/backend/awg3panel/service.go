@@ -339,6 +339,10 @@ func (s *Service) Update(ctx context.Context, id string, in Input) (View, *Check
 		credsChanged = in.Password != "" || in.P12 != nil || moved
 		if credsChanged {
 			next.Lock = LockNone
+			// Пауза 429 -- тоже про вход под этими учётными данными: на
+			// диске её снимаем так же, как clearMem снимает её в памяти,
+			// иначе после перезапуска сервиса панель снова на паузе.
+			next.PausedUntil = time.Time{}
 			// Readonly -- тоже про учётные данные: панель могла обновиться и
 			// получить мутирующие маршруты с тех пор, как её пометили
 			// read-only; сменой одного пароля (без смены адреса) это раньше

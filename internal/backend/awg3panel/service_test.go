@@ -844,3 +844,51 @@ func TestFreshConfigForRouter_ReadonlyRefused(t *testing.T) {
 		t.Fatalf("на панели только для просмотра появился пир: %d", n)
 	}
 }
+
+// Пересохранение учётных данных снимает паузу 429 не только в памяти, но и на
+// диске: после перезапуска сервиса панель не должна снова оказаться на паузе.
+func TestResaveClearsPauseOnDiskAfterRestart(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	ctx := context.Background()
+	e.p.SetOverride(respond429)
+	if _, err := e.s.Peers(ctx, "main", ""); KindOf(err) != KindBanned {
+		t.Fatalf("первый отказ: %v", err)
+	}
+	if views, _ := NewService(e.path, e.opts).List(); views[0].PausedUntil.IsZero() {
+		t.Fatal("пауза не легла на диск")
+	}
+	e.p.SetOverride(nil)
+	if _, res, err := e.s.Update(ctx, "main", Input{Label: "Main", BaseURL: e.p.URL, User: "admin", Password: testPanelPass}); err != nil || res == nil || !res.OK {
+		t.Fatalf("пересохранение: %+v %v", res, err)
+	}
+	s2 := NewService(e.path, e.opts) // «перезапуск»: память пуста, остался диск
+	views, err := s2.List()
+	if err != nil || !views[0].PausedUntil.IsZero() {
+		t.Fatalf("пауза осталась на диске: %+v %v", views, err)
+	}
+	if _, err := s2.Peers(ctx, "main", ""); err != nil {
+		t.Fatalf("после перезапуска: %v", err)
+	}
+}
+
+// Список панелей (а с ним и допуски к выпуску) отдаётся из хранилища и не ходит
+// в панель: лежащая панель, пауза и замок его не прячут.
+func TestListKeepsIssuersWhenPanelDown(t *testing.T) {
+	e := newSvcEnv(t, awg3paneltest.Options{})
+	e.create(t, "main")
+	if _, err := e.s.AddIssuer("main", 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	e.p.SetOverride(respond429)
+	_, _ = e.s.Peers(context.Background(), "main", "")
+	e.p.Close()
+	hits := e.p.TotalHits()
+	views, err := NewService(e.path, e.opts).List()
+	if err != nil || len(views) != 1 || len(views[0].Issuers) != 1 || views[0].Issuers[0].TelegramUserID != 555 {
+		t.Fatalf("допуски: %+v %v", views, err)
+	}
+	if e.p.TotalHits() != hits {
+		t.Fatal("список ходил в панель")
+	}
+}
