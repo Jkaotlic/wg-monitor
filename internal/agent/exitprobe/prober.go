@@ -23,6 +23,10 @@ const (
 	warmupBudget = 2 * time.Minute
 )
 
+// warmupRetry -- пауза между попытками прогрева, пока awg-manager после
+// перезагрузки роутера ещё не отвечает (в тестах укорачивается).
+var warmupRetry = 10 * time.Second
+
 // Prober меряет адрес выхода по кругу, по одному VPN-туннелю раз в Every,
 // каждый -- не чаще раза в PerTunnel. Не в цикле проверок: бюджет проверки
 // 10 с, а замер -- секунды плюс внешние запросы.
@@ -72,9 +76,16 @@ func Running(t awgmgr.Tunnel) bool {
 // Step -- один замер: самый давно не мерянный работающий VPN-туннель, если его
 // срок подошёл. Возвращает id измеренного или "".
 func (p *Prober) Step(ctx context.Context) string {
+	id, _ := p.step(ctx, false)
+	return id
+}
+
+// step -- Step с различением «нечего мерить» ("", nil) и «список туннелей не
+// прочитался» ("", err). warming: провал awg-manager не считается в паузу.
+func (p *Prober) step(ctx context.Context, warming bool) (string, error) {
 	ta, err := p.Client.TunnelsAll(ctx)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	now := p.now()
 	var due *awgmgr.Tunnel
@@ -100,13 +111,13 @@ func (p *Prober) Step(ctx context.Context) string {
 	}
 	p.mu.Unlock()
 	if due == nil {
-		return ""
+		return "", nil
 	}
-	res := p.measure(ctx, *due)
+	res := p.measure(ctx, *due, warming)
 	p.mu.Lock()
 	p.results[due.ID] = res
 	p.mu.Unlock()
-	return due.ID
+	return due.ID, nil
 }
 
 // ProbeNow -- замер по кнопке. Остановленный VPN-туннель -- ошибка: мерить нечем.
@@ -122,7 +133,7 @@ func (p *Prober) ProbeNow(ctx context.Context, tunnelID string) (wire.ExitProbe,
 		if !Running(t) {
 			return wire.ExitProbe{}, fmt.Errorf("exit_ip_probe: VPN-туннель %s не работает -- мерить нечего", tunnelID)
 		}
-		res := p.measure(ctx, t)
+		res := p.measure(ctx, t, false)
 		p.mu.Lock()
 		if p.results == nil {
 			p.results = map[string]wire.ExitProbe{}
@@ -140,7 +151,10 @@ func (p *Prober) awgmAllowed(now time.Time) bool {
 	return p.awgmOff.IsZero() || !now.Before(p.awgmOff)
 }
 
-func (p *Prober) awgmResult(now time.Time, err error) {
+// warming: прогрев после старта -- awg-manager после перезагрузки роутера
+// может ещё подниматься, и его отказы в паузу не идут (кроме ответа «не
+// умею»: он окончательный).
+func (p *Prober) awgmResult(now time.Time, err error, warming bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
@@ -148,6 +162,7 @@ func (p *Prober) awgmResult(now time.Time, err error) {
 		p.awgmFails, p.awgmOff = 0, time.Time{}
 	case errors.Is(err, awgmgr.ErrUnsupportedByRouter):
 		p.awgmFails, p.awgmOff = 0, now.Add(awgmPause)
+	case warming:
 	default:
 		p.awgmFails++
 		if p.awgmFails >= 2 {
@@ -156,11 +171,11 @@ func (p *Prober) awgmResult(now time.Time, err error) {
 	}
 }
 
-func (p *Prober) measure(ctx context.Context, t awgmgr.Tunnel) wire.ExitProbe {
+func (p *Prober) measure(ctx context.Context, t awgmgr.Tunnel, warming bool) wire.ExitProbe {
 	now := p.now()
 	if p.awgmAllowed(now) {
 		ip, err := p.Client.TestIP(ctx, t.ID)
-		p.awgmResult(now, err)
+		p.awgmResult(now, err, warming)
 		if err == nil {
 			res := wire.ExitProbe{VPNIP: ip.VPNIP, DirectIP: ip.DirectIP, EndpointIP: ip.EndpointIP, Source: wire.ExitSourceAwgm, At: now}
 			if ip.VPNIP == "" || ip.DirectIP == "" {
@@ -212,13 +227,23 @@ func (p *Prober) Snapshot() *wire.ExitFacts {
 }
 
 // Warmup -- первый обход после старта агента: меряет все работающие
-// VPN-туннели подряд, пока Step находит, кого мерить. Без него после
-// перезапуска агента адреса выхода появлялись по одному раз в Every.
+// VPN-туннели подряд, пока step находит, кого мерить. Без него после
+// перезапуска агента адреса выхода появлялись по одному раз в Every. Список
+// туннелей не прочитался (awg-manager после перезагрузки роутера ещё не
+// поднят) -- повтор через warmupRetry, пока не кончится ctx.
 func (p *Prober) Warmup(ctx context.Context) {
 	for ctx.Err() == nil {
 		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		id := p.Step(sctx)
+		id, err := p.step(sctx, true)
 		cancel()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(warmupRetry):
+			}
+			continue
+		}
 		if id == "" {
 			return
 		}
