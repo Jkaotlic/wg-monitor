@@ -3,7 +3,8 @@
 //
 // Ответ бэкенда (GET .../tunnels/{id}/autorepair): enabled, provider, option,
 // allow_relocate, suggested {provider, option, why}, sources [{provider, label,
-// options [{id, label}], ok, note}], blocked (строка), can_edit. Запасного
+// options [{id, label}], ok, note}], blocked (строка), rename_pending (прежнее
+// имя, если VPN-туннель переименовали после включения), can_edit. Запасного
 // VPN-туннеля бэкенд не знает (снимок наборов правил живёт на роутере), поэтому
 // резерв считается здесь из снимка, который экран и так держит.
 //
@@ -21,9 +22,12 @@ const quote = (s) => {
   return t.includes('«') ? t : `«${t}»`
 }
 
-export function autorepairBadge(state) {
+// reason -- причина стопа из списка (reasons): сейчас она бывает одна --
+// VPN-туннель переименован и ждёт подтверждения автопочинки.
+export function autorepairBadge(state, reason = '') {
   if (state === 'on') return { tone: 'ok', text: 'Автопочинка' }
   if (state === 'limited') return { tone: 'neutral', text: 'Автопочинка: только перезапуск' }
+  if (state === 'blocked' && reason) return { tone: 'warn', text: 'Автопочинка ждёт подтверждения' }
   if (state === 'blocked') return { tone: 'warn', text: 'Автопочинка стоит — нужен человек' }
   return null
 }
@@ -47,8 +51,12 @@ export function autorepairRow(resp) {
   let value = 'выключена'
   let hint = 'Включите, и если VPN-туннель упадёт, я починю его сам.'
   if (r.enabled) {
-    hint = 'Выключить можно этим же переключателем, в любой момент.'
-    if (r.blocked) value = `стоит: ${r.blocked}`
+    hint = 'Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.'
+    if (r.rename_pending) {
+      // Переименовали после включения: перезапуск идёт, выпуск ждёт человека.
+      value = 'ждёт подтверждения'
+      hint = `VPN-туннель переименован (был ${quote(r.rename_pending)}): пока вы не подтвердите автопочинку, я только перезапускаю его, конфиг не выпускаю.`
+    } else if (r.blocked) value = `стоит: ${r.blocked}`
     else if (!r.provider || !r.option) value = 'только перезапуск'
     else value = `включена · из ${sourceLabel(r.sources, r.provider, r.option)}`
   }
@@ -62,7 +70,8 @@ export function autorepairRow(resp) {
 // Уводит трафик бэкенд только с первого звена цепочки: оно и несёт трафик,
 // пока живо. Этот VPN-туннель стоит в цепочке не первым -- он сам резерв:
 // carrier -- имя звена, через которое трафик идёт сейчас, и обещать «уведу
-// на запасной» нельзя.
+// на запасной» нельзя. reserve -- этот случай; carrier пустой при reserve --
+// живого звена нет (первое тоже лежит), и называть лежащее нельзя.
 function linkAvailable(i) {
   if (typeof i.available === 'boolean') return i.available
   return Boolean(i.role) && i.role !== 'unavailable' && i.role !== 'down'
@@ -70,7 +79,7 @@ function linkAvailable(i) {
 
 export function backupFor(snapshot, tunnelID) {
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
-  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '', carrier: '' }
+  if (tunnels.length === 0 || !Array.isArray(snapshot?.policies)) return { known: false, name: '', carrier: '', reserve: false }
   const nameOf = (link) => {
     const meta = tunnels.find((t) => link.tunnel_id && t.id === link.tunnel_id)
     return String(meta?.name || link.name || link.tunnel_id || link.bind || '').trim()
@@ -79,14 +88,15 @@ export function backupFor(snapshot, tunnelID) {
     const links = Array.isArray(p.interfaces) ? p.interfaces : []
     if (!links.some((i) => i.tunnel_id === tunnelID) && p.active_tunnel_id !== tunnelID) continue
     if (links.length > 0 && links[0].tunnel_id !== tunnelID && links.some((i) => i.tunnel_id === tunnelID)) {
-      const active = links.find((i) => i.role === 'active' && i.tunnel_id !== tunnelID) || links[0]
-      return { known: true, name: '', carrier: nameOf(active) }
+      const live = (i) => i.tunnel_id !== tunnelID && linkAvailable(i)
+      const carrier = links.find((i) => i.role === 'active' && live(i)) || links.find(live)
+      return { known: true, name: '', carrier: carrier ? nameOf(carrier) : '', reserve: true }
     }
     const other = links.find((i) => i.tunnel_id && i.tunnel_id !== tunnelID && linkAvailable(i))
     if (!other) continue
-    return { known: true, name: nameOf(other), carrier: '' }
+    return { known: true, name: nameOf(other), carrier: '', reserve: false }
   }
-  return { known: true, name: '', carrier: '' }
+  return { known: true, name: '', carrier: '', reserve: false }
 }
 
 function okSources(resp) {
@@ -113,19 +123,20 @@ function initialPick(resp) {
 }
 
 // name -- имя этого VPN-туннеля, backup -- имя запасного: строка, '' (нет
-// запасного) или null (не знаем). carrier -- этот VPN-туннель сам резерв, и
-// трафик идёт через carrier (см. backupFor).
+// запасного) или null (не знаем). reserve -- этот VPN-туннель сам резерв;
+// carrier -- через что идёт трафик (пусто -- живого звена нет), см. backupFor.
 //
 // Источник человек выбирает в поле ниже и может сменить его до нажатия, а
 // текст листа от поля не зависит: поэтому источник здесь не называется.
-export function enableSheetText(resp, tunnelName, backup, carrier = '') {
+export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve = Boolean(carrier)) {
   const sources = okSources(resp)
-  const start = initialPick(resp)
   const name = `«${tunnelName}»`
   const reissue = sources.length > 0 ? ', а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере' : ''
   let what
-  if (carrier) {
-    what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной: трафик и так идёт через «${carrier}», и его я не трогаю.`
+  if (reserve && carrier) {
+    what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной: трафик и так идёт через «${carrier}», порядок VPN-туннелей я не меняю.`
+  } else if (reserve) {
+    what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной, а у трафика сейчас нет рабочего VPN-туннеля; порядок VPN-туннелей я не меняю.`
   } else if (backup === null || backup === undefined) {
     what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}.`
   } else if (backup) {
@@ -133,23 +144,36 @@ export function enableSheetText(resp, tunnelName, backup, carrier = '') {
   } else {
     what = `Запасного VPN-туннеля нет: пока чиню, заблокированное открываться не будет. Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}.`
   }
+  // Цена -- своя у каждого кабинета: у «Amnezia Premium» страна -- место в
+  // подписке, у «HideMy.name» код открывает все серверы.
   const costs = []
-  if (sources.some((s) => CABINETS.includes(s.provider))) {
-    costs.push('Повторный выпуск того же конфига место в кабинете не тратит. Смена локации берёт только уже выпущенные конфиги других стран и новое место в подписке не занимает; она меняет страну, через которую видны сайты.')
+  const amnezia = findSource(sources, 'amnezia')
+  if (amnezia) {
+    costs.push(
+      `${quote(amnezia.label || BRAND.amnezia)}: повторный выпуск того же конфига места в подписке не тратит. Смена страны может один раз занять ещё одно место в подписке: выпущу одну новую страну и больше не буду. Уже выпущенные страны не беру — их ключи стоят на других устройствах, а один ключ в двух местах ломает оба.`,
+    )
   }
+  const hidemy = findSource(sources, 'hidemyname')
+  if (hidemy) {
+    costs.push(`${quote(hidemy.label || BRAND.hidemyname)}: повторный выпуск и смена сервера места не тратят — код открывает все серверы.`)
+  }
+  if (amnezia || hidemy) costs.push('Смена локации меняет страну, через которую видны сайты.')
   if (sources.some((s) => s.provider === 'awg3')) {
     costs.push('Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.')
   }
   if (costs.length === 0) costs.push('Перезапуск ничего не тратит.')
   return {
-    title: `Включить автопочинку «${tunnelName}»?`,
+    // Переименованный VPN-туннель: тот же лист, но это подтверждение.
+    title: resp?.rename_pending ? `Подтвердить автопочинку «${tunnelName}»?` : `Включить автопочинку «${tunnelName}»?`,
     sections: [
       { h: 'Что будет делать', text: what },
       { h: 'Чего стоит', text: costs.join(' ') },
       { h: 'Кому напишу', text: 'Владельцу, операторам и админу — в личку бота: что упало, что делаю и чем кончилось. Если понадобится ваше участие, напишу отдельно, со звуком.' },
-      { h: 'Как выключить', text: 'Этим же переключателем, в любой момент.' },
+      { h: 'Как выключить', text: 'Кнопкой «Выключить автопочинку» на этом экране, в любой момент.' },
     ],
-    note: start ? '' : NO_SOURCE_NOTE,
+    // Про урезанный режим говорит подсказка поля источника (она следует
+    // выбору); вторая такая же строка под листом -- повтор.
+    note: '',
   }
 }
 

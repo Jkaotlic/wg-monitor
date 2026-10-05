@@ -7,7 +7,7 @@ import { FALLBACK_ERROR_TEXT } from '../src/errorText.js'
 
 // Автопочинка на экране VPN-туннеля: выключена -- клик открывает лист с четырьмя
 // разделами; включена -- клик сразу шлёт PUT enabled:false, без листа.
-const mocks = vi.hoisted(() => ({ get: null, put: [], list: {}, putError: null }))
+const mocks = vi.hoisted(() => ({ get: null, put: [], list: {}, reasons: {}, putError: null }))
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getAutorepair: () => Promise.resolve(mocks.get),
@@ -16,7 +16,7 @@ vi.mock('../src/api.js', async (importOriginal) => ({
     if (mocks.putError) return Promise.reject(mocks.putError)
     return Promise.resolve({ ...mocks.get, ...body, enabled: body.enabled })
   },
-  listAutorepair: () => Promise.resolve({ tunnels: mocks.list }),
+  listAutorepair: () => Promise.resolve({ tunnels: mocks.list, reasons: mocks.reasons }),
   fetchRouterSettings: () => Promise.resolve({ role: 'owner' }),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [] }),
 }))
@@ -55,6 +55,7 @@ beforeEach(() => {
   mocks.put = []
   mocks.putError = null
   mocks.list = {}
+  mocks.reasons = {}
 })
 
 describe('автопочинка: экран VPN-туннеля', () => {
@@ -105,6 +106,40 @@ describe('автопочинка: экран VPN-туннеля', () => {
     const { root } = await mount()
     expect(root.querySelector('.tunnel-autorepair')).toBeNull()
     expect(root.textContent).not.toContain('Автопочинка')
+    render(null, root)
+    root.remove()
+  })
+
+  it('переименован: строка просит подтвердить, кнопка подтверждения открывает лист, выключение на месте', async () => {
+    mocks.get = { ...BASE, enabled: true, provider: 'amnezia', option: 'nl', rename_pending: 'Старый' }
+    const { root, sheets } = await mount()
+    expect(root.textContent).toContain('ждёт подтверждения')
+    expect(root.textContent).toContain('был «Старый»')
+    expect(root.querySelector('.tunnel-autorepair').textContent).toBe('Выключить автопочинку')
+    const confirm = root.querySelector('.tunnel-autorepair-confirm')
+    expect(confirm.textContent).toBe('Подтвердить автопочинку')
+    await act(async () => confirm.click())
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].title).toBe('Подтвердить автопочинку «vpn-nl»?')
+    expect(sheets[0].buttonLabel).toBe('Подтвердить')
+    await sheets[0].perform('', { source: 'amnezia|nl', allow_relocate: true })
+    expect(mocks.put).toEqual([[4, 'awg12', { enabled: true, provider: 'amnezia', option: 'nl', allow_relocate: true }]])
+    render(null, root)
+    root.remove()
+  })
+
+  it('резерв, а первое звено лежит -- лист не называет лежащий VPN-туннель', async () => {
+    mocks.get = { ...BASE }
+    const snap = {
+      tunnels: SNAP.tunnels,
+      policies: [{ name: 'P', interfaces: [{ tunnel_id: 'awg10', role: 'unavailable', available: false }, { tunnel_id: 'awg12', role: 'unavailable' }] }],
+    }
+    const { root, sheets } = await mount({ snapshot: snap })
+    await act(async () => root.querySelector('.tunnel-autorepair').click())
+    const host = document.createElement('div')
+    await act(async () => render(sheets[0].body, host))
+    expect(host.textContent).toContain('у трафика сейчас нет рабочего VPN-туннеля')
+    expect(host.textContent).not.toContain('«vpn-de»')
     render(null, root)
     root.remove()
   })
@@ -171,6 +206,19 @@ describe('автопочинка: метка во вкладке', () => {
     expect(text).toContain('Автопочинка стоит — нужен человек')
     expect(text).toContain('Автопочинка: только перезапуск')
     expect(root.querySelectorAll('.pill').length).toBe(2)
+    render(null, root)
+    root.remove()
+  })
+
+  it('переименованный VPN-туннель -- метка просит подтвердить', async () => {
+    mocks.list = { awg12: 'blocked' }
+    mocks.reasons = { awg12: 'VPN-туннель переименован — подтвердите автопочинку на его экране' }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => render(<TunnelsTab routerID={4} asleep={false} openSheet={() => {}} />, root))
+    await flush()
+    expect(root.textContent).toContain('Автопочинка ждёт подтверждения')
+    expect(root.textContent).not.toContain('нужен человек')
     render(null, root)
     root.remove()
   })

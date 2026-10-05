@@ -68,7 +68,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
   function askAutorepair() {
     const target = card
     const backup = backupFor(snapshot, target.id)
-    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier)
+    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier, backup.reserve)
     openSheet(
       localSheet({
         title: text.title,
@@ -83,8 +83,8 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
           </>
         ),
         note: text.note,
-        buttonLabel: 'Включить',
-        busyLabel: 'Включаем…',
+        buttonLabel: ar?.rename_pending ? 'Подтвердить' : 'Включить',
+        busyLabel: ar?.rename_pending ? 'Подтверждаем…' : 'Включаем…',
         fields: enableFields(ar),
         fieldsReady: enableReady,
         errorText: (err) => errorText(err),
@@ -267,6 +267,13 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
                 <DataRow title={row.title} value={row.value} />
               </div>
               <p class="hint">{row.hint}</p>
+              {/* Переименованный VPN-туннель: выпуск ждёт подтверждения -- тот же
+                  лист включения перепишет имя на сервере. */}
+              {ar.enabled && ar.rename_pending && (
+                <button type="button" class="btn btn-primary btn-wide tunnel-autorepair-confirm" disabled={arBusy} onClick={askAutorepair}>
+                  Подтвердить автопочинку
+                </button>
+              )}
               <button type="button" class="btn btn-ghost btn-wide tunnel-autorepair" disabled={arBusy} onClick={ar.enabled ? disableAutorepair : askAutorepair}>
                 {ar.enabled ? 'Выключить автопочинку' : 'Включить автопочинку'}
               </button>

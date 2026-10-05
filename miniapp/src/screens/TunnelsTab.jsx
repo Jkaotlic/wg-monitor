@@ -169,16 +169,20 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // экрана VPN-туннеля (там её могли включить или выключить). Сбой чтения --
   // без меток: она подсказка, а не данные для решения.
   const [autoStates, setAutoStates] = useState({})
+  const [autoReasons, setAutoReasons] = useState({})
   const loadAutorepair = () => {
     const rid = routerID
     listAutorepair(rid)
       .then((r) => {
-        if (routerRef.current === rid) setAutoStates(r?.tunnels ?? {})
+        if (routerRef.current !== rid) return
+        setAutoStates(r?.tunnels ?? {})
+        setAutoReasons(r?.reasons ?? {})
       })
       .catch(() => {})
   }
   useEffect(() => {
     setAutoStates({})
+    setAutoReasons({})
     loadAutorepair()
   }, [routerID])
   useOnClose(layer === 'tunnel', loadAutorepair)
@@ -321,7 +325,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Метка только тем VPN-туннелям, что есть в нынешнем снимке: бэкенд хранит
   // настройки и для давно удалённых.
   const autoBadge = (id) => {
-    const b = autorepairBadge(autoStates[id])
+    const b = autorepairBadge(autoStates[id], autoReasons[id])
     return b ? (
       <Pill tone={b.tone === 'neutral' ? 'muted' : b.tone}>{b.text}</Pill>
     ) : null

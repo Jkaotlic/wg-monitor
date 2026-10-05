@@ -13,8 +13,8 @@ function latinOutside(s) {
   return String(s).replace(/«[^«»]*»/g, '').replace(/VPN/g, '').match(/[A-Za-z]+/g) ?? []
 }
 
-function allSheetStrings(resp, name, backup, carrier) {
-  const t = enableSheetText(resp, name, backup, carrier)
+function allSheetStrings(resp, name, backup, carrier, reserve) {
+  const t = enableSheetText(resp, name, backup, carrier, reserve)
   const out = [t.title, t.note, ...t.sections.flatMap((s) => [s.h, s.text])]
   for (const f of enableFields(resp)) {
     out.push(f.label)
@@ -32,10 +32,22 @@ describe('autorepairBadge', () => {
     expect(autorepairBadge('off')).toBeNull()
     expect(autorepairBadge(undefined)).toBeNull()
   })
+  it('стоит из-за переименования -- просит подтвердить', () => {
+    expect(autorepairBadge('blocked', 'VPN-туннель переименован — подтвердите автопочинку на его экране')).toEqual({ tone: 'warn', text: 'Автопочинка ждёт подтверждения' })
+  })
 })
 
 describe('autorepairRow', () => {
   it('выключена', () => expect(autorepairRow(RESP()).value).toBe('выключена'))
+  it('включена: выключают кнопкой, а не переключателем', () => {
+    const h = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl' })).hint
+    expect(h).toBe('Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.')
+  })
+  it('переименован -- ждёт подтверждения, называет прежнее имя', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', rename_pending: 'Старый' }))
+    expect(r.value).toBe('ждёт подтверждения')
+    expect(r.hint).toBe('VPN-туннель переименован (был «Старый»): пока вы не подтвердите автопочинку, я только перезапускаю его, конфиг не выпускаю.')
+  })
   it('включена с источником -- подпись кабинета в ёлочках', () => {
     const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl' }))
     expect(r.title).toBe('Автопочинка')
@@ -64,11 +76,11 @@ describe('backupFor', () => {
     ],
   }
   it('первый доступный другой туннель того же набора', () => {
-    expect(backupFor(snap, 'a')).toEqual({ known: true, name: 'reserve', carrier: '' })
+    expect(backupFor(snap, 'a')).toEqual({ known: true, name: 'reserve', carrier: '', reserve: false })
   })
   it('недоступное звено не резерв', () => {
     const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', role: 'unavailable' }] }] }
-    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: '' })
+    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: '', reserve: false })
   })
   it('звено в роли down не резерв', () => {
     const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', role: 'down' }] }] }
@@ -76,7 +88,14 @@ describe('backupFor', () => {
   })
   it('не первое звено цепочки -- резерв сам: трафик и так идёт через активное', () => {
     const s = { ...snap, policies: [{ interfaces: [{ tunnel_id: 'b', role: 'active', available: true }, { tunnel_id: 'a', role: 'unavailable' }, { tunnel_id: 'c', role: 'fallback', available: true }] }] }
-    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: 'reserve' })
+    expect(backupFor(s, 'a')).toEqual({ known: true, name: '', carrier: 'reserve', reserve: true })
+  })
+  it('резерв, а первое звено лежит -- через него трафик не идёт: следующее живое или никто', () => {
+    const down = { tunnel_id: 'b', role: 'unavailable', available: false }
+    const s1 = { ...snap, policies: [{ interfaces: [down, { tunnel_id: 'a', role: 'unavailable' }, { tunnel_id: 'c', role: 'fallback', available: true }] }] }
+    expect(backupFor(s1, 'a')).toEqual({ known: true, name: '', carrier: 'other', reserve: true })
+    const s2 = { ...snap, policies: [{ interfaces: [down, { tunnel_id: 'a', role: 'unavailable' }] }] }
+    expect(backupFor(s2, 'a')).toEqual({ known: true, name: '', carrier: '', reserve: true })
   })
   it('available: false не резерв, available: true резерв', () => {
     const s = (av) => ({ ...snap, policies: [{ interfaces: [{ tunnel_id: 'a', role: 'active' }, { tunnel_id: 'b', available: av }] }] })
@@ -84,11 +103,11 @@ describe('backupFor', () => {
     expect(backupFor(s(true), 'a').name).toBe('reserve')
   })
   it('набор без этого туннеля не считается', () => {
-    expect(backupFor(snap, 'c')).toEqual({ known: true, name: '', carrier: '' })
+    expect(backupFor(snap, 'c')).toEqual({ known: true, name: '', carrier: '', reserve: false })
   })
   it('нет снимка -- не знаем', () => {
-    expect(backupFor(null, 'a')).toEqual({ known: false, name: '', carrier: '' })
-    expect(backupFor({ tunnels: [] }, 'a')).toEqual({ known: false, name: '', carrier: '' })
+    expect(backupFor(null, 'a')).toEqual({ known: false, name: '', carrier: '', reserve: false })
+    expect(backupFor({ tunnels: [] }, 'a')).toEqual({ known: false, name: '', carrier: '', reserve: false })
   })
 })
 
@@ -99,7 +118,7 @@ describe('enableSheetText', () => {
     expect(t.title).toBe('Включить автопочинку «vpn-nl»?')
     expect(t.sections.map((s) => s.h)).toEqual(['Что будет делать', 'Чего стоит', 'Кому напишу', 'Как выключить'])
     expect(sec(t, 'Кому напишу')).toBe('Владельцу, операторам и админу — в личку бота: что упало, что делаю и чем кончилось. Если понадобится ваше участие, напишу отдельно, со звуком.')
-    expect(sec(t, 'Как выключить')).toBe('Этим же переключателем, в любой момент.')
+    expect(sec(t, 'Как выключить')).toBe('Кнопкой «Выключить автопочинку» на этом экране, в любой момент.')
   })
   it('с резервом', () => {
     const r = RESP({ suggested: { provider: 'amnezia', option: 'nl', why: 'так он был выпущен' } })
@@ -119,6 +138,15 @@ describe('enableSheetText', () => {
     expect(w).not.toContain('уведу')
     expect(w).not.toContain('Запасного VPN-туннеля нет')
     expect(w).toContain('трафик и так идёт через «main»')
+    expect(w).toContain('порядок VPN-туннелей я не меняю')
+    expect(w).not.toContain('его я не трогаю')
+  })
+  it('VPN-туннель -- резерв, а живого звена нет: лежащее не называется', () => {
+    const w = sec(enableSheetText(RESP(), 'vpn-nl', '', '', true), 'Что будет делать')
+    expect(w).not.toContain('уведу')
+    expect(w).not.toContain('и так идёт')
+    expect(w).toContain('у трафика сейчас нет рабочего VPN-туннеля')
+    expect(w).toContain('порядок VPN-туннелей я не меняю')
   })
   it('без резерва', () => {
     const w = sec(enableSheetText(RESP(), 'vpn-nl', ''), 'Что будет делать')
@@ -132,17 +160,30 @@ describe('enableSheetText', () => {
   })
   it('цена по доступным источникам', () => {
     const cost = sec(enableSheetText(RESP(), 'x', ''), 'Чего стоит')
-    expect(cost).toContain('Повторный выпуск того же конфига место в кабинете не тратит.')
-    expect(cost).toContain('Смена локации берёт только уже выпущенные конфиги других стран и новое место в подписке не занимает')
+    expect(cost).toContain('«Amnezia Premium»: повторный выпуск того же конфига места в подписке не тратит.')
+    expect(cost).toContain('Смена страны может один раз занять ещё одно место в подписке')
+    expect(cost).toContain('Уже выпущенные страны не беру')
+    expect(cost).not.toContain('«HideMy.name»')
     expect(cost).toContain('меняет страну, через которую видны сайты')
     expect(cost).toContain('Если старое подключение на сервере не оживёт, заведу новое — оно займёт ещё одно место на сервере.')
     const only = sec(enableSheetText(RESP({ sources: [SOURCES[2]] }), 'x', ''), 'Чего стоит')
     expect(only).not.toContain('Повторный выпуск')
   })
-  it('нет рабочих источников -- перевыпуска в тексте нет, note про урезанный режим', () => {
+  it('«HideMy.name»: своя фраза о цене -- места не тратит, про подписку и выпущенные страны ни слова', () => {
+    const hm = SOURCES.map((s) => (s.provider === 'hidemyname' ? { ...s, ok: true } : s)).filter((s) => s.provider !== 'amnezia')
+    const cost = sec(enableSheetText(RESP({ sources: hm }), 'x', ''), 'Чего стоит')
+    expect(cost).toContain('«HideMy.name»: повторный выпуск и смена сервера места не тратят — код открывает все серверы.')
+    expect(cost).not.toContain('подписке')
+    expect(cost).not.toContain('выпущенные страны')
+  })
+  it('нет рабочих источников -- перевыпуска в тексте нет; о урезанном режиме говорит одна подсказка поля', () => {
     const t = enableSheetText(RESP({ sources: [SOURCES[1]] }), 'x', 'r')
     expect(sec(t, 'Что будет делать')).not.toContain('выпущу')
-    expect(t.note).toBe('Источник не выбран: смогу только перезапускать. Чтобы пересоздавать конфиг, выберите кабинет.')
+    expect(t.note).toBe('')
+    expect(enableFields(RESP({ sources: [SOURCES[1]] }))[0].hint({ source: '' })).toBe('Источник не выбран: смогу только перезапускать. Чтобы пересоздавать конфиг, выберите кабинет.')
+  })
+  it('переименован -- лист подтверждения', () => {
+    expect(enableSheetText(RESP({ enabled: true, rename_pending: 'Старый' }), 'vpn-nl', '').title).toBe('Подтвердить автопочинку «vpn-nl»?')
   })
 })
 
@@ -194,16 +235,19 @@ describe('латиница только в ёлочках', () => {
     ['неизвестно', RESP(), null],
     ['без источников', RESP({ sources: [SOURCES[1]] }), 'r'],
     ['резерв сам', RESP(), '', 'main'],
+    ['резерв сам, живого звена нет', RESP(), '', '', true],
+    ['переименован', RESP({ enabled: true, rename_pending: 'Old' }), ''],
     ['настоящие подписи кабинетов', RESP({ suggested: { provider: 'hidemyname', option: 'de', why: 'x' }, sources: SOURCES.map((s) => ({ ...s, ok: true })) }), 'r'],
   ]
-  for (const [name, resp, backup, carrier] of variants) {
+  for (const [name, resp, backup, carrier, reserve] of variants) {
     it(`лист: ${name}`, () => {
-      const bad = allSheetStrings(resp, 'vpn-nl', backup, carrier).flatMap(latinOutside)
+      const bad = allSheetStrings(resp, 'vpn-nl', backup, carrier, reserve).flatMap(latinOutside)
       expect(bad).toEqual([])
     })
   }
   it('метки и строка', () => {
     for (const s of ['on', 'limited', 'blocked']) expect(latinOutside(autorepairBadge(s).text)).toEqual([])
+    expect(latinOutside(autorepairBadge('blocked', 'x').text)).toEqual([])
     for (const resp of [
       RESP(),
       RESP({ enabled: true }),
@@ -211,6 +255,7 @@ describe('латиница только в ёлочках', () => {
       RESP({ enabled: true, provider: 'hidemyname', option: 'de', sources: SOURCES.map((s) => ({ ...s, ok: true })) }),
       RESP({ enabled: true, provider: 'awg3', option: 'main/awg1' }),
       RESP({ enabled: true, provider: 'amnezia', option: 'nl', blocked: 'лимит попыток' }),
+      RESP({ enabled: true, provider: 'amnezia', option: 'nl', rename_pending: 'Old' }),
     ]) {
       const r = autorepairRow(resp)
       expect(latinOutside(`${r.title} ${r.value} ${r.hint}`)).toEqual([])
