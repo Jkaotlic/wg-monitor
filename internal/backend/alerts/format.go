@@ -1293,26 +1293,11 @@ func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 // («tunnel_awg12», «awgmgr_api») он нигде не видел, а в подписи тревоги оно
 // стояло первым.
 func checkHumanName(check string) string {
-	switch checkCategory(check) {
-	case "tunnel":
-		return "VPN-туннель"
-	case "dns":
-		return "поиск сайтов по имени"
-	case "hydraroute":
-		return "умная маршрутизация"
-	case "awg_manager", "awgmgr_api":
-		return "связь с панелью роутера"
-	case "external_reach":
-		return "доступность сервисов через обход"
-	case "resolver_guard":
-		return "свой DNS-сервер"
-	case "dns_ru":
-		return dnsRuHumanName
-	case "bypass_leak":
-		return bypassLeakHumanName
+	if name, ok := CheckNames[check]; ok {
+		return name
 	}
-	if check == "agent_heartbeat" {
-		return "отчёты роутера"
+	if checkCategory(check) == "tunnel" {
+		return "VPN-туннель"
 	}
 	return check
 }
@@ -1624,8 +1609,10 @@ func mscLoc() *time.Location {
 // сервер, которому роутер отдал русские зоны, молчит, а заграничные
 // отвечают. Тревога своя: проверка dns такого не видит -- для неё это один
 // голос из нескольких.
+// dnsRuHumanName -- подпись из общей таблицы, для середины фразы.
+var dnsRuHumanName = lowerFirst(CheckNames["dns_ru"])
+
 const (
-	dnsRuHumanName         = "сервер имён для русских сайтов"
 	dnsRuHeadline          = "Русские сайты могут не открываться"
 	dnsRuWhatBroke         = "Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов"
 	dnsRuImpact            = "Банки, госуслуги, магазины и другие русские сайты могут не открываться или открываться через раз, пока сервер не ответит."
@@ -1671,7 +1658,6 @@ const DNSRuGoneReason = "ru_upstreams_gone"
 // правила уводят сайты в VPN-туннель, а адрес в интернете с ним тот же, что
 // и без него.
 const (
-	bypassLeakHumanName         = "смена адреса через VPN-туннель"
 	bypassLeakHeadline          = "VPN-туннель %s работает, но не меняет ваш адрес"
 	bypassLeakWhatBroke         = "Роутер отправляет через этот VPN-туннель сайты из ваших правил, но в интернете вы выходите с тем же адресом, что и без него. Заблокированные сайты, скорее всего, не откроются. Если всё открывается — это особенность вашего VPN-сервера, делать ничего не нужно."
 	bypassLeakAdvice            = "Проверьте VPN-туннель на экране роутера и при необходимости замените конфиг."

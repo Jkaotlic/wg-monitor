@@ -40,7 +40,7 @@ func TestDNSRuAlertSaysRussianSitesMayNotOpen(t *testing.T) {
 		if strings.Contains(got, "Проверка dns_ru") || strings.Contains(got, "dns_ru") {
 			t.Errorf("%s: имя проверки в тексте для владельца:\n%s", what, got)
 		}
-		if !strings.Contains(got, "проверка: сервер имён для русских сайтов") {
+		if !strings.Contains(got, "проверка: Сервер имён для русских сайтов") {
 			t.Errorf("%s: подпись проверки не человеческая:\n%s", what, got)
 		}
 	}
