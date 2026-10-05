@@ -173,6 +173,12 @@ func TestWakeCheckLabelHydraRouteProvenVsUnproven(t *testing.T) {
 		{"не проверено", wire.Check{Name: "hydraroute", Status: "unknown", Details: map[string]any{"installed": false, "running": false, "unverified": true}}, "обход блокировок не удалось проверить"},
 		{"ошибка чтения статуса", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"error": "awg-manager: timeout"}}, "обход блокировок не удалось проверить"},
 		{"ошибка чтения, details пуст", wire.Check{Name: "hydraroute", Status: "fail"}, "обход блокировок не удалось проверить"},
+		// Ревью v0.56, M3: установлен, не запущен, а правила не прочитались --
+		// нужен ли он, неизвестно; «обход не работает» не доказано, доказано
+		// лишь, что не запущен.
+		{"не запущен, правила не прочитаны", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "mechanism_probe_error": "awg-manager: timeout"}}, "HydraRoute Neo не запущен"},
+		{"не запущен, DNS-правила его требуют, статические не прочитались", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "hrneo_required": true, "mechanism_probe_error": "static: timeout"}}, "обход блокировок не работает"},
+		{"не запущен, правила его требуют", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "hrneo_required": true}}, "обход блокировок не работает"},
 	}
 	for _, c := range cases {
 		if got := wakeCheckLabel(c.c); got != c.want {

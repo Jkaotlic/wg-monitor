@@ -116,8 +116,17 @@ func wakeCheckLabel(c wire.Check) string {
 		if unverified, _ := boolOrFalse(c.Details, "unverified"); unverified {
 			return wakeName("hydraroute") + " не удалось проверить"
 		}
-		if _, read := boolOrFalse(c.Details, "installed"); !read {
+		installed, read := boolOrFalse(c.Details, "installed")
+		if !read {
 			return wakeName("hydraroute") + " не удалось проверить"
+		}
+		// Установлен, не запущен, а правила не прочитались (агент вынес Fail
+		// без hrneo_required): нужен ли он -- неизвестно, «обход не работает»
+		// не доказано. Доказано лишь, что не запущен (ревью v0.56, M3).
+		running, _ := boolOrFalse(c.Details, "running")
+		required, _ := boolOrFalse(c.Details, "hrneo_required")
+		if _, probeFailed := c.Details["mechanism_probe_error"]; installed && !running && probeFailed && !required {
+			return "HydraRoute Neo не запущен"
 		}
 		return wakeName("hydraroute") + " не работает"
 	case "awg_manager", "awgmgr_api":
