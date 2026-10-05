@@ -714,48 +714,7 @@ func (s *Service) IssueDevice(ctx context.Context, id, iface, name string) (Issu
 // ConfigForRouter -- конфиг для роутера: пир «wgmon-<ник>» уже есть -- его
 // конфиг заново (слот не тратится), нет -- новый пир.
 func (s *Service) ConfigForRouter(ctx context.Context, id, iface, nickname string) (RouterConfig, error) {
-	name, err := RouterPeerName(nickname)
-	if err != nil {
-		return RouterConfig{}, err
-	}
-	iface = strings.TrimSpace(iface)
-	if iface == "" {
-		return RouterConfig{}, &FieldError{Field: "iface", Reason: "Выберите интерфейс панели"}
-	}
-	id = normID(id)
-	unlock := s.lockInstance(id)
-	defer unlock()
-	inst, c, err := s.ready(id)
-	if err != nil {
-		return RouterConfig{}, err
-	}
-	if inst.Readonly {
-		return RouterConfig{}, &Error{Kind: KindReadonly, Msg: "панель только для просмотра"}
-	}
-	peers, err := c.Peers(ctx, iface)
-	if err != nil {
-		return RouterConfig{}, notFoundAsIface(s.trip(id, err))
-	}
-	if p, ok := newestNamed(peers, name); ok {
-		conf, err := c.PeerConfig(ctx, iface, p.ID)
-		if err == nil {
-			s.opts.Logger.Info("awg3-панель: конфиг роутера по имеющемуся пиру", "panel", id, "iface", iface, "peer_id", p.ID)
-			return RouterConfig{Conf: conf, PeerID: p.ID, Reused: true}, nil
-		}
-		if KindOf(err) != KindNotFound {
-			return RouterConfig{}, s.trip(id, err)
-		}
-		// Пира удалили между списком и выдачей -- выпускаем новый.
-	}
-	// WithoutCancel: см. IssueDevice -- ушедший вызывающий не должен ронять
-	// уже начатое создание пира.
-	issued, err := c.AddPeer(context.WithoutCancel(ctx), iface, name)
-	if err != nil {
-		return RouterConfig{}, notFoundAsIface(s.trip(id, err))
-	}
-	s.forgetPages(id)
-	s.opts.Logger.Info("awg3-панель: выпущен пир роутера", "panel", id, "iface", iface, "peer_id", issued.ID)
-	return RouterConfig{Conf: []byte(issued.Config), PeerID: issued.ID}, nil
+	return s.routerConfig(ctx, id, iface, nickname, false)
 }
 
 // FreshConfigForRouter -- как ConfigForRouter, но всегда новый пир
@@ -764,6 +723,12 @@ func (s *Service) ConfigForRouter(ctx context.Context, id, iface, nickname strin
 // не автоматика. Самым свежим по created_at становится новый, поэтому
 // следующий ConfigForRouter отдаст именно его.
 func (s *Service) FreshConfigForRouter(ctx context.Context, id, iface, nickname string) (RouterConfig, error) {
+	return s.routerConfig(ctx, id, iface, nickname, true)
+}
+
+// routerConfig -- общий путь обоих: проверки, замок панели, выпуск пира.
+// fresh=false сначала ищет имеющийся пир роутера.
+func (s *Service) routerConfig(ctx context.Context, id, iface, nickname string, fresh bool) (RouterConfig, error) {
 	name, err := RouterPeerName(nickname)
 	if err != nil {
 		return RouterConfig{}, err
@@ -782,13 +747,35 @@ func (s *Service) FreshConfigForRouter(ctx context.Context, id, iface, nickname 
 	if inst.Readonly {
 		return RouterConfig{}, &Error{Kind: KindReadonly, Msg: "панель только для просмотра"}
 	}
-	// WithoutCancel: см. IssueDevice.
+	if !fresh {
+		peers, err := c.Peers(ctx, iface)
+		if err != nil {
+			return RouterConfig{}, notFoundAsIface(s.trip(id, err))
+		}
+		if p, ok := newestNamed(peers, name); ok {
+			conf, err := c.PeerConfig(ctx, iface, p.ID)
+			if err == nil {
+				s.opts.Logger.Info("awg3-панель: конфиг роутера по имеющемуся пиру", "panel", id, "iface", iface, "peer_id", p.ID)
+				return RouterConfig{Conf: conf, PeerID: p.ID, Reused: true}, nil
+			}
+			if KindOf(err) != KindNotFound {
+				return RouterConfig{}, s.trip(id, err)
+			}
+			// Пира удалили между списком и выдачей -- выпускаем новый.
+		}
+	}
+	// WithoutCancel: см. IssueDevice -- ушедший вызывающий не должен ронять
+	// уже начатое создание пира.
 	issued, err := c.AddPeer(context.WithoutCancel(ctx), iface, name)
 	if err != nil {
 		return RouterConfig{}, notFoundAsIface(s.trip(id, err))
 	}
 	s.forgetPages(id)
-	s.opts.Logger.Info("awg3-панель: выпущен новый пир роутера взамен прежнего", "panel", id, "iface", iface, "peer_id", issued.ID)
+	msg := "awg3-панель: выпущен пир роутера"
+	if fresh {
+		msg = "awg3-панель: выпущен новый пир роутера взамен прежнего"
+	}
+	s.opts.Logger.Info(msg, "panel", id, "iface", iface, "peer_id", issued.ID)
 	return RouterConfig{Conf: []byte(issued.Config), PeerID: issued.ID}, nil
 }
 
