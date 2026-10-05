@@ -104,6 +104,10 @@ type Deps struct {
 	Settings func(routerID int64, tunnelID string) (Setting, bool)
 	// SaveOption -- удачная смена локации запоминается в настройке туннеля.
 	SaveOption func(routerID int64, tunnelID, provider, option string)
+	// SaveUnconfirmed -- другая локация легла на роутер, но проверку не
+	// прошла: настройка и происхождение всё равно указывают на неё (на
+	// роутере теперь её конфиг), с отметкой «не подтверждена».
+	SaveUnconfirmed func(routerID int64, tunnelID, provider, option string)
 	// SpendRelocation записывает, что для настройки выпущена новая страна
 	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
@@ -452,7 +456,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		}
 	}
 	th.Progress(ctx, progressText(names, log, "выпускаю конфиг заново из "+sourceLabel(set.Provider)))
-	ok, nh := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
+	ok, nh, _ := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
 		return d.Source.Issue(ctx, req.RouterID, set.Provider, set.Option)
 	})
 	if ok {
@@ -557,32 +561,35 @@ var errStopped = errors.New("починка прервана: сервер пр�
 
 // tryIssue -- ступени 2 и 3: выпустить конфиг, проверить, положить в ТОТ ЖЕ
 // VPN-туннель (target_id), доказать. nh != nil -- источник ждёт человека.
-func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc Scenario, names lineNames, issue func() (replace.Issued, error)) (bool, *NeedHuman) {
+// tryIssue выпускает конфиг и кладёт его в VPN-туннель на месте. imported --
+// конфиг на роутер лёг (агент подтвердил замену), даже если потом не
+// доказан: тогда на роутере уже он, и запись об источнике обязана идти за
+// ним (см. SaveUnconfirmed).
+func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc Scenario, names lineNames, issue func() (replace.Issued, error)) (ok bool, nh *NeedHuman, imported bool) {
 	d.step(jobID, step, provision.StepActive, "выпускаю конфиг")
 	issued, err := issue()
 	if err != nil {
-		var nh *NeedHuman
 		if errors.As(err, &nh) {
 			d.logWarn("linkrepair: источник ждёт человека", "step", step, "err", nh.Cause)
 			d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг — "+nh.Action)
-			return false, nh
+			return false, nh, false
 		}
 		// Сырые ошибки источника (кабинет, база) -- оператору в лог.
 		d.logWarn("linkrepair: источник не выдал конфиг", "step", step, "err", err)
 		d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг")
-		return false, nil
+		return false, nil, false
 	}
 	if len(issued.Conf) == 0 {
 		d.step(jobID, step, provision.StepFailed, "источник вернул пустой конфиг")
-		return false, nil
+		return false, nil, false
 	}
 	if detail, _, err := d.Probe.AnalyzeConf(ctx, req.RouterID, issued.Conf); err != nil {
 		d.step(jobID, step, provision.StepFailed, detail)
-		return false, nil
+		return false, nil, false
 	}
 	if ctx.Err() != nil {
 		d.step(jobID, step, provision.StepFailed, errStopped.Error())
-		return false, nil
+		return false, nil, false
 	}
 	backend := issued.Backend
 	if backend == "" {
@@ -597,15 +604,15 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 		"target_id": sc.TunnelID,
 	}); err != nil {
 		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
-		return false, nil
+		return false, nil, false
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, step, provision.StepFailed, "конфиг заменён, но "+err.Error())
-		return false, nil
+		return false, nil, true
 	}
 	d.step(jobID, step, provision.StepDone, "конфиг заменён, "+verdict)
-	return true, nil
+	return true, nil, true
 }
 
 // checkIssued -- страна настройки «Amnezia Premium» всё ещё выпущена. Не
@@ -655,7 +662,7 @@ func relocateNewOnce(provider string) bool { return provider == "amnezia" }
 func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string) (ok bool, nh *NeedHuman, used Option) {
 	if set.Provider == "awg3" {
 		th.Progress(ctx, progressText(names, log, "завожу новое подключение на своём сервере"))
-		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+		ok, nh, _ := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 			return d.Source.Fresh(ctx, req.RouterID, set.Provider, set.Option)
 		})
 		return ok, nh, Option{ID: set.Option}
@@ -697,11 +704,14 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 			break
 		}
 		th.Progress(ctx, progressText(names, log, "пробую локацию «"+optionLabel(opt)+"»"))
-		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+		ok, nh, imported := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 			return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
 		})
 		if ok {
 			return true, nil, opt
+		}
+		if imported {
+			d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
 		}
 		if nh != nil {
 			lastNH = nh
@@ -737,6 +747,11 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 			"все страны уже выпущены — их ключи стоят в других местах, а один ключ в двух местах ломает оба")
 		return false, &NeedHuman{Cause: errors.New("невыпущенной страны нет"), Action: ActNoNewCountry}, Option{}
 	}
+	// Подписка заполнена -- кабинет новую страну не выдаст, а отметка уже
+	// сожгла бы единственную смену страны. Спросить до отметки.
+	if nh := d.checkRoom(ctx, jobID, req, set); nh != nil {
+		return false, nh, Option{}
+	}
 	notIssued := &NeedHuman{Cause: errors.New("отметка о новой стране не записалась"), Action: ActNewCountryNotIssued}
 	if d.SpendRelocation == nil {
 		d.step(jobID, StepRecreate, provision.StepFailed, "отметку о новой стране записать некуда — новую страну не выпускаю")
@@ -748,17 +763,55 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 		return false, notIssued, Option{}
 	}
 	th.Progress(ctx, progressText(names, log, "выпускаю новую страну «"+optionLabel(opt)+"»"))
-	ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+	ok, nh, imported := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 		return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
 	})
 	if ok {
 		return true, nil, opt
+	}
+	if imported {
+		d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
 	}
 	if nh == nil && ctx.Err() == nil {
 		// Пробовалась одна страна: «другие локации тоже не помогли» -- неправда.
 		nh = &NeedHuman{Cause: errors.New("новая страна не помогла"), Action: ActNewCountryNoHelp(optionLabel(opt))}
 	}
 	return false, nh, Option{}
+}
+
+// checkRoom -- в подписке есть место под новую страну. Нет места, кабинет
+// не ответил или бэкенд останавливается -- новая страна не выпускается и
+// отметка о смене страны не ставится.
+func (d Deps) checkRoom(ctx context.Context, jobID string, req StartReq, set Setting) *NeedHuman {
+	room, err := d.Source.HasRoom(ctx, req.RouterID, set.Provider)
+	if ctx.Err() != nil {
+		d.step(jobID, StepRecreate, provision.StepFailed, errStopped.Error())
+		return &NeedHuman{Cause: errStopped, Action: ActAborted}
+	}
+	if err != nil {
+		var nh *NeedHuman
+		if errors.As(err, &nh) {
+			d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не сказал, есть ли место в подписке — "+nh.Action)
+			return nh
+		}
+		d.logWarn("linkrepair: место в подписке не узнать", "err", err)
+		d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не сказал, есть ли место в подписке — новую страну не выпускаю")
+		return &NeedHuman{Cause: err, Action: ActAmneziaKey}
+	}
+	if !room {
+		d.step(jobID, StepRecreate, provision.StepFailed,
+			"подписка «Amnezia Premium» заполнена — новую страну не выпускаю, смена страны не потрачена")
+		return &NeedHuman{Cause: errors.New("подписка заполнена"), Action: ActSubscriptionFull}
+	}
+	return nil
+}
+
+// saveUnconfirmed -- на роутер лёг конфиг другой локации, но проверку он не
+// прошёл: запись об источнике всё равно идёт за ним.
+func (d Deps) saveUnconfirmed(req StartReq, sc Scenario, provider, option string) {
+	if d.SaveUnconfirmed != nil && provider != "awg3" && option != "" {
+		d.SaveUnconfirmed(req.RouterID, sc.TunnelID, provider, option)
+	}
 }
 
 // optionLabel -- как вариант кабинета называется для человека.

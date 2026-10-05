@@ -16,6 +16,9 @@ type Source interface {
 	Fresh(ctx context.Context, routerID int64, provider, option string) (replace.Issued, error)
 	// Options -- варианты кабинета по порядку (страны/серверы); для awg3 -- nil.
 	Options(ctx context.Context, routerID int64, provider string) ([]Option, error)
+	// HasRoom -- в подписке кабинета есть место под ещё один выпуск (новую
+	// страну). Кабинет без предела мест -- true.
+	HasRoom(ctx context.Context, routerID int64, provider string) (bool, error)
 }
 
 // Option -- вариант кабинета. Label -- подпись кабинета («Германия»), её и
@@ -61,6 +64,9 @@ const (
 	// ActNewCountryNotIssued -- новую страну выпустить не вышло (отметка не
 	// записалась): ни одна другая локация не пробовалась.
 	ActNewCountryNotIssued = "новую страну выпустить не вышло — смените сервер во вкладке «Управление»"
+	// ActSubscriptionFull -- в подписке «Amnezia Premium» нет места: новая
+	// страна не выпускается, единственная смена страны не тратится.
+	ActSubscriptionFull = "подписка «Amnezia Premium» заполнена — освободите место или смените сервер во вкладке «Управление»"
 	// ActRelocateNoHelp -- менять локацию было разрешено, и это не помогло.
 	ActRelocateNoHelp = "другие локации тоже не помогли — смените сервер во вкладке «Управление»"
 )

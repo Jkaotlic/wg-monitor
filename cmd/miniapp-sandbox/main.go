@@ -251,6 +251,7 @@ func main() {
 		Source:          backend.RepairSource(cabinet, awg3Panels, d),
 		Settings:        backend.LinkRepairSettings(d, nil),
 		SaveOption:      backend.LinkRepairSaveOption(d, nil),
+		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, nil),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        sink,

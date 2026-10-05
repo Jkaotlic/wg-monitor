@@ -144,6 +144,38 @@ func LinkRepairSaveOption(database *db.DB, logger *slog.Logger) func(routerID in
 	}
 }
 
+// LinkRepairSaveUnconfirmed -- другая локация легла на роутер, но проверку
+// не прошла: настройка (если её провайдер тот же) и происхождение всё равно
+// указывают на неё -- на роутере теперь её конфиг. Происхождение -- с
+// отметкой «не подтверждена». Иначе следующая починка «тот же конфиг на
+// месте» выпустила бы старую страну, а экран врал бы, чем поднят туннель.
+func LinkRepairSaveUnconfirmed(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID, provider, option string) {
+	warn := func(msg string, err error, routerID int64, tunnelID string) {
+		if logger != nil {
+			logger.Warn(msg, "router_id", routerID, "tunnel_id", tunnelID, "err", err)
+		}
+	}
+	return func(routerID int64, tunnelID, provider, option string) {
+		repo := database.TunnelRepairSettings()
+		s, ok, err := repo.Get(routerID, tunnelID)
+		if err != nil {
+			warn("linkrepair: настройка не прочиталась", err, routerID, tunnelID)
+		} else if ok && s.Provider == provider {
+			s.Option = option
+			if err := repo.Put(s); err != nil {
+				warn("linkrepair: локация на роутере не записалась в настройку", err, routerID, tunnelID)
+			}
+		}
+		name := ""
+		if o, found, err := database.TunnelOrigins().Get(routerID, tunnelID); err == nil && found {
+			name = o.TunnelName
+		}
+		if err := database.TunnelOrigins().RecordUnconfirmed(routerID, tunnelID, name, provider, option, time.Now()); err != nil {
+			warn("linkrepair: происхождение конфига не записалось", err, routerID, tunnelID)
+		}
+	}
+}
+
 // deletedTunnelID -- какой VPN-туннель удаляла команда tunnel_delete: по
 // tunnel_id или (мастер) по проверке tunnel_<id>.
 func deletedTunnelID(args map[string]any) string {

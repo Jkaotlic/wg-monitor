@@ -29,6 +29,7 @@ var CopyTables = []string{
 	"tg_state",
 	"router_operators",
 	"tunnel_config_origin",
+	"tunnel_origin_unconfirmed",
 	"router_repair_settings",
 	"tunnel_repair_settings",
 	"router_notify_mutes",

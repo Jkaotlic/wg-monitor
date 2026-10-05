@@ -35,6 +35,9 @@ type miniappAutorepairResp struct {
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
 	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
 	RelocateSpent string `json:"relocate_spent"`
+	// OptionUnconfirmed -- вариант настройки стоит на роутере, но проверку
+	// не прошёл: автопочинка сменила локацию, и доказать её не вышло.
+	OptionUnconfirmed bool `json:"option_unconfirmed,omitempty"`
 	// HasBackup -- есть ли у VPN-туннеля запасной в общем наборе правил.
 	// Снимок наборов правил живёт на роутере и бэкендом не хранится, а
 	// спрашивать роутер из GET нельзя -- поэтому пока всегда nil: «не знаем».
@@ -342,6 +345,10 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 		// сервер», без подробностей чужой панели.
 		if s.Provider == RepairProviderAwg3 && !miniappCanIssueAwg3(d, tg, u.ID, miniappAutorepairPanelOf(s.Option)) {
 			resp.Option = ""
+		}
+		if o, ok, err := d.DB.TunnelOrigins().Get(u.ID, tunnelID); err == nil && ok && o.Unconfirmed &&
+			o.Provider == s.Provider && o.Variant == s.Option && resp.Option != "" {
+			resp.OptionUnconfirmed = true
 		}
 	}
 	if resp.Enabled {

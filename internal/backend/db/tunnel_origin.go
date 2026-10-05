@@ -19,6 +19,9 @@ type TunnelOrigin struct {
 	Variant    string
 	IssuedAt   time.Time
 	IssuedBy   int64
+	// Unconfirmed -- конфиг этого варианта лёг на роутер, но проверку не
+	// прошёл (RecordUnconfirmed). Подтверждённая запись (Record) снимает.
+	Unconfirmed bool
 }
 
 type TunnelOriginRepo struct{ d *DB }
@@ -45,6 +48,24 @@ func (r *TunnelOriginRepo) Record(userID int64, tunnelID, tunnelName, provider, 
 	if err != nil {
 		return fmt.Errorf("tunnel_origin.Record: %w", err)
 	}
+	if _, err := r.d.db.Exec(`DELETE FROM tunnel_origin_unconfirmed WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID); err != nil {
+		return fmt.Errorf("tunnel_origin.Record: %w", err)
+	}
+	return nil
+}
+
+// RecordUnconfirmed -- то же, что Record, с отметкой «не подтверждена»:
+// конфиг на роутере стоит, а проверку не прошёл.
+func (r *TunnelOriginRepo) RecordUnconfirmed(userID int64, tunnelID, tunnelName, provider, variant string, issuedAt time.Time) error {
+	if err := r.Record(userID, tunnelID, tunnelName, provider, variant, issuedAt, 0); err != nil {
+		return err
+	}
+	if _, err := r.d.db.Exec(
+		`INSERT INTO tunnel_origin_unconfirmed(user_id, tunnel_id, variant, marked_at) VALUES(?,?,?,?)
+		 ON CONFLICT(user_id, tunnel_id) DO UPDATE SET variant = excluded.variant, marked_at = excluded.marked_at`,
+		userID, tunnelID, variant, issuedAt.UTC()); err != nil {
+		return fmt.Errorf("tunnel_origin.RecordUnconfirmed: %w", err)
+	}
 	return nil
 }
 
@@ -52,10 +73,13 @@ func (r *TunnelOriginRepo) Record(userID int64, tunnelID, tunnelName, provider, 
 // «система этого не помнит», а не ошибка.
 func (r *TunnelOriginRepo) Get(userID int64, tunnelID string) (TunnelOrigin, bool, error) {
 	row := r.d.db.QueryRow(
-		`SELECT tunnel_id, tunnel_name, provider, variant, issued_at, issued_by
-		   FROM tunnel_config_origin WHERE user_id = ? AND tunnel_id = ?`, userID, tunnelID)
+		`SELECT o.tunnel_id, o.tunnel_name, o.provider, o.variant, o.issued_at, o.issued_by,
+		        u.variant IS NOT NULL AND u.variant = o.variant
+		   FROM tunnel_config_origin o
+		   LEFT JOIN tunnel_origin_unconfirmed u ON u.user_id = o.user_id AND u.tunnel_id = o.tunnel_id
+		  WHERE o.user_id = ? AND o.tunnel_id = ?`, userID, tunnelID)
 	var out TunnelOrigin
-	if err := row.Scan(&out.TunnelID, &out.TunnelName, &out.Provider, &out.Variant, &out.IssuedAt, &out.IssuedBy); err != nil {
+	if err := row.Scan(&out.TunnelID, &out.TunnelName, &out.Provider, &out.Variant, &out.IssuedAt, &out.IssuedBy, &out.Unconfirmed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return TunnelOrigin{}, false, nil
 		}

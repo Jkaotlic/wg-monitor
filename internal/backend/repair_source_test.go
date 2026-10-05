@@ -293,3 +293,65 @@ func TestLinkRepairSpendRelocation(t *testing.T) {
 		t.Fatalf("отметка: %+v", s)
 	}
 }
+
+// A4.6: место в подписке «Amnezia Premium» -- по счёту устройств кабинета.
+func TestRepairSource_HasRoom(t *testing.T) {
+	cases := []struct {
+		name      string
+		used, max int
+		want      bool
+	}{
+		{"есть место", 2, 3, true},
+		{"заполнена", 3, 3, false},
+		{"без предела", 5, 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cab := &fakeCabinet{accounts: map[string]VPNAccount{
+				"amnezia": {Provider: "amnezia", Connected: true, DevicesUsed: c.used, DevicesMax: c.max},
+			}}
+			src, id := repairSourceEnv(t, cab, &fakeAwg3{})
+			got, err := src.HasRoom(context.Background(), id, "amnezia")
+			if err != nil || got != c.want {
+				t.Fatalf("HasRoom=%v err=%v, ждали %v", got, err, c.want)
+			}
+		})
+	}
+	// Кабинет не подключён или не ответил -- не «место есть», а человек.
+	src, id := repairSourceEnv(t, &fakeCabinet{accounts: map[string]VPNAccount{}}, &fakeAwg3{})
+	var nh *linkrepair.NeedHuman
+	if _, err := src.HasRoom(context.Background(), id, "amnezia"); !errors.As(err, &nh) || nh.Action != linkrepair.ActAmneziaKey {
+		t.Fatalf("неподключённый кабинет: %v", err)
+	}
+	src, id = repairSourceEnv(t, &fakeCabinet{err: errors.New("таймаут")}, &fakeAwg3{})
+	if _, err := src.HasRoom(context.Background(), id, "amnezia"); !errors.As(err, &nh) {
+		t.Fatalf("кабинет не ответил: %v", err)
+	}
+}
+
+// A4.3: другая страна легла на роутер, проверку не прошла -- настройка и
+// происхождение указывают на неё, с отметкой «не подтверждена»; удачная
+// запись потом отметку снимает.
+func TestLinkRepairSaveUnconfirmed(t *testing.T) {
+	d, id := repairDB(t)
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: id, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	LinkRepairSaveUnconfirmed(d, nil)(id, "awg12", "amnezia", "de")
+
+	s, _, _ := d.TunnelRepairSettings().Get(id, "awg12")
+	if s.Option != "de" || !s.Enabled {
+		t.Fatalf("настройка не пошла за роутером: %+v", s)
+	}
+	o, ok, err := d.TunnelOrigins().Get(id, "awg12")
+	if err != nil || !ok || o.Variant != "de" || !o.Unconfirmed {
+		t.Fatalf("происхождение: %+v ok=%v err=%v", o, ok, err)
+	}
+
+	LinkRepairSaveOption(d, nil)(id, "awg12", "amnezia", "de")
+	if o, _, _ := d.TunnelOrigins().Get(id, "awg12"); o.Unconfirmed {
+		t.Fatalf("подтверждённая запись не сняла отметку: %+v", o)
+	}
+}

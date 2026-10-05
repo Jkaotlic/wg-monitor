@@ -256,6 +256,7 @@ func main() {
 		Source:          backend.RepairSource(cb, awg3Panels, d),
 		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
+		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, logger.With("component", "linkrepair")),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        cmdQueue,

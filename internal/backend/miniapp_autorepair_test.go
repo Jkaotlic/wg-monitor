@@ -536,3 +536,22 @@ func TestAutorepair_Awg3OptionFilteredByPanelRight(t *testing.T) {
 		t.Fatalf("допущенный оператор без подсказки из происхождения: %+v", r.Suggested)
 	}
 }
+
+// A4.3: GET говорит, что вариант настройки на роутере стоит, но проверку не
+// прошёл.
+func TestAutorepair_GetOptionUnconfirmed(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes()); r.OptionUnconfirmed {
+		t.Fatal("без отметки вариант назван неподтверждённым")
+	}
+	LinkRepairSaveUnconfirmed(env.d, nil)(env.ownedID, "awg12", "amnezia", "de")
+	r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
+	if r.Option != "de" || !r.OptionUnconfirmed {
+		t.Fatalf("ответ: option=%q unconfirmed=%v", r.Option, r.OptionUnconfirmed)
+	}
+}

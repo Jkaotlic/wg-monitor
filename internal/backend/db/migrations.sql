@@ -137,6 +137,21 @@ CREATE TABLE IF NOT EXISTS tunnel_repair_settings (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- tunnel_origin_unconfirmed -- конфиг на роутере не подтверждён проверкой
+-- (v0.55): автопочинка положила в VPN-туннель другую локацию, а проверку она
+-- не прошла. Происхождение всё равно указывает на неё -- на роутере теперь её
+-- конфиг; строка здесь говорит «не подтверждена». Подтверждённая запись
+-- происхождения строку удаляет. variant -- к какому варианту относится
+-- отметка: происхождение могли перезаписать другим путём.
+CREATE TABLE IF NOT EXISTS tunnel_origin_unconfirmed (
+    user_id    INTEGER NOT NULL,
+    tunnel_id  TEXT    NOT NULL,
+    variant    TEXT    NOT NULL DEFAULT '',
+    marked_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, tunnel_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Заглушённые уведомления: пара «человек + роутер». Отдельной таблицей, а не
 -- колонкой: выключатель личный, у одного роутера может быть несколько
 -- получателей с разными решениями. Строка есть -- заглушено; строки нет --
