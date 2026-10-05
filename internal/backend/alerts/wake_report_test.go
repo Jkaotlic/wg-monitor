@@ -172,7 +172,7 @@ func TestWakeCheckLabelHydraRouteProvenVsUnproven(t *testing.T) {
 		{"не запущен", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}}, "обход блокировок не работает"},
 		{"не проверено", wire.Check{Name: "hydraroute", Status: "unknown", Details: map[string]any{"installed": false, "running": false, "unverified": true}}, "обход блокировок не удалось проверить"},
 		{"ошибка чтения статуса", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"error": "awg-manager: timeout"}}, "обход блокировок не удалось проверить"},
-		{"ошибка чтения, details пуст", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}}, "обход блокировок не удалось проверить"},
+		{"ошибка чтения, details пуст", wire.Check{Name: "hydraroute", Status: "fail"}, "обход блокировок не удалось проверить"},
 	}
 	for _, c := range cases {
 		if got := wakeCheckLabel(c.c); got != c.want {
