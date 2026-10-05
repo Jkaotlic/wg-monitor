@@ -195,6 +195,12 @@ describe('enableFields / enableReady', () => {
     expect(vals).toEqual(['', 'amnezia|nl', 'awg3|main/awg1'])
     expect(sel.options.map((o) => o.label).join('|')).not.toContain('Germany')
   })
+  it('кабинет без выпущенных стран (ok:false с объяснением) в выборе не участвует', () => {
+    const resp = RESP({ sources: [{ provider: 'amnezia', label: 'Amnezia Premium', ok: false, note: 'в кабинете нет выпущенных стран — выпустите конфиг во вкладке «Управление»', options: [] }, SOURCES[2]] })
+    expect(enableFields(resp)[0].options.map((o) => o.value)).toEqual(['', 'awg3|main/awg1'])
+    const cost = enableSheetText(resp, 'x', '').sections.find((x) => x.h === 'Чего стоит').text
+    expect(cost).not.toContain('Amnezia')
+  })
   it('подсказка про урезанный режим следует выбору', () => {
     const [sel] = enableFields(RESP())
     expect(sel.hint({ source: '' })).toContain('Источник не выбран')

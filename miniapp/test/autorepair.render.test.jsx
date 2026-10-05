@@ -163,6 +163,10 @@ describe('автопочинка: отказ сервера на PUT', () => {
     await act(async () => root.querySelector('.tunnel-autorepair').click())
     const sh = sheets[0]
     expect(sh.errorText(new ApiError(409, 'source_not_connected', 'x failed: 409', 'Кабинет не подключён — подключите его и повторите.'))).toBe('Кабинет не подключён — подключите его и повторите.')
+    // Невыпущенная страна «Amnezia Premium» -- отказ сервера читается как есть.
+    expect(sh.errorText(new ApiError(409, 'option_not_issued', 'x failed: 409', 'эта страна ещё не выпущена в кабинете — выберите выпущенную'))).toBe(
+      'эта страна ещё не выпущена в кабинете — выберите выпущенную',
+    )
     const en = sh.errorText(new ApiError(500, 'internal', 'x failed: 500', 'settings not saved'))
     expect(en).toBe(FALLBACK_ERROR_TEXT)
     expect(en).not.toMatch(/settings/)
