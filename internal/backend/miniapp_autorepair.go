@@ -32,6 +32,9 @@ type miniappAutorepairResp struct {
 	// переименовали: перезапуск идёт, а выпуск конфига ждёт, пока человек
 	// подтвердит автопочинку (PUT включения перепишет имя). Пусто -- имя то же.
 	RenamePending string `json:"rename_pending,omitempty"`
+	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
+	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
+	RelocateSpent string `json:"relocate_spent"`
 	// HasBackup -- есть ли у VPN-туннеля запасной в общем наборе правил.
 	// Снимок наборов правил живёт на роутере и бэкендом не хранится, а
 	// спрашивать роутер из GET нельзя -- поэтому пока всегда nil: «не знаем».
@@ -307,6 +310,7 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 	resp := miniappAutorepairResp{CanEdit: true}
 	if found {
 		resp.Enabled, resp.Provider, resp.Option, resp.AllowRelocate = s.Enabled, s.Provider, s.Option, s.AllowRelocate
+		resp.RelocateSpent = s.RelocateSpent
 	}
 	if resp.Enabled {
 		resp.Blocked = miniappAutorepairBlocked(d, u.Nickname, tunnelID)

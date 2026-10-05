@@ -429,3 +429,24 @@ func TestAutorepair_AmneziaOnlyIssuedCountries(t *testing.T) {
 		}
 	}
 }
+
+// Смена страны «Amnezia Premium» уже израсходована -- GET это говорит, лист
+// не обещает её снова.
+func TestAutorepair_GetRelocateSpent(t *testing.T) {
+	env := autorepairEnv(t)
+	repo := env.d.TunnelRepairSettings()
+	if err := repo.Put(db.TunnelRepairSetting{UserID: env.ownedID, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	rec := env.do(t, cabOwner, http.MethodGet, path, "")
+	if !strings.Contains(rec.Body.String(), `"relocate_spent":""`) {
+		t.Fatalf("поле обязано быть и пустым: %s", rec.Body.String())
+	}
+	if err := repo.SpendRelocation(env.ownedID, "awg12", "de"); err != nil {
+		t.Fatal(err)
+	}
+	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes()); r.RelocateSpent != "de" {
+		t.Fatalf("relocate_spent: %+v", r)
+	}
+}
