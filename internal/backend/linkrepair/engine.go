@@ -360,11 +360,9 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, th Threa
 	if set.foreign(brokenName) {
 		d.dropSetting(req.RouterID, sc.TunnelID)
 		if req.Auto {
-			d.skip(jobID, "настройка автопочинки была записана для другого VPN-туннеля", StepFailover, StepRestart, StepReissue, StepRecreate, StepFailback)
-			d.Store.Update(jobID, func(j *provision.Job) {
-				j.State = provision.StateFailed
-				j.Hint = "настройка автопочинки была записана для другого VPN-туннеля"
-			})
+			d.step(jobID, StepFailover, provision.StepFailed, "настройка автопочинки была записана для другого VPN-туннеля")
+			d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate, StepFailback)
+			d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateFailed })
 			th.Quiet(context.WithoutCancel(ctx))
 			return
 		}
@@ -663,8 +661,9 @@ func (d Deps) aborted(ctx context.Context, jobID string, req StartReq, th Thread
 	d.skip(jobID, errStopped.Error(), StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	d.Store.Update(jobID, func(j *provision.Job) {
+		// Подсказка -- «что делать»; человеку тут делать нечего, причина --
+		// в шагах.
 		j.State = provision.StateFailed
-		j.Hint = errStopped.Error()
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), "")
 	return true
@@ -710,8 +709,9 @@ func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, t
 	}
 	text := failText(names, log)
 	d.Store.Update(jobID, func(j *provision.Job) {
+		// Подсказка -- «что делать» на экране починки: только действие.
 		j.State = provision.StateFailed
-		j.Hint = orID(action, text)
+		j.Hint = action
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
 }
@@ -727,8 +727,9 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
+		// Подсказка -- только действие; причина -- в шаге step.
 		j.State = provision.StateFailed
-		j.Hint = orID(action, cause.Error())
+		j.Hint = action
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
 }

@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -103,5 +104,31 @@ func TestMiniappRepair_StrangerGets404(t *testing.T) {
 		`{"check_name":"tunnel_awg11"}`)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("код %d, хотим 404", rr.Code)
+	}
+}
+
+// Ход починки отдаёт экрану подсказку задания: на провале это «что делать».
+func TestMiniappRepair_StatusCarriesHint(t *testing.T) {
+	d, routerID, tgUser := linkRepairDeps(t)
+	u, err := d.DB.Users().GetByID(routerID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	job := d.LinkRepair.Store.Create(linkrepair.KindLinkRepair, u.Nickname, linkrepair.Steps())
+	d.LinkRepair.Store.Update(job.ID, func(j *provision.Job) {
+		j.Target = "tunnel_awg11"
+		j.State = provision.StateFailed
+		j.Hint = linkrepair.ActAmneziaKey
+	})
+	rr := doRepair(t, NewMux(d), http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/repair", routerID), tgUser, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp miniappReplaceResp
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("ответ: %v", err)
+	}
+	if resp.Hint != linkrepair.ActAmneziaKey || resp.State != "failed" {
+		t.Fatalf("ответ без «что делать»: %+v", resp)
 	}
 }

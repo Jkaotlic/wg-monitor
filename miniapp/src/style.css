@@ -2748,6 +2748,13 @@ body {
   color: var(--bad);
 }
 
+.repair-action {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  font-weight: 500;
+}
+
 .repair-calm {
   display: flex;
   flex-direction: column;

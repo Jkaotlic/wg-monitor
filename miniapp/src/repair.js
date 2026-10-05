@@ -106,6 +106,10 @@ export function repairView(job, { checkName = '', ownJobID = '', pollFailed = fa
   } else if (running) title = 'Поднимаю связь'
   else if (done) title = job.state === 'success' ? 'Готово' : 'Не получилось'
   else title = 'Чиню'
+  // «Что делать» -- подсказка задания: с v0.54 у лесенки это только действие
+  // для человека («обновите ключ…»), причина живёт в шагах (note). Подсказку
+  // старого мастера замены так не читаем: там она бывает и причиной.
+  const action = ladder && done && job.state === 'failed' ? String(job.hint ?? '').trim().replace(/[.\s]+$/, '') : ''
   return {
     title,
     loading,
@@ -114,6 +118,7 @@ export function repairView(job, { checkName = '', ownJobID = '', pollFailed = fa
     done,
     ok: done && job?.state === 'success',
     note: failed?.detail ?? '',
+    action,
     steps: ladder
       ? (() => {
           const raise = raiseStage(steps, done)

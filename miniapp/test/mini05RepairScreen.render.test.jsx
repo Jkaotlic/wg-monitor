@@ -50,6 +50,22 @@ describe('MINI-05: экран починки', () => {
   })
 })
 
+describe('v0.54: провал лесенки', () => {
+  it('экран говорит, что делать, а не только где сломалось', async () => {
+    const steps = ['failover', 'restart', 'reissue', 'recreate', 'failback'].map((name) => ({ name, status: 'failed' }))
+    steps[0].status = 'done'
+    steps[3].status = 'skipped'
+    steps[4].status = 'skipped'
+    steps[2].detail = 'источник не выдал конфиг'
+    mocks.status = () => Promise.resolve({ job_id: 'j-2', state: 'failed', running: false, check_name: 'tunnel_awg10', hint: 'обновите ключ «Amnezia Premium» во вкладке «Управление»', steps })
+    const root = await mount()
+    const action = root.querySelector('.repair-action')
+    expect(action?.textContent).toBe('Что делать: обновите ключ «Amnezia Premium» во вкладке «Управление».')
+    render(null, root)
+    root.remove()
+  })
+})
+
 describe('review п.2: первый опрос /repair не удался', () => {
   it('кнопка «Починить» есть, ошибка названа', async () => {
     mocks.status = () => Promise.reject(new Error('сервер не ответил'))

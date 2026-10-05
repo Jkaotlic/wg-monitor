@@ -112,6 +112,20 @@ describe('repairView: лесенка автопочинки', () => {
     expect(v.ok).toBe(false)
   })
 
+  it('провал лесенки -- «что делать» из подсказки задания, отдельно от причины', () => {
+    const steps = ladder(['done', 'failed', 'failed', 'skipped', 'skipped'])
+    steps[2].detail = 'источник не выдал конфиг'
+    const v = repairView({ state: 'failed', hint: 'обновите ключ «Amnezia Premium» во вкладке «Управление»', steps })
+    expect(v.note).toBe('источник не выдал конфиг')
+    expect(v.action).toBe('обновите ключ «Amnezia Premium» во вкладке «Управление»')
+  })
+
+  it('«что делать» -- только у законченного провала лесенки', () => {
+    expect(repairView({ state: 'success', hint: 'x', steps: ladder(['done', 'done', 'skipped', 'skipped', 'done']) }).action).toBe('')
+    expect(repairView({ state: 'running', running: true, hint: 'x', steps: ladder(['done', 'active']) }).action).toBe('')
+    expect(repairView({ state: 'failed', steps: ladder(['done', 'failed', 'failed', 'failed', 'skipped']) }).action).toBe('')
+  })
+
   it('провал посреди идущего задания -- ещё active, пока есть куда идти', () => {
     const v = repairView({ state: 'running', running: true, steps: ladder(['done', 'failed', 'pending']) })
     expect(v.steps[1].state).toBe('active')

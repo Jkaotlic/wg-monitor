@@ -993,6 +993,34 @@ func TestLadder_RouterFailuresReachOwnerAsWords(t *testing.T) {
 	}
 }
 
+// Подсказка задания -- это «что делать» на экране починки: только действие
+// для человека или пусто. Причина провала живёт в шагах, а не в подсказке.
+func TestLadder_HintIsActionOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*scriptCommander)
+		want  string
+	}{
+		{"VPN-туннель вне наборов", func(c *scriptCommander) {
+			c.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
+		}, ""},
+		{"отказал уводу", func(c *scriptCommander) {
+			c.refuse = map[string]bool{"route_policy_promote": true}
+		}, ""},
+		{"лесенка кончилась", func(*scriptCommander) {}, ActServerDead},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+			tc.setup(e.cmd)
+			job, _ := e.run(t, ladderReq())
+			if job.Hint != tc.want {
+				t.Fatalf("подсказка %q, ждали %q", job.Hint, tc.want)
+			}
+		})
+	}
+}
+
 // Снимок не пришёл -- имя VPN-туннеля знает запускающий.
 func TestLadder_NameFromCallerWhenNoSnapshot(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true})

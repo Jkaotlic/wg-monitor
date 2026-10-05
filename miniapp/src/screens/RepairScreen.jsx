@@ -112,6 +112,11 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
             <Quoted text={view.note} />
           </p>
         ) : null}
+        {view.action ? (
+          <p class="repair-action">
+            <Quoted text={`Что делать: ${view.action}.`} />
+          </p>
+        ) : null}
 
         {/* Текст идёт за состоянием: «пока чиню» на законченной починке --
             неправда, а экран, который врёт в мелочи, не верят и в крупном. */}
