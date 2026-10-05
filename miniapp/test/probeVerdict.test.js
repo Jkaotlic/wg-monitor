@@ -20,7 +20,7 @@ describe('вердикт проверок на вкладке «VPN-туннел
     expect(tunnelLive(s.tunnels[0])).toBe('down')
     expect(tunnelLive(s.tunnels[1])).toBe('up')
     const rows = tunnelList(s)
-    expect(rows.find((r) => r.id === 'awg10').stateLabel).toBe('не отвечает')
+    expect(rows.find((r) => r.id === 'awg10').stateLabel).toBe('поднят, но не отвечает')
   })
   it('исходный снимок не меняется, без проверок -- как есть', () => {
     withCheckVerdict(snap, events)

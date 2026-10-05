@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy } from '../src/labels.js'
+import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy, tunnelStateLabel } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -212,5 +212,18 @@ describe('checkState — подпись и тон строки', () => {
     expect(checkState({ check_name: 'dns', status: 'ok' })).toEqual({ label: 'работает', tone: 'ok' })
     expect(checkState({ check_name: 'dns', status: 'fail' })).toEqual({ label: 'не работает', tone: 'danger' })
     expect(checkState({ check_name: 'dns', status: 'pending' })).toEqual({ label: 'pending', tone: 'muted' })
+  })
+})
+
+// A1.1 (v0.55): проверка главнее -- упавшая проверка не даёт слова «работает».
+describe('tunnelStateLabel: проверка главнее', () => {
+  it('поднят, проверка провалена -- «поднят, но не отвечает»', () => {
+    const t = { enabled: true, run_state: 'running', handshake_age_sec: 5, status: 'fail' }
+    expect(tunnelStateLabel(t)).toBe('поднят, но не отвечает')
+    expect(tunnelStateLabel({ ...t, status: 'dead' })).toBe('поднят, но не отвечает')
+  })
+  it('проверка жива -- «работает»; выключенный остаётся выключенным', () => {
+    expect(tunnelStateLabel({ enabled: true, run_state: 'running', handshake_age_sec: 5, status: 'ok' })).toBe('работает')
+    expect(tunnelStateLabel({ enabled: false, status: 'fail' })).toBe('выключен')
   })
 })

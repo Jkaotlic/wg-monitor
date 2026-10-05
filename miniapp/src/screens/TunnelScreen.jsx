@@ -30,7 +30,9 @@ import { ExitRow } from './SignalSections.jsx'
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
 export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
-  const fresh = tunnelCard(snapshot, tunnelID)
+  // Слова о состоянии -- по снимку с вердиктом проверок, как в списке (A1.1):
+  // иначе роутерное «running» спорит с проверкой «не отвечает».
+  const fresh = tunnelCard(verdictSnapshot ?? snapshot, tunnelID)
   // После удаления снимок уже не знает VPN-туннель: экран держит последнее,
   // что видел, чтобы договорить итог.
   const last = useRef(fresh)

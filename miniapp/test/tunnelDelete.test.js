@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { withCheckVerdict } from '../src/routes.js'
 import {
   mayManageTunnels,
   tunnelList,
@@ -210,3 +211,27 @@ describe('приёмка: состояние VPN-туннеля', () => {
     expect(tunnelList(snap).map((r) => r.stateLabel)).toEqual(['работает', 'выключен', 'не отвечает', 'состояние неизвестно'])
   })
 })
+
+// A1.1 (v0.55): проверка главнее. Роутер говорит «работает», проверка --
+// «не отвечает»: слово одно, «поднят, но не отвечает», и в списке, и на экране.
+describe('A1.1: проверка главнее состояния роутера', () => {
+  const snap = {
+    tunnels: [
+      { id: 'a', name: 'dead-remote', type: 'managed', status: 'running', enabled: true },
+      { id: 'b', name: 'off', type: 'managed', status: 'disabled', enabled: false },
+    ],
+  }
+  const events = { tunnels: [{ tunnel_id: 'a', status: 'fail' }] }
+
+  it('поднят на роутере, проверка провалена -- «поднят, но не отвечает»', () => {
+    const shown = withCheckVerdict(snap, events)
+    expect(tunnelList(shown).map((r) => r.stateLabel)).toEqual(['поднят, но не отвечает', 'выключен'])
+    expect(tunnelCard(shown, 'a')).toBeTruthy()
+  })
+
+  it('не поднявшийся на роутере по-прежнему «не отвечает»', () => {
+    const down = { tunnels: [{ id: 'c', name: 'c', type: 'managed', status: 'down', enabled: true }] }
+    expect(tunnelList(withCheckVerdict(down, { tunnels: [{ tunnel_id: 'c', status: 'fail' }] })).map((r) => r.stateLabel)).toEqual(['не отвечает'])
+  })
+})
+

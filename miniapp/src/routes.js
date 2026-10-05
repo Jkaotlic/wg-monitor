@@ -66,7 +66,8 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
       if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
-      if (failing.has(t.id)) return { ...t, status: 'dead' }
+      // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
+      if (failing.has(t.id)) return { ...t, status: 'dead', check_failed: true }
       if (unchecked.has(t.id)) return { ...t, check_unverified: true }
       return t
     }),

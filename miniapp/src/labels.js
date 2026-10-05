@@ -240,6 +240,8 @@ export function pingLabel(status) {
 export function tunnelStateLabel(t) {
   if (t.enabled === false) return 'выключен'
   if (t.enabled == null) return 'неизвестно'
+  // Проверка главнее состояния роутера (A1.1): упавшая проверка не оставляет «работает».
+  if (t.run_state === 'running' && (t.status === 'fail' || t.status === 'dead')) return 'поднят, но не отвечает'
   if (t.run_state && t.run_state !== 'running') {
     return { stopped: 'остановлен', disabled: 'выключен', dead: 'не на связи', fail: 'не на связи', failed: 'не на связи' }[t.run_state] ?? t.run_state
   }

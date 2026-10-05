@@ -5,7 +5,7 @@ import { act } from 'preact/test-utils'
 
 // Экран VPN-туннеля на вкладке «VPN-туннели»: список, права, причины отказа,
 // удаление набором имени и итог.
-const mocks = vi.hoisted(() => ({ calls: [], answers: {}, role: 'owner', api: [], deleteReply: null, deleteReplies: [], result: null }))
+const mocks = vi.hoisted(() => ({ calls: [], answers: {}, role: 'owner', api: [], deleteReply: null, deleteReplies: [], result: null, checks: null }))
 
 vi.mock('../src/useCommand.js', async () => {
   const { useState } = await import('preact/hooks')
@@ -30,6 +30,8 @@ vi.mock('../src/api.js', async (importOriginal) => {
   return {
     ...real,
     // role === null -- роль ещё не пришла.
+    // checks -- ответ «событий» с проверками VPN-туннелей; null -- как раньше.
+    fetchRouterChecks: (id) => (mocks.checks ? Promise.resolve(mocks.checks) : real.fetchRouterChecks(id)),
     fetchRouterSettings: () => (mocks.role === null ? new Promise(() => {}) : Promise.resolve({ role: mocks.role })),
     // Контракт части 1: пока сервер ждёт снимок роутера -- {state:'checking'},
     // итог -- {state:'queued', cmd_id}.
@@ -168,6 +170,21 @@ beforeEach(() => {
   mocks.deleteReply = null
   mocks.deleteReplies = []
   mocks.result = { status: 'ok', output: '' }
+  mocks.checks = null
+})
+
+describe('A1.1: проверка главнее на экране VPN-туннеля', () => {
+  it('роутер «running», проверка провалена -- экран и список говорят «поднят, но не отвечает»', async () => {
+    mocks.checks = { tunnels: [{ tunnel_id: 'nwg1', status: 'fail' }] }
+    const { root } = await mount()
+    const row = [...root.querySelectorAll('.list-row-btn')].find((b) => b.querySelector('.row-title')?.textContent === 'amsterdam')
+    expect(row.textContent).toContain('поднят, но не отвечает')
+    await openTunnel(root, 'amsterdam')
+    const screen = root.querySelector('.tunnel-screen')
+    expect(screen.textContent).toContain('поднят, но не отвечает')
+    expect(screen.textContent).not.toContain('работает')
+    render(null, root)
+  })
 })
 
 describe('экран VPN-туннеля', () => {
