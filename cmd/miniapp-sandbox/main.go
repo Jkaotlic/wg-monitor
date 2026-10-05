@@ -40,9 +40,11 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -70,6 +72,7 @@ func main() {
 	latest := flag.String("latest", "", "последний выпуск, который «видит» бэкенд: пусто -- настоящий поход на GitHub; версия (v0.34.0) -- без сети: Парк предлагает раскатку бэкенда до неё, переустановка агента ставит её")
 	hrneoStopped := flag.String("hrneo-stopped", "", "роутер, на котором HydraRoute Neo засеян остановленным (лист «Запустить»), например дача-северная; пусто -- запущен на всех")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
+	brokenAgent := flag.String("broken-agent", "", "версия агента sandbox-broken (по умолчанию из seed, v0.18.5 -- лесенка автопочинки кончается перезапуском; v0.54.0 -- лесенка целиком)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
@@ -185,6 +188,11 @@ func main() {
 			fatal(err)
 		}
 	}
+	if *brokenAgent != "" {
+		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-broken"], *brokenAgent); err != nil {
+			fatal(err)
+		}
+	}
 	reviver := newSandboxRevive(*reviveOn, map[int64]bool{ids["sandbox-bronya"]: true})
 	reviver.seedState(ids["sandbox-off"], *reviveState, time.Now().UTC())
 	if *reviveAuto {
@@ -225,23 +233,30 @@ func main() {
 		AwaitStep:      20 * time.Second,
 		HandshakeTries: 2,
 		HandshakeWait:  time.Second,
+		Retired:        backend.LinkRepairDropSetting(d, nil),
 	}
 
 	// Движок починки -- тоже настоящий: подменены только кабинет, очередь
-	// команд и происхождение. Замок у него общий с мастером замены, поэтому
+	// команд и панели своих серверов. Замок у него общий с мастером замены, поэтому
 	// Store один на двоих -- ровно как в проде.
+	//
+	// Уведомления о ходе починки -- настоящий notify.Repairs поверх Telegram,
+	// пишущего в консоль. Диспетчера тревог в песочнице нет, поэтому текста
+	// тревоги нет и нить работает новыми сообщениями (ход молчит, итог --
+	// строкой в консоли), а «восстановилось» гасить некому.
+	repairs := notify.NewRepairs(notify.NewFanout(d, tgToLog{}, slog.Default(), 0), tgToLog{}, d, nil, time.Now)
 	repairEngine := &linkrepair.Deps{
-		Store:      replaceEngine.Store,
-		Replace:    *replaceEngine,
-		Origin:     backend.LinkRepairOrigin(d),
-		Attempts:   linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(routerID int64) bool { on, _ := d.RepairSettings().AutoRepair(routerID); return on },
-		Commands:   sink,
-		Notify: func(_ context.Context, routerID int64, text string) {
-			slog.Info("песочница: отчёт о починке", "router_id", routerID, "text", text)
-		},
-		BaseCtx:   context.Background(),
-		AwaitStep: 20 * time.Second,
+		Store:           replaceEngine.Store,
+		Probe:           *replaceEngine,
+		Source:          backend.RepairSource(cabinet, awg3Panels, d),
+		Settings:        backend.LinkRepairSettings(d, nil),
+		SaveOption:      backend.LinkRepairSaveOption(d, nil),
+		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		Attempts:        linkrepair.Attempts{KV: d.KV()},
+		Commands:        sink,
+		Report:          repairs,
+		BaseCtx:         context.Background(),
+		AwaitStep:       20 * time.Second,
 	}
 
 	deps := backend.Deps{
@@ -324,6 +339,24 @@ type offlineToLog struct{}
 
 func (offlineToLog) SendOffline(_ context.Context, userID int64, nickname string, since time.Duration) error {
 	slog.Info("песочница: роутер молчит", "nickname", nickname, "user_id", userID, "молчит", since.Round(time.Second))
+	return nil
+}
+
+// tgToLog -- Telegram песочницы: отправки и правки уведомлений о починке
+// уходят строкой в консоль.
+type tgToLog struct{}
+
+func (tgToLog) SendMessage(_ context.Context, chatID int64, _ *int64, text, _ string, replyTo *int64) (int64, error) {
+	var re int64
+	if replyTo != nil {
+		re = *replyTo
+	}
+	slog.Info("песочница: сообщение в личку", "chat_id", chatID, "reply_to", re, "text", text)
+	return time.Now().UnixNano() % 1_000_000, nil
+}
+
+func (tgToLog) EditMessageText(_ context.Context, chatID, messageID int64, text, _ string, _ *tg.InlineKeyboardMarkup) error {
+	slog.Info("песочница: правка сообщения", "chat_id", chatID, "message_id", messageID, "text", text)
 	return nil
 }
 

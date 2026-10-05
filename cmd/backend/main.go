@@ -19,6 +19,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
@@ -228,32 +229,40 @@ func main() {
 		BaseCtx: ctx,
 		Now:     time.Now,
 		Logger:  logger.With("component", "replace"),
+		// Списанный заменой VPN-туннель уносит с собой настройку автопочинки.
+		Retired: backend.LinkRepairDropSetting(d, logger.With("component", "replace")),
 	}
 
-	// Движок починки линии. Store общий с мастером замены: замок один на
-	// двоих, иначе починка и замена столкнулись бы на одном роутере.
+	// Свои VPN-серверы (awg3-панели): один сервис на мини-апп и на источник
+	// автопочинки.
+	awg3Panels := newAwg3PanelService(cfg.SelfHostedAmnezia, logger)
+
+	// Движок починки VPN-туннеля -- лесенка v0.54. Store общий с мастером
+	// замены: замок один на двоих, иначе починка и замена столкнулись бы на
+	// одном роутере. Проверки (обмен ключами, выход, анализ конфига) -- те же,
+	// что у мастера. Ход починки дописывается в саму тревогу (notify.Repairs):
+	// текст тревоги помнит диспетчер, он же спрашивает у починки, сказано ли
+	// уже «починил», и печатает в тревоге строку «Автопочинка включена».
+	repairs := notify.NewRepairs(
+		notify.NewFanout(d, tgClient, logger.With("component", "linkrepair_notify"), cfg.Telegram.AdminUserID),
+		tgClient, d, disp, time.Now)
+	repairs.SetMiniAppBaseURL(cfg.PublicBaseURL)
+	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
+	disp.SetCovered(repairs.TakeCovered)
+	disp.SetHardHook(repairs.Uncover)
 	repairEngine := &linkrepair.Deps{
-		Store:    provisionStore,
-		Replace:  *replaceEngine,
-		Origin:   backend.LinkRepairOrigin(d),
-		Attempts: linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(routerID int64) bool {
-			on, err := d.RepairSettings().WithDefault(cfg.Repair.AutoDefault).AutoRepair(routerID)
-			if err != nil {
-				logger.Warn("linkrepair: настройка не прочиталась", "router_id", routerID, "err", err)
-				return false
-			}
-			return on
-		},
-		Commands: cmdQueue,
-		Notify: func(ctx context.Context, routerID int64, text string) {
-			if err := cb.NotifyRouterTopic(ctx, routerID, text); err != nil {
-				logger.Warn("linkrepair: notify failed", "router_id", routerID, "err", err)
-			}
-		},
-		BaseCtx: ctx,
-		Now:     time.Now,
-		Logger:  logger.With("component", "linkrepair"),
+		Store:           provisionStore,
+		Probe:           *replaceEngine,
+		Source:          backend.RepairSource(cb, awg3Panels, d),
+		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
+		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
+		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		Attempts:        linkrepair.Attempts{KV: d.KV()},
+		Commands:        cmdQueue,
+		Report:          repairs,
+		BaseCtx:         ctx,
+		Now:             time.Now,
+		Logger:          logger.With("component", "linkrepair"),
 	}
 
 	mux := backend.NewMux(backend.Deps{
@@ -274,7 +283,7 @@ func main() {
 		VPNCabinetKeys: cb,
 		// Свои VPN-серверы -- только админу в мини-аппе.
 		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
-		Awg3Panels:          newAwg3PanelService(cfg.SelfHostedAmnezia, logger),
+		Awg3Panels:          awg3Panels,
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,

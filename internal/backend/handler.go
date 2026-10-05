@@ -1040,6 +1040,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 			// Запусти мы раньше -- отказ движка (выключенный полуавтомат,
 			// исчерпанные попытки, идущая замена) рисковал бы унести с собой
 			// и уведомление.
+			// VPN-туннель ожил сам -- стоп автопочинки после провала снимается
+			// (D1): иначе однажды не починенный туннель не чинился бы больше
+			// никогда. Окно попыток остаётся: флапающему туннелю потолок тот же.
+			if tr.Kind == state.Recovery && d.LinkRepair != nil && d.LinkRepair.Attempts.KV != nil &&
+				strings.HasPrefix(c.Name, miniappTunnelPrefix) {
+				if err := d.LinkRepair.Attempts.Clear(nick, c.Name); err != nil {
+					d.Logger.Warn("автопочинка: стоп не снялся", "nickname", nick, "check", c.Name, "err", err)
+				}
+			}
 			if tr.Kind == state.Hard && d.StartLinkRepair != nil {
 				if _, ok := linkrepair.ScenarioFor(c.Name); ok {
 					// Имя VPN-туннеля -- из самой проверки: оно нужно починке,
@@ -1294,6 +1303,18 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					d.Logger.Warn("version_audit snapshot: decode failed", "nickname", nick, "cmd_id", res.ID, "err", err)
 				} else if err := d.DB.RouterVersions().Upsert(uid, VersionSnapshotFromAudit(va)); err != nil {
 					d.Logger.Warn("version_audit snapshot: upsert failed", "nickname", nick, "cmd_id", res.ID, "err", err)
+				}
+			}
+		}
+		// Агент подтвердил удаление VPN-туннеля -- его настройка автопочинки
+		// уходит вместе с ним: id awg-manager может отдать новому туннелю, а
+		// согласие на автопочинку к нему не переходит.
+		if d.DB != nil {
+			if cmd, found := d.CommandSink.CommandByID(uid, res.ID); found && cmd.Action == "tunnel_delete" && res.Status == "ok" {
+				if tid := deletedTunnelID(cmd.Args); tid != "" {
+					if err := d.DB.TunnelRepairSettings().Delete(uid, tid); err != nil {
+						d.Logger.Warn("tunnel_delete: настройка автопочинки не удалилась", "nickname", nick, "tunnel_id", tid, "err", err)
+					}
 				}
 			}
 		}

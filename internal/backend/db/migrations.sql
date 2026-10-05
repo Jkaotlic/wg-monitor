@@ -114,6 +114,29 @@ CREATE TABLE IF NOT EXISTS router_repair_settings (
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- tunnel_repair_settings -- автопочинка на VPN-туннель (v0.54). Строки нет --
+-- выключено: включение только явное, с предупреждением на экране. Пустой
+-- provider -- урезанный режим: только перезапуск.
+CREATE TABLE IF NOT EXISTS tunnel_repair_settings (
+    user_id        INTEGER NOT NULL,
+    tunnel_id      TEXT    NOT NULL,
+    -- tunnel_name -- имя VPN-туннеля при включении: id awg-manager
+    -- переиспользует, и другое имя под тем же id -- уже чужой туннель.
+    tunnel_name    TEXT    NOT NULL DEFAULT '',
+    enabled        INTEGER NOT NULL DEFAULT 0,
+    provider       TEXT    NOT NULL DEFAULT '',
+    option         TEXT    NOT NULL DEFAULT '',
+    allow_relocate INTEGER NOT NULL DEFAULT 0,
+    -- relocate_spent -- страна «Amnezia Premium», которую автопочинка уже
+    -- выпустила при смене локации (место в подписке): одна на настройку
+    -- навсегда, повторное включение её не снимает. Пусто -- не выпускала.
+    relocate_spent TEXT    NOT NULL DEFAULT '',
+    updated_by     INTEGER NOT NULL DEFAULT 0,
+    updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, tunnel_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Заглушённые уведомления: пара «человек + роутер». Отдельной таблицей, а не
 -- колонкой: выключатель личный, у одного роутера может быть несколько
 -- получателей с разными решениями. Строка есть -- заглушено; строки нет --

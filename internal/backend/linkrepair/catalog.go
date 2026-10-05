@@ -9,15 +9,15 @@
 //     трафик. Движок и есть этот «кто-то».
 //
 // Поэтому первым шагом идёт failover: человек не должен сидеть без обхода
-// блокировок, пока мы чиним. Починка идёт фоном, а failback возвращает его
-// на ту же линию, ради которой всё затевалось.
+// блокировок, пока мы чиним. Дальше -- лесенка: перезапуск, тот же конфиг на
+// месте, пересоздание; failback возвращает трафик только на VPN-туннель,
+// чья ступень доказана. Провал всех ступеней оставляет трафик на резерве.
 package linkrepair
 
 import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 )
 
 // KindLinkRepair -- вид задания в общем Store. Имя не сокращается до
@@ -25,11 +25,15 @@ import (
 // и это про починку УСТАНОВКИ агента, другой смысл.
 const KindLinkRepair provision.JobKind = "link_repair"
 
-// Свои у движка только два шага -- увести и вернуть. Всё между ними делает
-// мастер замены своим чеклистом: перевыпуск конфига -- это он и есть.
+// Шаги лесенки (спека v0.54, раздел 3). Каждая ступень между уводом и
+// возвратом засчитывается только доказанной: свежий обмен ключами и выход
+// через VPN-туннель.
 const (
-	StepFailover = "failover"
-	StepFailback = "failback"
+	StepFailover = "failover" // 0. увести трафик на резерв
+	StepRestart  = "restart"  // 1. поднять: перезапуск
+	StepReissue  = "reissue"  // 2. тот же конфиг заново, в тот же VPN-туннель
+	StepRecreate = "recreate" // 3. пересоздать: новый пир / другая локация
+	StepFailback = "failback" // 4. вернуть трафик на починенный VPN-туннель
 )
 
 // tunnelCheckPrefix -- тот же префикс, которым агент называет проверку
@@ -45,14 +49,14 @@ type Scenario struct {
 	TunnelID  string
 }
 
-// Steps -- полный чеклист задания: увести на резерв, отработать замену
-// конфига целиком, вернуться на починенную линию. Имена шагов замены берутся
-// из её же пакета, чтобы Store.Update находил их по имени, когда мастер
-// будет двигать их в том же задании.
+// Steps -- полный чеклист задания: лесенка целиком, по порядку.
 func Steps() []provision.Step {
-	steps := []provision.Step{{Name: StepFailover, Status: provision.StepPending}}
-	steps = append(steps, replace.Steps()...)
-	return append(steps, provision.Step{Name: StepFailback, Status: provision.StepPending})
+	names := []string{StepFailover, StepRestart, StepReissue, StepRecreate, StepFailback}
+	steps := make([]provision.Step, 0, len(names))
+	for _, n := range names {
+		steps = append(steps, provision.Step{Name: n, Status: provision.StepPending})
+	}
+	return steps
 }
 
 // ScenarioFor возвращает сценарий починки для провалившейся проверки.

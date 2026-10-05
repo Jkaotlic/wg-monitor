@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,10 +34,11 @@ func linkRepairDeps(t *testing.T) (Deps, int64, int64) {
 	}
 	repair := &linkrepair.Deps{
 		Store:      store,
-		Replace:    *eng,
-		Origin:     LinkRepairOrigin(d),
+		Probe:      *eng,
+		Source:     RepairSource(nil, nil, d),
+		Settings:   LinkRepairSettings(d, nil),
+		SaveOption: LinkRepairSaveOption(d, nil),
 		Attempts:   linkrepair.Attempts{KV: d.KV()},
-		AutoRepair: func(int64) bool { return true },
 		Commands:   sink,
 		BaseCtx:    context.Background(),
 		AwaitStep:  50 * time.Millisecond,
@@ -94,23 +96,6 @@ func TestMiniappRepair_NoScenario(t *testing.T) {
 	}
 }
 
-func TestMiniappRepair_AutoToggle(t *testing.T) {
-	d, routerID, tgUser := linkRepairDeps(t)
-	rr := doRepair(t, NewMux(d), http.MethodPut,
-		fmt.Sprintf("/v1/miniapp/routers/%d/repair/auto", routerID), tgUser,
-		`{"enabled":false}`)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("код %d, хотим 200: %s", rr.Code, rr.Body.String())
-	}
-	on, err := d.DB.RepairSettings().AutoRepair(routerID)
-	if err != nil {
-		t.Fatalf("AutoRepair: %v", err)
-	}
-	if on {
-		t.Fatal("выключение полуавтомата обязано доехать до базы")
-	}
-}
-
 // Чужой роутер не виден даже для отказа: 404, а не 409 и не 422.
 func TestMiniappRepair_StrangerGets404(t *testing.T) {
 	d, routerID, _ := linkRepairDeps(t)
@@ -119,5 +104,31 @@ func TestMiniappRepair_StrangerGets404(t *testing.T) {
 		`{"check_name":"tunnel_awg11"}`)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("код %d, хотим 404", rr.Code)
+	}
+}
+
+// Ход починки отдаёт экрану подсказку задания: на провале это «что делать».
+func TestMiniappRepair_StatusCarriesHint(t *testing.T) {
+	d, routerID, tgUser := linkRepairDeps(t)
+	u, err := d.DB.Users().GetByID(routerID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	job := d.LinkRepair.Store.Create(linkrepair.KindLinkRepair, u.Nickname, linkrepair.Steps())
+	d.LinkRepair.Store.Update(job.ID, func(j *provision.Job) {
+		j.Target = "tunnel_awg11"
+		j.State = provision.StateFailed
+		j.Hint = linkrepair.ActAmneziaKey
+	})
+	rr := doRepair(t, NewMux(d), http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/repair", routerID), tgUser, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp miniappReplaceResp
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("ответ: %v", err)
+	}
+	if resp.Hint != linkrepair.ActAmneziaKey || resp.State != "failed" {
+		t.Fatalf("ответ без «что делать»: %+v", resp)
 	}
 }

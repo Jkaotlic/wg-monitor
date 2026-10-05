@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { deleteTunnel } from '../api.js'
+import { deleteTunnel, getAutorepair, putAutorepair } from '../api.js'
+import { errorText } from '../errorText.js'
+import { autorepairRow, backupFor, enableBody, enableFields, enableReady, enableSheetText } from '../autorepair.js'
 import { waitCommand, waitDeadlineMs, repeatWhilePending } from '../commandWait.js'
 import { localSheet, confirmSheet } from '../sheet.js'
 import {
@@ -27,7 +29,7 @@ import { ExitRow } from './SignalSections.jsx'
 // Удаление необратимо, поэтому подтверждается набором имени, а сервер сам
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
-export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
+export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
   const fresh = tunnelCard(snapshot, tunnelID)
   // После удаления снимок уже не знает VPN-туннель: экран держит последнее,
   // что видел, чтобы договорить итог.
@@ -42,6 +44,74 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
     },
     [],
   )
+
+  // Автопочинка (v0.54): настройка этого VPN-туннеля. Строку видит только тот,
+  // кому можно править (can_edit); сбой чтения -- строки нет, а не догадка.
+  const [ar, setAr] = useState(null)
+  const [arBusy, setArBusy] = useState(false)
+  const [arError, setArError] = useState('')
+  useEffect(() => {
+    let live = true
+    setAr(null)
+    if (tunnelID) {
+      getAutorepair(routerID, tunnelID)
+        .then((r) => {
+          if (live) setAr(r)
+        })
+        .catch(() => {})
+    }
+    return () => {
+      live = false
+    }
+  }, [routerID, tunnelID])
+
+  function askAutorepair() {
+    const target = card
+    // Резерв и несущий -- по снимку с вердиктом проверок: лист не называет
+    // VPN-туннель, который приложение само показывает как неотвечающий.
+    const backup = backupFor(verdictSnapshot ?? snapshot, target.id)
+    const text = enableSheetText(ar, target.name, backup.known ? backup.name : null, backup.carrier, backup.reserve, backup.self)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: (
+          <>
+            {text.sections.map((sec) => (
+              <span class="sheet-sec" key={sec.h}>
+                <b class="sheet-sec-h">{sec.h}</b>
+                <Quoted text={sec.text} />
+              </span>
+            ))}
+          </>
+        ),
+        note: text.note,
+        buttonLabel: ar?.rename_pending ? 'Подтвердить' : 'Включить',
+        busyLabel: ar?.rename_pending ? 'Подтверждаем…' : 'Включаем…',
+        fields: enableFields(ar),
+        fieldsReady: enableReady,
+        errorText: (err) => errorText(err),
+        perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values)),
+        onDone: (resp) => {
+          if (alive.current && resp) setAr(resp)
+        },
+      }),
+    )
+  }
+
+  // Выключение -- сразу, без листа; провайдер и вариант сервер оставляет, и
+  // повторное включение предложит прежний выбор.
+  async function disableAutorepair() {
+    setArBusy(true)
+    setArError('')
+    try {
+      const resp = await putAutorepair(routerID, card.id, { enabled: false, provider: ar.provider, option: ar.option, allow_relocate: ar.allow_relocate })
+      if (alive.current) setAr(resp)
+    } catch (e) {
+      if (alive.current) setArError(errorText(e) || 'Не получилось выключить автопочинку. Попробуйте ещё раз.')
+    } finally {
+      if (alive.current) setArBusy(false)
+    }
+  }
 
   // Отказ сервера держится, пока снимок тот же: поменялись правила, главный
   // выход или цепочка -- экран снова решает по свежему снимку.
@@ -190,6 +260,29 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
           {fresh && <ExitRow routerID={routerID} tunnelID={card.id} running={tunnelRunning} />}
           {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
+
+        {fresh && ar?.can_edit && typeof openSheet === 'function' && (() => {
+          const row = autorepairRow(ar)
+          return (
+            <>
+              <div class="card card-rows">
+                <DataRow title={row.title} value={row.value} />
+              </div>
+              <p class="hint">{row.hint}</p>
+              {/* Переименованный VPN-туннель: выпуск ждёт подтверждения -- тот же
+                  лист включения перепишет имя на сервере. */}
+              {ar.enabled && ar.rename_pending && (
+                <button type="button" class="btn btn-primary btn-wide tunnel-autorepair-confirm" disabled={arBusy} onClick={askAutorepair}>
+                  Подтвердить автопочинку
+                </button>
+              )}
+              <button type="button" class="btn btn-ghost btn-wide tunnel-autorepair" disabled={arBusy} onClick={ar.enabled ? disableAutorepair : askAutorepair}>
+                {ar.enabled ? 'Выключить автопочинку' : 'Включить автопочинку'}
+              </button>
+              {arError && <p class="state state-error" role="status">{arError}</p>}
+            </>
+          )
+        })()}
 
         {replaceBtn}
         {restartBtn}

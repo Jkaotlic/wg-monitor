@@ -300,7 +300,7 @@ export function startReplace(routerID, body) {
   return request(`/routers/${routerID}/replace`, { method: 'POST', body: JSON.stringify(body) })
 }
 
-// Починка VPN-туннеля: запуск, состояние и выключатель полуавтомата. Состояние,
+// Починка VPN-туннеля: запуск и состояние. Состояние,
 // как и у замены, спрашивается ПРО РОУТЕР: починку мог запустить сторож сам,
 // и идентификатора задания у экрана не будет вовсе.
 export function fetchRepairStatus(routerID) {
@@ -314,11 +314,21 @@ export function startRepair(routerID, checkName) {
   })
 }
 
-export function setAutoRepair(routerID, enabled) {
-  return request(`/routers/${routerID}/repair/auto`, {
+// Автопочинка одного VPN-туннеля (v0.54): настройка, включение и выключение
+// и метки для вкладки «VPN-туннели» одним запросом на роутер.
+export function getAutorepair(routerID, tunnelID) {
+  return request(`/routers/${routerID}/tunnels/${encodeURIComponent(tunnelID)}/autorepair`)
+}
+
+export function putAutorepair(routerID, tunnelID, body) {
+  return request(`/routers/${routerID}/tunnels/${encodeURIComponent(tunnelID)}/autorepair`, {
     method: 'PUT',
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify(body),
   })
+}
+
+export function listAutorepair(routerID) {
+  return request(`/routers/${routerID}/autorepair`)
 }
 
 // confirm -- набранное человеком имя роутера. Сервер сверяет его сам для

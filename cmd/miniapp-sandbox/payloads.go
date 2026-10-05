@@ -28,6 +28,11 @@ func sandboxOutput(routerID int64, action string, args map[string]any) string {
 	case "route_status":
 		return mustJSON(routeSnapshot(routerState(routerID)))
 	case "tunnel_import":
+		// Лесенка автопочинки (v0.54) кладёт конфиг в ТОТ ЖЕ VPN-туннель
+		// (target_id): агент отвечает «заменён», и нового туннеля нет.
+		if target := argString(args, "target_id", ""); target != "" {
+			return fmt.Sprintf("✅ Туннель %q заменён (id=%s)", argString(args, "name", "amnezia_nl"), target)
+		}
 		// Мастер вытаскивает идентификатор нового туннеля из этой строки:
 		// формат ровно тот, что печатает агент. Соврать здесь форматом --
 		// значит проверять экран на ответе, которого не бывает.
@@ -71,6 +76,17 @@ func sandboxOutput(routerID int64, action string, args map[string]any) string {
 		return "Проверка напрямую\nExit IP: 203.0.113.1"
 	case "check_via_tunnel", "exit_ip_tunnel", "exit_ip":
 		return "Проверка через туннель\nExit IP: 203.0.113.9"
+	// Замер выхода по конкретному VPN-туннелю (агент v0.47+): им лесенка
+	// автопочинки доказывает ступень. Выход через туннель отличается от
+	// прямого -- ступень считается доказанной.
+	case "exit_ip_probe":
+		changed := true
+		return mustJSON(wire.ExitProbe{
+			VPNIP: "203.0.113.9", DirectIP: "198.51.100.1", Changed: &changed,
+			Source: "awgm", At: time.Now().UTC(),
+		})
+	case "tunnel_restart":
+		return "VPN-туннель " + argString(args, "tunnel_id", "") + " перезапущен"
 	// Осмотр -- тем форматом, каким его пишет агент
 	// (internal/agent/actions/router_doctor.go): одно замечание, чтобы итог
 	// «Проверить все» на экране «Парк» показывал ветку «проблемы у N».
@@ -135,9 +151,13 @@ var sandboxRouter = struct {
 	disabled     map[string]bool
 	deleted      map[string]bool
 	hrneoStopped map[int64]bool
-	egress       string
-	nextID       int
-}{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, hrneoStopped: map[int64]bool{}, egress: wire.DefaultEgressDirect, nextID: 21}
+	// own -- VPN-туннели, которые есть только у одного роутера (v0.54:
+	// туннель со своего сервера у sandbox-broken). Стоят запасными в общем
+	// наборе правил этого роутера.
+	own    map[int64][]wire.TunnelMeta
+	egress string
+	nextID int
+}{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, hrneoStopped: map[int64]bool{}, own: map[int64][]wire.TunnelMeta{}, egress: wire.DefaultEgressDirect, nextID: 21}
 
 type routerSnapshotState struct {
 	imported     []wire.TunnelMeta
@@ -145,6 +165,7 @@ type routerSnapshotState struct {
 	disabled     map[string]bool
 	deleted      map[string]bool
 	hrneoStopped bool
+	own          []wire.TunnelMeta
 	egress       string
 }
 
@@ -154,6 +175,7 @@ func routerState(routerID int64) routerSnapshotState {
 	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}, deleted: map[string]bool{},
 		hrneoStopped: sandboxRouter.hrneoStopped[routerID], egress: sandboxRouter.egress}
 	st.imported = append(st.imported, sandboxRouter.imported...)
+	st.own = append(st.own, sandboxRouter.own[routerID]...)
 	for k, v := range sandboxRouter.disabled {
 		st.disabled[k] = v
 	}
@@ -170,6 +192,19 @@ func setSandboxEgress(egress string) {
 	sandboxRouter.mu.Lock()
 	defer sandboxRouter.mu.Unlock()
 	sandboxRouter.egress = egress
+}
+
+// addRouterTunnel -- VPN-туннель только этого роутера, запасным звеном его
+// общего набора правил.
+func addRouterTunnel(routerID int64, t wire.TunnelMeta) {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	for _, have := range sandboxRouter.own[routerID] {
+		if have.ID == t.ID {
+			return
+		}
+	}
+	sandboxRouter.own[routerID] = append(sandboxRouter.own[routerID], t)
 }
 
 func deleteTunnel(id string) {
@@ -302,6 +337,13 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 		},
 		DefaultEgress: st.egress,
 		PolicyModel:   true,
+	}
+	snap.Tunnels = append(snap.Tunnels, st.own...)
+	for i, t := range st.own {
+		snap.Policies[0].Interfaces = append(snap.Policies[0].Interfaces, wire.RoutePolicyInterface{
+			Bind: t.Iface, Name: t.Name, Role: "fallback", Available: t.Available, Order: 3 + i,
+			TunnelID: t.ID, ViaVPN: true,
+		})
 	}
 	snap.Tunnels = append(snap.Tunnels, st.imported...)
 	kept := snap.Tunnels[:0]

@@ -67,3 +67,115 @@ describe('repairView', () => {
     expect(v.steps.every((s) => s.state === 'pending')).toBe(true)
   })
 })
+
+// v0.54: лесенка автопочинки -- пять шагов задания, три стадии на экране.
+describe('repairView: лесенка автопочинки', () => {
+  const ladder = (st) => ['failover', 'restart', 'reissue', 'recreate', 'failback'].map((name, i) => ({ name, status: st[i] ?? 'pending' }))
+
+  it('пять шагов сворачиваются в failover / raise / failback', () => {
+    const v = repairView({ state: 'running', running: true, steps: ladder(['done', 'active']) })
+    expect(v.steps.map((s) => s.key)).toEqual(['failover', 'raise', 'failback'])
+    expect(v.steps.map((s) => s.label)).toEqual(['Увожу трафик на запасной VPN-туннель', 'Поднимаю VPN-туннель', 'Возвращаю всё на место'])
+    expect(v.steps.map((s) => s.state)).toEqual(['done', 'active', 'pending'])
+  })
+
+  it('подстрока -- detail активного шага', () => {
+    const steps = ladder(['done', 'active'])
+    steps[1].detail = 'перезапускаю'
+    expect(repairView({ state: 'running', running: true, steps }).steps[1].sub).toBe('перезапускаю')
+  })
+
+  it('перезапуск помог: остальные шаги skipped, стадия done, подстрока -- последнего не пропущенного', () => {
+    const steps = ladder(['done', 'done', 'skipped', 'skipped', 'done'])
+    steps[1].detail = 'тот же конфиг, связь есть'
+    const v = repairView({ state: 'success', steps })
+    expect(v.steps[1].state).toBe('done')
+    expect(v.steps[1].sub).toBe('тот же конфиг, связь есть')
+    expect(v.ok).toBe(true)
+    expect(v.note).toBe('')
+  })
+
+  it('skipped не делает стадию проваленной; провал перезапуска при удаче пересоздания -- не провал', () => {
+    const v = repairView({ state: 'success', steps: ladder(['done', 'failed', 'done', 'skipped', 'done']) })
+    expect(v.steps[1].state).toBe('done')
+    expect(v.note).toBe('')
+  })
+
+  it('все ступени провалились -- стадия failed, причина в note', () => {
+    const steps = ladder(['done', 'failed', 'failed', 'failed', 'skipped'])
+    steps[3].detail = 'место на сервере кончилось'
+    const v = repairView({ state: 'failed', steps })
+    expect(v.steps[1].state).toBe('failed')
+    expect(v.steps[1].sub).toBe('место на сервере кончилось')
+    expect(v.note).toBe('место на сервере кончилось')
+    expect(v.done).toBe(true)
+    expect(v.ok).toBe(false)
+  })
+
+  it('провал лесенки -- «что делать» из подсказки задания, отдельно от причины', () => {
+    const steps = ladder(['done', 'failed', 'failed', 'skipped', 'skipped'])
+    steps[2].detail = 'источник не выдал конфиг'
+    const v = repairView({ state: 'failed', hint: 'обновите ключ «Amnezia Premium» во вкладке «Управление»', steps })
+    expect(v.note).toBe('источник не выдал конфиг')
+    expect(v.action).toBe('обновите ключ «Amnezia Premium» во вкладке «Управление»')
+  })
+
+  it('«что делать» -- только у законченного провала лесенки', () => {
+    expect(repairView({ state: 'success', hint: 'x', steps: ladder(['done', 'done', 'skipped', 'skipped', 'done']) }).action).toBe('')
+    expect(repairView({ state: 'running', running: true, hint: 'x', steps: ladder(['done', 'active']) }).action).toBe('')
+    expect(repairView({ state: 'failed', steps: ladder(['done', 'failed', 'failed', 'failed', 'skipped']) }).action).toBe('')
+  })
+
+  it('стадия увода показывает, что сделано: резерв упал -- «трафик и так идёт через …»', () => {
+    const steps = ladder(['done', 'active'])
+    steps[0].detail = 'трафик и так идёт через «Работа»'
+    expect(repairView({ state: 'running', running: true, steps }).steps[0].sub).toBe('трафик и так идёт через «Работа»')
+  })
+
+  it('стадия возврата показывает, что сделано, как и первые две', () => {
+    const steps = ladder(['done', 'done', 'skipped', 'skipped', 'done'])
+    steps[4].detail = 'трафик снова идёт через VPN-туннель «Дача»'
+    expect(repairView({ state: 'success', steps }).steps[2].sub).toBe('трафик снова идёт через VPN-туннель «Дача»')
+    steps[4].detail = 'возвращать нечего — запасного VPN-туннеля не было'
+    expect(repairView({ state: 'success', steps }).steps[2].sub).toBe('возвращать нечего — запасного VPN-туннеля не было')
+  })
+
+  it('провал посреди идущего задания -- ещё active, пока есть куда идти', () => {
+    const v = repairView({ state: 'running', running: true, steps: ladder(['done', 'failed', 'pending']) })
+    expect(v.steps[1].state).toBe('active')
+    expect(v.note).toBe('')
+  })
+
+  it('пропущенный возврат: стадия skipped, а не failed', () => {
+    const v = repairView({ state: 'success', steps: ladder(['skipped', 'done', 'skipped', 'skipped', 'skipped']) })
+    expect(v.steps.map((s) => s.state)).toEqual(['skipped', 'done', 'skipped'])
+  })
+
+  it('старое задание (шаги мастера, без restart) -- прежняя свёртка', () => {
+    const v = repairView({ state: 'running', running: true, steps: [{ name: 'failover', status: 'done' }, { name: 'issue', status: 'active' }, { name: 'failback', status: 'pending' }] })
+    expect(v.steps.map((s) => s.key)).toEqual(['failover', 'reissue', 'failback'])
+    expect(v.steps[1].label).toBe('Выпускаю новый конфиг и поднимаю VPN-туннель')
+    expect(v.steps[1].state).toBe('active')
+  })
+
+  it('шагов ещё нет (задание грузится) -- подписи лесенки, а не старое «Выпускаю новый конфиг…»', () => {
+    for (const job of [null, { state: 'running', running: true, steps: [] }, { state: 'running', running: true }]) {
+      const v = repairView(job)
+      expect(v.steps.map((s) => s.label)).toEqual(['Увожу трафик на запасной VPN-туннель', 'Поднимаю VPN-туннель', 'Возвращаю всё на место'])
+    }
+  })
+
+  it('прерванная лесенка показывает, что делать', () => {
+    const v = repairView(
+      { state: 'failed', check_name: 'tunnel_awg12', hint: 'починка прервана — бэкенд перезапускался; запустите её ещё раз', steps: ladder(['done', 'skipped', 'skipped', 'skipped', 'skipped']) },
+      { checkName: 'tunnel_awg12' },
+    )
+    expect(v.title).toBe('Не получилось')
+    expect(v.action).toBe('починка прервана — бэкенд перезапускался; запустите её ещё раз')
+  })
+
+  it('skipped в старой свёртке не рушит стадию', () => {
+    const v = repairView({ state: 'success', steps: [{ name: 'failover', status: 'skipped' }, { name: 'issue', status: 'done' }, { name: 'retire', status: 'skipped' }, { name: 'failback', status: 'skipped' }] })
+    expect(v.steps[1].state).toBe('done')
+  })
+})

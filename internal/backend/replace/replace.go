@@ -105,6 +105,10 @@ type Deps struct {
 	HandshakeTries int
 	HandshakeWait  time.Duration
 	Sleep          func(context.Context, time.Duration)
+	// Retired -- прежний VPN-туннель списан (выключен и остался на роутере).
+	// Его настройка автопочинки больше ни к чему не относится. nil -- никого
+	// не звать.
+	Retired func(routerID int64, tunnelID string)
 }
 
 type StartReq struct {
@@ -300,7 +304,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 
 	// 3. Рукопожатие: без него VPN-туннель не живой, что бы ни говорил статус.
 	d.step(jobID, StepHandshake, provision.StepActive, "ждём, когда VPN-туннель обменяется ключами")
-	if err := d.waitHandshake(ctx, req.RouterID, state.NewTunnelID, state.NewTunnelName); err != nil {
+	if err := d.WaitHandshake(ctx, req.RouterID, state.NewTunnelID, state.NewTunnelName); err != nil {
 		d.step(jobID, StepHandshake, provision.StepFailed, err.Error())
 		return err
 	}
@@ -323,7 +327,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	// 5. Рукопожатия мало: оно бывает и при не ходящем трафике. Критерий --
 	// адрес выхода сменился и отличается от прямого.
 	d.step(jobID, StepVerify, provision.StepActive, "смотрим, каким адресом видно снаружи")
-	verdict, err := d.verifyExit(ctx, req.RouterID)
+	verdict, err := d.VerifyExit(ctx, req.RouterID)
 	if err != nil {
 		d.step(jobID, StepVerify, provision.StepFailed, err.Error())
 		return err
@@ -343,64 +347,26 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		return nil
 	}
 	d.step(jobID, StepRetire, provision.StepDone, "прежний VPN-туннель выключен и остался на роутере")
+	if d.Retired != nil {
+		d.Retired(req.RouterID, req.OldTunnelID)
+	}
 	return nil
 }
 
-// analyze спрашивает роутер (awg-manager 2.18.x), примет ли модуль этот
-// конфиг, — до импорта. Ошибки анализа останавливают замену: модуль отверг
-// бы конфиг, и новый VPN-туннель не поднялся бы. Замечания идут в описание
-// шага. Старый агент (не знает команды) и старая панель (supported=false)
-// проверку пропускают, но замену не срывают: проверить нечем — не значит,
-// что конфиг плох.
+// analyze -- шаг мастера над AnalyzeConf: двигает шаг «проверяем конфиг».
+// Ошибки анализа останавливают замену: модуль отверг бы конфиг, и новый
+// VPN-туннель не поднялся бы. Замечания идут в описание шага. Старый агент
+// (не знает команды) и старая панель (supported=false) проверку пропускают,
+// но замену не срывают: проверить нечем — не значит, что конфиг плох.
 func (d Deps) analyze(ctx context.Context, jobID string, routerID int64, conf []byte) error {
-	const skipped = "проверку конфига этот роутер пока не умеет — пропускаю"
 	d.step(jobID, StepAnalyze, provision.StepActive, "спрашиваем роутер, примет ли он конфиг")
-	res, err := d.command(ctx, routerID, "tunnel_analyze", map[string]any{
-		"conf": base64.StdEncoding.EncodeToString(conf),
-	})
+	detail, _, err := d.AnalyzeConf(ctx, routerID, conf)
 	if err != nil {
-		d.step(jobID, StepAnalyze, provision.StepDone, skipped)
-		return nil
+		d.step(jobID, StepAnalyze, provision.StepFailed, detail)
+		return err
 	}
-	var out struct {
-		Supported bool           `json:"supported"`
-		Errors    []analyzeIssue `json:"errors"`
-		Warnings  []analyzeIssue `json:"warnings"`
-	}
-	if json.Unmarshal([]byte(res.Output), &out) != nil || !out.Supported {
-		d.step(jobID, StepAnalyze, provision.StepDone, skipped)
-		return nil
-	}
-	if len(out.Errors) > 0 {
-		msgs := joinIssues(out.Errors)
-		d.step(jobID, StepAnalyze, provision.StepFailed, "роутер не примет этот конфиг: "+msgs)
-		return errors.New("роутер не примет выпущенный конфиг: " + msgs)
-	}
-	if len(out.Warnings) > 0 {
-		d.step(jobID, StepAnalyze, provision.StepDone, "конфиг подходит, но есть замечания: "+joinIssues(out.Warnings))
-		return nil
-	}
-	d.step(jobID, StepAnalyze, provision.StepDone, "конфиг подходит модулю роутера")
+	d.step(jobID, StepAnalyze, provision.StepDone, detail)
 	return nil
-}
-
-// analyzeIssue — ошибка или замечание анализа. Message awg-manager пишет
-// по-русски и для человека, поэтому оно уходит владельцу как есть.
-type analyzeIssue struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func joinIssues(issues []analyzeIssue) string {
-	msgs := make([]string, 0, len(issues))
-	for _, is := range issues {
-		if m := strings.TrimSpace(is.Message); m != "" {
-			msgs = append(msgs, m)
-		} else if is.Code != "" {
-			msgs = append(msgs, is.Code)
-		}
-	}
-	return strings.Join(msgs, "; ")
 }
 
 func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *runState) {
@@ -545,60 +511,6 @@ func (d Deps) logCommandFailure(action, status, output string) {
 	if d.Logger != nil {
 		d.Logger.Warn("replace command failed", "action", action, "status", status, "output", strings.TrimSpace(output))
 	}
-}
-
-// waitHandshake ищет линию в снимке по идентификатору, а в текст для человека
-// кладёт её имя.
-func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID, name string) error {
-	last := ""
-	for i := 0; i < d.handshakeTries(); i++ {
-		res, err := d.command(ctx, routerID, "route_status", map[string]any{})
-		if err != nil {
-			return fmt.Errorf("не узнали у роутера, обменялся ли новый VPN-туннель ключами: %w", err)
-		}
-		var snap wire.RouteSnapshot
-		if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
-			d.logCommandFailure("route_status", "unparsable", err.Error())
-			return errors.New("не узнали у роутера, обменялся ли новый VPN-туннель ключами: " + RouterGarbled)
-		}
-		for _, t := range snap.Tunnels {
-			if t.ID != tunnelID {
-				continue
-			}
-			if t.HasHandshake {
-				return nil
-			}
-			last = fmt.Sprintf("VPN-туннель «%s» на роутере есть, но ключами ещё не обменялся", name)
-		}
-		if last == "" {
-			last = fmt.Sprintf("VPN-туннеля «%s» на роутере не видно", name)
-		}
-		d.sleep(ctx, d.handshakeWait())
-	}
-	return errors.New("новый VPN-туннель так и не обменялся ключами: " + last)
-}
-
-// verifyExit -- критерий успеха. Одного рукопожатия недостаточно: оно бывает
-// и когда трафик не ходит, поэтому спрашиваем адрес выхода через туннель и
-// напрямую и требуем, чтобы они отличались.
-func (d Deps) verifyExit(ctx context.Context, routerID int64) (string, error) {
-	viaRes, err := d.command(ctx, routerID, "check_via_tunnel", map[string]any{})
-	if err != nil {
-		return "", fmt.Errorf("адрес выхода через новый VPN-туннель проверить не вышло: %w", err)
-	}
-	directRes, err := d.command(ctx, routerID, "check_direct", map[string]any{})
-	if err != nil {
-		return "", fmt.Errorf("адрес выхода напрямую проверить не вышло: %w", err)
-	}
-	via := exitIP(viaRes.Output)
-	direct := exitIP(directRes.Output)
-	if via == "" {
-		return "", errors.New("через новый VPN-туннель адрес выхода не определился")
-	}
-	if direct != "" && via == direct {
-		return "", fmt.Errorf("снаружи виден тот же адрес, что и напрямую (%s): трафик в обход не пошёл", via)
-	}
-	return fmt.Sprintf("через VPN-туннель %s, напрямую %s", via, orUnknown(direct)), nil
 }
 
 func (d Deps) findTunnelByName(ctx context.Context, routerID int64, name string) (string, bool) {

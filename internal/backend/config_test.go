@@ -475,3 +475,22 @@ revive:
 		t.Fatalf("revive.key_file: %q", cfg.Revive.KeyFile)
 	}
 }
+
+// repair.auto_default с v0.54 не читается: автопочинка включается на
+// VPN-туннеле. Старый backend.yaml на Pi с этим ключом обязан загружаться.
+func TestLoadConfigIgnoresRetiredRepairAutoDefault(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "secret-bot-token-xyz")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+repair:
+  auto_default: true
+`)
+	if _, err := LoadConfig(cfgPath); err != nil {
+		t.Fatalf("старый ключ repair.auto_default ломает загрузку: %v", err)
+	}
+}

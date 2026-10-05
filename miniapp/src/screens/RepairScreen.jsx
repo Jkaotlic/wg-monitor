@@ -95,7 +95,14 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
           {view.steps.map((s, i) => (
             <li key={s.key} class={`repair-step repair-step-${s.state}`}>
               <StepMark state={s.state} index={i} />
-              <span class="repair-step-label">{s.label}</span>
+              <span class="repair-step-label">
+                {s.label}
+                {s.sub ? (
+                  <span class="repair-step-sub">
+                    <Quoted text={s.sub} />
+                  </span>
+                ) : null}
+              </span>
             </li>
           ))}
         </ol>
@@ -103,6 +110,11 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
         {view.note ? (
           <p class="repair-note">
             <Quoted text={view.note} />
+          </p>
+        ) : null}
+        {view.action ? (
+          <p class="repair-action">
+            <Quoted text={`Что делать: ${view.action}.`} />
           </p>
         ) : null}
 

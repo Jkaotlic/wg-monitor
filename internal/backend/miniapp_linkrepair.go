@@ -20,10 +20,6 @@ type miniappRepairReq struct {
 	CheckName string `json:"check_name"`
 }
 
-type miniappRepairAutoReq struct {
-	Enabled bool `json:"enabled"`
-}
-
 // miniappRepairStartHandler запускает починку по кнопке. Доступно всем, у
 // кого есть доступ к роутеру: починка ничего не удаляет, а прежний туннель
 // остаётся на месте выключенным.
@@ -81,10 +77,6 @@ func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusUnprocessableEntity, "no_scenario",
 				"эту поломку отсюда починить нечем")
 			return
-		case errors.Is(err, linkrepair.ErrUnknownOrigin):
-			writeJSONError(w, http.StatusUnprocessableEntity, "unknown_origin",
-				"не помним, каким конфигом поднят этот VPN-туннель — перевыпустить нечего")
-			return
 		case errors.Is(err, linkrepair.ErrAlreadyRunning):
 			writeJSONError(w, http.StatusConflict, "already_running", err.Error())
 			return
@@ -140,30 +132,5 @@ func miniappRepairStatusHandler(d Deps) http.HandlerFunc {
 		resp.TunnelID, _ = strings.CutPrefix(job.Target, miniappTunnelPrefix)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
-	}
-}
-
-// miniappRepairAutoHandler включает и выключает полуавтомат на роутере.
-func miniappRepairAutoHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		telegramUserID, _ := miniappUserFromContext(r.Context())
-		routerID, ok := parseMiniappRouterID(r)
-		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
-			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
-			return
-		}
-		if !requireJSONContentType(w, r) {
-			return
-		}
-		var req miniappRepairAutoReq
-		if !decodeWizardJSON(w, r, &req) {
-			return
-		}
-		if err := d.DB.RepairSettings().SetAutoRepair(routerID, req.Enabled); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "settings not saved")
-			return
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
 	}
 }

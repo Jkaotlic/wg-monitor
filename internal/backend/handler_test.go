@@ -2122,3 +2122,61 @@ func TestHardTransition_SkipsUnfixable(t *testing.T) {
 		t.Fatalf("движок звали %d раз, должно быть 0", calls)
 	}
 }
+
+// VPN-туннель ожил сам -- стоп автопочинки после провала снимается (D1):
+// иначе однажды не починенный туннель больше не чинился бы никогда.
+func TestRecovery_ClearsRepairBlock(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	t.Cleanup(func() { _ = d.Close() })
+	tok := "3131313131313131313131313131313131313131313131313131313131313131"
+	uid, _ := d.Users().Insert("роутер", tok, "198.51.100.11", "awg0")
+	hardSince := time.Now().Add(-time.Hour)
+	// Одно «ok» уже было: следующее закрывает тревогу (Recovery: 2).
+	if err := d.State().Save(uid, "tunnel_awg12", db.IncidentState{
+		CurrentStatus: "hard", ConsecutiveFails: 5, ConsecutiveOKs: 1, HardSince: &hardSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attempts := linkrepair.Attempts{KV: d.KV()}
+	for _, check := range []string{"tunnel_awg12", "tunnel_awg13"} {
+		if err := attempts.Record("роутер", check, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+		LinkRepair: &linkrepair.Deps{Attempts: attempts},
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC().Truncate(time.Second),
+		AgentVersion: "v0.54.0",
+		Checks:       []wire.Check{{Name: "tunnel_awg12", Status: "ok"}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	disp.mu.Lock()
+	kinds := append([]state.Kind(nil), disp.calls...)
+	disp.mu.Unlock()
+	if len(kinds) != 1 || kinds[0] != state.Recovery {
+		t.Fatalf("ждали Recovery, переходы: %v", kinds)
+	}
+	if ok, why := attempts.Allow("роутер", "tunnel_awg12"); !ok {
+		t.Fatalf("ожившему VPN-туннелю стоп обязан сняться: %s", why)
+	}
+	// Чужая проверка не трогается.
+	if ok, _ := attempts.Allow("роутер", "tunnel_awg13"); ok {
+		t.Fatal("стоп другого VPN-туннеля снят чужим восстановлением")
+	}
+}

@@ -56,9 +56,16 @@ func (a Attempts) load(nickname, checkName string) attemptLog {
 // Allow отвечает, можно ли начинать автопочинку. Причина отказа -- текст
 // для человека, а не код: её печатает экран.
 func (a Attempts) Allow(nickname, checkName string) (bool, string) {
+	ok, why, _ := a.verdict(nickname, checkName)
+	return ok, why
+}
+
+// verdict -- Allow и отдельно: отказ из-за потолка попыток (а не из-за
+// провала). Тогда человеку ещё говорится, что делать.
+func (a Attempts) verdict(nickname, checkName string) (bool, string, bool) {
 	log := a.load(nickname, checkName)
 	if log.Failed {
-		return false, "прошлая попытка починить не помогла — нужен человек"
+		return false, "прошлая попытка починить не помогла — нужен человек", false
 	}
 	cutoff := a.now().Add(-attemptWindow)
 	fresh := 0
@@ -68,9 +75,9 @@ func (a Attempts) Allow(nickname, checkName string) (bool, string) {
 		}
 	}
 	if fresh >= attemptLimit {
-		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh)
+		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh), true
 	}
-	return true, ""
+	return true, "", false
 }
 
 // Record запоминает попытку. ok=false запрещает следующую автопочинку до
@@ -87,6 +94,29 @@ func (a Attempts) Record(nickname, checkName string, ok bool) error {
 	}
 	log.At = append(kept, a.now())
 	log.Failed = !ok
+	raw, err := json.Marshal(log)
+	if err != nil {
+		return err
+	}
+	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
+}
+
+// Blocked -- то же, что Allow, глазами экрана: стоит ли автопочинка и почему.
+func (a Attempts) Blocked(nickname, checkName string) (bool, string) {
+	ok, why := a.Allow(nickname, checkName)
+	return !ok, why
+}
+
+// Clear снимает стоп после провала (D1): удачная ручная починка, возврат
+// VPN-туннеля в норму, повторное включение тумблера. Окно попыток остаётся:
+// флапающий VPN-туннель, который каждый раз чинится, всё равно упирается в
+// потолок за 6 часов.
+func (a Attempts) Clear(nickname, checkName string) error {
+	log := a.load(nickname, checkName)
+	if !log.Failed {
+		return nil
+	}
+	log.Failed = false
 	raw, err := json.Marshal(log)
 	if err != nil {
 		return err

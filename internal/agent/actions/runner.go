@@ -672,10 +672,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		name, _ := cmd.Args["name"].(string)
 		replace, _ := cmd.Args["replace"].(bool)
 		backend, _ := cmd.Args["backend"].(string)
+		targetID, _ := cmd.Args["target_id"].(string)
 		if confB64 == "" || name == "" {
 			return "err", "tunnel_import: conf and name are required", payload
 		}
-		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, r.sleep, confB64, name, replace, backend)
+		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, r.sleep, confB64, name, replace, backend, targetID)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

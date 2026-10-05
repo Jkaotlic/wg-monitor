@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -54,6 +55,8 @@ func (f *fakeCommander) AwaitResult(_ context.Context, _ int64, id string, _ tim
 		snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{
 			{ID: "awg21", Name: "amnezia_nl", HasHandshake: f.statusCalls > f.handshakeAfter},
 			{ID: "awg11", Name: "old"},
+			// Обмен ключами был, но давно: живым такой VPN-туннель не считается.
+			{ID: "awg31", Name: "stale", HasHandshake: true, HandshakeAge: 900},
 		}}
 		b, _ := json.Marshal(snap)
 		return &wire.CommandResult{ID: id, Status: "ok", Output: string(b)}, true
@@ -546,5 +549,35 @@ func TestRunOnJob_UsesCallerJobAndLock(t *testing.T) {
 	}
 	if got.State != provision.StateSuccess {
 		t.Fatalf("state=%s hint=%s", got.State, got.Hint)
+	}
+}
+
+// Прежний VPN-туннель списан: его настройка автопочинки больше ни к чему не
+// относится (id может уйти новому туннелю) -- мастер зовёт Retired.
+func TestReplace_RetireDropsOldTunnel(t *testing.T) {
+	cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+		"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+	}}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &noteLog{})
+	var mu sync.Mutex
+	var retired []string
+	d.Retired = func(routerID int64, tunnelID string) {
+		mu.Lock()
+		defer mu.Unlock()
+		retired = append(retired, fmt.Sprint(routerID, "/", tunnelID))
+	}
+	id, err := d.Start(startReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job := waitJob(t, d, id); job.State != provision.StateSuccess {
+		t.Fatalf("state=%s", job.State)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(retired) != 1 || retired[0] != "1/awg11" {
+		t.Fatalf("списание прежнего VPN-туннеля: %v", retired)
 	}
 }

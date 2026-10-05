@@ -1,7 +1,9 @@
 import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable, listAutorepair } from '../api.js'
+import { autorepairBadge } from '../autorepair.js'
+import { Pill } from '../ui/Pill.jsx'
 import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
@@ -163,6 +165,28 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     })
   }
 
+  // Метки автопочинки: один запрос на вкладку -- при открытии и при возврате с
+  // экрана VPN-туннеля (там её могли включить или выключить). Сбой чтения --
+  // без меток: она подсказка, а не данные для решения.
+  const [autoStates, setAutoStates] = useState({})
+  const [autoReasons, setAutoReasons] = useState({})
+  const loadAutorepair = () => {
+    const rid = routerID
+    listAutorepair(rid)
+      .then((r) => {
+        if (routerRef.current !== rid) return
+        setAutoStates(r?.tunnels ?? {})
+        setAutoReasons(r?.reasons ?? {})
+      })
+      .catch(() => {})
+  }
+  useEffect(() => {
+    setAutoStates({})
+    setAutoReasons({})
+    loadAutorepair()
+  }, [routerID])
+  useOnClose(layer === 'tunnel', loadAutorepair)
+
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
   useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
   useOnClose(routesOpen, () => run('route_status', {}, deadline))
@@ -296,6 +320,15 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     if (['active', 'unknown', 'activeUnknown', 'checkUnknown'].includes(c.role)) return null
     if (c.role === 'down' || c.role === 'activeDown') return restartButton(c)
     return toggleButton(c)
+  }
+
+  // Метка только тем VPN-туннелям, что есть в нынешнем снимке: бэкенд хранит
+  // настройки и для давно удалённых.
+  const autoBadge = (id) => {
+    const b = autorepairBadge(autoStates[id], autoReasons[id])
+    return b ? (
+      <Pill tone={b.tone === 'neutral' ? 'muted' : b.tone}>{b.text}</Pill>
+    ) : null
   }
 
   return (
@@ -463,6 +496,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 key={t.id}
                 title={t.name}
                 sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
+                right={autoBadge(t.id)}
                 onClick={() => openLayer?.('tunnel', { tunnelID: t.id })}
               />
             ))}
@@ -481,6 +515,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           routerID={routerID}
           asleep={asleep}
           snapshot={snapshot}
+          verdictSnapshot={shown}
           tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}

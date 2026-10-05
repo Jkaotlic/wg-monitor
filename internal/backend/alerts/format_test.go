@@ -1262,3 +1262,34 @@ func TestHardAndOfflineTextsDoNotReferenceRemovedButtons(t *testing.T) {
 		}
 	}
 }
+
+// Автопочинка включена -- тревога последней строкой обещает дописать ход
+// починки сюда же. Без неё строки нет. Строка проходит те же сторожа, что и
+// вся тревога: читает владелец.
+func TestFormatHard_AutoRepairLine(t *testing.T) {
+	const line = "Автопочинка включена — начинаю чинить, допишу сюда."
+	args := HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now(), ConsecFails: 3,
+		Check: wire.Check{Name: "tunnel_awg11", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900}},
+	}
+	if got := FormatHard(args); strings.Contains(got, "Автопочинка") {
+		t.Fatalf("без автопочинки строки быть не может:\n%s", got)
+	}
+	args.AutoRepair = true
+	got := FormatHard(args)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if last := lines[len(lines)-1]; !strings.Contains(last, line) {
+		t.Fatalf("последняя строка %q, ждали %q:\n%s", last, line, got)
+	}
+	for _, bad := range []string{"ssh ", "SSH", "opkg", "fails", "handshake", "рестарт", "ping"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("недопустимое %q в тревоге:\n%s", bad, got)
+		}
+	}
+	tail := lines[len(lines)-1]
+	for _, r := range tail {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			t.Fatalf("латиница в строке автопочинки: %q", tail)
+		}
+	}
+}

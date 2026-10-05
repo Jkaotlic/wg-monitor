@@ -110,7 +110,13 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStatusHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStartHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStatusHandler(d))))
-	mux.Handle("PUT /v1/miniapp/routers/{id}/repair/auto", reqID(auth(miniappRepairAutoHandler(d))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/autorepair", reqID(auth(miniappAutorepairListHandler(d))))
+	// GET настройки автопочинки -- шаблоном с подпутём, а не литералом
+	// «autorepair»: литерал пересекается с «tunnels/import/{token}» без
+	// победителя, и мукс падает при регистрации. Предпросмотр импорта
+	// конкретнее и забирает свои пути сам; прочие подпути -- 404.
+	mux.Handle("GET /v1/miniapp/routers/{id}/tunnels/{tunnel_id}/{part}", reqID(auth(miniappAutorepairGetHandler(d))))
+	mux.Handle("PUT /v1/miniapp/routers/{id}/tunnels/{tunnel_id}/autorepair", reqID(auth(miniappAutorepairPutHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/commands", reqID(auth(miniappCommandHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/commands/{cmd_id}", reqID(auth(miniappCommandResultHandler(d))))
 	// VPN-туннели (цикл 4): удаление и импорт .conf. Вопросы агенту живут

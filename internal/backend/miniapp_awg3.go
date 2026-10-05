@@ -30,6 +30,9 @@ type Awg3Panels interface {
 	Peers(ctx context.Context, id, iface string) (awg3panel.Page, error)
 	IssueDevice(ctx context.Context, id, iface, name string) (awg3panel.Issued, error)
 	ConfigForRouter(ctx context.Context, id, iface, nickname string) (awg3panel.RouterConfig, error)
+	// FreshConfigForRouter -- всегда новый пир роутера: ступень «пересоздать»
+	// автопочинки (старый пир остаётся на панели).
+	FreshConfigForRouter(ctx context.Context, id, iface, nickname string) (awg3panel.RouterConfig, error)
 	AddIssuer(id string, tg, by int64) (awg3panel.View, error)
 	RemoveIssuer(id string, tg int64) (awg3panel.View, error)
 	IsIssuer(id string, tg int64) (bool, error)

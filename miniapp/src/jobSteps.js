@@ -3,7 +3,7 @@
 // или перенаправление агента. Экран один на все три; различаются слова.
 
 export const JOB_STATES = ['running', 'success', 'failed']
-export const STEP_STATUSES = ['pending', 'active', 'done', 'failed']
+export const STEP_STATUSES = ['pending', 'active', 'done', 'failed', 'skipped']
 
 // Все 10 имён provision/steps.go. Порядок шагов задаёт сервер (массив steps),
 // здесь только слова. Сверка с Go -- test/jobSteps.test.js.
