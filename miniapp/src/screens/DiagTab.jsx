@@ -4,7 +4,7 @@ import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { DIAG_SECTIONS, parseDiag, checkRows, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
-import { humanAge, tunnelCountSummary, workingTunnelCount, workingTunnelNote, uncheckedTunnelCount } from '../labels.js'
+import { humanAge, tunnelCountSummary, workingTunnelNote } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
 import { agoText } from '../when.js'
@@ -80,8 +80,9 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const age = data.router?.last_seen_age_sec
   const silent = isStale(data.router)
   // То же правило, что на «Сейчас» (MINI-07).
-  const tunnelsAlive = workingTunnelCount(data.tunnels, data.incidents)
-  const tunnelsUnchecked = uncheckedTunnelCount(data.tunnels)
+  const tunnelCounts = tunnelCountSummary(data.tunnels, data.incidents)
+  const tunnelsAlive = tunnelCounts.working
+  const tunnelsUnchecked = tunnelCounts.unchecked
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
   const runRecheck = () => recheck.run('force_recheck', {}, deadline).then((res) => { if (res?.status === 'ok') load() })
   const split = dnsSplitView(data.checks, { silent, agentVersion: data.router?.agent_version })
@@ -107,7 +108,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
             silent
               ? 'данные устарели'
               : data.tunnels.length
-                ? workingTunnelNote(tunnelsAlive, tunnelCountSummary(data.tunnels, data.incidents).total, tunnelsUnchecked)
+                ? workingTunnelNote(tunnelsAlive, tunnelCounts.total, tunnelsUnchecked)
                 : 'роутер не сообщил ни одного'
           }
           tone={!silent && data.tunnels.length && tunnelsAlive === 0 && tunnelsUnchecked === 0 ? 'danger' : undefined}

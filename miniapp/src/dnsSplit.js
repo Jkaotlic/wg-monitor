@@ -7,7 +7,7 @@
 // ответов ничего не различает (прогон 14.09.2026). Поэтому слов уверенности
 // здесь нет, а оговорка стоит рядом с ответом.
 
-import { agentAtLeast } from './agentConfig.js'
+import { agentAtLeast, agentVersionKnown } from './agentConfig.js'
 
 // Имена зон так, как их пишет человек, а не роутер (punycode).
 const ZONE_NAMES = {
@@ -64,7 +64,7 @@ export const DNS_SPLIT_TEXTS = {
 
 // Что сказать, пока проверки нет, -- по версии агента, а не «на всякий случай».
 function missingNote(agentVersion) {
-  if (!agentVersion) return DNS_SPLIT_TEXTS.unknownAgent
+  if (!agentVersionKnown(agentVersion)) return DNS_SPLIT_TEXTS.unknownAgent
   return agentAtLeast(agentVersion, DNS_SPLIT_MIN_VERSION) ? DNS_SPLIT_TEXTS.notYet : DNS_SPLIT_TEXTS.tooOld
 }
 

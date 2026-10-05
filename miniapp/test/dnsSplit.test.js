@@ -29,6 +29,11 @@ describe('dnsSplitView', () => {
   })
 
   it('B2: версия агента неизвестна -- не обещаем обновление и не врём про «ещё не пришла»', () => {
+    for (const agentVersion of [undefined, '', 'garbage']) {
+      const n = dnsSplitView([{ check_name: 'dns', status: 'ok' }], { agentVersion }).note
+      expect(n).toContain('Версию агента роутер не сообщил')
+      expect(n).not.toContain('появится после обновления')
+    }
     const v = dnsSplitView([{ check_name: 'dns', status: 'ok' }])
     expect(v.note).toContain('Версию агента роутер не сообщил')
     expect(v.note).not.toContain('появится после обновления')

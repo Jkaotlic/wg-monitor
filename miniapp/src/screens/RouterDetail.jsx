@@ -26,10 +26,8 @@ import {
   checkLabel,
   tunnelOf,
   checkState as checkStateOf,
-  workingTunnelCount,
   tunnelCountSummary,
   workingTunnelNote,
-  uncheckedTunnelCount,
   commandOutcomeLabel,
   incidentCopy,
   legendLabel,
@@ -437,10 +435,12 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
-  const liveCount = workingTunnelCount(tunnels, incidents)
-  const ownTotal = tunnelCountSummary(tunnels, incidents).total
+  // Один счёт на экран: свои / работают / не проверено -- одним вызовом.
+  const counts = tunnelCountSummary(tunnels, incidents)
+  const liveCount = counts.working
+  const ownTotal = counts.total
   // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
-  const uncheckedCount = uncheckedTunnelCount(tunnels)
+  const uncheckedCount = counts.unchecked
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же

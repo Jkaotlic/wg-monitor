@@ -31,11 +31,15 @@ describe('B4: одна таблица подписей', () => {
     expect(rows.length).toBeGreaterThanOrEqual(6)
   })
 
-  it('в исходниках нет второго словаря подписей', () => {
-    for (const f of readdirSync(new URL('../src', import.meta.url))) {
-      if (!f.endsWith('.js')) continue
-      const src = readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8')
-      expect(src, f).not.toMatch(/ROW_TITLES|LEGEND_LABEL/)
+  it('в исходниках (.js и .jsx, включая экраны) нет второго словаря подписей', () => {
+    const walk = (dir) =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.jsx?$/.test(e.name) ? [`${dir}/${e.name}`] : [],
+      )
+    const files = walk(new URL('../src', import.meta.url).pathname)
+    expect(files.some((f) => f.endsWith('.jsx'))).toBe(true)
+    for (const f of files) {
+      expect(readFileSync(f, 'utf8'), f).not.toMatch(/ROW_TITLES|LEGEND_LABEL/)
     }
   })
 })

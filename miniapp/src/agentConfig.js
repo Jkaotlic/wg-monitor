@@ -94,6 +94,22 @@ function parseAgentVersion(s) {
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] ?? '' }
 }
 
+// Версия агента читается (v0.31.0, 0.54.1)? Пустая -- роутер ещё не прислал
+// свежий отчёт (agent_version шлётся с v0.20.0), нечитаемая -- то же самое.
+export function agentVersionKnown(version) {
+  return parseAgentVersion(version) !== null
+}
+
+export const AGENT_VERSION_UNKNOWN_NOTE =
+  'Роутер ещё не прислал свежий отчёт, поэтому версию его агента мы не знаем. Загляните сюда позже.'
+
+// Фраза «появится после обновления» -- только при ИЗВЕСТНОЙ версии ниже порога;
+// пустая или нечитаемая версия не повод просить обновление (v0.56, B2).
+export function agentGateNote(version, tooOldText) {
+  if (!agentVersionKnown(version)) return AGENT_VERSION_UNKNOWN_NOTE
+  return `${tooOldText} Агент на роутере: ${String(version).trim()}.`
+}
+
 // Кому и когда экран доступен вообще. Радиус правки router-global, поэтому
 // круг -- только админ бота; расширение круга -- отдельный пункт бэклога.
 export function agentConfigAvailable(settings) {
