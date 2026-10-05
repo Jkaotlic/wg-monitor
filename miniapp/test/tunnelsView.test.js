@@ -48,7 +48,7 @@ describe('tunnelsView -- активная линия', () => {
   })
 
   it('пустой снимок не падает', () => {
-    expect(tunnelsView(null)).toEqual({ active: null, policyName: '', chain: [], unused: [] })
+    expect(tunnelsView(null)).toEqual({ state: 'none', active: null, policyName: '', chain: [], unused: [] })
   })
 })
 

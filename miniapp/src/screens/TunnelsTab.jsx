@@ -43,6 +43,9 @@ const CHAIN_TITLE = {
   unknown: 'Состояние неизвестно',
   activeUnknown: 'Назначен несущим, проверка неизвестна',
   checkUnknown: 'Проверка неизвестна',
+  // sing-box (B1): звено настроено, но маршрут роутер выбирает для каждого
+  // адреса -- «несёт трафик» о нём сказать нельзя.
+  routed: 'Настроено, маршрут выбирается по адресу',
 }
 
 const SOURCES_WAIT_MS = 8000
@@ -224,7 +227,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   }, [routerID, result])
 
   const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
-  const view = tunnelsView(shown)
+  // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
+  // traffic из того же ответа /events, что и проверки.
+  const view = tunnelsView(shown, checks?.traffic)
   const list = tunnelList(shown)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
@@ -411,7 +416,31 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {snapshot && !view.active && (
+      {snapshot && view.state === 'singbox' && (
+        <Section title="VPN-туннели обхода">
+          <Hero>
+            <StateTag>настроено, маршрут выбирается по адресу</StateTag>
+            <p class="traffic-detail" style="padding-bottom:16px">
+              Роутер выбирает VPN-туннель для каждого адреса отдельно, поэтому одного, который несёт весь обход, здесь нет.
+            </p>
+          </Hero>
+        </Section>
+      )}
+
+      {/* Сервер не назвал несущего: гадать по «первому поднятому» нельзя --
+          так «Роутер» и эта вкладка называли разные VPN-туннели (B1). */}
+      {snapshot && view.state === 'unknown' && (
+        <Section title="VPN-туннель, который несёт трафик">
+          <Hero cold>
+            <StateTag tone="warn">роутер не сообщил, какой несёт трафик</StateTag>
+            <p class="traffic-detail" style="padding-bottom:16px">
+              Какой VPN-туннель несёт обход, роутер не сообщил — гадать не будем. Их состояние — ниже.
+            </p>
+          </Hero>
+        </Section>
+      )}
+
+      {snapshot && view.state === 'none' && (
         <Section title="VPN-туннель, который работает">
           <Hero cold>
             <StateTag tone="danger">ни один VPN-туннель не несёт трафик</StateTag>
@@ -461,7 +490,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               }))}
             />
             <p class="card-foot">
-              Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.
+              {view.state === 'singbox'
+                ? 'Маршрут для каждого адреса выбирает роутер среди настроенных VPN-туннелей.'
+                : 'Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.'}
             </p>
           </div>
         </Section>
