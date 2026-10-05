@@ -543,7 +543,7 @@ describe('v0.50: форма сервера без простыни (спека �
 
 
 describe('«Выданные подключения» (B3)', () => {
-  const LIVE = { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home' } }
+  const LIVE = { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home', likely: true } }
   const OTHER = { id: 'KEY-B', name: 'Phone of Ann', address: '10.8.1.4/32', in_use: null }
 
   it('сервер не читается, пока не нажали: вход на SSH -- по кнопке', async () => {
@@ -558,7 +558,7 @@ describe('«Выданные подключения» (B3)', () => {
     const first = root.querySelector('.selfhosted-client')
     expect(first.textContent).toContain('wgmon-home-20261003-120000')
     expect(first.textContent).toContain('10.8.1.3/32')
-    expect(first.querySelector('.selfhosted-client-warn').textContent).toContain('Этим подключением живёт VPN-туннель «ams_home» роутера «home»')
+    expect(first.querySelector('.selfhosted-client-warn').textContent).toContain('Скорее всего, этим подключением живёт VPN-туннель «ams_home» роутера «home»')
     expect(root.querySelectorAll('.selfhosted-client-warn')).toHaveLength(1)
     cleanup(root)
   })

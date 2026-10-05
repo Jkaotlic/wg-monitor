@@ -309,7 +309,7 @@ describe('выданные подключения: строки и лист от
   const inst = { id: 'ams', label: 'Амстердам' }
   const resp = {
     clients: [
-      { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home' } },
+      { id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', created_at: '2026-10-03T12:00:00Z', in_use: { router: 'home', tunnel: 'ams_home', likely: true } },
       { id: 'KEY-B', name: 'Phone of Ann', address: '10.8.1.4/32', in_use: null },
     ],
   }
@@ -318,11 +318,17 @@ describe('выданные подключения: строки и лист от
     const rows = clientRows(resp)
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ id: 'KEY-A', name: 'wgmon-home-20261003-120000', address: '10.8.1.3/32', date: '03.10.2026' })
-    expect(rows[0].inUse).toBe('Этим подключением живёт VPN-туннель «ams_home» роутера «home»: после отзыва он перестанет работать.')
+    expect(rows[0].inUse).toBe('Скорее всего, этим подключением живёт VPN-туннель «ams_home» роутера «home»: после отзыва он перестанет работать.')
     expect(rows[1].date).toBe('')
     expect(rows[1].inUse).toBe('')
     expect(clientRows(null)).toEqual([])
     expect(clientRows({ clients: 'x' })).toEqual([])
+  })
+
+  it('прежнее подключение того же роутера -- «возможно», не «скорее всего»', () => {
+    const rows = clientRows({ clients: [{ id: 'K', name: 'n', address: 'a', in_use: { router: 'home', tunnel: 'ams_home', likely: false } }] })
+    expect(rows[0].inUse).toBe('Возможно, этим подключением живёт VPN-туннель «ams_home» роутера «home»: если это так, после отзыва он перестанет работать.')
+    expect(revokeSheetText({ id: 'ams', label: 'Амстердам' }, rows[0]).body).toContain('Возможно, этим подключением живёт')
   })
 
   it('лист отзыва: набор названия сервера; предупреждение с роутером и туннелем только когда подключение живое', () => {
@@ -330,7 +336,7 @@ describe('выданные подключения: строки и лист от
     const a = revokeSheetText(inst, live)
     expect(a.title).toBe('Отозвать подключение «wgmon-home-20261003-120000»?')
     expect(a.body).toContain('перестанет работать')
-    expect(a.body).toContain('Этим подключением живёт VPN-туннель «ams_home» роутера «home»')
+    expect(a.body).toContain('Скорее всего, этим подключением живёт VPN-туннель «ams_home» роутера «home»')
     const b = revokeSheetText(inst, plain)
     expect(b.body).not.toContain('живёт VPN-туннель')
     expect(b.body).toContain('больше не сможет им пользоваться')
