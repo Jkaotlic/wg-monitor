@@ -96,6 +96,8 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/toggle", reqID(auth(miniappSelfHostedToggleHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/selfhosted/{inst}", reqID(auth(miniappSelfHostedDeleteHandler(d))))
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/check", reqID(auth(miniappSelfHostedCheckHandler(d))))
+	mux.Handle("GET /v1/miniapp/selfhosted/{inst}/clients", reqID(auth(miniappSelfHostedClientsHandler(d))))
+	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/clients/revoke", reqID(auth(miniappSelfHostedRevokeHandler(d))))
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/trust-host-key", reqID(auth(miniappSelfHostedTrustHostKeyHandler(d))))
 	// awg3-панели оператора (v0.49): только админ, гейт внутри обработчиков.
 	mux.Handle("GET /v1/miniapp/awg3panels", reqID(auth(miniappAwg3ListHandler(d))))

@@ -21,6 +21,8 @@ type sandboxSelfHosted struct {
 	mu        sync.Mutex
 	instances []selfhostedamnezia.Instance
 	issued    int
+	// clients -- выданные подключения «Домашнего VPS»; отзыв их убирает.
+	clients []selfhostedamnezia.Client
 }
 
 var _ backend.SelfHostedVPS = (*sandboxSelfHosted)(nil)
@@ -31,7 +33,12 @@ var _ backend.SelfHostedVPS = (*sandboxSelfHosted)(nil)
 const sandboxHostKey = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
 
 func newSandboxSelfHosted() *sandboxSelfHosted {
-	return &sandboxSelfHosted{instances: []selfhostedamnezia.Instance{
+	now := time.Now()
+	return &sandboxSelfHosted{clients: []selfhostedamnezia.Client{
+		{PublicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", Name: "wgmon-sandbox-home-" + now.Add(-72*time.Hour).Format("20060102-150405"), Address: "10.8.1.2/32", CreatedAt: now.Add(-72 * time.Hour)},
+		{PublicKey: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=", Name: "wgmon-sandbox-home-" + now.Add(-24*time.Hour).Format("20060102-150405"), Address: "10.8.1.3/32", CreatedAt: now.Add(-24 * time.Hour)},
+		{PublicKey: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=", Name: "Phone of Ann", Address: "10.8.1.4/32", CreatedAt: now.Add(-6 * time.Hour)},
+	}, instances: []selfhostedamnezia.Instance{
 		{ID: "home", Label: "Домашний VPS", Enabled: true, EndpointHost: "vpn.sandbox.example.com", EndpointPort: 47567,
 			// Пароль-заглушка не литералом: gosec G101 ловит строку в поле SSHPassword,
 			// а песочница по SSH не ходит вовсе.
@@ -233,4 +240,38 @@ func (d sandboxDocs) SendPhoto(_ context.Context, chatID int64, _ *int64, filena
 	}
 	slog.Info("песочница: QR в личку", "chat", chatID, "file", filename, "bytes", len(data), "caption", caption)
 	return 2, nil
+}
+
+func (s *sandboxSelfHosted) Clients(_ context.Context, id string) ([]selfhostedamnezia.Client, selfhostedamnezia.Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 {
+		return nil, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrInstanceNotFound
+	}
+	if !s.instances[i].Enabled {
+		return nil, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrInstanceDisabled
+	}
+	if id != "home" {
+		return nil, s.instances[i], nil
+	}
+	return append([]selfhostedamnezia.Client{}, s.clients...), s.instances[i], nil
+}
+
+func (s *sandboxSelfHosted) Revoke(_ context.Context, id, publicKey string) (selfhostedamnezia.Client, selfhostedamnezia.Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 {
+		return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrInstanceNotFound
+	}
+	if id == "home" {
+		for k, c := range s.clients {
+			if c.PublicKey == publicKey {
+				s.clients = append(s.clients[:k:k], s.clients[k+1:]...)
+				return c, s.instances[i], nil
+			}
+		}
+	}
+	return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrClientNotFound
 }

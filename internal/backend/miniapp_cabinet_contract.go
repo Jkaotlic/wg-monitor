@@ -70,6 +70,10 @@ type SelfHostedVPS interface {
 	// TrustNewHostKey -- «Доверять новому ключу» (v0.55, B2): запомненный
 	// отпечаток ключа хоста сбрасывается, следующий вход запомнит новый.
 	TrustNewHostKey(id string) error
+	// Clients -- выданные подключения сервера (v0.55, B3).
+	Clients(ctx context.Context, id string) ([]selfhostedamnezia.Client, selfhostedamnezia.Instance, error)
+	// Revoke -- отзыв подключения по ключу. ErrClientNotFound -- такого нет.
+	Revoke(ctx context.Context, id, publicKey string) (selfhostedamnezia.Client, selfhostedamnezia.Instance, error)
 }
 
 // MiniappDocSender -- .conf документом и QR картинкой в личку нажавшему (*tg.Client).

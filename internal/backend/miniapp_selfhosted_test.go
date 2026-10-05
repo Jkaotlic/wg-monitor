@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 )
@@ -305,5 +306,139 @@ func TestMiniappSelfHostedHostKey(t *testing.T) {
 	want := "Ключ сервера «Дом» изменился — если вы переустанавливали сервер, подтвердите новый ключ в карточке"
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "selfhosted_host_key_changed" || msg != want {
 		t.Fatalf("файл при смене ключа: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+const (
+	revKeyA = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	revKeyB = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+	revKeyC = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+)
+
+// seedRevokeClients -- три подключения «Дома»: два выдано роутеру router-owned
+// (живое -- новое), третье чужое (выдано в приложении Amnezia).
+func seedRevokeClients(t *testing.T, env *cabinetEnv, withTunnel bool) {
+	t.Helper()
+	seedVPS(env)
+	old := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	env.vps.clients = []selfhostedamnezia.Client{
+		{PublicKey: revKeyA, Name: "wgmon-router-owned-20261001-100000", Address: "10.8.1.2/32", CreatedAt: old},
+		{PublicKey: revKeyB, Name: "wgmon-router-owned-20261003-120000", Address: "10.8.1.3/32", CreatedAt: old.Add(48 * time.Hour)},
+		{PublicKey: revKeyC, Name: "Phone of Ann", Address: "10.8.1.4/32", CreatedAt: old.Add(72 * time.Hour)},
+	}
+	if withTunnel {
+		name := selfhostedamnezia.TunnelName("dacha", "router-owned")
+		if err := env.d.Events().Insert(env.ownedID, "tunnel_awg20", "ok", `{"tunnel_id":"awg20","tunnel_name":"`+name+`"}`, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMiniappSelfHostedClientsListWarnsAboutLiveTunnel(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedRevokeClients(t, env, true)
+	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Clients []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Address string `json:"address"`
+			InUse   *struct {
+				Router string `json:"router"`
+				Tunnel string `json:"tunnel"`
+			} `json:"in_use"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Clients) != 3 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	// Живёт туннель только последним подключением роутера; прежнее и чужое -- нет.
+	for _, c := range resp.Clients {
+		wantUse := c.ID == revKeyB
+		if (c.InUse != nil) != wantUse {
+			t.Errorf("%s: in_use=%v, ждали %v", c.Name, c.InUse, wantUse)
+		}
+		if c.InUse != nil && (c.InUse.Router != "router-owned" || c.InUse.Tunnel != selfhostedamnezia.TunnelName("dacha", "router-owned")) {
+			t.Errorf("in_use: %+v", c.InUse)
+		}
+	}
+	for _, leak := range []string{"SECRET-SSH", "ssh_password"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Fatalf("утечка %s", leak)
+		}
+	}
+}
+
+func TestMiniappSelfHostedClientsNoTunnelNoWarning(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedRevokeClients(t, env, false)
+	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients", "")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"in_use":{`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappSelfHostedRevokeAdminOnlyAndConfirmed(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedRevokeClients(t, env, true)
+	body := `{"client_id":"` + revKeyB + `","confirm":"Дом"}`
+	for _, who := range []int64{cabStranger, cabOperator, cabOwner} {
+		for _, rt := range []struct{ m, p string }{
+			{http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients"},
+			{http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke"},
+		} {
+			rec := env.do(t, who, rt.m, rt.p, body)
+			if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+				t.Errorf("%s от %d: %d %s", rt.p, who, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if len(env.vps.revoked) != 0 {
+		t.Fatalf("не админ отозвал: %v", env.vps.revoked)
+	}
+	// Имя сервера набрано неверно -- 400 на бэкенде, ничего не отозвано.
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":"дача"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || len(env.vps.revoked) != 0 {
+		t.Fatalf("неверное имя: %d %s %v", rec.Code, rec.Body.String(), env.vps.revoked)
+	}
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`"}`)
+	if rec.Code != http.StatusBadRequest || len(env.vps.revoked) != 0 {
+		t.Fatalf("без подтверждения: %d %s", rec.Code, rec.Body.String())
+	}
+	// Верное имя (регистр и пробелы прощаются, как у «Доверять новому ключу») -- отзыв.
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":" дом "}`)
+	if rec.Code != http.StatusNoContent || len(env.vps.revoked) != 1 || env.vps.revoked[0] != "dacha:"+revKeyB {
+		t.Fatalf("отзыв: %d %s %v", rec.Code, rec.Body.String(), env.vps.revoked)
+	}
+	if !strings.Contains(env.logs.String(), "отозвано") || strings.Contains(env.logs.String(), revKeyB) {
+		t.Fatalf("журнал: %s", env.logs.String())
+	}
+	// Повтор -- подключения уже нет: 404 словами.
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":"Дом"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "client_not_found" {
+		t.Fatalf("повтор: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappSelfHostedRevokeFailuresAreWords(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedRevokeClients(t, env, false)
+	env.vps.revokeErr = &selfhostedamnezia.HostKeyChangedError{Label: "Дом"}
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":"Дом"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "selfhosted_host_key_changed" || !strings.Contains(msg, "«Дом»") {
+		t.Fatalf("ключ хоста: %d %s", rec.Code, rec.Body.String())
+	}
+	env.vps.revokeErr = errors.New("remote docker wg set: SSH-ПОДРОБНОСТЬ-НЕ-НАРУЖУ")
+	rec = env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/selfhosted/dacha/clients/revoke", `{"client_id":"`+revKeyB+`","confirm":"Дом"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "selfhosted_revoke_failed" || strings.Contains(rec.Body.String(), "ПОДРОБНОСТЬ") || msg == "" {
+		t.Fatalf("сбой сервера: %d %s", rec.Code, rec.Body.String())
+	}
+	env.vps.listErr = selfhostedamnezia.ErrInstanceDisabled
+	rec = env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients", "")
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "instance_disabled" {
+		t.Fatalf("выключен: %d %s", rec.Code, rec.Body.String())
 	}
 }

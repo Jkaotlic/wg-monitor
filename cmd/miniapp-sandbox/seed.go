@@ -7,6 +7,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -278,6 +279,12 @@ func seedHistory(d *db.DB, uid int64, now time.Time, nick string) error {
 
 	switch nick {
 	case "sandbox-home":
+		// VPN-туннель с «Домашнего VPS» под именем выпуска: по нему лист отзыва
+		// подключения предупреждает, что им живёт роутер (v0.55, B3).
+		if err := d.Events().Insert(uid, "tunnel_awg30", "ok", `{"tunnel_id":"awg30","tunnel_name":"`+selfhostedamnezia.TunnelName("home", nick)+
+			`","status":"running","enabled":true,"handshake_age_sec":30,"ping_check_status":"ok","active_default_known":true}`, now); err != nil {
+			return err
+		}
 		// Вчера четыре минуты не было интернета -- одна строка в ленте.
 		return pair("external_reach", now.Add(-26*time.Hour), 4*time.Minute)
 	case "sandbox-broken":
