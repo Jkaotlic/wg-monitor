@@ -34,47 +34,63 @@ type TunnelsCheck struct {
 	Grace *RunGrace
 }
 
-// runGraceRuns -- сколько обходов подряд остановленный VPN-туннель сохраняет
-// свои правила. Разовый перезапуск (ping-check, смена конфига) укладывается
-// в один обход; без окна такой обход давал «трафик напрямую» и глушил
-// падение как у неиспользуемого туннеля (fleet-audit 15.09).
-const runGraceRuns = 2
+// defaultRunGraceWindow -- окно терпимости, когда интервал отчётов не задан.
+const defaultRunGraceWindow = 2 * time.Minute
 
-// RunGrace помнит, на каком обходе каждый VPN-туннель последний раз работал.
-// Общая на все обходы проверки; безопасна для параллельного вызова.
+// RunGrace -- окно терпимости на разовый перезапуск VPN-туннеля (ping-check,
+// смена конфига): туннель, работавший не дольше Window назад, для правил
+// считается работающим. Без окна такой отчёт давал «трафик напрямую» и
+// глушил падение как у неиспользуемого туннеля (fleet-audit 15.09).
+//
+// Окно меряется временем, а не числом прогонов: при флапе интерфейса
+// хук-отчёты идут раз в 10-20 с, и окно «на два прогона» кончалось бы посреди
+// того же перезапуска. Общая на все прогоны проверки; безопасна для
+// параллельного вызова.
 type RunGrace struct {
+	// Window -- ширина окна; агент ставит два интервала плановых отчётов.
+	// 0 -- defaultRunGraceWindow.
+	Window time.Duration
+	// Now -- часы (тесты подменяют); nil -- time.Now.
+	Now func() time.Time
+
 	mu         sync.Mutex
-	run        int
-	lastUsable map[string]int
+	lastUsable map[string]time.Time
 }
 
-// Observe отмечает очередной обход и возвращает туннели в окне терпимости:
-// включённые, сейчас не работающие, но работавшие не больше runGraceRuns
-// обходов назад. Выключенный в настройках туннель окна не получает -- это
-// решение человека, а не перезапуск.
+// Observe отмечает очередной прогон и возвращает туннели в окне терпимости:
+// включённые, сейчас не работающие, но работавшие не дольше Window назад.
+// Выключенный в настройках туннель окна не получает -- это решение человека,
+// а не перезапуск.
 func (g *RunGrace) Observe(tunnels []awgmgr.Tunnel) map[string]bool {
 	if g == nil {
 		return nil
 	}
+	now := time.Now()
+	if g.Now != nil {
+		now = g.Now()
+	}
+	window := g.Window
+	if window <= 0 {
+		window = defaultRunGraceWindow
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.run++
 	if g.lastUsable == nil {
-		g.lastUsable = map[string]int{}
+		g.lastUsable = map[string]time.Time{}
 	}
 	present := make(map[string]bool, len(tunnels))
 	out := map[string]bool{}
 	for _, tu := range tunnels {
 		present[tu.ID] = true
 		if tunnelRouteFallbackUsable(tu) {
-			g.lastUsable[tu.ID] = g.run
+			g.lastUsable[tu.ID] = now
 			continue
 		}
 		if !tu.Enabled {
 			delete(g.lastUsable, tu.ID)
 			continue
 		}
-		if last, ok := g.lastUsable[tu.ID]; ok && g.run-last <= runGraceRuns {
+		if last, ok := g.lastUsable[tu.ID]; ok && now.Sub(last) <= window {
 			out[tu.ID] = true
 		}
 	}
@@ -311,6 +327,9 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string, graced
 	usable := func(tu awgmgr.Tunnel) bool {
 		return tunnelRouteFallbackUsable(tu) || (graced[tu.ID] && strings.TrimSpace(tu.InterfaceName) != "")
 	}
+	// Назначенный выход (routeTag) выигрывает и в окне терпимости, даже у
+	// работающего соседа с основным маршрутом: awg-manager шлёт трафик туда,
+	// перезапускается он или нет.
 	if activeDefaultID != "" {
 		for _, tu := range tunnels {
 			if tu.ID == activeDefaultID && usable(tu) {
@@ -318,8 +337,8 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string, graced
 			}
 		}
 	}
-	// Работающий главный важнее того, что в окне терпимости: правила идут
-	// туда, где есть живой выход.
+	// Назначенного нет: работающий заявивший основной маршрут важнее того,
+	// что в окне терпимости.
 	for _, tu := range tunnels {
 		if tu.DefaultRoute && tunnelRouteFallbackUsable(tu) {
 			return tu.InterfaceName

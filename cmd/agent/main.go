@@ -103,7 +103,8 @@ func main() {
 			Client:          awgClient,
 			HandshakeMaxAge: cfg.Checks.AWG.HandshakeMaxAge(),
 			AwgmDownSince:   signals.tracker.DownSince,
-			Grace:           &checks.RunGrace{},
+			// Окно терпимости -- два плановых отчёта (A2.10).
+			Grace: &checks.RunGrace{Window: 2 * cfg.Agent.Interval()},
 		},
 	}
 
