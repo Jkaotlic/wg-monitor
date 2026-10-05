@@ -48,7 +48,7 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, tunnels, "")
+	got := tallyRouteCounts(context.Background(), c, tunnels, "", nil)
 	// nwg1 (default): 1 explicit HR + 2 fall-through HR credited = 3 DNS, all HR.
 	if c := got["nwg1"]; c.DNS != 3 || c.DNSHR != 3 || c.Static != 1 {
 		t.Errorf("nwg1: %+v (want DNS=3 HR=3 Static=1)", c)
@@ -79,7 +79,7 @@ func TestTallyRouteCounts_NoDefaultRoute_FallThroughDropped(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, tunnels, "")
+	got := tallyRouteCounts(context.Background(), c, tunnels, "", nil)
 	if len(got) != 0 {
 		t.Errorf("want empty (disabled default iface, fall-through dropped); got %+v", got)
 	}
@@ -103,7 +103,7 @@ func TestTallyRouteCounts_DoesNotCreditFallThroughToStartingDefaultTunnel(t *tes
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 
-	got := tallyRouteCounts(context.Background(), c, tunnels, "")
+	got := tallyRouteCounts(context.Background(), c, tunnels, "", nil)
 	if c := got["nwg1"]; c.DNS != 0 || c.DNSHR != 0 {
 		t.Fatalf("starting default tunnel must not receive HR fall-through counts: %+v", c)
 	}
@@ -137,7 +137,7 @@ func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testi
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 
-	got := tallyRouteCounts(context.Background(), c, tunnels, "")
+	got := tallyRouteCounts(context.Background(), c, tunnels, "", nil)
 	if c := got["nwg1"]; c.DNS != 1 || c.DNSHR != 1 {
 		t.Fatalf("explicit HR route should be credited by tunnelId fallback: %+v", c)
 	}
@@ -152,7 +152,7 @@ func TestTallyRouteCounts_ListError_ReturnsNil(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, nil, "")
+	got := tallyRouteCounts(context.Background(), c, nil, "", nil)
 	if got != nil {
 		t.Errorf("want nil on list error; got %+v", got)
 	}
@@ -475,7 +475,7 @@ func TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag(t *testing.T) 
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 
-	got := tallyRouteCounts(context.Background(), c, tunnels, "awg12")
+	got := tallyRouteCounts(context.Background(), c, tunnels, "awg12", nil)
 	if cc := got["nwg3"]; cc.DNS != 1 || cc.DNSHR != 1 {
 		t.Errorf("authoritative default nwg3 (awg12) should carry HR fall-through: %+v", cc)
 	}

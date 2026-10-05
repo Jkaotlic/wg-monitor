@@ -195,6 +195,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 			return
 		}
+		if writeMiniappCabinetKeyError(d, w, err) {
+			return
+		}
 		if err != nil {
 			// Текст ошибки кабинета -- только в журнал (реализация кабинета
 			// уже убрала из него ключ и код); человеку -- слова из таблицы.
@@ -305,7 +308,7 @@ func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser,
 	}
 	rc, err := d.Awg3Panels.ConfigForRouter(r.Context(), instID, iface, u.Nickname)
 	if err != nil {
-		writeMiniappAwg3Error(d, w, "выпуск на роутер", err)
+		writeMiniappAwg3ErrorFor(d, w, "выпуск на роутер", err, miniappIsAdmin(tgUser, d.TelegramAdminUserID))
 		return
 	}
 	tunnelName := awg3panel.TunnelName(instID, iface)

@@ -222,9 +222,25 @@ type miniappAwg3ErrorBody struct {
 	RetryAt string `json:"retry_at,omitempty"`
 }
 
-// writeMiniappAwg3Error -- отказ словами. Текст ошибки панели -- только в
-// журнал (в нём нет секретов, но есть внутренности); человеку -- таблица.
-func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) {
+// writeMiniappAwg3ErrorAsAdmin -- отказ словами для ручек ТОЛЬКО админа
+// (за miniappAwg3Gate): причина панели (пароль, пауза, сертификат) ему
+// нужна, чтобы чинить. Текст ошибки панели -- только в журнал (в нём нет
+// секретов, но есть внутренности); человеку -- таблица. Ручка, куда может
+// прийти не админ, зовёт writeMiniappAwg3ErrorFor с настоящей ролью.
+func writeMiniappAwg3ErrorAsAdmin(d Deps, w http.ResponseWriter, op string, err error) {
+	writeMiniappAwg3ErrorFor(d, w, op, err, true)
+}
+
+// miniappAwg3IssuerText -- единственный текст допущенному не админу: что
+// именно не так с панелью (пароль, сертификат, адрес, пауза), ему не про что
+// знать и нечем чинить -- это дело админа.
+const miniappAwg3IssuerText = "Выпуск с этого сервера сейчас недоступен — сообщите администратору"
+
+// writeMiniappAwg3ErrorFor -- то же по роли. Не админ (допущенный к выпуску)
+// получает общий русский текст и код awg3_unavailable: ни причины замка, ни
+// времени паузы, ни просьбы пересохранить учётные данные. Подробности остаются
+// в журнале.
+func writeMiniappAwg3ErrorFor(d Deps, w http.ResponseWriter, op string, err error, admin bool) {
 	var fe *awg3panel.FieldError
 	var pe *awg3panel.Error
 	switch {
@@ -235,6 +251,11 @@ func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) 
 	case errors.Is(err, awg3panel.ErrInstanceExists):
 		writeMiniappCabinetError(w, http.StatusConflict, "awg3_exists")
 	case errors.Is(err, awg3panel.ErrInstanceDisabled):
+		if !admin {
+			miniappCabinetLogger(d).Warn("awg3-панель: "+op+" не удалось", "err", err)
+			writeMiniappCabinetJSON(w, http.StatusConflict, miniappAwg3ErrorBody{Code: "awg3_unavailable", Error: "awg3_unavailable", Message: miniappAwg3IssuerText})
+			return
+		}
 		writeMiniappCabinetError(w, http.StatusConflict, "awg3_disabled")
 	case errors.Is(err, awg3panel.ErrIfaceNotFound):
 		writeMiniappCabinetError(w, http.StatusNotFound, "awg3_iface_not_found")
@@ -252,11 +273,16 @@ func writeMiniappAwg3Error(d Deps, w http.ResponseWriter, op string, err error) 
 			status = http.StatusNotFound
 		}
 		body := miniappAwg3ErrorBody{Code: code, Error: code, Message: miniappCabinetErrorText(code)}
-		if !pe.Until.IsZero() {
+		if !admin {
+			body = miniappAwg3ErrorBody{Code: "awg3_unavailable", Error: "awg3_unavailable", Message: miniappAwg3IssuerText}
+		} else if !pe.Until.IsZero() {
 			body.RetryAt = rfc3339(pe.Until)
 		}
 		miniappCabinetLogger(d).Warn("awg3-панель: "+op+" не удалось", "kind", pe.Kind, "status", pe.Status, "err", pe.Error())
 		writeMiniappCabinetJSON(w, status, body)
+	// Ключ шифрования -- админу словами; допущенному не админу -- общий
+	// текст без причины, как у прочих отказов панели (v0.51).
+	case admin && writeMiniappCabinetKeyError(d, w, err):
 	default:
 		miniappCabinetLogger(d).Error("awg3-панель: "+op+" не удалось", "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
@@ -270,7 +296,7 @@ func miniappAwg3ListHandler(d Deps) http.HandlerFunc {
 		}
 		views, err := d.Awg3Panels.List()
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "список", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "список", err)
 			return
 		}
 		now := time.Now()
@@ -300,12 +326,12 @@ func miniappAwg3CreateHandler(d Deps) http.HandlerFunc {
 		}
 		in, err := req.input()
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "добавление", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "добавление", err)
 			return
 		}
 		v, res, err := d.Awg3Panels.Create(r.Context(), in)
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "добавление", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "добавление", err)
 			return
 		}
 		miniappCabinetLogger(d).Info("awg3-панель добавлена", "panel", v.ID, "check_ok", res.OK, "check_kind", res.Kind)
@@ -328,12 +354,12 @@ func miniappAwg3UpdateHandler(d Deps) http.HandlerFunc {
 		}
 		in, err := req.input()
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "изменение", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "изменение", err)
 			return
 		}
 		v, res, err := d.Awg3Panels.Update(r.Context(), id, in)
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "изменение", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "изменение", err)
 			return
 		}
 		out := miniappAwg3SaveResp{Panel: miniappAwg3View(v, time.Now())}
@@ -362,7 +388,7 @@ func miniappAwg3DeleteHandler(d Deps) http.HandlerFunc {
 		}
 		views, err := d.Awg3Panels.List()
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "удаление", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "удаление", err)
 			return
 		}
 		label := ""
@@ -383,7 +409,7 @@ func miniappAwg3DeleteHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		if err := d.Awg3Panels.Delete(id); err != nil {
-			writeMiniappAwg3Error(d, w, "удаление", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "удаление", err)
 			return
 		}
 		miniappCabinetLogger(d).Info("awg3-панель удалена", "panel", id)
@@ -468,7 +494,7 @@ func miniappAwg3PeersHandler(d Deps) http.HandlerFunc {
 		}
 		page, err := d.Awg3Panels.Peers(r.Context(), id, r.URL.Query().Get("iface"))
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "пиры", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "пиры", err)
 			return
 		}
 		now := time.Now()
@@ -548,7 +574,7 @@ func miniappAwg3DeviceHandler(d Deps) http.HandlerFunc {
 		tgUser, _ := miniappUserFromContext(r.Context())
 		issued, err := d.Awg3Panels.IssueDevice(r.Context(), id, req.Iface, req.Name)
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "устройство", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "устройство", err)
 			return
 		}
 		resp := miniappAwg3DeviceResp{
@@ -657,7 +683,7 @@ func miniappAwg3IssuableHandler(d Deps) http.HandlerFunc {
 		}
 		list, err := d.Awg3Panels.IssuablePanels(r.Context(), tg, miniappIsAdmin(tg, d.TelegramAdminUserID))
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "панели для выпуска", err)
+			writeMiniappAwg3ErrorFor(d, w, "панели для выпуска", err, miniappIsAdmin(tg, d.TelegramAdminUserID))
 			return
 		}
 		for _, p := range list {
@@ -694,7 +720,7 @@ func miniappAwg3AddIssuerHandler(d Deps) http.HandlerFunc {
 		admin, _ := miniappUserFromContext(r.Context())
 		v, err := d.Awg3Panels.AddIssuer(id, body.TelegramUserID, admin)
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "допуск", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "допуск", err)
 			return
 		}
 		writeMiniappCabinetJSON(w, http.StatusOK, struct {
@@ -719,7 +745,7 @@ func miniappAwg3RemoveIssuerHandler(d Deps) http.HandlerFunc {
 		}
 		v, err := d.Awg3Panels.RemoveIssuer(id, tg)
 		if err != nil {
-			writeMiniappAwg3Error(d, w, "допуск", err)
+			writeMiniappAwg3ErrorAsAdmin(d, w, "допуск", err)
 			return
 		}
 		writeMiniappCabinetJSON(w, http.StatusOK, struct {

@@ -273,6 +273,7 @@ func (w *Watcher) init(ctx context.Context) bool {
 	if perr != nil {
 		w.log.Warn("dns watchdog: state file unreadable — ignoring it", "path", w.cfg.StatePath, "err", perr)
 	}
+	p = w.refreshOwnRecord(p)
 	own := w.ownLines(lines)
 	applied := presentOf(lines, p.AppliedLines)
 	w.ready = true
@@ -304,6 +305,26 @@ func (w *Watcher) init(ctx context.Context) bool {
 			"mode", p.Mode, "pending", p.Pending, "own_lines", len(own), "watchdog_lines", len(applied))
 	}
 	return true
+}
+
+// refreshOwnRecord: запись помнит свою строку прежнего endpoint, а в файле
+// теперь другой (оператор поправил его, пока сторож держал роутер на
+// запасных). Возврат по такой записи воскресил бы СТАРУЮ строку, а новую
+// сторож так и не признал бы своей. Запись о своей строке начинается заново --
+// с нынешнего endpoint; запасные строки в ней остаются, их возврат уберёт.
+func (w *Watcher) refreshOwnRecord(p persisted) persisted {
+	if len(p.RemovedPrimaryLines) == 0 {
+		return p
+	}
+	for _, l := range p.RemovedPrimaryLines {
+		if id, ok := actions.DNSProxyRemovalCommand(l); ok && id == w.ownID {
+			return p
+		}
+	}
+	w.log.Warn("dns watchdog: state file remembers the own line of another endpoint — recording the current one instead",
+		"recorded_own", w.maskAll(p.RemovedPrimaryLines), "endpoint", w.masked)
+	p.RemovedPrimaryLines = []string{"https upstream " + w.cfg.Endpoint}
+	return p
 }
 
 // reconcile runs at start-up and while the current mode is unproven. It

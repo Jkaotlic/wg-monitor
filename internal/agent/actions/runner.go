@@ -57,10 +57,8 @@ import (
 )
 
 // OpkgExecutor is the surface a real Opkg implementation exposes to Runner.
-// SmartUpgrade does the full live workflow (update + space-check + upgrade);
-// DryRun is kept for tests / external callers that want a preflight only.
+// SmartUpgrade does the full live workflow (update + space-check + upgrade).
 type OpkgExecutor interface {
-	DryRun(ctx context.Context) (status, output string)
 	SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult)
 	DisableFeed(ctx context.Context, url string) (status, output string, payload wire.OpkgUpgradeResult)
 	HrneoUpdate(ctx context.Context) (status, output string)

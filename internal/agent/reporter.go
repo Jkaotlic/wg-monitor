@@ -92,6 +92,16 @@ type Reporter struct {
 
 	lastPersistAt time.Time // AGENT-10: когда файл состояния писался последний раз
 	stateWrites   int       // сколько раз писался (для тестов)
+
+	// now и newTicker -- часы планового ритма; тесты подменяют их
+	// управляемыми, чтобы ритм не зависел от загрузки машины.
+	now       func() time.Time
+	newTicker func(time.Duration) (<-chan time.Time, func())
+}
+
+func realTicker(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
 }
 
 type ReporterConfig struct {
@@ -135,6 +145,8 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		reportRejectedPath: cfg.ReportRejectedPath,
 		facts:              cfg.Facts,
 		wake:               make(chan struct{}, 1),
+		now:                time.Now,
+		newTicker:          realTicker,
 	}
 	r.loadState()
 	return r
@@ -145,14 +157,14 @@ func (r *Reporter) Run(ctx context.Context) {
 	// Тикер не сбрасывается хук-отчётами: флапающий интерфейс (хук раз в
 	// 30-60 с) иначе откладывал бы плановые отчёты без конца, а тревоги и
 	// выздоровления держатся только на них.
-	t := time.NewTicker(r.interval)
-	defer t.Stop()
+	tick, stop := r.newTicker(r.interval)
+	defer stop()
 	for {
 		select {
 		case <-ctx.Done():
 			r.persistOnExit()
 			return
-		case <-t.C:
+		case <-tick:
 			r.sendOnce(ctx)
 		case <-r.wake:
 			r.wakeReport(ctx)
@@ -167,7 +179,7 @@ func (r *Reporter) Run(ctx context.Context) {
 func (r *Reporter) regularOverdue() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return !r.lastRegularAt.IsZero() && time.Since(r.lastRegularAt) >= r.interval
+	return !r.lastRegularAt.IsZero() && r.now().Sub(r.lastRegularAt) >= r.interval
 }
 
 // ForceResumed triggers an immediate report cycle with Resumed=true regardless
@@ -225,7 +237,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
 	if !hook {
 		forced = r.forceResumed
 		r.forceResumed = false
-		r.lastRegularAt = start
+		r.lastRegularAt = r.now()
 	}
 	r.mu.Unlock()
 	resumed := !hook && (forced || (!prev.IsZero() && time.Since(prev) > ResumedThreshold))

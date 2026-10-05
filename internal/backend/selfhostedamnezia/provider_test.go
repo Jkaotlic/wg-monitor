@@ -203,12 +203,12 @@ func TestStoreUpsertRoundTripAndProviderConfigWithSSHPassword(t *testing.T) {
 
 func TestRunnerForConfigUsesRemoteDockerWhenSSHPasswordConfigured(t *testing.T) {
 	cfg := Config{Container: "amnezia-awg2", SSHHost: "10.10.10.2", SSHPort: 2222, SSHUser: "root", SSHPassword: "secret-pass"}
-	r := runnerForConfig(cfg)
+	r := runnerForConfig(cfg, HostKeyPolicy{Known: "SHA256:x"})
 	remote, ok := r.(RemoteDockerRunner)
 	if !ok {
 		t.Fatalf("runner type = %T, want RemoteDockerRunner", r)
 	}
-	if remote.Host != "10.10.10.2" || remote.Port != 2222 || remote.User != "root" || remote.Password != "secret-pass" || remote.Container != "amnezia-awg2" {
+	if remote.Host != "10.10.10.2" || remote.Port != 2222 || remote.User != "root" || remote.Password != "secret-pass" || remote.Container != "amnezia-awg2" || remote.HostKey.Known != "SHA256:x" {
 		t.Fatalf("bad remote runner: %+v", remote)
 	}
 }

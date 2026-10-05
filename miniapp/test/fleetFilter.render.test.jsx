@@ -32,7 +32,9 @@ async function type(el, value) {
     el.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-const chip = (root, label) => [...root.querySelectorAll('.filter-chip')].find((b) => b.querySelector('.filter-chip-label').textContent === label)
+// Слово чипа согласуется с числом («1 молчит»), поэтому чип ищется по ключу.
+const KEY = { все: 'all', тревога: 'alert', 'в порядке': 'online', спят: 'sleeping', молчат: 'silent' }
+const chip = (root, label) => root.querySelector(`.filter-chip[data-filter="${KEY[label]}"]`)
 const count = (root, label) => chip(root, label).querySelector('.filter-chip-count').textContent
 const sideNames = (root) => [...root.querySelectorAll('.side-row-name')].map((n) => n.textContent)
 const sidebar = (props = {}) => (

@@ -173,7 +173,7 @@ func TestServiceParallelCreatesKeepEveryInstance(t *testing.T) {
 func TestServiceParallelIssuesGetDistinctAddresses(t *testing.T) {
 	s := newTestService(t)
 	runner := newLockedRunner()
-	s.newRunner = func(Config) Runner { return runner }
+	s.newRunner = func(Config, HostKeyPolicy) Runner { return runner }
 	if err := s.Create(homeInstance()); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestServiceParallelIssuesGetDistinctAddresses(t *testing.T) {
 
 func TestServiceIssueRefusesMissingAndDisabled(t *testing.T) {
 	s := newTestService(t)
-	s.newRunner = func(Config) Runner { return newLockedRunner() }
+	s.newRunner = func(Config, HostKeyPolicy) Runner { return newLockedRunner() }
 	if _, _, err := s.Issue(context.Background(), "home", "c"); !errors.Is(err, ErrInstanceNotFound) {
 		t.Fatalf("нет сервера: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestServiceCheckOneAttemptInWords(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestService(t)
 			runner := &checkRunner{err: tc.err}
-			s.newRunner = func(Config) Runner { return runner }
+			s.newRunner = func(Config, HostKeyPolicy) Runner { return runner }
 			inst := homeInstance()
 			inst.SSHHost, inst.SSHPassword = "203.0.113.7", "SECRET-SSH-MUST-NOT-LEAK"
 			if err := s.Create(inst); err != nil {

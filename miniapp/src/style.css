@@ -124,8 +124,7 @@
   margin: 0 0 var(--sp-2);
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -342,8 +341,7 @@
 .field label {
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -810,8 +808,7 @@ body {
   margin: 0;
   font-size: var(--fs-xs);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -925,8 +922,8 @@ body {
 }
 
 /* ---------------- Прочие проверки spoiler (§3.6) ----------------
-   Same visual voice as every other .section-title (small, muted, uppercase,
-   letter-spaced) so a collapsed spoiler reads as just another section header,
+   Same visual voice as every other .section-title (small, muted, bold; since
+   v0.55 no caps) so a collapsed spoiler reads as just another section header,
    not a foreign control -- the marker triangle is the only tell that this one
    is interactive. Plain native <details>/<summary>: since v0.41 only healthy
    checks live inside it, failing ones sit above it in .checks-failing, so
@@ -1713,8 +1710,7 @@ body {
   display: block;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--dim);
 }
 
@@ -2273,7 +2269,7 @@ body {
    есть своя строка, но без карточки: новостью он не является. */
 .day-quiet {
   margin: 0;
-  padding: 2px 14px 6px;
+  padding: 2px 0 6px;
   font-size: var(--fs-sm);
   color: var(--dim);
 }
@@ -2998,7 +2994,7 @@ body {
    (@media ниже). */
 .fleet-counts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--fleet-count-cols, 3), minmax(0, 1fr));
   gap: var(--sp-2);
   margin-bottom: var(--sp-3);
 }
@@ -3016,6 +3012,7 @@ body {
 
 .fleet-count-ok { border-top-color: var(--ok); }
 .fleet-count-attention { border-top-color: var(--bad); }
+.fleet-count-sleeping { border-top-color: var(--warn); }
 .fleet-count-silent { border-top-color: var(--warn); }
 
 .fleet-count-value {
@@ -4161,6 +4158,46 @@ body {
   color: var(--danger);
 }
 
+/* Ключ своего сервера (B2): подпись, отпечаток моноширинно -- длинный, без
+   пробелов, поэтому переносится по любому знаку. */
+.selfhosted-hostkey {
+  margin-top: var(--sp-3);
+}
+
+.selfhosted-hostkey-label {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.selfhosted-hostkey-value {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  margin-bottom: var(--sp-2);
+}
+
+/* Выданные подключения (B3): строка на подключение, предупреждение о живом
+   VPN-туннеле -- цветом тревоги, имя клиента длинное -- переносится. */
+.selfhosted-client {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.selfhosted-client-name {
+  margin: 0 0 var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.selfhosted-client-warn {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}
+
 .field-error input {
   border-color: var(--danger);
 }
@@ -4355,8 +4392,7 @@ body {
     margin-bottom: calc(-1 * var(--sp-3));
     font-size: var(--fs-xs);
     font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    letter-spacing: 0;
     color: var(--dim);
   }
 
@@ -4796,7 +4832,7 @@ body {
   /* --- Сводка парка --- */
   .fleet-counts {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--fleet-count-cols, 3), minmax(0, 1fr));
     gap: var(--sp-4);
   }
 
@@ -4813,6 +4849,7 @@ body {
 
   .fleet-count-ok { border-top-color: var(--ok); }
   .fleet-count-attention { border-top-color: var(--bad); }
+  .fleet-count-sleeping { border-top-color: var(--warn); }
   .fleet-count-silent { border-top-color: var(--warn); }
 
   .fleet-count-value {

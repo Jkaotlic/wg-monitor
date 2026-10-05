@@ -18,7 +18,11 @@ type threadTG struct {
 	sends   []threadSend
 	edits   []threadEdit
 	editErr map[int64]error // chatID -> ошибка правки
-	nextID  int64
+	// editSeq -- ошибки правки по очереди: каждая попытка снимает первую,
+	// nil в очереди -- удачная правка. Пустая очередь -- смотрим editErr.
+	editSeq   map[int64][]error
+	editTries map[int64]int
+	nextID    int64
 }
 
 type threadSend struct {
@@ -53,7 +57,16 @@ func (f *threadTG) SendMessageWithKeyboard(_ context.Context, chatID int64, _ *i
 func (f *threadTG) EditMessageText(_ context.Context, chatID, messageID int64, text, _ string, kb *tg.InlineKeyboardMarkup) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err, ok := f.editErr[chatID]; ok {
+	if f.editTries == nil {
+		f.editTries = map[int64]int{}
+	}
+	f.editTries[chatID]++
+	if q := f.editSeq[chatID]; len(q) > 0 {
+		f.editSeq[chatID] = q[1:]
+		if q[0] != nil {
+			return q[0]
+		}
+	} else if err, ok := f.editErr[chatID]; ok {
 		return err
 	}
 	f.edits = append(f.edits, threadEdit{chatID, messageID, text, kb})
@@ -189,7 +202,7 @@ func TestThread_EditsSnapshotAfterTableCleared(t *testing.T) {
 
 func TestThread_FallsBackToSendOnEditError(t *testing.T) {
 	d, router := threadSetup(t)
-	tgc := &threadTG{editErr: map[int64]error{1001: errors.New("Bad Request: message to edit not found")}}
+	tgc := &threadTG{editErr: map[int64]error{1001: &tg.APIError{Method: "editMessageText", Code: 400, Description: "Bad Request: message to edit not found"}}}
 	kb := alertKB()
 	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, kb, true}, nil)
 
@@ -503,7 +516,7 @@ func TestThread_MutedRecipientsSkipped(t *testing.T) {
 // тревогу заново ему не шлём.
 func TestThread_FallbackSkipsMuted(t *testing.T) {
 	d, router := threadSetup(t)
-	tgc := &threadTG{editErr: map[int64]error{1002: errors.New("Bad Request: message to edit not found")}}
+	tgc := &threadTG{editErr: map[int64]error{1002: &tg.APIError{Method: "editMessageText", Code: 400, Description: "Bad Request: message to edit not found"}}}
 	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
 	th := r.Begin(context.Background(), router, threadCheck)
 	if err := d.RouterOperators().Remove(router, 1002); err != nil {
@@ -561,5 +574,241 @@ func TestWithRepairBlock_LongBlockNoPanic(t *testing.T) {
 		if strings.ContainsRune(got, 0) {
 			t.Fatalf("блок %d: в правке нулевые знаки", n)
 		}
+	}
+}
+
+// sleepRec -- пауза без ожидания: записывает, сколько нить просила ждать.
+type sleepRec struct {
+	mu    sync.Mutex
+	waits []time.Duration
+}
+
+func (s *sleepRec) sleep(ctx context.Context, d time.Duration) error {
+	s.mu.Lock()
+	s.waits = append(s.waits, d)
+	s.mu.Unlock()
+	return ctx.Err()
+}
+
+func (s *sleepRec) total() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t time.Duration
+	for _, w := range s.waits {
+		t += w
+	}
+	return t
+}
+
+func tooMany(after time.Duration) error {
+	return &tg.APIError{Method: "editMessageText", Code: 429, Description: "Too Many Requests: retry after 5", RetryAfter: after}
+}
+
+func serverErr() error {
+	return &tg.APIError{Method: "editMessageText", Code: 502, Description: "Bad Gateway"}
+}
+
+func sendsTo(tgc *threadTG, chatID int64) int {
+	tgc.mu.Lock()
+	defer tgc.mu.Unlock()
+	n := 0
+	for _, s := range tgc.sends {
+		if s.chatID == chatID {
+			n++
+		}
+	}
+	return n
+}
+
+// A4.1: 429 -- ждём, сколько велит Telegram, и правим снова; громкого дубля
+// всей тревоги нет.
+func TestThread_EditRetriesOn429WithRetryAfter(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{editSeq: map[int64][]error{1001: {tooMany(5 * time.Second), nil}}}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	sl := &sleepRec{}
+	r.sleep = sl.sleep
+
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню: перезапускаю…")
+
+	if tgc.editTries[1001] != 2 {
+		t.Fatalf("попыток правки владельцу %d, ждали 2", tgc.editTries[1001])
+	}
+	if len(sl.waits) != 1 || sl.waits[0] != 5*time.Second {
+		t.Fatalf("паузы %v, ждали одну в 5 с по Retry-After", sl.waits)
+	}
+	if n := sendsTo(tgc, 1001); n != 0 {
+		t.Fatalf("при 429 владельцу ушёл громкий дубль (%d)", n)
+	}
+}
+
+// A4.1: 5xx -- повтор с паузой, без дубля.
+func TestThread_EditRetriesOn5xx(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{editSeq: map[int64][]error{1001: {serverErr(), serverErr(), nil}}}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	sl := &sleepRec{}
+	r.sleep = sl.sleep
+
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Done(context.Background(), "Починил.")
+
+	if tgc.editTries[1001] != 3 {
+		t.Fatalf("попыток правки %d, ждали 3", tgc.editTries[1001])
+	}
+	if len(sl.waits) != 2 {
+		t.Fatalf("паузы %v, ждали две", sl.waits)
+	}
+	if n := sendsTo(tgc, 1001); n != 0 {
+		t.Fatalf("при 5xx ушёл громкий дубль (%d)", n)
+	}
+}
+
+// A4.1: общий потолок -- не больше 30 с ожидания на одну правку; исчерпан --
+// правка пропускается без громкого дубля (следующий ход поправит снова).
+func TestThread_EditRetryCeiling30s(t *testing.T) {
+	d, router := threadSetup(t)
+	seq := make([]error, 50)
+	for i := range seq {
+		seq[i] = tooMany(7 * time.Second)
+	}
+	tgc := &threadTG{editSeq: map[int64][]error{1001: seq}}
+	clock := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, clock.now)
+	sl := &sleepRec{}
+	r.sleep = func(ctx context.Context, dur time.Duration) error { clock.add(dur); return sl.sleep(ctx, dur) }
+
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню: перезапускаю…")
+
+	if got := sl.total(); got > 30*time.Second {
+		t.Fatalf("ждали всего %v, потолок 30 с", got)
+	}
+	if tgc.editTries[1001] > 6 {
+		t.Fatalf("попыток %d -- потолок не держится", tgc.editTries[1001])
+	}
+	if n := sendsTo(tgc, 1001); n != 0 {
+		t.Fatalf("исчерпан повтор -- ушёл громкий дубль (%d)", n)
+	}
+	// Оператору правка дошла как обычно.
+	found := false
+	for _, e := range tgc.edits {
+		if e.chatID == 1002 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("правка оператору не дошла из-за чужого 429")
+	}
+}
+
+// A4.1: Retry-After больше остатка потолка -- не ждём впустую.
+func TestThread_EditRetryAfterBeyondCeilingGivesUp(t *testing.T) {
+	d, router := threadSetup(t)
+	tgc := &threadTG{editSeq: map[int64][]error{1001: {tooMany(120 * time.Second), nil}}}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	sl := &sleepRec{}
+	r.sleep = sl.sleep
+
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню…")
+	if sl.total() != 0 {
+		t.Fatalf("ждали %v при Retry-After 120 с", sl.waits)
+	}
+	if n := sendsTo(tgc, 1001); n != 0 {
+		t.Fatalf("ушёл громкий дубль (%d)", n)
+	}
+}
+
+// A4.1: громкий дубль -- только «удалено / не найдено / чат недоступен».
+func TestThread_EditLoudDuplicateOnlyForGoneMessage(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		loud bool
+	}{
+		{"не найдено", &tg.APIError{Code: 400, Description: "Bad Request: message to edit not found"}, true},
+		{"удалено/нельзя править", &tg.APIError{Code: 400, Description: "Bad Request: message can't be edited"}, true},
+		{"чат недоступен 403", &tg.APIError{Code: 403, Description: "Forbidden: bot was blocked by the user"}, true},
+		{"чат не найден", &tg.APIError{Code: 400, Description: "Bad Request: chat not found"}, true},
+		{"кривая разметка", &tg.APIError{Code: 400, Description: "Bad Request: can't parse entities"}, false},
+		{"слишком длинно", &tg.APIError{Code: 400, Description: "Bad Request: message is too long"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, router := threadSetup(t)
+			tgc := &threadTG{editErr: map[int64]error{1001: c.err}}
+			r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+			sl := &sleepRec{}
+			r.sleep = sl.sleep
+			th := r.Begin(context.Background(), router, threadCheck)
+			th.Progress(context.Background(), "Чиню…")
+			got := sendsTo(tgc, 1001) > 0
+			if got != c.loud {
+				t.Fatalf("громкий дубль=%v, ждали %v", got, c.loud)
+			}
+			if len(sl.waits) != 0 {
+				t.Fatalf("постоянная ошибка не повторяется, а ждали %v", sl.waits)
+			}
+		})
+	}
+}
+
+// slowTG -- Telegram, у которого каждая правка идёт 15 с (таймаут HTTP-клиента)
+// и кончается сетевой ошибкой: время двигают поддельные часы.
+type slowTG struct {
+	*threadTG
+	clock *fakeClock
+	tries int
+}
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func (s *slowTG) EditMessageText(_ context.Context, chatID, _ int64, _, _ string, _ *tg.InlineKeyboardMarkup) error {
+	s.clock.add(15 * time.Second)
+	if chatID == 1001 {
+		s.tries++
+	}
+	return errors.New("tg editMessageText: context deadline exceeded")
+}
+
+// Fix round 1: потолок 30 с -- реальное время правки, а не сумма пауз.
+// Правка, которая сама идёт 15 с, за 30 с успевает не больше двух попыток;
+// первая попытка следующему получателю всё равно делается.
+func TestThread_EditRetryCeilingCountsRealTime(t *testing.T) {
+	d, router := threadSetup(t)
+	clock := &fakeClock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	base := &threadTG{}
+	slow := &slowTG{threadTG: base, clock: clock}
+	f := NewFanout(d, base, quietLogger(), 0)
+	r := NewRepairs(f, slow, d, fakeTexts{threadAlert, alertKB(), true}, clock.now)
+	r.sleep = func(ctx context.Context, dur time.Duration) error { clock.add(dur); return ctx.Err() }
+
+	start := clock.now()
+	th := r.Begin(context.Background(), router, threadCheck)
+	th.Progress(context.Background(), "Чиню…")
+	// Два получателя: на первого не больше 30 с (с запасом на одну правку,
+	// начатую до потолка), второму -- одна попытка.
+	if slow.tries > 2 {
+		t.Fatalf("первому получателю %d попыток по 15 с -- потолок не держит реальное время", slow.tries)
+	}
+	if spent := clock.now().Sub(start); spent > 30*time.Second+2*15*time.Second {
+		t.Fatalf("правка заняла %v", spent)
 	}
 }

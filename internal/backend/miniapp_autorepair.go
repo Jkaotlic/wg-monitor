@@ -35,6 +35,9 @@ type miniappAutorepairResp struct {
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
 	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
 	RelocateSpent string `json:"relocate_spent"`
+	// OptionUnconfirmed -- вариант настройки стоит на роутере, но проверку
+	// не прошёл: автопочинка сменила локацию, и доказать её не вышло.
+	OptionUnconfirmed bool `json:"option_unconfirmed,omitempty"`
 	// HasBackup -- есть ли у VPN-туннеля запасной в общем наборе правил.
 	// Снимок наборов правил живёт на роутере и бэкендом не хранится, а
 	// спрашивать роутер из GET нельзя -- поэтому пока всегда nil: «не знаем».
@@ -265,6 +268,11 @@ func miniappAutorepairSuggest(d Deps, routerID int64, tunnelID string, panels []
 	if o, ok, err := d.DB.TunnelOrigins().Get(routerID, tunnelID); err == nil && ok {
 		switch o.Provider {
 		case RepairProviderAmnezia, RepairProviderHideMy, RepairProviderAwg3:
+			// Свой сервер -- только панель, с которой этому человеку
+			// разрешена выдача (panels уже отобраны правом).
+			if o.Provider == RepairProviderAwg3 && !miniappAutorepairPanelListed(panels, o.Variant) {
+				break
+			}
 			if strings.TrimSpace(o.Variant) != "" && offered(o.Provider, o.Variant) {
 				return &miniappAutorepairPick{Provider: o.Provider, Option: o.Variant, Why: "так он был выпущен"}
 			}
@@ -302,6 +310,27 @@ func miniappAutorepairSuggest(d Deps, routerID int64, tunnelID string, panels []
 	return nil
 }
 
+// miniappAutorepairPanelOf -- id панели из варианта «панель/интерфейс» в
+// нижнем регистре (так id панелей и хранятся).
+func miniappAutorepairPanelOf(option string) string {
+	panel, _, _ := strings.Cut(option, "/")
+	return strings.ToLower(strings.TrimSpace(panel))
+}
+
+// miniappAutorepairPanelListed -- панель варианта есть среди разрешённых.
+func miniappAutorepairPanelListed(panels []awg3panel.IssuablePanel, option string) bool {
+	id := miniappAutorepairPanelOf(option)
+	if id == "" {
+		return false
+	}
+	for _, p := range panels {
+		if strings.ToLower(p.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
 func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, tunnelID string) (miniappAutorepairResp, error) {
 	s, found, err := d.DB.TunnelRepairSettings().Get(u.ID, tunnelID)
 	if err != nil {
@@ -311,6 +340,16 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 	if found {
 		resp.Enabled, resp.Provider, resp.Option, resp.AllowRelocate = s.Enabled, s.Provider, s.Option, s.AllowRelocate
 		resp.RelocateSpent = s.RelocateSpent
+		// Вариант своего сервера (панель и интерфейс) -- только тому, кому
+		// с этой панели разрешена выдача: остальным -- что источник «свой
+		// сервер», без подробностей чужой панели.
+		if s.Provider == RepairProviderAwg3 && !miniappCanIssueAwg3(d, tg, u.ID, miniappAutorepairPanelOf(s.Option)) {
+			resp.Option = ""
+		}
+		if o, ok, err := d.DB.TunnelOrigins().Get(u.ID, tunnelID); err == nil && ok && o.Unconfirmed &&
+			o.Provider == s.Provider && o.Variant == s.Option && resp.Option != "" {
+			resp.OptionUnconfirmed = true
+		}
 	}
 	if resp.Enabled {
 		resp.Blocked = miniappAutorepairBlocked(d, u.Nickname, tunnelID)
@@ -389,6 +428,13 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_provider", "неизвестный источник")
 			return
 		}
+		if req.Provider == RepairProviderAwg3 {
+			// id панели -- в нижнем регистре, как его хранит список панелей:
+			// иначе движок и допуск не узнают свою панель.
+			if panel, iface, ok := strings.Cut(req.Option, "/"); ok {
+				req.Option = strings.ToLower(strings.TrimSpace(panel)) + "/" + strings.TrimSpace(iface)
+			}
+		}
 		if req.Provider == "" {
 			// Урезанный режим -- только перезапуск: варианту и смене локации
 			// без источника взяться неоткуда.
@@ -398,6 +444,15 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 		cur, found, err := repo.Get(routerID, tid)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "settings not read")
+			return
+		}
+		// VPN-туннель должен быть у роутера (те же события, что у экрана
+		// VPN-туннелей). Исключение -- выключить уже записанную настройку
+		// пропавшего туннеля: это уборка, она ничего не обещает.
+		names := miniappTunnelNames(d, routerID)
+		tunnelName, known := names[miniappTunnelPrefix+tid]
+		if !known && (req.Enabled || !found) {
+			writeJSONError(w, http.StatusNotFound, "tunnel_not_found", "VPN-туннель не найден на роутере")
 			return
 		}
 		if !req.Enabled {
@@ -417,7 +472,7 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 			// по нему движок узнает, что под этим id уже другой VPN-туннель.
 			if err := repo.Put(db.TunnelRepairSetting{
 				UserID: routerID, TunnelID: tid, Enabled: true,
-				TunnelName: miniappTunnelNameForCheck(d, routerID, miniappTunnelPrefix+tid),
+				TunnelName: tunnelName,
 				Provider:   req.Provider, Option: req.Option, AllowRelocate: req.AllowRelocate,
 				UpdatedBy: tg,
 			}); err != nil {

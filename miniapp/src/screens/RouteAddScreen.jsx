@@ -5,7 +5,7 @@ import { useCommand } from '../useCommand.js'
 import { tunnelRows, rebindTargets, tunnelRuleSummary } from '../routes.js'
 import { templateGroups, templateChoice, parseManualTargets, addPlanSummary, skippedNote } from '../routeAdd.js'
 import { confirmSheet } from '../sheet.js'
-import { tunnelLiveLabel } from '../labels.js'
+import { tunnelTargetLabel } from '../labels.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -134,7 +134,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
                   <ListRow
                     key={t.id}
                     title={t.name}
-                    sub={`${tunnelLiveLabel(t.live)} · ${tunnelRuleSummary(t)}`}
+                    sub={`${tunnelTargetLabel(t)} · ${tunnelRuleSummary(t)}`}
                     onClick={() => pickTunnel(t)}
                   />
                 ))}

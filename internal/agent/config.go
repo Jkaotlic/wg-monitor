@@ -274,6 +274,12 @@ func (s StateConfig) DNSWatchdogStatePath() string {
 	return filepath.Join(filepath.Dir(s.ResolvedPath()), "dns-watchdog-state.json")
 }
 
+// DNSRuStatePath -- где проверка dns_ru помнит, были ли в настройках роутера
+// ру-апстримы (переживает перезапуск агента).
+func (s StateConfig) DNSRuStatePath() string {
+	return filepath.Join(filepath.Dir(s.ResolvedPath()), "dns-ru-state.json")
+}
+
 type ChecksConfig struct {
 	AWG AWGCheckConfig `yaml:"awg"`
 	DNS DNSCheckConfig `yaml:"dns"`

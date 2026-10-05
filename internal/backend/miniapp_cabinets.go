@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 // Кабинеты VPN роутера в мини-аппе (цикл 3): ключи Amnezia Premium и коды
@@ -43,6 +44,8 @@ var miniappCabinetTexts = map[string]string{
 	"invalid_country":           "Страна не распознана — обновите экран",
 	"cabinet_not_connected":     "Ключ кабинета не сохранён — сначала добавьте ключ",
 	"cabinet_failed":            "Кабинет не ответил — повторите позже",
+	"cabinet_key_missing":       "Ключи кабинетов на сервере не прочитать: ключ шифрования не найден — напишите администратору",
+	"cabinet_key_wrong":         "Ключи кабинетов на сервере не расшифровываются: ключ шифрования не тот — напишите администратору",
 	"slot_busy":                 "Все слоты подписки заняты — отзовите страну, которая больше не нужна, и повторите",
 	"unknown_provider":          "Такого кабинета приложение не знает",
 	"missing_option":            "Не выбрана страна или сервер",
@@ -56,6 +59,10 @@ var miniappCabinetTexts = map[string]string{
 	"instance_disabled":         "Свой сервер выключен — включите его и повторите",
 	"instance_not_ready":        "У своего сервера не заполнены адрес и порт для клиентов",
 	"selfhosted_failed":         "Свой сервер не выпустил конфиг — нажмите «Проверить подключение»",
+	"client_not_found":          "Подключения уже нет на сервере — обновите список",
+	"selfhosted_revoke_failed":  "Свой сервер не отозвал подключение — нажмите «Проверить подключение» и повторите",
+	"selfhosted_revoke_partial": "Подключение уже отключено, но запись на сервере не дочищена — повторите отзыв",
+	"selfhosted_clients_failed": "Не удалось получить список подключений — нажмите «Проверить подключение»",
 	"invalid_field":             "Поле заполнено неверно",
 	"missing_iface":             "Не выбран интерфейс панели",
 	"awg3_not_configured":       "Панели awg3 на этом сервере не настроены",
@@ -89,6 +96,25 @@ func miniappCabinetErrorText(code string) string {
 
 func writeMiniappCabinetError(w http.ResponseWriter, status int, code string) {
 	writeMiniappDeployError(w, status, code, miniappCabinetErrorText(code))
+}
+
+// writeMiniappCabinetKeyError -- сбой хранилища кабинетов из-за ключа
+// шифрования (v0.55, B1): файл зашифрован, а ключа нет или он не тот.
+// Человеку -- слова вместо «на стороне сервера», файл при этом не тронут.
+// false -- причина другая, ответ не написан.
+func writeMiniappCabinetKeyError(d Deps, w http.ResponseWriter, err error) bool {
+	code := ""
+	switch {
+	case errors.Is(err, sealedfile.ErrKeyMissing):
+		code = "cabinet_key_missing"
+	case errors.Is(err, sealedfile.ErrUnreadable):
+		code = "cabinet_key_wrong"
+	default:
+		return false
+	}
+	miniappCabinetLogger(d).Error("кабинеты: хранилище не читается без верного ключа шифрования", "code", code)
+	writeMiniappCabinetError(w, http.StatusServiceUnavailable, code)
+	return true
 }
 
 func writeMiniappCabinetJSON(w http.ResponseWriter, status int, v any) {
@@ -211,6 +237,9 @@ func miniappCabinetsHandler(d Deps) http.HandlerFunc {
 				return
 			}
 		}
+		if writeMiniappCabinetKeyError(d, w, err) {
+			return
+		}
 		miniappCabinetLogger(d).Error("кабинеты: не прочитаны ключи", "router_id", u.ID, "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
 	}
@@ -279,6 +308,9 @@ func miniappCabinetAddHandler(d Deps, provider string) http.HandlerFunc {
 			return
 		default:
 			// Ошибка хранилища -- про файл, не про секрет; наружу не идёт.
+			if writeMiniappCabinetKeyError(d, w, err) {
+				return
+			}
 			miniappCabinetLogger(d).Error("кабинет: ключ не сохранён", "router_id", u.ID, "provider", provider, "err", err)
 			writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
 			return
@@ -330,6 +362,9 @@ func miniappCabinetSecretResult(d Deps, w http.ResponseWriter, routerID int64, p
 	case errors.Is(err, ErrCabinetSecretNotFound):
 		writeMiniappCabinetError(w, http.StatusNotFound, "secret_not_found")
 	default:
+		if writeMiniappCabinetKeyError(d, w, err) {
+			return
+		}
 		miniappCabinetLogger(d).Error("кабинет: ключ не изменён", "router_id", routerID, "provider", provider, "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
 	}

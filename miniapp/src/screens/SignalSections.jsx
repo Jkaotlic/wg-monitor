@@ -8,17 +8,31 @@ import { DataRow } from '../ui/DataRow.jsx'
 
 // Факты v0.47 живут своим запросом: не ответил -- секции молчат, а экран
 // остаётся рабочим (тот же приём, что у версий в SettingsScreen).
+// Секции экрана читают факты каждая своим хуком -- без общего запроса
+// «Проверки» ходили в /facts дважды (A1.3). Запрос на роутер один, пока
+// идёт: все, кто спросил за это время, ждут тот же ответ. Принудительное
+// перечитывание (после замера) начинает новый.
+const factsInFlight = new Map()
+function sharedFacts(routerID, fresh) {
+  if (!fresh && factsInFlight.has(routerID)) return factsInFlight.get(routerID)
+  const p = fetchRouterFacts(routerID).finally(() => {
+    if (factsInFlight.get(routerID) === p) factsInFlight.delete(routerID)
+  })
+  factsInFlight.set(routerID, p)
+  return p
+}
+
 export function useFacts(routerID) {
   const [facts, setFacts] = useState(null)
-  const load = () =>
-    fetchRouterFacts(routerID)
+  const load = (fresh = true) =>
+    sharedFacts(routerID, fresh)
       .then(setFacts)
       .catch(() => setFacts(null))
   useEffect(() => {
     setFacts(null)
-    load()
+    load(false)
   }, [routerID])
-  return { facts, reload: load }
+  return { facts, reload: () => load(true) }
 }
 
 // Строки экрана VPN-туннеля: куда выходит трафик и сколько раз за сутки

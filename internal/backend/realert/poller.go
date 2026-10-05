@@ -180,6 +180,29 @@ func (p *Poller) Run(ctx context.Context) error {
 
 func (p *Poller) WaitForExit() { p.wg.Wait() }
 
+// resolverGuardCheck -- проверка DNS-сторожа агента (как в backend/handler.go;
+// пакет стоит ниже backend, поэтому строка продублирована).
+const resolverGuardCheck = "resolver_guard"
+
+// notReadyLookback -- сколько последних строк просматривается в поисках
+// строки сторожа с настоящим ответом.
+const notReadyLookback = 50
+
+// resolverGuardNotReadyJSON: details_json несёт ready:false. Нечитаемое и
+// пустое -- обычная строка (агент старый), как в backend.resolverGuardNotReady.
+func resolverGuardNotReadyJSON(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	var d struct {
+		Ready *bool `json:"ready"`
+	}
+	if json.Unmarshal([]byte(raw), &d) != nil {
+		return false
+	}
+	return d.Ready != nil && !*d.Ready
+}
+
 // lastKnownCheck loads the most recent event row for (userID, checkName) and
 // reconstructs a wire.Check from its details_json. Returns zero Check if no
 // event exists or unmarshal fails — formatter degrades gracefully.
@@ -187,6 +210,20 @@ func (p *Poller) lastKnownCheck(userID int64, checkName string) wire.Check {
 	row, ok, err := p.d.Events().LatestEvent(userID, checkName)
 	if err != nil || !ok {
 		return wire.Check{}
+	}
+	if checkName == resolverGuardCheck && resolverGuardNotReadyJSON(row.DetailsJSON) {
+		// Строка «ещё не прочитал настройки» -- не ответ о DNS: автомат её
+		// пропускает, и напоминание не должно строиться из неё. Берём
+		// последнюю строку с настоящим ответом (окно мало: таких подряд
+		// бывает несколько после одного перезапуска).
+		if recent, err := p.d.Events().RecentEvents(userID, checkName, notReadyLookback); err == nil {
+			for _, r := range recent {
+				if !resolverGuardNotReadyJSON(r.DetailsJSON) {
+					row = r
+					break
+				}
+			}
+		}
 	}
 	c := wire.Check{Name: row.CheckName, Status: row.Status}
 	if row.DetailsJSON != "" {

@@ -406,6 +406,8 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		return "Сервисы не открываются через обход"
 	case "resolver_guard":
 		return resolverGuardHeadline(d)
+	case "dns_ru":
+		return dnsRuHeadline
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineHeadline
@@ -449,6 +451,11 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 			return resolverGuardUnreadHeadline
 		}
 		return resolverGuardRecoveredHeadline
+	case "dns_ru":
+		if strOrEmpty(d, "reason") == DNSRuGoneReason {
+			return dnsRuGoneHeadline
+		}
+		return dnsRuRecoveredHeadline
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineRecovered
@@ -482,6 +489,8 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns [
 		writeExternalReachWhatBroke(b, d)
 	case "resolver_guard":
 		writeResolverGuardWhatBroke(b, d)
+	case "dns_ru":
+		writeDNSRuWhatBroke(b, d)
 	default:
 		writeGenericWhatBroke(b, d)
 	}
@@ -923,6 +932,8 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 		return "Интернет от этого не пропадает: VPN-туннели работают сами по себе. Но кнопки в приложении — «Починить», перезапуск VPN-туннеля, правка маршрутов — могут не сработать, пока связь с роутером не вернётся."
 	case "external_reach":
 		return "Через этот VPN-туннель сервисы не открываются: дело либо в самом VPN-туннеле, либо в правилах, которые через него ведут."
+	case "dns_ru":
+		return dnsRuImpact
 	case "resolver_guard":
 		switch {
 		case resolverGuardNoFallback(d):
@@ -965,6 +976,8 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 		return "Список VPN-туннелей бот читает у панели роутера. Если она не отвечает — либо перезапускается, либо на роутере поменяли доступ к ней."
 	case "external_reach":
 		return diagnoseExternalReach(d, ns)
+	case "dns_ru":
+		return dnsRuDiagnoseFor(ns)
 	case "resolver_guard":
 		switch {
 		case resolverGuardNoFallback(d):
@@ -1132,6 +1145,8 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		return "Само по себе это не мешает интернету. Откройте приложение — там на экране «Проверки» видно, вернулась ли связь с панелью роутера. Если не вернулась за полчаса, перезагрузите роутер."
 	case "external_reach":
 		return adviseExternalReach(d, ns)
+	case "dns_ru":
+		return dnsRuAdvice
 	case "resolver_guard":
 		switch {
 		case resolverGuardNoFallback(d):
@@ -1270,6 +1285,8 @@ func checkHumanName(check string) string {
 		return "доступность сервисов через обход"
 	case "resolver_guard":
 		return "свой DNS-сервер"
+	case "dns_ru":
+		return dnsRuHumanName
 	}
 	if check == "agent_heartbeat" {
 		return "отчёты роутера"
@@ -1389,6 +1406,8 @@ func checkCategory(name string) string {
 		return "external_reach"
 	case name == "resolver_guard":
 		return "resolver_guard"
+	case name == "dns_ru":
+		return "dns_ru"
 	}
 	return "generic"
 }
@@ -1575,3 +1594,50 @@ func mscLoc() *time.Location {
 	})
 	return mscLocVal
 }
+
+// Серверы имён для русских сайтов (проверка dns_ru агента v0.55, спека C):
+// сервер, которому роутер отдал русские зоны, молчит, а заграничные
+// отвечают. Тревога своя: проверка dns такого не видит -- для неё это один
+// голос из нескольких.
+const (
+	dnsRuHumanName         = "сервер имён для русских сайтов"
+	dnsRuHeadline          = "Русские сайты могут не открываться"
+	dnsRuWhatBroke         = "Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов"
+	dnsRuImpact            = "Банки, госуслуги, магазины и другие русские сайты могут не открываться или открываться через раз, пока сервер не ответит."
+	dnsRuDiagnose          = "Обычно так бывает при сбое у самого сервера имён или по дороге к нему у провайдера. Заграничные серверы имён при этом отвечают, поэтому общая проверка поиска сайтов молчит, а эта — нет."
+	dnsRuDiagnoseBoth      = "Обычно так бывает при сбое у самого сервера имён или по дороге к нему у провайдера. Общая проверка поиска сайтов тоже в аварии — из-за этих же серверов для русских сайтов; это одна поломка, а не две."
+	dnsRuAdvice            = "Чаще всего это проходит само за несколько минут — бот напишет, когда сервер снова ответит. Если русские сайты не открываются дольше получаса, перезагрузите роутер. Не помогло — напишите тому, кто настраивал роутер."
+	dnsRuRecoveredHeadline = "Сервер имён для русских сайтов снова отвечает"
+	dnsRuGoneHeadline      = "В настройках роутера больше нет отдельного сервера имён для русских сайтов"
+)
+
+// neighborDNSCheck -- соседская запись «общая проверка dns сейчас в аварии
+// (HARD)». Её добавляет диспетчер к тревоге dns_ru (collectDNSRuNeighbors).
+const neighborDNSCheck = "dns"
+
+// dnsRuDiagnoseFor -- «общая проверка поиска сайтов молчит» верна, только
+// пока проверка dns не в аварии: порог dns -- 2 из 3 серверов, и два русских
+// сервера против одного заграничного роняют обе проверки сразу.
+func dnsRuDiagnoseFor(ns []NeighborSummary) string {
+	for _, n := range ns {
+		if n.CheckName == neighborDNSCheck && n.Status == "hard" {
+			return dnsRuDiagnoseBoth
+		}
+	}
+	return dnsRuDiagnose
+}
+
+func writeDNSRuWhatBroke(b *strings.Builder, d map[string]any) {
+	b.WriteString(dnsRuWhatBroke + ".\n")
+	if n, ok := intOrZero(d, "ru_upstreams"); ok && n > 1 {
+		fmt.Fprintf(b, "Не ответил ни один из %d серверов имён для русских сайтов.\n", n)
+	}
+	if resolves, ok := boolOrFalse(d, "router_resolves"); ok && resolves {
+		b.WriteString("Заграничные серверы имён отвечают — остальные сайты открываются.\n")
+	}
+}
+
+// DNSRuGoneReason -- причина, с которой бэкенд сам закрывает тревогу dns_ru,
+// когда строка проверки пропала из свежего отчёта: ру-апстримов в настройках
+// роутера больше нет (или агент откатили).
+const DNSRuGoneReason = "ru_upstreams_gone"

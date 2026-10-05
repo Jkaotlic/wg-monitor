@@ -25,7 +25,7 @@ import (
 type Service struct {
 	path      string
 	legacy    Config
-	newRunner func(Config) Runner
+	newRunner func(Config, HostKeyPolicy) Runner
 	now       func() time.Time
 
 	storeMu   sync.Mutex
@@ -87,6 +87,7 @@ func (s *Service) update(fn func(*Store) error) error {
 
 func (s *Service) Create(inst Instance) error {
 	inst = cleanInstance(inst)
+	inst.SSHHostKey = "" // отпечаток не приходит из формы: его запоминает первый вход
 	if err := ValidateInstance(inst); err != nil {
 		return err
 	}
@@ -112,11 +113,18 @@ func (s *Service) Update(id string, inst Instance) error {
 				continue
 			}
 			inst.Enabled = cur.Enabled
+			// Отпечаток ключа хоста не приходит из формы: он остаётся, пока
+			// адрес и порт SSH те же, и сбрасывается при смене сервера --
+			// новый запомнит первый удачный вход.
+			inst.SSHHostKey = ""
+			if inst.SSHHost != "" && inst.SSHHost == cur.SSHHost && inst.SSHPort == cur.SSHPort {
+				inst.SSHHostKey = cur.SSHHostKey
+			}
 			if inst.SSHHost != "" && inst.SSHPassword == "" {
 				// Сохранённый пароль -- только для того же входа. Сменили адрес,
-				// порт или пользователя -- пароль вводится заново: иначе проверка
-				// подключения отправила бы его на другой сервер, а host key не
-				// проверяется (InsecureIgnoreHostKey).
+				// порт или пользователя -- пароль вводится заново: у нового
+				// адреса ключ хоста ещё не запомнен, и первый вход поверил бы
+				// любому -- старый пароль туда без ведома человека не уходит.
 				if inst.SSHHost != cur.SSHHost || inst.SSHPort != cur.SSHPort || inst.SSHUser != cur.SSHUser {
 					return &FieldError{Field: "ssh_password", Reason: "Адрес SSH изменён — введите пароль заново"}
 				}
@@ -159,7 +167,10 @@ func (s *Service) Issue(ctx context.Context, id, clientName string) (IssuedConfi
 	if err != nil {
 		return IssuedConfig{}, Instance{}, err
 	}
-	issued, err := IssueWithRunner(ctx, cfg, s.newRunner(cfg), clientName, s.now())
+	issued, err := IssueWithRunner(ctx, cfg, s.newRunner(cfg, s.hostKeyPolicy(inst)), clientName, s.now())
+	if errors.Is(err, ErrHostKeyChanged) {
+		return IssuedConfig{}, Instance{}, &HostKeyChangedError{Label: inst.Label}
+	}
 	if err != nil {
 		return IssuedConfig{}, Instance{}, err
 	}
@@ -228,7 +239,7 @@ func cleanInstance(inst Instance) Instance {
 	inst.SSHHost = strings.TrimSpace(inst.SSHHost)
 	inst.SSHUser = strings.TrimSpace(inst.SSHUser)
 	if inst.SSHHost == "" {
-		inst.SSHPort, inst.SSHUser, inst.SSHPassword = 0, "", ""
+		inst.SSHPort, inst.SSHUser, inst.SSHPassword, inst.SSHHostKey = 0, "", "", ""
 		return inst
 	}
 	if inst.SSHPort == 0 {
@@ -329,7 +340,10 @@ func (s *Service) Check(ctx context.Context, id string) (CheckResult, error) {
 	cfg := s.legacy.ProviderConfig(inst)
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	if _, err := s.newRunner(cfg).Run(ctx, []string{"true"}, nil); err != nil {
+	if _, err := s.newRunner(cfg, s.hostKeyPolicy(inst)).Run(ctx, []string{"true"}, nil); err != nil {
+		if errors.Is(err, ErrHostKeyChanged) {
+			return CheckResult{OK: false, Message: (&HostKeyChangedError{Label: inst.Label}).Error()}, nil
+		}
 		return CheckResult{OK: false, Message: checkFailureText(cfg, err)}, nil
 	}
 	return CheckResult{OK: true, Message: fmt.Sprintf("Подключение есть: контейнер «%s» отвечает", cfg.Container)}, nil
@@ -342,6 +356,10 @@ func checkFailureText(cfg Config, err error) string {
 		return "Сервер не ответил за 25 секунд — проверьте адрес и порт SSH"
 	case strings.HasPrefix(msg, "ssh dial"):
 		return "Сервер не отвечает по SSH — проверьте адрес и порт SSH"
+	case strings.HasPrefix(msg, "ssh host key save"):
+		return "Вход по SSH прошёл, но ключ сервера не запомнился — повторите позже"
+	case strings.HasPrefix(msg, "ssh refused"):
+		return "Вход не выполнен: ключ сервера нечем проверить"
 	case strings.HasPrefix(msg, "ssh auth"):
 		return "SSH не принял пользователя или пароль"
 	case strings.HasPrefix(msg, "ssh session"):

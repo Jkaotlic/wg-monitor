@@ -556,3 +556,29 @@ func TestUpdateAgentConfigAWGMBaseURLOnlySameHostOrPrivate(t *testing.T) {
 		})
 	}
 }
+
+// Гонка «проверка записи -> перезапуск»: сторож ушёл на запасные, пока правка
+// ложилась на диск. Файл возвращается прежним, перезапуска нет.
+func TestUpdateAgentConfigRechecksHoldAfterWriting(t *testing.T) {
+	path := writeWatchdogOnConfig(t)
+	before, _ := os.ReadFile(path)
+	state := writeWatchdogState(t, `{"mode":"primary"}`)
+	restarted := stubRestart(t)
+	old := afterWatchdogConfigWritten
+	afterWatchdogConfigWritten = func() {
+		_ = os.WriteFile(state, []byte(`{"mode":"fallback"}`), 0o600)
+	}
+	t.Cleanup(func() { afterWatchdogConfigWritten = old })
+
+	_, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": false}, path, state)
+	if err == nil || !strings.Contains(err.Error(), "запасных") {
+		t.Fatalf("want отказ со словом «запасных», got %v", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Errorf("конфиг не возвращён:\n%s", after)
+	}
+	if *restarted {
+		t.Error("агент перезапущен")
+	}
+}

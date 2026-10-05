@@ -25,6 +25,10 @@ import (
 // the one string it needs instead of creating a cycle.
 const resolverGuardCheck = "resolver_guard"
 
+// heartbeatCheck -- сердцебиение агента: каждый полный отчёт несёт его, как бы
+// ни кончились остальные проверки.
+const heartbeatCheck = "agent_heartbeat"
+
 // FlapGap -- тишина, после которой новое падение считается новой новостью, а
 // не продолжением прежней. Короче -- один вечер разваливается на десяток
 // строк; длиннее -- два разных отвала слипаются, и человек не видит, что
@@ -63,12 +67,22 @@ func Fold(rows []db.EventRow, now time.Time) []Incident {
 		byCheck[r.CheckName] = append(byCheck[r.CheckName], r)
 	}
 
+	var heartbeats []time.Time
+	for _, r := range byCheck[heartbeatCheck] {
+		heartbeats = append(heartbeats, r.TS)
+	}
+	sort.Slice(heartbeats, func(i, j int) bool { return heartbeats[i].Before(heartbeats[j]) })
+
 	var out []Incident
 	for check, list := range byCheck {
 		sorted := make([]db.EventRow, len(list))
 		copy(sorted, list)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i].TS.Before(sorted[j].TS) })
-		out = append(out, foldCheck(check, sorted, now)...)
+		var goneAt time.Time
+		if check == resolverGuardCheck {
+			goneAt = watchdogGoneAt(sorted, heartbeats)
+		}
+		out = append(out, foldCheck(check, sorted, now, goneAt)...)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].From.After(out[j].From) })
@@ -80,7 +94,7 @@ func Fold(rows []db.EventRow, now time.Time) []Incident {
 
 // foldCheck работает по одной проверке: пара ищется внутри одного имени, иначе
 // dns и hydraroute слиплись бы в одну поломку.
-func foldCheck(check string, sorted []db.EventRow, now time.Time) []Incident {
+func foldCheck(check string, sorted []db.EventRow, now, goneAt time.Time) []Incident {
 	var raw []Incident
 	var cur *Incident
 	for _, e := range sorted {
@@ -109,11 +123,34 @@ func foldCheck(check string, sorted []db.EventRow, now time.Time) []Incident {
 		}
 	}
 	if cur != nil {
-		cur.Ongoing = true
-		cur.DownSec = int(now.Sub(cur.From).Seconds())
+		if goneAt.IsZero() {
+			cur.Ongoing = true
+			cur.DownSec = int(now.Sub(cur.From).Seconds())
+		} else {
+			cur.To = goneAt
+			cur.DownSec = int(goneAt.Sub(cur.From).Seconds())
+		}
 		raw = append(raw, *cur)
 	}
 	return mergeFlaps(raw)
+}
+
+// watchdogGoneAt: сторож выключили правкой файла (или его настройки сломались)
+// посреди аварии -- проверка пропала из отчётов, а отчёты идут. Идущая авария,
+// которую уже никто не обновит, висела бы в ленте вечно; бэкенд закрывает её
+// тревогу по тому же признаку (clearMissingResolverGuardHard). Концом
+// считается первый отчёт без проверки; нулевое время -- проверка на месте.
+func watchdogGoneAt(guardRows []db.EventRow, heartbeats []time.Time) time.Time {
+	if len(guardRows) == 0 {
+		return time.Time{}
+	}
+	last := guardRows[len(guardRows)-1].TS
+	for _, hb := range heartbeats {
+		if hb.After(last) {
+			return hb
+		}
+	}
+	return time.Time{}
 }
 
 // resolverGuardRowNotReady parses details_json for "ready": false. Unparsable

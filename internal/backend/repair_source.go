@@ -81,6 +81,34 @@ func (s repairSource) Options(ctx context.Context, routerID int64, provider stri
 	return out, nil
 }
 
+// HasRoom -- в подписке кабинета есть место под новую страну: тот же счёт,
+// по которому кабинет откажет в выпуске (занято устройств против предела).
+// Предела нет (0) -- место есть. Кабинет не подключён или не ответил --
+// NeedHuman: «места нет» и «не знаем» одинаково не повод тратить попытку.
+func (s repairSource) HasRoom(ctx context.Context, routerID int64, provider string) (bool, error) {
+	if provider == RepairProviderAwg3 {
+		return true, nil
+	}
+	act, err := cabinetAction(provider)
+	if err != nil {
+		return false, err
+	}
+	if s.cab == nil {
+		return false, &linkrepair.NeedHuman{Cause: errors.New("кабинеты провайдеров не подключены к бэкенду"), Action: act}
+	}
+	acc, err := s.cab.Account(ctx, routerID, provider)
+	if err != nil {
+		return false, &linkrepair.NeedHuman{Cause: err, Action: act}
+	}
+	if !acc.Connected {
+		return false, &linkrepair.NeedHuman{Cause: errors.New("кабинет не подключён: " + acc.Note), Action: act}
+	}
+	if acc.DevicesMax <= 0 {
+		return true, nil
+	}
+	return acc.DevicesUsed < acc.DevicesMax, nil
+}
+
 // cabinetAction -- что сказать человеку, когда этот кабинет отказал.
 func cabinetAction(provider string) (string, error) {
 	switch provider {

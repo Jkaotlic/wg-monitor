@@ -194,3 +194,31 @@ func TestRunner_HrneoUpdate_Dispatch(t *testing.T) {
 		t.Errorf("hrneo_update budget = %v, want 300s", got)
 	}
 }
+
+// Сбой самой проверки `opkg info` -- не «не установлен»: человек не должен
+// идти ставить пакет, который стоит.
+func TestHrneoUpdate_InfoErrorIsNotNotInstalled(t *testing.T) {
+	f := &fakeHrneoOpkg{installed: "3.18.3-1"}
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "opkg" && len(args) > 0 && args[0] == "info" {
+			return nil, errors.New("exit status 255")
+		}
+		return f.exec(ctx, name, args...)
+	})
+	status, out := o.HrneoUpdate(context.Background())
+	if status != "err" || strings.Contains(out, "не установлен") || !strings.Contains(out, "не удалось проверить") {
+		t.Errorf("status=%q out=%q", status, out)
+	}
+}
+
+// Отмена во время паузы после перезапуска -- «прервано», а не вывод по
+// недождавшейся проверке.
+func TestHrneoUpdate_SleepCancelledIsInterrupted(t *testing.T) {
+	f := &fakeHrneoOpkg{installed: "3.18.3-1", after: "3.19.0-1", upgradable: "hrneo - 3.18.3-1 - 3.19.0-1\n", dfOut: dfPlenty, running: true}
+	o := hrneoRunner(t, f)
+	o.Sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	status, out := o.HrneoUpdate(context.Background())
+	if status != "err" || !strings.Contains(out, "прервана") {
+		t.Errorf("status=%q out=%q", status, out)
+	}
+}

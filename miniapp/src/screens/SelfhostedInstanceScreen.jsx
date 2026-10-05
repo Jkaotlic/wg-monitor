@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted } from '../api.js'
+import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted, trustSelfhostedHostKey, fetchSelfhostedClients, revokeSelfhostedClient } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
   SELFHOSTED_GROUPS,
@@ -22,6 +22,12 @@ import {
   sshHostWarning,
   SSH_WIPE_TEXT,
   SSH_CHANGED_TEXT,
+  HOSTKEY_TEXTS,
+  hostKeyView,
+  trustHostKeySheetText,
+  CLIENTS_TEXTS,
+  clientRows,
+  revokeSheetText,
 } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -53,6 +59,8 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
   // Поле, которое отверг сервер (invalid_field): { key, text }.
   const [fieldError, setFieldError] = useState(null)
   const [toggling, setToggling] = useState(false)
+  // Выданные подключения: null -- ещё не читали; { busy } | { rows } | { error }.
+  const [clients, setClients] = useState(null)
 
   const alive = useRef(true)
   const valuesRef = useRef(values)
@@ -273,6 +281,70 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
     )
   }
 
+  // «Доверять новому ключу»: набором названия, как удаление. После --
+  // перечитать сервер: отпечатка больше нет, новый запомнит вход.
+  function trustHostKey() {
+    const text = trustHostKeySheetText(inst)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: HOSTKEY_TEXTS.trustButton,
+        busyLabel: 'Сохраняем…',
+        danger: true,
+        confirmPhrase: deleteConfirmPhrase(inst),
+        confirmStrict: true,
+        errorText: selfhostedErrorText,
+        perform: (typed) => trustSelfhostedHostKey(instanceId, typed),
+        onDone: () => {
+          if (!alive.current) return
+          setInst((prev) => ({ ...prev, ssh_host_key: '' }))
+          setCheck(null)
+          setError('')
+          setNotice(HOSTKEY_TEXTS.trusted)
+          reload()
+        },
+      }),
+    )
+  }
+
+  // Читает сервер по SSH -- только по кнопке, не при открытии экрана.
+  function loadClients() {
+    if (clients?.busy) return
+    setClients({ busy: true })
+    fetchSelfhostedClients(instanceId)
+      .then((resp) => {
+        if (alive.current) setClients({ rows: clientRows(resp) })
+      })
+      .catch((err) => {
+        if (alive.current) setClients({ error: selfhostedErrorText(err) })
+      })
+  }
+
+  function revokeClient(row) {
+    const text = revokeSheetText(inst, row)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: CLIENTS_TEXTS.revoke,
+        busyLabel: CLIENTS_TEXTS.revoking,
+        danger: true,
+        confirmPhrase: deleteConfirmPhrase(inst),
+        confirmStrict: true,
+        errorText: selfhostedErrorText,
+        perform: (typed) => revokeSelfhostedClient(instanceId, row.id, typed),
+        onDone: () => {
+          if (!alive.current) return
+          setError('')
+          setNotice(CLIENTS_TEXTS.revoked)
+          loadClients()
+        },
+      }),
+    )
+  }
+
+  const hostKey = hostKeyView(inst)
   const title = isNew ? SELFHOSTED_TEXTS.newTitle : inst ? `Сервер «${inst.label || inst.id}»` : 'Сервер'
 
   return (
@@ -307,6 +379,52 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                       <Quoted text={check.text} />
                     </p>
                   )}
+                  {hostKey && (
+                    <div class="selfhosted-hostkey">
+                      <p class="selfhosted-hostkey-label">{HOSTKEY_TEXTS.label}</p>
+                      {hostKey.fingerprint ? (
+                        <code class="selfhosted-hostkey-value">{hostKey.fingerprint}</code>
+                      ) : (
+                        <p class="field-hint">{HOSTKEY_TEXTS.unknown}</p>
+                      )}
+                      {hostKey.canTrust && (
+                        <button type="button" class="btn btn-ghost cabinet-danger" onClick={trustHostKey}>
+                          {HOSTKEY_TEXTS.trustButton}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </Section>
+            )}
+            {!isNew && inst && inst.enabled && (
+              <Section title={CLIENTS_TEXTS.title}>
+                <div class="card selfhosted-clients">
+                  <p class="field-hint">{CLIENTS_TEXTS.hint}</p>
+                  {clients?.busy && <p class="state">{CLIENTS_TEXTS.loading}</p>}
+                  {clients?.error && (
+                    <p class="state state-error" role="alert">
+                      <Quoted text={clients.error} />
+                    </p>
+                  )}
+                  {clients?.rows && clients.rows.length === 0 && <p class="traffic-detail">{CLIENTS_TEXTS.empty}</p>}
+                  {clients?.rows?.map((row) => (
+                    <div key={row.id} class="selfhosted-client">
+                      <p class="selfhosted-client-name">{row.name}</p>
+                      <p class="field-hint">{[row.address, row.date].filter(Boolean).join(' · ')}</p>
+                      {row.inUse && (
+                        <p class="selfhosted-client-warn">
+                          <Quoted text={row.inUse} />
+                        </p>
+                      )}
+                      <button type="button" class="btn btn-ghost cabinet-danger" onClick={() => revokeClient(row)}>
+                        {CLIENTS_TEXTS.revoke}
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button" class="btn btn-ghost" disabled={clients?.busy === true} onClick={loadClients}>
+                    {clients && !clients.busy ? CLIENTS_TEXTS.refresh : CLIENTS_TEXTS.show}
+                  </button>
                 </div>
               </Section>
             )}

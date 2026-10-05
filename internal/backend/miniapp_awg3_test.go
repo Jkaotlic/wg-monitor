@@ -37,6 +37,7 @@ type fakeAwg3 struct {
 	devices       []string
 	routerConf    awg3panel.RouterConfig
 	routerErr     error
+	issuableErr   error
 	routerCalls   []string
 	issuers       map[string][]int64
 	issuable      []awg3panel.IssuablePanel
@@ -821,6 +822,9 @@ func (f *fakeAwg3) IssuablePanels(_ context.Context, tg int64, all bool) ([]awg3
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.issuableCalls = append(f.issuableCalls, fmt.Sprintf("%d|%v", tg, all))
+	if f.issuableErr != nil {
+		return nil, f.issuableErr
+	}
 	out := []awg3panel.IssuablePanel{}
 	for _, p := range f.issuable {
 		ok := all

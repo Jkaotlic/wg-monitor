@@ -68,6 +68,10 @@ type miniappTunnel struct {
 	// Нужны только для вывода «обход идёт правилами» и в мини-апп не уходят.
 	RoutesDNS    int `json:"-"`
 	RoutesStatic int `json:"-"`
+	// RunGrace -- агент держит правила за недавно остановленным VPN-туннелем
+	// (окно терпимости на разовый перезапуск, checks.RunGrace). В мини-апп не
+	// уходит: экрану нужен вывод «обход идёт», а не сырьё.
+	RunGrace bool `json:"-"`
 }
 
 // miniappTunnelDetails is the subset of the agent's details map we decode.
@@ -88,6 +92,7 @@ type miniappTunnelDetails struct {
 	Note               string `json:"note"`
 	RoutesDNS          int    `json:"routes_dns"`
 	RoutesStatic       int    `json:"routes_static"`
+	RunGrace           bool   `json:"run_grace"`
 }
 
 // miniappTunnelFromEvent projects one latest-event row into the mini app's
@@ -132,6 +137,7 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	out.Note = d.Note
 	out.RoutesDNS = d.RoutesDNS
 	out.RoutesStatic = d.RoutesStatic
+	out.RunGrace = d.RunGrace
 	return out, true
 }
 
@@ -286,7 +292,7 @@ func miniappBypassByRules(tunnels []miniappTunnel, hd miniappHydraDetails) (bool
 	bypass := false
 	for i := range tunnels {
 		t := &tunnels[i]
-		if t.RunState != "running" {
+		if !miniappTunnelCarriesRules(t) {
 			continue
 		}
 		live = append(live, t)
@@ -304,6 +310,13 @@ func miniappBypassByRules(tunnels []miniappTunnel, hd miniappHydraDetails) (bool
 		return true, live[0]
 	}
 	return true, nil
+}
+
+// miniappTunnelCarriesRules -- VPN-туннель работает, или остановлен на
+// разовый перезапуск и агент держит за ним правила (run_grace): такой
+// отчёт не повод говорить «напрямую».
+func miniappTunnelCarriesRules(t *miniappTunnel) bool {
+	return t.RunState == "running" || t.RunGrace
 }
 
 // miniappPolicyCarrier -- VPN-туннель, который несёт обход по сводке политик
@@ -329,7 +342,7 @@ func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*min
 			continue
 		}
 		t := miniappTunnelByID(tunnels, p.ActiveTunnelID)
-		if t == nil || t.RunState != "running" {
+		if t == nil || !miniappTunnelCarriesRules(t) {
 			continue
 		}
 		if best == nil || executed > bestExecuted {

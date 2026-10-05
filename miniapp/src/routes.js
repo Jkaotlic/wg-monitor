@@ -66,7 +66,8 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
       if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
-      if (failing.has(t.id)) return { ...t, status: 'dead' }
+      // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
+      if (failing.has(t.id)) return { ...t, status: 'dead', check_failed: true }
       if (unchecked.has(t.id)) return { ...t, check_unverified: true }
       return t
     }),
@@ -169,6 +170,18 @@ export function routingVerdict(snapshot) {
     // Претенденты есть, но все выключены. Трафик при этом действительно идёт
     // напрямую -- и назвать причину важнее, чем повторить общий вывод: иначе
     // оператор ищет поломку маршрутизации там, где просто выключен туннель.
+    // Слова те же, что на плашке строки (routeBadge): включённый, но не
+    // отвечающий -- «не отвечает», и только снятый настройкой -- «выключен».
+    const silent = claiming.filter((t) => !tunnelSwitchedOff(t))
+    if (silent.length > 0) {
+      const sNames = silent.map((t) => t.name || t.id).join(', ')
+      return {
+        mode: 'unknown',
+        partial,
+        title: silent.length > 1 ? 'Главные VPN-туннели не отвечают' : `Главный VPN-туннель «${sNames}» не отвечает`,
+        detail: `Основным ${silent.length > 1 ? 'назначены' : 'назначен'} «${sNames}», но ${silent.length > 1 ? 'они не отвечают' : 'он не отвечает'} — обход сейчас не работает.`,
+      }
+    }
     const names = claiming.map((t) => t.name || t.id).join(', ')
     return {
       mode: 'direct',
@@ -305,6 +318,11 @@ export function tunnelRows(snapshot) {
       name: t.name || t.id,
       defaultRoute: Boolean(t.default_route),
       live: tunnelLive(t),
+      // Проверка провалена при поднятом на роутере (withCheckVerdict): слово «работает» нельзя.
+      checkFailed: Boolean(t.check_failed),
+      switchedOff: tunnelSwitchedOff(t),
+      // Проверка пришла, но ничего не проверила: «работает» тоже нельзя.
+      checkUnverified: Boolean(t.check_unverified),
       type: t.type ?? '',
       total: own + viaPolicy.dns,
       policyRules: viaPolicy.dns,
@@ -410,7 +428,9 @@ export function ruleBackendLabel(backend) {
 // пилюля на выключенном туннеле утверждала бы, что трафик идёт через него.
 export function defaultRouteBadge(row) {
   if (!row?.defaultRoute) return null
-  if (row.live === 'down') return { tone: 'muted', text: 'назначен основным, но выключен' }
+  // Проверка главнее (A1.1): поднят на роутере, но не отвечает -- не «выключен».
+  if (row.checkFailed) return { tone: 'muted', text: 'назначен основным, но не отвечает' }
+  if (row.live === 'down') return { tone: 'muted', text: row.switchedOff === false ? 'назначен основным, но не отвечает' : 'назначен основным, но выключен' }
   if (row.live === 'unknown') return { tone: 'muted', text: 'назначен основным' }
   return { tone: 'ok', text: 'основной маршрут' }
 }
@@ -487,6 +507,9 @@ export function promoteTargets(snapshot, activeTunnelID) {
         tunnelID: link.tunnel_id,
         tunnelName: t?.name || link.name || link.tunnel_id,
         live: t ? tunnelLive(t) : 'unknown',
+        checkFailed: Boolean(t?.check_failed),
+        switchedOff: t ? tunnelSwitchedOff(t) : false,
+        checkUnverified: Boolean(t?.check_unverified),
       })
     }
   }

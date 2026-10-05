@@ -227,3 +227,38 @@ func (b *Box) Open(routerID int64, nonce, ciphertext []byte) (Secrets, error) {
 	}
 	return secretsFromValues(w), nil
 }
+
+// ErrBlobUnreadable -- файл не расшифровывается: другой ключ, файл под чужим
+// именем или битые байты. Причину наружу не раскрываем.
+var ErrBlobUnreadable = errors.New("файл не расшифровывается этим ключом шифрования")
+
+// blobAADPrefix отделяет домен файлов от домена роутеров: AAD секрета
+// роутера -- одни десятичные цифры, AAD файла всегда начинается с этой
+// приставки, так что шифр одного никогда не откроется как другое.
+const blobAADPrefix = "wg-monitor-file:"
+
+func blobAAD(domain string) []byte { return []byte(blobAADPrefix + domain) }
+
+// SealBlob шифрует произвольные байты (файл кабинета, v0.55) тем же ключом,
+// что пароли root, с AAD = домен файла (его постоянное имя): шифр одного
+// файла, подложенный вместо другого, не расшифруется. Формат паролей root
+// (Seal/Open) не меняется.
+func (b *Box) SealBlob(domain string, plain []byte) ([]byte, []byte, error) {
+	nonce, err := randomNonce(b.aead.NonceSize())
+	if err != nil {
+		return nil, nil, errors.New("не получен случайный nonce")
+	}
+	return nonce, b.aead.Seal(nil, nonce, plain, blobAAD(domain)), nil
+}
+
+// OpenBlob -- обратное SealBlob. Любой отказ -- ErrBlobUnreadable.
+func (b *Box) OpenBlob(domain string, nonce, ciphertext []byte) ([]byte, error) {
+	if len(nonce) != b.aead.NonceSize() {
+		return nil, ErrBlobUnreadable
+	}
+	plain, err := b.aead.Open(nil, nonce, ciphertext, blobAAD(domain))
+	if err != nil {
+		return nil, ErrBlobUnreadable
+	}
+	return plain, nil
+}

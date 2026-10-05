@@ -23,6 +23,7 @@ import {
   firmwareStatusErrorText,
   maintenanceOutcomeLabel,
   commandErrorText,
+  commandName,
   asleepNote,
   commandDeadlineMs,
   rebootBannerVisible,
@@ -109,7 +110,7 @@ describe('листы', () => {
     const feed = feedDisableSheet({ routerID: 2, feed: { url: 'https://feed.example.com/aarch64-k3.10', host: 'feed.example.com' } })
     expect(feed.action).toBe('opkg_feed_disable')
     expect(feed.args).toEqual({ url: 'https://feed.example.com/aarch64-k3.10' })
-    expect(feed.buttonLabel).toBe('Отключить фид')
+    expect(feed.buttonLabel).toBe('Отключить источник')
   })
 
   it('ни один лист не показывает внутренних имён', () => {
@@ -127,6 +128,20 @@ describe('листы', () => {
       expect(s.commandLabel).toBeTruthy()
       expect(visibleText(s)).not.toMatch(INTERNAL)
     }
+  })
+
+  it('лист источника пакетов без «фид» и «закомментирует»', () => {
+    const s = feedDisableSheet({ routerID: 2, feed: { url: 'https://feed.example.com/x', host: 'feed.example.com' } })
+    expect(visibleText(s)).not.toMatch(/фид|коммент/i)
+  })
+
+  it('у каждой команды есть человеческое имя, неизвестная -- общее слово', () => {
+    for (const a of ['tunnel_restart', 'tunnel_power', 'pingcheck_toggle', 'dns_reset', 'route_add', 'route_delete', 'route_rebind', 'route_policy_promote', 'update_agent_config', 'router_doctor', 'version_audit', 'service_restart', 'firmware_install']) {
+      const n = commandName(a)
+      expect(n, a).toMatch(/[А-Яа-яЁё]/)
+      expect(n, a).not.toMatch(/_/)
+    }
+    expect(commandName('something_new')).toBe('команда роутеру')
   })
 })
 
@@ -293,6 +308,8 @@ describe('ответы сервера и ожидание', () => {
     expect(commandErrorText('agent_too_old')).toContain('обновления агента')
     expect(commandErrorText('confirm_mismatch')).toBe('Имя роутера набрано неверно — команда не отправлена.')
     expect(commandErrorText('reboot_cooldown')).toBe('Роутер уже перезагружается — повторить можно через пять минут.')
+    expect(commandErrorText('invalid_service')).toBe('Эту службу из приложения перезапустить нельзя — команда не отправлена.')
+    expect(commandErrorText('invalid_feed_url')).toBe('Адрес источника пакетов не подошёл — команда не отправлена.')
     expect(commandErrorText('whatever')).toBe('')
   })
 

@@ -170,6 +170,7 @@ func TestAutorepair_SuggestFromAmneziaName(t *testing.T) {
 
 func TestAutorepair_PutRejectsUnconnectedSource(t *testing.T) {
 	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
 		`{"enabled":true,"provider":"hidemyname","option":"a1b2c3"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "source_not_connected") {
@@ -187,6 +188,7 @@ func TestAutorepair_PutRejectsUnconnectedSource(t *testing.T) {
 
 func TestAutorepair_PutAwg3NeedsIssuer(t *testing.T) {
 	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	body := `{"enabled":true,"provider":"awg3","option":"main/awg1"}`
 	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", body)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "source_forbidden") {
@@ -208,6 +210,7 @@ func TestAutorepair_PutAwg3NeedsIssuer(t *testing.T) {
 
 func TestAutorepair_PutEnableClearsBlock(t *testing.T) {
 	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	nick := env.nickname(t)
 	kv := linkrepair.Attempts{KV: env.d.KV()}
 	if err := kv.Record(nick, "tunnel_awg12", false); err != nil {
@@ -448,5 +451,107 @@ func TestAutorepair_GetRelocateSpent(t *testing.T) {
 	}
 	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes()); r.RelocateSpent != "de" {
 		t.Fatalf("relocate_spent: %+v", r)
+	}
+}
+
+// A4.2: включить автопочинку VPN-туннеля, которого у роутера нет, нельзя --
+// 404, настройка не пишется. Выключить уже записанную для пропавшего --
+// можно: это уборка, а не обещание.
+func TestAutorepair_PutUnknownTunnel404(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg77/autorepair",
+		`{"enabled":true,"provider":"amnezia","option":"nl"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("код %d, хотим 404: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg77"); ok {
+		t.Fatal("настройка для чужого VPN-туннеля записана")
+	}
+	rec = env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg77/autorepair", `{"enabled":false}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("выключение без настройки и туннеля: код %d, хотим 404", rec.Code)
+	}
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: env.ownedID, TunnelID: "awg78", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	rec = env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg78/autorepair", `{"enabled":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("выключение настройки пропавшего VPN-туннеля: код %d: %s", rec.Code, rec.Body.String())
+	}
+	if s, _, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg78"); s.Enabled {
+		t.Fatal("настройка пропавшего VPN-туннеля не выключилась")
+	}
+}
+
+// A4.2: id панели своего сервера пишется в нижнем регистре -- движок и
+// допуск сравнивают его с id панели как есть.
+func TestAutorepair_PutAwg3PanelIDLowercased(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	rec := env.do(t, cabOperator, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
+		`{"enabled":true,"provider":"awg3","option":" MAIN / awg1 "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	s, _, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12")
+	if s.Option != "main/awg1" {
+		t.Fatalf("вариант записан как %q, ждали main/awg1", s.Option)
+	}
+}
+
+// A4.2: сохранённый вариант своего сервера и подсказка из происхождения
+// видны только тому, кому разрешена выдача с этой панели.
+func TestAutorepair_Awg3OptionFilteredByPanelRight(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	seedAutorepairTunnel(t, env, "awg13", "Склад")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: true, Provider: "awg3", Option: "main/awg1", UpdatedBy: cabOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.d.TunnelOrigins().Record(env.ownedID, "awg13", "Склад", "awg3", "main/awg2", time.Now(), 0); err != nil {
+		t.Fatal(err)
+	}
+	path12 := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	path13 := "/v1/miniapp/routers/{id}/tunnels/awg13/autorepair"
+
+	owner := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path12, "").Body.Bytes())
+	if owner.Option != "" {
+		t.Fatalf("владельцу без допуска к панели показан вариант %q", owner.Option)
+	}
+	if !owner.Enabled || owner.Provider != "awg3" {
+		t.Fatalf("владелец обязан видеть, что автопочинка включена: %+v", owner)
+	}
+	if op := decodeAutorepair(t, env.do(t, cabOperator, http.MethodGet, path12, "").Body.Bytes()); op.Option != "main/awg1" {
+		t.Fatalf("допущенному оператору вариант не показан: %q", op.Option)
+	}
+
+	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path13, "").Body.Bytes()); r.Suggested != nil {
+		t.Fatalf("подсказка из происхождения на чужую панель: %+v", r.Suggested)
+	}
+	r := decodeAutorepair(t, env.do(t, cabOperator, http.MethodGet, path13, "").Body.Bytes())
+	if r.Suggested == nil || r.Suggested.Option != "main/awg2" {
+		t.Fatalf("допущенный оператор без подсказки из происхождения: %+v", r.Suggested)
+	}
+}
+
+// A4.3: GET говорит, что вариант настройки на роутере стоит, но проверку не
+// прошёл.
+func TestAutorepair_GetOptionUnconfirmed(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes()); r.OptionUnconfirmed {
+		t.Fatal("без отметки вариант назван неподтверждённым")
+	}
+	LinkRepairSaveUnconfirmed(env.d, nil)(env.ownedID, "awg12", "amnezia", "de")
+	r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
+	if r.Option != "de" || !r.OptionUnconfirmed {
+		t.Fatalf("ответ: option=%q unconfirmed=%v", r.Option, r.OptionUnconfirmed)
 	}
 }

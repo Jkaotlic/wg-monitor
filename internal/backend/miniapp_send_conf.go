@@ -86,8 +86,9 @@ func miniappSendConfHandler(d Deps) http.HandlerFunc {
 				writeMiniappCabinetError(w, http.StatusBadRequest, "missing_instance")
 				return
 			}
-			// Каждый файл -- новый клиент на своём сервере (отзыва пиров пока
-			// нет -- бэклог); экран предупреждает об этом до нажатия.
+			// Каждый файл -- новый клиент на своём сервере; лишние админ отзывает
+			// в карточке сервера («Выданные подключения»). Экран предупреждает
+			// о новом клиенте до нажатия.
 			issued, inst, err := d.SelfHosted.Issue(r.Context(), instID, miniappSelfHostedClientName(u.Nickname))
 			if err != nil {
 				miniappSelfHostedIssueError(d, w, err)

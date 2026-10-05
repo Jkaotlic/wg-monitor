@@ -101,6 +101,38 @@ func (e *EventsRepo) LatestEvent(userID int64, checkName string) (EventRow, bool
 	return r, true, nil
 }
 
+// RecentEvents -- до n последних строк (userID, checkName), свежие вперёд.
+// Точечная выборка по уникальному индексу (user_id, check_name, ts): таблица
+// горячая, поэтому всегда с малым LIMIT.
+func (e *EventsRepo) RecentEvents(userID int64, checkName string, n int) ([]EventRow, error) {
+	rows, err := e.d.db.Query(
+		`SELECT id, user_id, check_name, status, details_json, ts
+		   FROM events
+		  WHERE user_id = ? AND check_name = ?
+		  ORDER BY ts DESC LIMIT ?`,
+		userID, checkName, n,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventRow
+	for rows.Next() {
+		var r EventRow
+		var tsStr string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.CheckName, &r.Status, &r.DetailsJSON, &tsStr); err != nil {
+			return nil, err
+		}
+		t, err := parseEventTS(tsStr)
+		if err != nil {
+			return nil, err
+		}
+		r.TS = t
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // LatestEventTSWithStatus -- время самой свежей строки (userID, checkName)
 // с заданным статусом не раньше since. Точечная выборка по уникальному
 // индексу (user_id, check_name, ts) в обратном порядке: обычно первая же

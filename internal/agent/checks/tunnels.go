@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
@@ -28,6 +29,77 @@ type TunnelsCheck struct {
 	// AwgmDownSince -- открытая серия неудач пингчека awg-manager
 	// (pingruns.Tracker.DownSince, v0.47). nil -- без пометки.
 	AwgmDownSince func(tunnelID string) (time.Time, bool)
+	// Grace -- память обходов для окна терпимости (RunGrace). nil -- без
+	// окна: остановленному туннелю правила не засчитываются.
+	Grace *RunGrace
+}
+
+// defaultRunGraceWindow -- окно терпимости, когда интервал отчётов не задан.
+const defaultRunGraceWindow = 2 * time.Minute
+
+// RunGrace -- окно терпимости на разовый перезапуск VPN-туннеля (ping-check,
+// смена конфига): туннель, работавший не дольше Window назад, для правил
+// считается работающим. Без окна такой отчёт давал «трафик напрямую» и
+// глушил падение как у неиспользуемого туннеля (fleet-audit 15.09).
+//
+// Окно меряется временем, а не числом прогонов: при флапе интерфейса
+// хук-отчёты идут раз в 10-20 с, и окно «на два прогона» кончалось бы посреди
+// того же перезапуска. Общая на все прогоны проверки; безопасна для
+// параллельного вызова.
+type RunGrace struct {
+	// Window -- ширина окна; агент ставит два интервала плановых отчётов.
+	// 0 -- defaultRunGraceWindow.
+	Window time.Duration
+	// Now -- часы (тесты подменяют); nil -- time.Now.
+	Now func() time.Time
+
+	mu         sync.Mutex
+	lastUsable map[string]time.Time
+}
+
+// Observe отмечает очередной прогон и возвращает туннели в окне терпимости:
+// включённые, сейчас не работающие, но работавшие не дольше Window назад.
+// Выключенный в настройках туннель окна не получает -- это решение человека,
+// а не перезапуск.
+func (g *RunGrace) Observe(tunnels []awgmgr.Tunnel) map[string]bool {
+	if g == nil {
+		return nil
+	}
+	now := time.Now()
+	if g.Now != nil {
+		now = g.Now()
+	}
+	window := g.Window
+	if window <= 0 {
+		window = defaultRunGraceWindow
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.lastUsable == nil {
+		g.lastUsable = map[string]time.Time{}
+	}
+	present := make(map[string]bool, len(tunnels))
+	out := map[string]bool{}
+	for _, tu := range tunnels {
+		present[tu.ID] = true
+		if tunnelRouteFallbackUsable(tu) {
+			g.lastUsable[tu.ID] = now
+			continue
+		}
+		if !tu.Enabled {
+			delete(g.lastUsable, tu.ID)
+			continue
+		}
+		if last, ok := g.lastUsable[tu.ID]; ok && now.Sub(last) <= window {
+			out[tu.ID] = true
+		}
+	}
+	for id := range g.lastUsable {
+		if !present[id] {
+			delete(g.lastUsable, id)
+		}
+	}
+	return out
 }
 
 func (t TunnelsCheck) Group() string { return "tunnels" }
@@ -69,7 +141,8 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	if s, serr := t.Client.Settings(ctx); serr == nil {
 		activeDefaultID = s.ActiveDefaultTunnelID()
 	}
-	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels, activeDefaultID)
+	graced := t.Grace.Observe(tunnels.Tunnels)
+	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels, activeDefaultID, graced)
 
 	// Матрица задержек -- один запрос на весь обход: снимок общий для всех
 	// линий. Эндпоинт появился в awg-manager 2.18, на старых роутерах его
@@ -106,7 +179,12 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
 		// «не знаем», а не «правил нет».
 		rc.Unknown = routeCounts == nil
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier))
+		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier)
+		if graced[tu.ID] && chk.Details != nil {
+			// Остановлен недавно: правила за ним сохранены окном терпимости.
+			chk.Details["run_grace"] = true
+		}
+		out = append(out, chk)
 	}
 	annotateAwgmDown(out, t.AwgmDownSince)
 	return out
@@ -181,7 +259,9 @@ type routeCounts struct {
 // interface name (e.g. "nwg1"). Fall-through HR-Neo rules (routes=nil,
 // hrPolicyName set) are credited to the default-route tunnel. Either list
 // failing returns an empty map — degraded, not fatal.
-func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel, activeDefaultID string) map[string]routeCounts {
+// graced -- туннели в окне терпимости (RunGrace): для правил они всё ещё
+// работают.
+func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel, activeDefaultID string, graced map[string]bool) map[string]routeCounts {
 	dns, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		return nil
@@ -190,7 +270,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 	if err != nil {
 		return nil
 	}
-	defaultIface := resolveDefaultIface(tunnels, activeDefaultID)
+	defaultIface := resolveDefaultIface(tunnels, activeDefaultID, graced)
 	out := map[string]routeCounts{}
 	bump := func(iface string, dns, hr, stat int) {
 		if iface == "" {
@@ -243,16 +323,29 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 // the authoritative id is unknown or doesn't resolve to a usable tunnel. The
 // usable gate (vs. plain enabled) keeps a starting/stopped default from absorbing
 // fall-through credit it isn't yet carrying.
-func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string) string {
+func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string, graced map[string]bool) string {
+	usable := func(tu awgmgr.Tunnel) bool {
+		return tunnelRouteFallbackUsable(tu) || (graced[tu.ID] && strings.TrimSpace(tu.InterfaceName) != "")
+	}
+	// Назначенный выход (routeTag) выигрывает и в окне терпимости, даже у
+	// работающего соседа с основным маршрутом: awg-manager шлёт трафик туда,
+	// перезапускается он или нет.
 	if activeDefaultID != "" {
 		for _, tu := range tunnels {
-			if tu.ID == activeDefaultID && tunnelRouteFallbackUsable(tu) {
+			if tu.ID == activeDefaultID && usable(tu) {
 				return tu.InterfaceName
 			}
 		}
 	}
+	// Назначенного нет: работающий заявивший основной маршрут важнее того,
+	// что в окне терпимости.
 	for _, tu := range tunnels {
 		if tu.DefaultRoute && tunnelRouteFallbackUsable(tu) {
+			return tu.InterfaceName
+		}
+	}
+	for _, tu := range tunnels {
+		if tu.DefaultRoute && usable(tu) {
 			return tu.InterfaceName
 		}
 	}

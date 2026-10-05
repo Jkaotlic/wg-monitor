@@ -69,6 +69,11 @@ func main() {
 	// без тома), один раз переезжают к базе -- до того, как их кто-то откроет.
 	backend.MigrateLegacyStores(backend.LegacyStoreDir, cfg.StoreFiles(), logger)
 	backend.WarnStoresOutsideDBDir(cfg, logger)
+	// Ключи кабинетов на диске -- шифром revive.key (v0.55, B1): открытые
+	// файлы перешифровываются на месте до того, как их кто-то откроет. Нет
+	// ключа -- старт идёт дальше, файлы как были, предупреждение в журнал и в
+	// строку «Бэкенд» сводки парка.
+	cabinetSealWarning := backend.SealCabinetStores(cfg.StoreFiles(), cfg.Revive.KeyFile, logger)
 	slog.SetDefault(logger)
 
 	d, err := db.Open(cfg.DBPath)
@@ -256,6 +261,7 @@ func main() {
 		Source:          backend.RepairSource(cb, awg3Panels, d),
 		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
+		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, logger.With("component", "linkrepair")),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        cmdQueue,
@@ -266,8 +272,9 @@ func main() {
 	}
 
 	mux := backend.NewMux(backend.Deps{
-		Logger:         logger,
-		HeartbeatStats: watcher.Snapshot,
+		Logger:             logger,
+		CabinetSealWarning: cabinetSealWarning,
+		HeartbeatStats:     watcher.Snapshot,
 		// Состояние ночного бэкапа: файл рядом с базой, читается по требованию.
 		BackupStatus: backend.NewBackupStatusSource(backup.StatusPath(cfg.DBPath), nil),
 		DB:           d,

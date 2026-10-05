@@ -120,13 +120,37 @@ describe('fleetSummary', () => {
       { id: 5, nickname: 'Новый', status: 'offline', last_seen_age_sec: null },
     ]
     const s = fleetSummary(list)
-    expect({ total: s.total, ok: s.ok, attention: s.attention, silent: s.silent }).toEqual({ total: 5, ok: 1, attention: 1, silent: 3 })
+    // A1.6: спящие -- отдельно от молчащих, как в чипах фильтра.
+    expect({ total: s.total, ok: s.ok, attention: s.attention, sleeping: s.sleeping, silent: s.silent }).toEqual({ total: 5, ok: 1, attention: 1, sleeping: 1, silent: 2 })
     expect(s.broken.map((r) => r.id)).toEqual([2, 5, 3, 4])
     expect(s.broken[0].pill).toEqual({ tone: 'danger', text: 'тревога' })
   })
 
   it('пустой парк', () => {
-    expect(fleetSummary([])).toEqual({ total: 0, ok: 0, attention: 0, silent: 0, broken: [] })
-    expect(fleetSummary()).toEqual({ total: 0, ok: 0, attention: 0, silent: 0, broken: [] })
+    expect(fleetSummary([])).toEqual({ total: 0, ok: 0, attention: 0, sleeping: 0, silent: 0, broken: [] })
+    expect(fleetSummary()).toEqual({ total: 0, ok: 0, attention: 0, sleeping: 0, silent: 0, broken: [] })
+  })
+})
+
+// A1.6 (v0.55): плитка и чипы фильтра -- одни слова и один счёт.
+describe('плитка и чипы считают одинаково', () => {
+  it('для любого парка счёт сводки равен счёту чипов', async () => {
+    const { applyFleetFilter } = await import('../src/fleetFilter.js')
+    const list = [
+      { id: 1, nickname: 'a', status: 'online', last_seen_age_sec: 20 },
+      { id: 2, nickname: 'b', status: 'alert', last_seen_age_sec: 12, reach: 'online' },
+      { id: 3, nickname: 'c', status: 'alert', last_seen_age_sec: 99999, reach: 'sleeping' },
+      { id: 4, nickname: 'd', status: 'offline', last_seen_age_sec: 7200 },
+      { id: 5, nickname: 'e', status: 'sleeping', last_seen_age_sec: 3600 },
+      { id: 6, nickname: 'f', status: 'offline', last_seen_age_sec: null },
+    ]
+    const s = fleetSummary(list)
+    const { counts } = applyFleetFilter(list)
+    expect({ ok: s.ok, attention: s.attention, sleeping: s.sleeping, silent: s.silent }).toEqual({
+      ok: counts.online,
+      attention: counts.alert,
+      sleeping: counts.sleeping,
+      silent: counts.silent,
+    })
   })
 })

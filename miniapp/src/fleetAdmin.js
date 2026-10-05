@@ -22,6 +22,9 @@ export function backendRow(fleet) {
   return {
     value: backend.version ?? '',
     sub: backend.update_available && backend.latest_version ? `доступна ${backend.latest_version}` : '',
+    // Ключи кабинетов на диске не защищены или не читаются (v0.55, B1):
+    // готовый текст сервера, пусто -- всё в порядке.
+    secretsWarning: typeof backend.secrets_warning === 'string' ? backend.secrets_warning : '',
   }
 }
 

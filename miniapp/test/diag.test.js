@@ -320,3 +320,36 @@ describe('checkRows -- что означает провал', () => {
     expect(dns.consequence).toBe('')
   })
 })
+
+// dns_ru -- на вкладке «Проверки» сразу после поиска сайтов по имени, своим
+// вопросом, с последствием у провала.
+describe('dns_ru на вкладке «Проверки»', () => {
+  const at = '2026-10-05T10:00:00Z'
+  const ROUTER = { status: 'online', last_seen_age_sec: 42 }
+  const rowsByKey = (rows) => Object.fromEntries(rows.map((r) => [r.key, r]))
+  it('провал -- «нет» и последствие, место -- сразу после dns', () => {
+    const rows = checkRows({
+      checks: [
+        { check_name: 'resolver_guard', status: 'ok', ts: at, details: { mode: 'primary' } },
+        { check_name: 'dns_ru', status: 'fail', ts: at },
+        { check_name: 'dns', status: 'ok', ts: at },
+      ],
+      tunnels: [],
+      router: ROUTER,
+    })
+    const keys = rows.map((r) => r.key)
+    expect(keys.indexOf('dns_ru')).toBe(keys.indexOf('dns') + 1)
+    const row = rowsByKey(rows).dns_ru
+    expect(row.title).toBe('Русские сайты открываются по имени')
+    expect(row.answer).toBe('нет')
+    expect(row.tone).toBe('danger')
+    expect(row.consequence).toBe('Русские сайты могут не открываться')
+  })
+  it('ок -- «да»; не проверено -- серым; нет строки -- нет и вопроса', () => {
+    const one = (c) => rowsByKey(checkRows({ checks: [c], tunnels: [], router: ROUTER })).dns_ru
+    expect(one({ check_name: 'dns_ru', status: 'ok', ts: at }).answer).toBe('да')
+    expect(one({ check_name: 'dns_ru', status: 'unknown', ts: at }).tone).toBe('muted')
+    const rows = checkRows({ checks: [{ check_name: 'dns', status: 'ok', ts: at }], tunnels: [], router: ROUTER })
+    expect(rows.map((r) => r.key)).not.toContain('dns_ru')
+  })
+})

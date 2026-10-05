@@ -159,26 +159,63 @@ func (s *recSender) snapshot() []wire.Report {
 }
 
 // I1: интерфейс флапает -- хук каждые 40 с при интервале 60 с. Внеочередные
-// отчёты не двигают автомат тревог, поэтому не смеют откладывать плановые:
-// за 5 минут плановых должно быть не меньше 4 (масштаб 1 с = 1 мс).
+// отчёты не двигают автомат тревог, поэтому не смеют откладывать плановые.
+// Часы и тикер управляемые: тест не зависит от загрузки машины.
 func TestReporterHookReportsDoNotPostponeRegularCadence(t *testing.T) {
 	s := &recSender{}
-	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: 60 * time.Millisecond})
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: 60 * time.Second})
+	base := time.Date(2026, 10, 5, 7, 0, 0, 0, time.UTC)
+	var clkMu sync.Mutex
+	clk := base
+	setClock := func(sec int) {
+		clkMu.Lock()
+		clk = base.Add(time.Duration(sec) * time.Second)
+		clkMu.Unlock()
+	}
+	r.now = func() time.Time { clkMu.Lock(); defer clkMu.Unlock(); return clk }
+	ticks := make(chan time.Time)
+	r.newTicker = func(d time.Duration) (<-chan time.Time, func()) {
+		if d != 60*time.Second {
+			t.Errorf("тикер на %v, хотим интервал 60 с", d)
+		}
+		return ticks, func() {}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
-	stop := time.After(300 * time.Millisecond)
-	tk := time.NewTicker(40 * time.Millisecond)
-loop:
-	for {
-		select {
-		case <-tk.C:
-			r.RequestWake()
-		case <-stop:
-			break loop
+	waitReports := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for len(s.snapshot()) < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("отчётов %d, ждали %d", len(s.snapshot()), n)
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
-	tk.Stop()
+	want := 1
+	waitReports(want) // первый плановый -- на старте
+	// 5 минут: тик каждые 60 с, хук каждые 40 с; в 120 и 240 оба -- тик первым.
+	for sec := 1; sec <= 300; sec++ {
+		if sec%60 == 0 {
+			setClock(sec)
+			ticks <- base.Add(time.Duration(sec) * time.Second)
+			want++
+			waitReports(want)
+		}
+		if sec%40 == 0 {
+			setClock(sec)
+			r.RequestWake()
+			want++
+			waitReports(want)
+		}
+	}
+	// Тик потерян (роутер спал), хук пришёл через 70 с после планового:
+	// плановый догоняется вслед за хук-отчётом.
+	setClock(370)
+	r.RequestWake()
+	want += 2
+	waitReports(want)
 	cancel()
 	<-done
 	regular, hook := 0, 0
@@ -189,11 +226,8 @@ loop:
 			regular++
 		}
 	}
-	if hook == 0 {
-		t.Fatal("хук-отчётов нет: тест ничего не проверяет")
-	}
-	if regular < 4 {
-		t.Fatalf("плановых отчётов %d (хук-отчётов %d): флап интерфейса заморозил автомат тревог", regular, hook)
+	if hook != 8 || regular != 7 {
+		t.Fatalf("плановых %d (хотим 7), хук-отчётов %d (хотим 8): флап интерфейса сбил ритм автомата тревог", regular, hook)
 	}
 }
 

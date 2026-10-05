@@ -26,7 +26,7 @@ const hrneoSettle = 3 * time.Second
 // работает».
 func (o *OpkgRunner) HrneoUpdate(ctx context.Context) (status, output string) {
 	if _, _, ok := o.lockHeldFresh(); ok {
-		return "locked", "на роутере уже идёт другая операция с пакетами — повторите через пару минут"
+		return "locked", opkgLockHeldText
 	}
 	if err := o.releaseStaleLock(); err != nil {
 		return "err", "clear stale lock: " + err.Error()
@@ -39,7 +39,11 @@ func (o *OpkgRunner) HrneoUpdate(ctx context.Context) (status, output string) {
 	}
 	defer o.releaseLock()
 
-	from, installed := o.hrneoInstalledVersion(ctx)
+	from, installed, infoErr := o.hrneoInstalledVersion(ctx)
+	if infoErr != nil {
+		// Сбой самой проверки -- не ответ «не установлен».
+		return "err", "не удалось проверить, установлен ли HydraRoute Neo: " + infoErr.Error()
+	}
 	if !installed {
 		return "err", "HydraRoute Neo не установлен"
 	}
@@ -69,8 +73,13 @@ func (o *OpkgRunner) HrneoUpdate(ctx context.Context) (status, output string) {
 	if out, err := o.Exec(ctx, hrneoInitScript, "restart"); err != nil {
 		return "err", fmt.Sprintf("HydraRoute Neo обновлён, но перезапуск не удался: %v\n%s", err, out)
 	}
-	_ = o.sleep(ctx, hrneoSettle)
-	to, _ := o.hrneoInstalledVersion(ctx)
+	if err := o.sleep(ctx, hrneoSettle); err != nil {
+		return "err", "HydraRoute Neo обновлён, но проверка после перезапуска прервана — посмотрите его состояние позже"
+	}
+	to, _, toErr := o.hrneoInstalledVersion(ctx)
+	if toErr != nil {
+		return "err", "HydraRoute Neo обновлён, но не удалось проверить его версию: " + toErr.Error()
+	}
 	running := o.hrneoRunning(ctx)
 	if to == "" || to == from {
 		return "err", fmt.Sprintf("HydraRoute Neo не обновился: версия осталась %s", from)
@@ -95,12 +104,15 @@ func (o *OpkgRunner) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (o *OpkgRunner) hrneoInstalledVersion(ctx context.Context) (string, bool) {
+// hrneoInstalledVersion: «не установлен» -- только когда opkg info отработал и
+// установленного блока в ответе нет; сбой самой команды -- ошибка.
+func (o *OpkgRunner) hrneoInstalledVersion(ctx context.Context) (string, bool, error) {
 	out, err := o.Exec(ctx, "opkg", "info", "hrneo")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
-	return installedVersionFromOpkgInfo(string(out))
+	v, ok := installedVersionFromOpkgInfo(string(out))
+	return v, ok, nil
 }
 
 func (o *OpkgRunner) hrneoRunning(ctx context.Context) bool {

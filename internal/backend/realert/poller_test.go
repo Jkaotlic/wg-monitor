@@ -627,3 +627,37 @@ func TestTickRealertReachesAdmin(t *testing.T) {
 		t.Fatal("у владельца кнопка выключения админа")
 	}
 }
+
+// Агент после перезапуска шлёт строки resolver_guard с ready:false («ещё не
+// прочитал настройки»): это не ответ о DNS, и автомат тревог их пропускает.
+// Напоминание обязано строиться из последней строки с настоящей аварией, а не
+// из такой пустышки со статусом ok.
+func TestLastKnownCheckSkipsResolverGuardNotReadyRows(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	if err := d.Events().Insert(uid, "resolver_guard", "fail", `{"mode":"fallback","ready":true}`, now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "resolver_guard", "ok", `{"ready":false}`, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPoller(d, &fakeTG{}, Config{})
+	got := p.lastKnownCheck(uid, "resolver_guard")
+
+	if got.Status != "fail" || got.Details["mode"] != "fallback" {
+		t.Fatalf("напоминание построено не из настоящей аварии: %+v", got)
+	}
+}
+
+// Остальные проверки берут просто последнюю строку, как и раньше.
+func TestLastKnownCheckOtherChecksTakeLatestRow(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	_ = d.Events().Insert(uid, "dns", "fail", `{"a":1}`, now.Add(-10*time.Minute))
+	_ = d.Events().Insert(uid, "dns", "ok", `{"ready":false}`, now.Add(-time.Minute))
+	p := NewPoller(d, &fakeTG{}, Config{})
+	if got := p.lastKnownCheck(uid, "dns"); got.Status != "ok" {
+		t.Fatalf("got %+v", got)
+	}
+}

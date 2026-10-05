@@ -12,6 +12,10 @@ const here = () => window.location.pathname + window.location.search
 // (записей под нами нет), следующий настоящий «назад» не должен пропасть.
 const SELF_GO_MS = 1000
 
+// Сколько записей-меток держит состояние: слои без адреса и лист поверх
+// (A1.4) -- «назад» браузера закрывает лист, а не уводит с места целиком.
+const markDepth = (state) => localLayerDepth(state) + (state?.sheet ? 1 : 0)
+
 // Навигация веб-управления живёт в адресе: «назад» браузера, обновление
 // страницы и закладки. В Telegram (enabled=false) адрес не трогаем вовсе.
 //
@@ -46,7 +50,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
 
   // Привести записи-метки к числу открытых слоёв без адреса.
   function reconcile(state) {
-    const want = localLayerDepth(state)
+    const want = markDepth(state)
     const have = depth.current
     if (want > have) {
       for (let i = have + 1; i <= want; i++) window.history.pushState({ [MARK]: i }, '', here())
@@ -74,7 +78,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
     }
     synced.current = true
     reconcile(nav)
-  }, [enabled, nav.routerID, nav.tab, nav.overlay, nav.diagView, nav.overlayParams])
+  }, [enabled, nav.routerID, nav.tab, nav.overlay, nav.diagView, nav.overlayParams, nav.sheet])
 
   useEffect(() => {
     if (!enabled) return undefined
@@ -100,14 +104,22 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
       // бэкенда) не отпускает и «назад» браузера: место остаётся, запись
       // возвращается -- вместе с меткой, если слой без адреса.
       if (navPinned(cur)) {
-        const local = localLayerDepth(cur) > 0
+        const local = markDepth(cur) > 0
         window.history.pushState(local ? { [MARK]: mark + 1 } : null, '', basePath + urlFromNav(cur))
         depth.current = local ? mark + 1 : 0
         return
       }
+      // «Вперёд» на запись-метку того же места (лист или слой закрыли кнопкой,
+      // метку сняли «назад»): навигация остаётся как есть -- иначе адрес
+      // пересобрал бы место и потерял цель возврата. Метка отматывается.
+      if (mark > depth.current && here() === basePath + urlFromNav(cur)) {
+        depth.current = mark
+        reconcile(cur)
+        return
+      }
       // «Назад» с записи-метки: закрыть слой без адреса тем же back, что кнопка
       // Telegram (лист поверх слоя закрывается первым -- reconcile вернёт метку).
-      if (LOCAL_LAYERS.includes(cur.overlay) && mark < depth.current && here() === basePath + urlFromNav(cur)) {
+      if ((LOCAL_LAYERS.includes(cur.overlay) || cur.sheet) && mark < depth.current && here() === basePath + urlFromNav(cur)) {
         let next = cur
         for (let i = depth.current - mark; i > 0; i--) {
           next = navReducer(next, { type: 'back' })

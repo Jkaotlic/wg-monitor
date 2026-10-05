@@ -19,16 +19,24 @@
 // них. Второго места для тех же списков не заводим, иначе болезнь вернётся.
 package dnsref
 
+import "strings"
+
 // Purpose -- зачем апстрим в наборе. Роль важна сама по себе: апстримы не
 // равны между собой, и проверка, считающая их равными, молчит при отказе того
 // единственного, что несёт все русские зоны.
 type Purpose string
 
 const (
-	PurposeYandex  Purpose = "yandex"  // русские зоны, мимо VPN-туннеля
+	PurposeRU      Purpose = "ru"      // русские зоны (Яндекс по DoT), мимо VPN-туннеля
 	PurposeForeign Purpose = "foreign" // всё остальное
 	PurposePinned  Purpose = "pinned"  // CDN-зоны, закреплённые за одним резолвером
 )
+
+// ReferenceUpstream -- строка эталона ручного сброса вместе с её ролью.
+type ReferenceUpstream struct {
+	Line    string
+	Purpose Purpose
+}
 
 // yandexDoTHost -- единственный хост, которому доверены русские зоны.
 const yandexDoTHost = "common.dot.dns.yandex.net"
@@ -84,16 +92,48 @@ func RUZones() []string { return copyOf(ruZones) }
 // сравнивали с источником, а не с литералом у себя.
 func YandexDoTHost() string { return yandexDoTHost }
 
-// ReferenceDoTLines -- то, что ручной сброс ставит на роутер и СОХРАНЯЕТ.
+// ReferenceUpstreams -- эталон ручного сброса с ролью каждой строки.
 // Сначала заграничная часть (ей резолвится весь остальной мир), затем по
 // строке на каждую русскую зону.
-func ReferenceDoTLines() []string {
-	out := make([]string, 0, len(referenceForeignDoT)+len(ruZones))
-	out = append(out, referenceForeignDoT...)
+func ReferenceUpstreams() []ReferenceUpstream {
+	out := make([]ReferenceUpstream, 0, len(referenceForeignDoT)+len(ruZones))
+	for _, l := range referenceForeignDoT {
+		out = append(out, ReferenceUpstream{Line: l, Purpose: PurposeForeign})
+	}
 	for _, z := range ruZones {
-		out = append(out, "tls upstream "+yandexDoTHost+" domain "+z)
+		out = append(out, ReferenceUpstream{Line: "tls upstream " + yandexDoTHost + " domain " + z, Purpose: PurposeRU})
 	}
 	return out
+}
+
+// ReferenceDoTLines -- то, что ручной сброс ставит на роутер и СОХРАНЯЕТ:
+// строки ReferenceUpstreams без ролей, в том же порядке.
+func ReferenceDoTLines() []string {
+	ups := ReferenceUpstreams()
+	out := make([]string, 0, len(ups))
+	for _, u := range ups {
+		out = append(out, u.Line)
+	}
+	return out
+}
+
+// ZonePurpose -- роль строки dns-proxy в НАСТРОЙКАХ роутера по её зоне
+// (квалификатор `domain`). Кому роутер отдал русскую зону, тот и несёт
+// русские сайты -- Яндекс это или нет; строка без зоны -- общий,
+// заграничный апстрим.
+func ZonePurpose(zone string) Purpose {
+	z := strings.TrimRight(strings.ToLower(strings.TrimSpace(zone)), ".")
+	for _, r := range ruZones {
+		if z == r {
+			return PurposeRU
+		}
+	}
+	for _, p := range pinnedZones {
+		if z == p {
+			return PurposePinned
+		}
+	}
+	return PurposeForeign
 }
 
 // RUCandidates -- формы для сторожа, в порядке предпочтения. Никогда не
@@ -109,6 +149,27 @@ func PinnedZones() []string { return copyOf(pinnedZones) }
 
 // PinnedCandidate -- резолвер, несущий PinnedZones, пока он жив.
 func PinnedCandidate() string { return pinnedCandidate }
+
+// zoneCanaries -- известные имена в русских зонах для пробы сервера, которому
+// отдана зона. Для зоны без записи здесь берётся nic.<зона>: проба считает
+// ответ «такого имени нет» живым сервером, так что имя может и не
+// существовать -- важно, чтобы вопрос был из ЭТОЙ зоны.
+var zoneCanaries = map[string]string{
+	"ru":       ruCanary,
+	"xn--p1ai": "xn--d1abbgf6aiiy.xn--p1ai", // президент.рф
+}
+
+// ZoneCanary -- имя для пробы сервера, которому роутер отдал зону.
+func ZoneCanary(zone string) string {
+	z := strings.TrimRight(strings.ToLower(strings.TrimSpace(zone)), ".")
+	if n, ok := zoneCanaries[z]; ok {
+		return n
+	}
+	if z == "" {
+		return ruCanary
+	}
+	return "nic." + z
+}
 
 // RUCanary -- имя для пробы живости раздельного DNS.
 func RUCanary() string { return ruCanary }

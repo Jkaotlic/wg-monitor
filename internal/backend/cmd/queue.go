@@ -294,6 +294,11 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for {
+		// Опрос уже оборван: команду, выданную в мёртвое соединение, агент не
+		// получит, а self_update держала бы место в раздаче до конца окна.
+		if ctx.Err() != nil {
+			return nil, false
+		}
 		if idx := q.nextDispatchableLocked(userID, time.Now()); idx >= 0 {
 			cmds := q.pending[userID]
 			head := cmds[idx]
@@ -342,6 +347,38 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 		}
 		q.signal.Wait()
 	}
+}
+
+// ReturnUndelivered возвращает в голову очереди команду, которую Dequeue
+// выдал, а ответ с ней до агента не дошёл (опрос оборвался). Запись о выдаче
+// снимается -- место в раздаче (SetDispatchLimit) свободно сразу, а не через
+// окно. Если на ответ уже есть результат, команда дошла -- ничего не делаем;
+// если за это время положили новую self_update, старая не возвращается.
+func (q *Queue) ReturnUndelivered(userID int64, cmd wire.Command) {
+	q.mu.Lock()
+	if _, answered := q.results[userID][cmd.ID]; answered {
+		q.mu.Unlock()
+		return
+	}
+	if bucket := q.issued[userID]; bucket != nil {
+		delete(bucket, cmd.ID)
+		if len(bucket) == 0 {
+			delete(q.issued, userID)
+		}
+	}
+	back := true
+	for _, c := range q.pending[userID] {
+		if c.ID == cmd.ID || (supersedesPending(cmd.Action) && c.Action == cmd.Action) {
+			back = false
+			break
+		}
+	}
+	if back {
+		q.pending[userID] = append([]wire.Command{cmd}, q.pending[userID]...)
+	}
+	q.mu.Unlock()
+	q.signal.Broadcast()
+	q.log().Info("queue return undelivered", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "requeued", back)
 }
 
 // nextDispatchableLocked -- индекс первой команды userID, которую можно

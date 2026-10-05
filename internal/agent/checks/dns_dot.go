@@ -92,7 +92,7 @@ func ProbeDoT(ctx context.Context, addr, sni, domain string, cfg *tls.Config, ti
 		return nil, fmt.Errorf("dot: response id mismatch: %d != %d", msg.Header.ID, id)
 	}
 	if msg.Header.RCode != dnsmessage.RCodeSuccess {
-		return nil, fmt.Errorf("dot: rcode %v", msg.Header.RCode)
+		return nil, &DNSReplyError{Prefix: "dot: ", RCode: msg.Header.RCode}
 	}
 	var out []string
 	for _, rr := range msg.Answers {
@@ -101,7 +101,7 @@ func ProbeDoT(ctx context.Context, addr, sni, domain string, cfg *tls.Config, ti
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("dot: no A answers")
+		return nil, &DNSReplyError{Prefix: "dot: ", NoAnswer: true}
 	}
 	return out, nil
 }

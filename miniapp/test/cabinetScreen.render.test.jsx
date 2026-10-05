@@ -620,4 +620,25 @@ describe('кабинет роутера: вкладка «Панель VPN-се�
     expect(root.textContent).not.toContain('не загрузился')
     cleanup(root)
   })
+
+  // A1.2 (v0.55): ошибка кабинетов не прячет вкладку «Панель VPN-сервера».
+  it('кабинеты не загрузились, панели есть -- вкладка панелей на месте и рабочая', async () => {
+    mocks.cabinetsFail = new Error('502')
+    mocks.awg3 = [{ id: 'main', label: 'Main', unavailable: false, ifaces: [{ id: 'awg1', title: 'Нидерланды' }] }]
+    const { root } = await mount()
+    expect([...root.querySelectorAll('.segment-tab')].map((t) => t.textContent)).toContain('Панель VPN-сервера')
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('Нидерланды')
+    cleanup(root)
+  })
+
+  it('кабинеты и список панелей упали -- вкладка панелей с ошибкой и «Повторить»', async () => {
+    mocks.cabinetsFail = new Error('502')
+    mocks.awg3Fail = true
+    const { root } = await mount()
+    await tab(root, 'Панель VPN-сервера')
+    expect(root.textContent).toContain('Список панелей VPN-серверов не загрузился.')
+    expect(button(root, 'Повторить')).toBeTruthy()
+    cleanup(root)
+  })
 })

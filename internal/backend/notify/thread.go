@@ -3,7 +3,9 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +46,9 @@ type Repairs struct {
 	d      *db.DB
 	texts  AlertTexts
 	now    func() time.Time
+	// sleep -- пауза перед повтором правки; прерывается ctx. Тесты
+	// подменяют её, чтобы не ждать по-настоящему.
+	sleep func(ctx context.Context, d time.Duration) error
 
 	mu         sync.Mutex
 	miniAppURL string
@@ -83,7 +88,19 @@ func NewRepairs(f *Fanout, e Editor, d *db.DB, texts AlertTexts, now func() time
 	if now == nil {
 		now = time.Now
 	}
-	return &Repairs{fanout: f, editor: e, d: d, texts: texts, now: now, covered: map[repairKey]*coverMark{}}
+	return &Repairs{fanout: f, editor: e, d: d, texts: texts, now: now, sleep: sleepCtx, covered: map[repairKey]*coverMark{}}
+}
+
+// sleepCtx -- пауза, которую обрывает отмена ctx.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // SetMiniAppBaseURL -- адрес мини-аппа для кнопки под «нужно ваше участие».
@@ -320,13 +337,27 @@ func (t *repairThread) send(ctx context.Context, text string) {
 
 // edit дописывает блок под тревогу каждому получателю с теми же кнопками,
 // что были под ней (админу -- с его рядом «Не писать мне»). Блок заменяет
-// прежний: текст хода от движка уже несёт всё сделанное. Правка не удалась
-// (сообщение удалено, старше лимита Telegram) -- этому получателю уходит
-// новое сообщение, и дальше правится уже оно. cur -- получатели сейчас
-// (nil -- неизвестно): кто выпал из них, тому ни правки, ни нового сообщения.
+// прежний: текст хода от движка уже несёт всё сделанное. cur -- получатели
+// сейчас (nil -- неизвестно): кто выпал из них, тому ни правки, ни нового
+// сообщения.
+//
+// Неудачная правка разбирается по причине (см. tryEdit): временная (429,
+// 5xx, обрыв сети) повторяется с паузой; сообщения больше нет или чат
+// закрыт -- получателю уходит новое сообщение, дальше правится оно; прочее
+// (наша ошибка в тексте) -- только в журнал. Громкий дубль всей тревоги из-за
+// флуд-контроля Telegram хуже пропущенной правки: следующий ход починки
+// поправит сообщение снова.
 func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]bool) {
 	full := withRepairBlock(t.base, block)
 	f := t.r.fanout
+	// Потолок -- реальное время правки (сами попытки тоже идут: таймаут
+	// HTTP-клиента Telegram 15 с), а не сумма пауз. Повторы и паузы идут под
+	// rctx со сроком: он обрывает их и тогда, когда нить получила ctx без
+	// отмены (Done, NeedHuman -- context.WithoutCancel), и бэкенд
+	// останавливается. Первая попытка каждому получателю -- под ctx.
+	deadline := t.r.now().Add(editRetryBudget)
+	rctx, cancel := context.WithTimeout(ctx, editRetryBudget)
+	defer cancel()
 	for i := range t.targets {
 		tgt := &t.targets[i]
 		if cur != nil && !cur[tgt.chatID] {
@@ -336,8 +367,13 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		if f.isAdmin(tgt.chatID) {
 			kb = withAdminMuteRow(kb, t.key.routerID)
 		}
-		err := t.r.editor.EditMessageText(ctx, tgt.chatID, tgt.messageID, full, "", kb)
+		err := t.tryEdit(ctx, rctx, deadline, tgt, full, kb)
 		if err == nil {
+			continue
+		}
+		if editErrorKind(err) != editGone {
+			t.r.warn("починка: тревога не поправлена, повтор на следующем ходе",
+				"telegram_user_id", tgt.chatID, "message_id", tgt.messageID, "check", t.key.checkName, "err", err)
 			continue
 		}
 		t.r.warn("починка: тревога не правится, шлём новым сообщением",
@@ -351,6 +387,82 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		f.noteSuccess(tgt.chatID)
 		tgt.messageID = mid
 	}
+}
+
+// editRetryBudget -- сколько реального времени одна правка (все получатели
+// вместе) может тратить на повторы. Движок починки ждёт нить под замком
+// роутера: дольше -- и ход починки встаёт из-за флуд-контроля Telegram.
+const editRetryBudget = 30 * time.Second
+
+// editBackoffStart -- первая пауза, когда Telegram не сказал, сколько ждать.
+const editBackoffStart = time.Second
+
+// tryEdit правит одно сообщение. Первая попытка -- под ctx; временные
+// ошибки повторяются под rctx, пока пауза с запасом укладывается до
+// deadline (часы Repairs.now). Возвращает последнюю ошибку.
+func (t *repairThread) tryEdit(ctx, rctx context.Context, deadline time.Time, tgt *threadTarget, full string, kb *tg.InlineKeyboardMarkup) error {
+	backoff := editBackoffStart
+	err := t.r.editor.EditMessageText(ctx, tgt.chatID, tgt.messageID, full, "", kb)
+	for {
+		if err == nil || editErrorKind(err) != editTransient {
+			return err
+		}
+		wait := backoff
+		if d, ok := tg.RateLimitDelay(err); ok && d > 0 {
+			wait = d
+		} else {
+			backoff *= 2
+		}
+		if !t.r.now().Add(wait).Before(deadline) {
+			return err
+		}
+		if sErr := t.r.sleep(rctx, wait); sErr != nil {
+			return err
+		}
+		err = t.r.editor.EditMessageText(rctx, tgt.chatID, tgt.messageID, full, "", kb)
+	}
+}
+
+type editKind int
+
+const (
+	editOther     editKind = iota // наша ошибка в тексте/кнопках -- повтор не поможет
+	editTransient                 // 429, 5xx, сеть -- повторить с паузой
+	editGone                      // сообщения нет или чат закрыт -- новое сообщение
+)
+
+// editErrorKind -- что делать с ошибкой правки.
+func editErrorKind(err error) editKind {
+	if err == nil {
+		return editOther
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return editOther
+	}
+	var ae *tg.APIError
+	if !errors.As(err, &ae) {
+		if messageGone(err.Error()) {
+			return editGone
+		}
+		// Не ответ Telegram, а обрыв по дороге -- временно.
+		return editTransient
+	}
+	switch {
+	case ae.Code == http.StatusTooManyRequests || ae.Code >= 500:
+		return editTransient
+	case tg.IsUnreachableChat(err) || messageGone(ae.Description):
+		return editGone
+	}
+	return editOther
+}
+
+// messageGone -- Telegram говорит, что править нечего: сообщение удалено,
+// не найдено или старше срока правки.
+func messageGone(desc string) bool {
+	d := strings.ToLower(desc)
+	return strings.Contains(d, "message to edit not found") ||
+		strings.Contains(d, "message can't be edited") ||
+		strings.Contains(d, "message_id_invalid")
 }
 
 // maxEditRunes -- потолок правки с запасом до лимита Telegram в 4096 знаков.

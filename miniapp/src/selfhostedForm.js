@@ -224,7 +224,78 @@ export function deleteInstanceSheetText(inst) {
   }
 }
 
+// Ключ своего сервера (v0.55, B2): отпечаток запоминает первый удачный вход,
+// смена ключа -- отказ входа. Блок только у сервера с адресом SSH.
+export const HOSTKEY_TEXTS = {
+  label: 'Ключ сервера',
+  unknown: 'Ещё не запомнен: запомнится при следующем входе.',
+  trustButton: 'Доверять новому ключу',
+  trusted: 'Старый ключ забыт. Нажмите «Проверить подключение» — новый ключ запомнится.',
+}
+
+export function hostKeyView(inst) {
+  if (!inst?.ssh_host) return null
+  const fingerprint = typeof inst.ssh_host_key === 'string' ? inst.ssh_host_key : ''
+  return { fingerprint, canTrust: fingerprint !== '' }
+}
+
+export function trustHostKeySheetText(inst) {
+  return {
+    title: `Доверять новому ключу сервера «${deleteConfirmPhrase(inst)}»?`,
+    body: 'Запомненный ключ сервера будет забыт, и следующий вход запомнит тот ключ, что предъявит сервер. Делайте это, только если сервер переустанавливали: иначе смена ключа может значить, что отвечает чужая машина.',
+  }
+}
+
+// Выданные подключения (v0.55, B3): список читается с сервера по кнопке,
+// отзыв -- листом с набором названия сервера.
+export const CLIENTS_TEXTS = {
+  title: 'Выданные подключения',
+  hint: 'Список читается с самого сервера: бот заходит на него только когда вы нажмёте кнопку.',
+  show: 'Показать выданные подключения',
+  refresh: 'Обновить список',
+  loading: 'Читаем список с сервера…',
+  empty: 'Выданных подключений нет.',
+  revoke: 'Отозвать',
+  revoking: 'Отзываем…',
+  revoked: 'Подключение отозвано.',
+}
+
+function clientDate(iso) {
+  const t = typeof iso === 'string' ? new Date(iso) : null
+  if (!t || Number.isNaN(t.getTime())) return ''
+  return t.toLocaleDateString('ru-RU', { timeZone: 'UTC', day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+function inUseText(c) {
+  const u = c?.in_use
+  if (!u || !u.router || !u.tunnel) return ''
+  // Самое новое подключение роутера -- «скорее всего»; прежние -- «возможно»:
+  // файл в личку и сорвавшийся импорт не дают сказать наверняка, чем живёт туннель.
+  if (u.likely === true) return `Скорее всего, этим подключением живёт VPN-туннель «${u.tunnel}» роутера «${u.router}»: после отзыва он перестанет работать.`
+  return `Возможно, этим подключением живёт VPN-туннель «${u.tunnel}» роутера «${u.router}»: если это так, после отзыва он перестанет работать.`
+}
+
+export function clientRows(resp) {
+  const list = Array.isArray(resp?.clients) ? resp.clients : []
+  return list.map((c) => ({
+    id: String(c.id ?? ''),
+    name: String(c.name || c.address || ''),
+    address: String(c.address ?? ''),
+    date: clientDate(c.created_at),
+    inUse: inUseText(c),
+  }))
+}
+
+export function revokeSheetText(inst, client) {
+  const base = 'Подключение будет убрано с сервера, и устройство или роутер, которому оно выдано, больше не сможет им пользоваться. Вернуть его нельзя — можно только выдать новое.'
+  return {
+    title: `Отозвать подключение «${client.name}»?`,
+    body: client.inUse ? `${client.inUse} ${base}` : base,
+  }
+}
+
 const SELFHOSTED_ERRORS = {
+  client_not_found: 'Подключения уже нет на сервере — обновите список.',
   confirm_mismatch: 'Название сервера набрано не так.',
   not_found: 'Такого сервера больше нет — вернитесь к списку.',
   instance_not_found: 'Такого сервера больше нет — вернитесь к списку.',

@@ -722,7 +722,7 @@ describe('promoteTargets', () => {
   // интерфейса -- другая операция с другим радиусом поражения.
   it('предлагает звенья цепочки, кроме уже активного', () => {
     expect(promoteTargets(SNAP, 'awg11')).toEqual([
-      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down' },
+      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down', checkFailed: false, checkUnverified: false, switchedOff: true },
     ])
   })
 
@@ -893,5 +893,29 @@ describe('bindTunnelName', () => {
     expect(bindTunnelName(snap, 'OpkgTun10')).toBe('Amsterdam')
     expect(bindTunnelName(snap, 'ISP')).toBe('ISP')
     expect(bindTunnelName(null, 'ISP')).toBe('ISP')
+  })
+})
+
+describe('цели выбора несут непроверенное состояние', () => {
+  it('tunnelRows и promoteTargets передают check_unverified', async () => {
+    const { tunnelRows, promoteTargets } = await import('../src/routes.js')
+    const snap = {
+      policy_model: true,
+      tunnels: [
+        { id: 'awg11', name: 'work', status: 'running', enabled: true },
+        { id: 'awg10', name: 'main', status: 'running', enabled: true, check_unverified: true },
+      ],
+      policies: [{
+        name: 'HydraRoute',
+        active_tunnel_id: 'awg11',
+        interfaces: [
+          { bind: 'OpkgTun11', name: 'work', role: 'active', tunnel_id: 'awg11' },
+          { bind: 'OpkgTun10', name: 'main', role: 'fallback', tunnel_id: 'awg10' },
+        ],
+      }],
+    }
+    expect(tunnelRows(snap).find((r) => r.id === 'awg10').checkUnverified).toBe(true)
+    expect(tunnelRows(snap).find((r) => r.id === 'awg11').checkUnverified).toBe(false)
+    expect(promoteTargets(snap, 'awg11')[0].checkUnverified).toBe(true)
   })
 })

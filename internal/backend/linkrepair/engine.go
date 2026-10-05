@@ -104,6 +104,10 @@ type Deps struct {
 	Settings func(routerID int64, tunnelID string) (Setting, bool)
 	// SaveOption -- удачная смена локации запоминается в настройке туннеля.
 	SaveOption func(routerID int64, tunnelID, provider, option string)
+	// SaveUnconfirmed -- другая локация легла на роутер, но проверку не
+	// прошла: настройка и происхождение всё равно указывают на неё (на
+	// роутере теперь её конфиг), с отметкой «не подтверждена».
+	SaveUnconfirmed func(routerID int64, tunnelID, provider, option string)
 	// SpendRelocation записывает, что для настройки выпущена новая страна
 	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
@@ -210,24 +214,6 @@ type lineNames struct {
 	// пусто при reserve -- живого звена у трафика нет.
 	reserve bool
 	carrier string
-}
-
-// namesFor берёт имена из того же снимка политики, где движок нашёл линии:
-// у каждого звена рядом с TunnelID лежит Name. Нет имени -- остаётся
-// идентификатор: выдумать его нечем, а промолчать хуже.
-func namesFor(pol wire.RoutePolicySummary, brokenID, backupID string) lineNames {
-	name := func(id string) string {
-		if id == "" {
-			return ""
-		}
-		for _, iface := range pol.Interfaces {
-			if iface.TunnelID == id && strings.TrimSpace(iface.Name) != "" {
-				return strings.TrimSpace(iface.Name)
-			}
-		}
-		return id
-	}
-	return lineNames{broken: name(brokenID), backup: name(backupID)}
 }
 
 // orID -- первое непустое значение.
@@ -337,6 +323,10 @@ func (d Deps) Start(req StartReq) (string, error) {
 		notStarted("уже идёт починка или замена конфига")
 		return "", ErrAlreadyRunning
 	}
+	if req.Auto {
+		// Попытка считается с запуска: прерванная итога не напишет.
+		_ = d.Attempts.Started(req.Nickname, req.CheckName)
+	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
 	th := d.begin(ctx, req)
@@ -350,7 +340,8 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	defer d.Store.Unlock(req.Nickname)
 	ctx := d.baseCtx()
 
-	pol, backup, carrier, reserve, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
+	plan, err := d.findPolicies(ctx, req.RouterID, sc.TunnelID)
+	brokenName := plan.name
 	if err != nil {
 		// Снимка нет или VPN-туннель не в наборе -- чинить вслепую нельзя.
 		// Имя -- из снимка, иначе от запускающего, иначе id.
@@ -369,47 +360,20 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	if renamedTo == "" && set.renamed(brokenName) {
 		renamedTo = brokenName
 	}
-	names := namesFor(pol, sc.TunnelID, backup)
-	names.carrier, names.reserve = carrier, reserve
-	if names.broken == sc.TunnelID {
-		names.broken = orID(brokenName, req.TunnelName, sc.TunnelID)
-	}
+	names := lineNames{broken: orID(brokenName, req.TunnelName, sc.TunnelID)}
+	names.carrier, names.reserve = plan.carrier, plan.reserve
 	var log []string // что сделано -- для правок и итоговой фразы
 
 	// Ступень 0. Увести трафик, пока чиним. Резерва может не быть -- это не
 	// провал: чинить всё равно надо, человек просто побудет без обхода.
 	// Упал резерв -- трафик и так идёт через первое звено, цепочку не трогаем.
-	if reserve {
-		d.step(jobID, StepFailover, provision.StepDone, textCarrier(carrier))
-	} else if backup != "" {
-		d.step(jobID, StepFailover, provision.StepActive, "уводим трафик на запасной VPN-туннель «"+names.backup+"»")
-		if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
-			"policy_name": pol.Name,
-			"tunnel_id":   backup,
-		}); err != nil {
-			// Отказ увода -- не повод бросать починку: чиним как без резерва,
-			// трафик там, где был. Возвращать потом нечего. Молчание -- не
-			// отказ: роутер мог команду и не получить.
-			what := "роутер не дал увести трафик на запасной VPN-туннель «" + names.backup + "»"
-			if errors.Is(err, errNoAnswer) {
-				what = "роутер не подтвердил увод трафика на запасной VPN-туннель «" + names.backup + "»"
-			}
-			d.step(jobID, StepFailover, provision.StepFailed, what+" ("+err.Error()+") — чиним как есть")
-			log = append(log, what)
-			names.backup = ""
-		} else {
-			d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
-			log = append(log, textMovedTo(names.backup))
-		}
-	} else {
-		d.step(jobID, StepFailover, provision.StepDone, "запасного VPN-туннеля нет — чиним как есть")
-	}
+	moved := d.failover(ctx, jobID, req, sc.TunnelID, plan, &names, &log)
 
 	// Ступень 1. Поднять.
 	th.Progress(ctx, progressText(names, log, "перезапускаю VPN-туннель «"+names.broken+"»"))
 	if d.tryRestart(ctx, jobID, req, sc, names) {
 		d.skip(jobID, "не понадобилось", StepReissue, StepRecreate)
-		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRestarted))
+		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRestarted))
 		return
 	}
 	log = append(log, textRestartNoHelp)
@@ -452,12 +416,12 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		}
 	}
 	th.Progress(ctx, progressText(names, log, "выпускаю конфиг заново из "+sourceLabel(set.Provider)))
-	ok, nh := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
+	ok, nh, _ := d.tryIssue(ctx, jobID, StepReissue, req, sc, names, func() (replace.Issued, error) {
 		return d.Source.Issue(ctx, req.RouterID, set.Provider, set.Option)
 	})
 	if ok {
 		d.skip(jobID, "не понадобилось", StepRecreate)
-		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textReissued(set.Provider)))
+		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textReissued(set.Provider)))
 		return
 	}
 	if nh != nil {
@@ -476,7 +440,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		if set.Provider != "awg3" && used.ID != "" && used.ID != set.Option && d.SaveOption != nil {
 			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used.ID)
 		}
-		d.finishOK(ctx, jobID, req, th, pol, sc, names, append(log, textRecreated(set.Provider, optionLabel(used))))
+		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRecreated(set.Provider, optionLabel(used))))
 		return
 	}
 	if nh != nil {
@@ -557,32 +521,35 @@ var errStopped = errors.New("починка прервана: сервер пр�
 
 // tryIssue -- ступени 2 и 3: выпустить конфиг, проверить, положить в ТОТ ЖЕ
 // VPN-туннель (target_id), доказать. nh != nil -- источник ждёт человека.
-func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc Scenario, names lineNames, issue func() (replace.Issued, error)) (bool, *NeedHuman) {
+// tryIssue выпускает конфиг и кладёт его в VPN-туннель на месте. imported --
+// конфиг на роутер лёг (агент подтвердил замену), даже если потом не
+// доказан: тогда на роутере уже он, и запись об источнике обязана идти за
+// ним (см. SaveUnconfirmed).
+func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc Scenario, names lineNames, issue func() (replace.Issued, error)) (ok bool, nh *NeedHuman, imported bool) {
 	d.step(jobID, step, provision.StepActive, "выпускаю конфиг")
 	issued, err := issue()
 	if err != nil {
-		var nh *NeedHuman
 		if errors.As(err, &nh) {
 			d.logWarn("linkrepair: источник ждёт человека", "step", step, "err", nh.Cause)
 			d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг — "+nh.Action)
-			return false, nh
+			return false, nh, false
 		}
 		// Сырые ошибки источника (кабинет, база) -- оператору в лог.
 		d.logWarn("linkrepair: источник не выдал конфиг", "step", step, "err", err)
 		d.step(jobID, step, provision.StepFailed, "источник не выдал конфиг")
-		return false, nil
+		return false, nil, false
 	}
 	if len(issued.Conf) == 0 {
 		d.step(jobID, step, provision.StepFailed, "источник вернул пустой конфиг")
-		return false, nil
+		return false, nil, false
 	}
 	if detail, _, err := d.Probe.AnalyzeConf(ctx, req.RouterID, issued.Conf); err != nil {
 		d.step(jobID, step, provision.StepFailed, detail)
-		return false, nil
+		return false, nil, false
 	}
 	if ctx.Err() != nil {
 		d.step(jobID, step, provision.StepFailed, errStopped.Error())
-		return false, nil
+		return false, nil, false
 	}
 	backend := issued.Backend
 	if backend == "" {
@@ -597,15 +564,15 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 		"target_id": sc.TunnelID,
 	}); err != nil {
 		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
-		return false, nil
+		return false, nil, false
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, step, provision.StepFailed, "конфиг заменён, но "+err.Error())
-		return false, nil
+		return false, nil, true
 	}
 	d.step(jobID, step, provision.StepDone, "конфиг заменён, "+verdict)
-	return true, nil
+	return true, nil, true
 }
 
 // checkIssued -- страна настройки «Amnezia Premium» всё ещё выпущена. Не
@@ -655,7 +622,7 @@ func relocateNewOnce(provider string) bool { return provider == "amnezia" }
 func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames, set Setting, th Thread, log []string) (ok bool, nh *NeedHuman, used Option) {
 	if set.Provider == "awg3" {
 		th.Progress(ctx, progressText(names, log, "завожу новое подключение на своём сервере"))
-		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+		ok, nh, _ := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 			return d.Source.Fresh(ctx, req.RouterID, set.Provider, set.Option)
 		})
 		return ok, nh, Option{ID: set.Option}
@@ -697,11 +664,14 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 			break
 		}
 		th.Progress(ctx, progressText(names, log, "пробую локацию «"+optionLabel(opt)+"»"))
-		ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+		ok, nh, imported := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 			return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
 		})
 		if ok {
 			return true, nil, opt
+		}
+		if imported {
+			d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
 		}
 		if nh != nil {
 			lastNH = nh
@@ -737,6 +707,11 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 			"все страны уже выпущены — их ключи стоят в других местах, а один ключ в двух местах ломает оба")
 		return false, &NeedHuman{Cause: errors.New("невыпущенной страны нет"), Action: ActNoNewCountry}, Option{}
 	}
+	// Подписка заполнена -- кабинет новую страну не выдаст, а отметка уже
+	// сожгла бы единственную смену страны. Спросить до отметки.
+	if nh := d.checkRoom(ctx, jobID, req, set); nh != nil {
+		return false, nh, Option{}
+	}
 	notIssued := &NeedHuman{Cause: errors.New("отметка о новой стране не записалась"), Action: ActNewCountryNotIssued}
 	if d.SpendRelocation == nil {
 		d.step(jobID, StepRecreate, provision.StepFailed, "отметку о новой стране записать некуда — новую страну не выпускаю")
@@ -748,17 +723,55 @@ func (d Deps) tryNewCountry(ctx context.Context, jobID string, req StartReq, sc 
 		return false, notIssued, Option{}
 	}
 	th.Progress(ctx, progressText(names, log, "выпускаю новую страну «"+optionLabel(opt)+"»"))
-	ok, nh := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
+	ok, nh, imported := d.tryIssue(ctx, jobID, StepRecreate, req, sc, names, func() (replace.Issued, error) {
 		return d.Source.Issue(ctx, req.RouterID, set.Provider, opt.ID)
 	})
 	if ok {
 		return true, nil, opt
+	}
+	if imported {
+		d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
 	}
 	if nh == nil && ctx.Err() == nil {
 		// Пробовалась одна страна: «другие локации тоже не помогли» -- неправда.
 		nh = &NeedHuman{Cause: errors.New("новая страна не помогла"), Action: ActNewCountryNoHelp(optionLabel(opt))}
 	}
 	return false, nh, Option{}
+}
+
+// checkRoom -- в подписке есть место под новую страну. Нет места, кабинет
+// не ответил или бэкенд останавливается -- новая страна не выпускается и
+// отметка о смене страны не ставится.
+func (d Deps) checkRoom(ctx context.Context, jobID string, req StartReq, set Setting) *NeedHuman {
+	room, err := d.Source.HasRoom(ctx, req.RouterID, set.Provider)
+	if ctx.Err() != nil {
+		d.step(jobID, StepRecreate, provision.StepFailed, errStopped.Error())
+		return &NeedHuman{Cause: errStopped, Action: ActAborted}
+	}
+	if err != nil {
+		var nh *NeedHuman
+		if errors.As(err, &nh) {
+			d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не сказал, есть ли место в подписке — "+nh.Action)
+			return nh
+		}
+		d.logWarn("linkrepair: место в подписке не узнать", "err", err)
+		d.step(jobID, StepRecreate, provision.StepFailed, "кабинет не сказал, есть ли место в подписке — новую страну не выпускаю")
+		return &NeedHuman{Cause: err, Action: ActAmneziaKey}
+	}
+	if !room {
+		d.step(jobID, StepRecreate, provision.StepFailed,
+			"подписка «Amnezia Premium» заполнена — новую страну не выпускаю, смена страны не потрачена")
+		return &NeedHuman{Cause: errors.New("подписка заполнена"), Action: ActSubscriptionFull}
+	}
+	return nil
+}
+
+// saveUnconfirmed -- на роутер лёг конфиг другой локации, но проверку он не
+// прошёл: запись об источнике всё равно идёт за ним.
+func (d Deps) saveUnconfirmed(req StartReq, sc Scenario, provider, option string) {
+	if d.SaveUnconfirmed != nil && provider != "awg3" && option != "" {
+		d.SaveUnconfirmed(req.RouterID, sc.TunnelID, provider, option)
+	}
 }
 
 // optionLabel -- как вариант кабинета называется для человека.
@@ -782,18 +795,96 @@ func (d Deps) aborted(ctx context.Context, jobID string, req StartReq, th Thread
 	return true
 }
 
+// failover -- ступень 0: увести трафик с упавшего VPN-туннеля в каждом
+// наборе правил, где он первое звено. Резерва может не быть -- это не
+// провал: чинить всё равно надо, человек просто побудет без обхода. Упал
+// резерв -- трафик и так идёт через первое звено, цепочку не трогаем.
+// Отказ увода в наборе -- не повод бросать починку: там трафик остаётся,
+// где был, и возвращать в нём потом нечего. Молчание -- не отказ: роутер
+// мог команду и не получить.
+func (d Deps) failover(ctx context.Context, jobID string, req StartReq, tunnelID string, plan policyPlan, names *lineNames, log *[]string) []policyMove {
+	if plan.reserve {
+		d.step(jobID, StepFailover, provision.StepDone, textCarrier(plan.carrier))
+		return nil
+	}
+	type cand struct {
+		policy   string
+		backup   string
+		backupNm string
+	}
+	var cands []cand
+	for _, p := range plan.active {
+		if b, ok := pickBackup(p, tunnelID); ok {
+			cands = append(cands, cand{p.Name, b, ifaceName(p, b)})
+		}
+	}
+	if len(cands) == 0 {
+		d.step(jobID, StepFailover, provision.StepDone, "запасного VPN-туннеля нет — чиним как есть")
+		return nil
+	}
+	all := make([]string, 0, len(cands))
+	for _, c := range cands {
+		all = append(all, c.backupNm)
+	}
+	d.step(jobID, StepFailover, provision.StepActive, "уводим трафик на запасной VPN-туннель «"+joinBackupNames(all)+"»")
+	var moved []policyMove
+	var refused []string
+	var lastErr error
+	for _, c := range cands {
+		if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
+			"policy_name": c.policy,
+			"tunnel_id":   c.backup,
+		}); err != nil {
+			refused, lastErr = append(refused, c.backupNm), err
+			continue
+		}
+		moved = append(moved, policyMove{policy: c.policy, backup: c.backup, backupName: c.backupNm})
+	}
+	movedNames := make([]string, 0, len(moved))
+	for _, m := range moved {
+		movedNames = append(movedNames, m.backupName)
+	}
+	names.backup = joinBackupNames(movedNames)
+	if len(refused) > 0 {
+		r := joinBackupNames(refused)
+		what := "роутер не дал увести трафик на запасной VPN-туннель «" + r + "»"
+		if errors.Is(lastErr, errNoAnswer) {
+			what = "роутер не подтвердил увод трафика на запасной VPN-туннель «" + r + "»"
+		}
+		if len(moved) == 0 {
+			d.step(jobID, StepFailover, provision.StepFailed, what+" ("+lastErr.Error()+") — чиним как есть")
+			*log = append(*log, what)
+			return nil
+		}
+		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»; "+what)
+		*log = append(*log, textMovedTo(names.backup), what)
+		return moved
+	}
+	d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
+	*log = append(*log, textMovedTo(names.backup))
+	return moved
+}
+
 // finishOK -- ступень доказана: вернуть трафик (если уводили), снять стоп,
 // сказать людям.
-func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Thread, pol wire.RoutePolicySummary, sc Scenario, names lineNames, log []string) {
-	if names.backup != "" {
+func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Thread, moved []policyMove, sc Scenario, names lineNames, log []string) {
+	if len(moved) > 0 {
 		d.step(jobID, StepFailback, provision.StepActive, "возвращаю трафик на VPN-туннель «"+names.broken+"»")
-		if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
-			"policy_name": pol.Name,
-			"tunnel_id":   sc.TunnelID,
-		}); err != nil {
+		var stuck []string
+		var lastErr error
+		for _, m := range moved {
+			if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
+				"policy_name": m.policy,
+				"tunnel_id":   sc.TunnelID,
+			}); err != nil {
+				stuck, lastErr = append(stuck, m.backupName), err
+			}
+		}
+		if len(stuck) > 0 {
 			// VPN-туннель починен, трафик на рабочем запасном -- это не
 			// провал починки, но человеку сказать надо.
-			d.step(jobID, StepFailback, provision.StepFailed, "вернуть трафик не вышло, он идёт через запасной VPN-туннель «"+names.backup+"»: "+err.Error())
+			names.backup = joinBackupNames(stuck)
+			d.step(jobID, StepFailback, provision.StepFailed, "вернуть трафик не вышло, он идёт через запасной VPN-туннель «"+names.backup+"»: "+lastErr.Error())
 			names.failbackFailed = true
 		} else {
 			d.step(jobID, StepFailback, provision.StepDone, "трафик снова идёт через VPN-туннель «"+names.broken+"»")
@@ -804,7 +895,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
 	}
 	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, true)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
 	} else {
 		_ = d.Attempts.Clear(req.Nickname, req.CheckName)
 	}
@@ -818,7 +909,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, false)
 	}
 	text := failText(names, log)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -838,7 +929,7 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	if req.Auto {
 		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
 		// но стоп не ставится, следующая тревога снова может её запустить.
-		_ = d.Attempts.Record(req.Nickname, req.CheckName, names.noSnapshot)
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, names.noSnapshot)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -950,40 +1041,104 @@ func (d Deps) step(jobID, name string, status provision.StepStatus, detail strin
 	})
 }
 
-// findPolicy ищет политику, в цепочке которой стоит упавшая линия, и
-// подбирает ей замену. Снимок спрашивается у агента: бэкенд состав политик
-// не хранит.
+// findPolicies находит все общие наборы правил, где стоит упавший
+// VPN-туннель, и делит их на те, где он первое звено (увод и возврат), и
+// те, где он резерв (не трогаются). Снимок спрашивается у агента: бэкенд
+// состав наборов не хранит.
 //
-// name -- имя упавшего VPN-туннеля из того же снимка. Оно нужно и тогда, когда
+// plan.name -- имя упавшего VPN-туннеля из того же снимка. Оно нужно и тогда, когда
 // набора не нашлось: причина уходит владельцу в личку, и идентификатор там
 // читать некому. Не пришёл снимок -- имени взять неоткуда, name пустое.
-func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (pol wire.RoutePolicySummary, backup, carrier string, reserve bool, name string, err error) {
+func (d Deps) findPolicies(ctx context.Context, routerID int64, tunnelID string) (plan policyPlan, err error) {
 	res, err := d.command(ctx, routerID, "route_status", map[string]any{})
 	if err != nil {
-		return pol, "", "", false, "", fmt.Errorf("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: %w", err)
+		return plan, fmt.Errorf("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: %w", err)
 	}
 	var snap wire.RouteSnapshot
 	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
 		d.logCommandFailure("route_status", "unparsable", err.Error())
-		return pol, "", "", false, "", errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
+		return plan, errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
 	for _, t := range snap.Tunnels {
 		if t.ID == tunnelID && strings.TrimSpace(t.Name) != "" {
-			name = strings.TrimSpace(t.Name)
+			plan.name = strings.TrimSpace(t.Name)
 		}
 	}
+	reserveSeen := false
 	for _, p := range snap.Policies {
+		in := false
 		for _, iface := range p.Interfaces {
-			if iface.TunnelID != tunnelID {
-				continue
+			if iface.TunnelID == tunnelID {
+				in = true
+				if plan.name == "" && strings.TrimSpace(iface.Name) != "" {
+					plan.name = strings.TrimSpace(iface.Name)
+				}
 			}
-			if c, res := carrierOf(p, tunnelID); res {
-				return p, "", c, true, name, nil
+		}
+		if !in {
+			continue
+		}
+		if c, res := carrierOf(p, tunnelID); res {
+			if !reserveSeen {
+				reserveSeen, plan.carrier = true, c
 			}
-			backup, _ := pickBackup(p, tunnelID)
-			return p, backup, "", false, name, nil
+			continue
+		}
+		plan.active = append(plan.active, p)
+	}
+	if len(plan.active) == 0 && !reserveSeen {
+		// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
+		return plan, ErrNotInAnySet
+	}
+	// Резерв -- только если ни в одном наборе VPN-туннель не первое звено:
+	// иначе есть что уводить, а наборы, где он резерв, просто не трогаются.
+	plan.reserve = len(plan.active) == 0
+	if !plan.reserve {
+		plan.carrier = ""
+	}
+	return plan, nil
+}
+
+// policyPlan -- где VPN-туннель стоит в общих наборах правил. active --
+// наборы, где он первое звено (там трафик уводится и возвращается); в
+// остальных он резерв, и цепочку, собранную человеком, починка не трогает.
+// reserve -- он резерв во всех своих наборах; carrier -- через что тогда
+// идёт трафик (первый такой набор).
+type policyPlan struct {
+	active  []wire.RoutePolicySummary
+	reserve bool
+	carrier string
+	name    string
+}
+
+// policyMove -- набор правил, где трафик уведён на запасной.
+type policyMove struct {
+	policy     string
+	backup     string
+	backupName string
+}
+
+// ifaceName -- имя звена набора по id VPN-туннеля; нет -- id.
+func ifaceName(p wire.RoutePolicySummary, id string) string {
+	for _, iface := range p.Interfaces {
+		if iface.TunnelID == id && strings.TrimSpace(iface.Name) != "" {
+			return strings.TrimSpace(iface.Name)
 		}
 	}
-	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
-	return pol, "", "", false, name, ErrNotInAnySet
+	return id
+}
+
+// joinBackupNames -- имена запасных для текста внутри «ёлочек»: один --
+// как есть, разные -- «A» и «B» (повторы схлопываются).
+func joinBackupNames(names []string) string {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return strings.Join(out, "» и «")
 }

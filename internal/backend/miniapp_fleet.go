@@ -39,6 +39,9 @@ type miniappFleetBackend struct {
 	Version         string `json:"version"`
 	LatestVersion   string `json:"latest_version,omitempty"`
 	UpdateAvailable bool   `json:"update_available"`
+	// SecretsWarning -- ключи кабинетов на диске не защищены или не читаются
+	// (v0.55, B1). Словами; нет поля -- всё в порядке.
+	SecretsWarning string `json:"secrets_warning,omitempty"`
 }
 
 // miniappFleetRevive -- оживление агента в строке парка. Поимённая проекция
@@ -375,6 +378,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			Version:         serverVersion,
 			LatestVersion:   latest,
 			UpdateAvailable: upstream.SoftwareNewerThan(serverVersion, latest),
+			SecretsWarning:  d.CabinetSealWarning,
 		}
 
 		gaps := buildDashboardNotifyGaps(d)

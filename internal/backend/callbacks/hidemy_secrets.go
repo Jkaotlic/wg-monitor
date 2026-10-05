@@ -11,6 +11,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 const defaultHideMySecretsPath = "/var/lib/wg-monitor/hidemyname.json" // #nosec G101 -- filesystem path for the secret store, not credential material.
@@ -180,7 +181,7 @@ func (r *Router) deleteHideMyCode(userID int64, codeID string) error {
 }
 
 func readHideMySecrets(path string) (hideMySecretFile, error) {
-	body, err := os.ReadFile(path)
+	body, err := sealedfile.ReadFile(path, sealedfile.DomainHideMy)
 	if os.IsNotExist(err) {
 		return emptyHideMySecretFile(), nil
 	}
@@ -223,27 +224,10 @@ func writeHideMySecrets(path string, env hideMySecretFile) error {
 		return fmt.Errorf("marshal hidemy secrets: %w", err)
 	}
 	body = append(body, '\n')
-	tmp, err := os.CreateTemp(dir, ".hidemyname-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create hidemy secrets temp: %w", err)
+	// Атомарно, 0600, с fsync; с ключом шифрования -- шифр (v0.55, B1).
+	if err := sealedfile.WriteFile(path, sealedfile.DomainHideMy, body); err != nil {
+		return fmt.Errorf("write hidemy secrets: %w", err)
 	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod hidemy secrets temp: %w", err)
-	}
-	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write hidemy secrets temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close hidemy secrets temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace hidemy secrets: %w", err)
-	}
-	_ = os.Chmod(path, 0o600)
 	return nil
 }
 

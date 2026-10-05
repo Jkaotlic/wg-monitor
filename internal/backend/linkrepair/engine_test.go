@@ -46,6 +46,7 @@ type scriptCommander struct {
 	reserve     bool                                       // awg12 -- резерв: первым в цепочке стоит живой awg10
 	carrierDown bool                                       // вместе с reserve: первое звено awg10 тоже лежит
 	snapshot    string                                     // ответ route_status вместо обычного
+	extra       []wire.RoutePolicySummary                  // наборы правил сверх основного
 	silent      map[string]bool                            // действия, на которые роутер молчит
 	refuse      map[string]bool                            // действия, которым агент отказывает
 	on          map[string]func(c *scriptCommander, n int) // крючок на n-й вызов действия (под замком)
@@ -108,8 +109,8 @@ func (c *scriptCommander) snapshotLocked() string {
 	}
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
-			{ID: "awg12", Name: "Дача", HasHandshake: c.hs},
-			{ID: "awg10", Name: "Работа", HasHandshake: true},
+			{ID: "awg12", Name: "Дача", HasHandshake: c.hs, HandshakeAge: 4},
+			{ID: "awg10", Name: "Работа", HasHandshake: true, HandshakeAge: 30},
 		},
 	}
 	ifaces := []wire.RoutePolicyInterface{
@@ -127,7 +128,7 @@ func (c *scriptCommander) snapshotLocked() string {
 			ifaces[0].Role, ifaces[0].Available = "unavailable", false
 		}
 	}
-	snap.Policies = []wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}
+	snap.Policies = append([]wire.RoutePolicySummary{{Name: "HydraRoute", Interfaces: ifaces}}, c.extra...)
 	b, _ := json.Marshal(snap)
 	return string(b)
 }
@@ -183,6 +184,8 @@ type fakeSource struct {
 	options []Option
 	// onOptions -- крючок на вызов Options (например, остановить бэкенд).
 	onOptions func()
+	// full -- подписка кабинета заполнена: свободного места нет.
+	full bool
 }
 
 // issuedOpts -- варианты кабинета, все уже выпущенные; подпись -- id в
@@ -224,6 +227,13 @@ func (s *fakeSource) Options(_ context.Context, _ int64, provider string) ([]Opt
 		return nil, err
 	}
 	return s.options, nil
+}
+
+func (s *fakeSource) HasRoom(_ context.Context, _ int64, provider string) (bool, error) {
+	if err := s.rec("room:" + provider); err != nil {
+		return false, err
+	}
+	return !s.full, nil
 }
 
 func (s *fakeSource) got() []string {
@@ -318,6 +328,14 @@ type ladderEnv struct {
 	// spent -- отметки «новая страна выпущена»; spendErr -- отметка не пишется.
 	spent    []string
 	spendErr error
+	// unconfirmed -- что легло на роутер, но проверку не прошло.
+	unconfirmed []savedOption
+}
+
+func (e *ladderEnv) unconfirmedOptions() []savedOption {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]savedOption(nil), e.unconfirmed...)
 }
 
 func (e *ladderEnv) spentMarks() []string {
@@ -349,6 +367,11 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.saved = append(e.saved, savedOption{routerID, tunnelID, provider, option})
+		},
+		SaveUnconfirmed: func(routerID int64, tunnelID, provider, option string) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.unconfirmed = append(e.unconfirmed, savedOption{routerID, tunnelID, provider, option})
 		},
 		SpendRelocation: func(routerID int64, tunnelID, option string) error {
 			e.mu.Lock()
@@ -591,7 +614,7 @@ func TestLadder_RelocateAmneziaNewCountryOnce(t *testing.T) {
 	if job.State != provision.StateSuccess || final.Kind != "done" {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	want := []string{"options:amnezia", "issue:amnezia:nl", "options:amnezia", "issue:amnezia:de"}
+	want := []string{"options:amnezia", "issue:amnezia:nl", "options:amnezia", "room:amnezia", "issue:amnezia:de"}
 	if got := e.src.got(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("источник: %v, ждали %v -- выпущенная страна занята в другом месте", got, want)
 	}
@@ -1706,14 +1729,12 @@ func TestAutostart_SecondHardWhileRunning(t *testing.T) {
 	fixOn(e.cmd, "tunnel_restart", 1, true)
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	restart := e.cmd.on["tunnel_restart"]
 	e.cmd.on["route_status"] = func(c *scriptCommander, n int) {
 		if n == 1 {
 			close(entered)
 			<-release
 		}
 	}
-	e.cmd.on["tunnel_restart"] = restart
 
 	id, err := e.d.Start(ladderReq())
 	if err != nil {
@@ -1743,5 +1764,275 @@ func TestAutostart_SecondHardWhileRunning(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("«не запускалась» ждали один раз, было %d: %+v", n, calls)
+	}
+}
+
+// A4.3: новая страна легла на роутер, но проверку не прошла -- настройка и
+// происхождение всё равно указывают на неё (на роутере теперь её конфиг), с
+// отметкой «не подтверждена»; подтверждённой она не записывается.
+func TestLadder_RelocateVerifyFailedRecordsUnconfirmed(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateFailed || final.Kind != "need" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if s := e.savedOptions(); len(s) != 0 {
+		t.Fatalf("непроверенная страна записана как подтверждённая: %+v", s)
+	}
+	if u := e.unconfirmedOptions(); len(u) != 1 || u[0] != (savedOption{1, "awg12", "amnezia", "de"}) {
+		t.Fatalf("на роутере «de», а запись об источнике отстала: %+v", u)
+	}
+}
+
+// A4.3: перебор локаций «HideMy.name» -- запись идёт за последней, что легла
+// на роутер.
+func TestLadder_RelocateVerifyFailedFollowsLastImported(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true})
+	e.src.options = issuedOpts("de", "fi")
+
+	_, _ = e.run(t, ladderReq())
+
+	u := e.unconfirmedOptions()
+	if len(u) == 0 || u[len(u)-1].Option != "fi" {
+		t.Fatalf("последняя легла «fi», запись: %+v", u)
+	}
+}
+
+// A4.3: конфиг на роутер не лёг (агент отказал) -- записывать нечего.
+func TestLadder_RelocateImportFailedNoUnconfirmed(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.cmd.refuse = map[string]bool{"tunnel_import": true}
+
+	_, _ = e.run(t, ladderReq())
+
+	if u := e.unconfirmedOptions(); len(u) != 0 {
+		t.Fatalf("импорт не прошёл, а записано: %+v", u)
+	}
+}
+
+// A4.6: подписка заполнена -- новую страну не выпускаем и единственную
+// попытку не сжигаем: «нужно ваше участие: подписка заполнена».
+func TestLadder_RelocateAmneziaFullSubscriptionKeepsAttempt(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.src.full = true
+
+	job, final := e.run(t, ladderReq())
+
+	if final.Kind != "need" || final.Action != ActSubscriptionFull {
+		t.Fatalf("итог %+v, ждали need с ActSubscriptionFull", final)
+	}
+	if job.Hint != ActSubscriptionFull {
+		t.Fatalf("подсказка %q", job.Hint)
+	}
+	if sp := e.spentMarks(); len(sp) != 0 {
+		t.Fatalf("при полной подписке отметка поставлена: %v", sp)
+	}
+	for _, c := range e.src.got() {
+		if c == "issue:amnezia:de" {
+			t.Fatal("при полной подписке выпущена новая страна")
+		}
+	}
+	if st := stepOf(job, StepRecreate); st.Status != provision.StepFailed || !strings.Contains(st.Detail, "заполнена") {
+		t.Fatalf("ступень 3: %+v", st)
+	}
+}
+
+// A4.6: кабинет не ответил про место -- тоже не тратим попытку.
+func TestLadder_RelocateAmneziaRoomUnknownKeepsAttempt(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.src.errs = map[string]error{"room:amnezia": &NeedHuman{Cause: errors.New("кабинет молчит"), Action: ActAmneziaKey}}
+
+	_, final := e.run(t, ladderReq())
+
+	if final.Kind != "need" || final.Action != ActAmneziaKey {
+		t.Fatalf("итог %+v", final)
+	}
+	if sp := e.spentMarks(); len(sp) != 0 {
+		t.Fatalf("без ответа о месте отметка поставлена: %v", sp)
+	}
+}
+
+// promotes -- увод/возврат по наборам: «набор:туннель» по порядку.
+func (c *scriptCommander) promotes() []string {
+	var out []string
+	for _, s := range c.actions("route_policy_promote") {
+		out = append(out, fmt.Sprint(s.Args["policy_name"], ":", s.Args["tunnel_id"]))
+	}
+	return out
+}
+
+// A4.5: VPN-туннель -- активное звено в двух наборах правил: трафик уводится
+// и возвращается в обоих. Набор, где он резерв, и набор без него не трогаются.
+func TestLadder_FailoverEveryPolicyWhereActive(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.cmd.extra = []wire.RoutePolicySummary{
+		{Name: "Policy0", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "active", Available: false, Order: 1},
+			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "fallback", Available: true, Order: 2},
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "fallback", Available: true, Order: 3},
+		}},
+		{Name: "Policy1", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun10", Name: "Работа", TunnelID: "awg10", Role: "active", Available: true, Order: 1},
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "unavailable", Available: false, Order: 2},
+		}},
+		{Name: "Policy2", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "active", Available: true, Order: 1},
+		}},
+	}
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	want := []string{"HydraRoute:awg10", "Policy0:awg10", "HydraRoute:awg12", "Policy0:awg12"}
+	if got := e.cmd.promotes(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("увод/возврат: %v, ждали %v", got, want)
+	}
+	if !strings.Contains(final.Text, "«Работа»") {
+		t.Fatalf("итог без запасного: %q", final.Text)
+	}
+}
+
+// A4.5: возврат не удался в одном из наборов -- человеку сказано, что трафик
+// остался на запасном.
+func TestLadder_FailbackPartialFailure(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.cmd.extra = []wire.RoutePolicySummary{
+		{Name: "Policy0", Interfaces: []wire.RoutePolicyInterface{
+			{Bind: "OpkgTun12", Name: "Дача", TunnelID: "awg12", Role: "active", Available: false, Order: 1},
+			{Bind: "OpkgTun14", Name: "Склад", TunnelID: "awg14", Role: "fallback", Available: true, Order: 2},
+		}},
+	}
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	// Четвёртый promote (возврат во втором наборе) роутер отклоняет: крючок
+	// срабатывает при постановке команды, до чтения ответа на неё.
+	e.cmd.on["route_policy_promote"] = func(c *scriptCommander, n int) {
+		if n == 4 {
+			c.refuse = map[string]bool{"route_policy_promote": true}
+		}
+	}
+
+	job, final := e.run(t, ladderReq())
+
+	if job.State != provision.StateSuccess {
+		t.Fatalf("state=%s", job.State)
+	}
+	if !strings.Contains(final.Text, "вернуть на него трафик не вышло") || !strings.Contains(final.Text, "«Склад»") {
+		t.Fatalf("итог: %q", final.Text)
+	}
+	if st := stepOf(job, StepFailback); st.Status != provision.StepFailed {
+		t.Fatalf("шаг возврата: %+v", st)
+	}
+}
+
+// A4.7: прерванный автозапуск тоже засчитывается в потолок попыток: иначе
+// перезапуски бэкенда посреди починки дают бесконечный цикл «падает --
+// чиним». Стоп при этом не ставится -- вердикта нет.
+func TestLadder_InterruptedAutoRunCounts(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	for i := 0; i < attemptLimit; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		e.d.BaseCtx = ctx
+		e.cmd.on = map[string]func(*scriptCommander, int){
+			"tunnel_restart": func(*scriptCommander, int) { cancel() },
+		}
+		e.rep = &recReporter{}
+		e.d.Report = e.rep
+		job, _ := e.run(t, ladderReq())
+		cancel()
+		if job.Hint != ActAborted {
+			t.Fatalf("запуск %d: подсказка %q", i, job.Hint)
+		}
+	}
+	ok, why, tooOften := e.d.Attempts.verdict("роутер", "tunnel_awg12")
+	if ok || !tooOften {
+		t.Fatalf("после %d прерванных запусков автопочинка разрешена: ok=%v why=%q", attemptLimit, ok, why)
+	}
+}
+
+// A4.7: удачный автозапуск считается одной попыткой, не двумя.
+func TestLadder_AutoRunCountsOnce(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	_, _ = e.run(t, ladderReq())
+	log := e.d.Attempts.load("роутер", "tunnel_awg12")
+	if len(log.At) != 1 || log.Failed {
+		t.Fatalf("журнал попыток: %+v", log)
+	}
+}
+
+// A4.7: владелец читает подпись локации из кабинета («Германия»), а не её
+// id («de») -- в ходе починки, в шагах и в итоге.
+func TestLadder_RelocationTextsUseLabelNotID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  Setting
+		opts []Option
+	}{
+		{"HideMy.name", Setting{Enabled: true, Provider: "hidemyname", Option: "nl", AllowRelocate: true},
+			[]Option{{ID: "nl", Label: "Нидерланды"}, {ID: "de", Label: "Германия"}}},
+		{"Amnezia Premium", Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true},
+			[]Option{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}}},
+		{"Amnezia Premium, страна уже выпускалась", Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, RelocateSpent: "de"},
+			[]Option{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия", Issued: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set := tc.set
+			e := newLadder(t, &set)
+			e.src.options = tc.opts
+			job, final := e.run(t, ladderReq())
+			texts := []string{job.Hint, final.Text, final.Action}
+			for _, s := range job.Steps {
+				texts = append(texts, s.Detail)
+			}
+			_, calls := e.rep.snapshot()
+			for _, c := range calls {
+				texts = append(texts, c.Text, c.Action)
+			}
+			all := strings.Join(texts, "\n")
+			if strings.Contains(all, "«de»") || strings.Contains(all, "«nl»") {
+				t.Fatalf("владельцу показан id локации:\n%s", all)
+			}
+			if !strings.Contains(all, "«Германия»") {
+				t.Fatalf("подписи локации нет:\n%s", all)
+			}
+		})
+	}
+}
+
+// Причина отказа панели своего сервера (пароль, сертификат, пауза) -- дело
+// админа: в ход, шаги и итог починки, которые читает владелец, она не
+// попадает -- только общее действие. Подробности -- в журнал.
+func TestLadder_PanelCauseNeverReachesOwner(t *testing.T) {
+	const secret = "пароль панели не принят — пересохраните учётные данные (HTTP 401 https://panel.example.com/api)"
+	e := newLadder(t, &Setting{Enabled: true, Provider: "awg3", Option: "main/awg1"})
+	e.src.errs = map[string]error{
+		"issue:awg3:main/awg1": &NeedHuman{Cause: errors.New(secret), Action: ActVPSPanel("Main")},
+		"fresh:awg3:main/awg1": &NeedHuman{Cause: errors.New(secret), Action: ActVPSPanel("Main")},
+	}
+	job, final := e.run(t, ladderReq())
+	texts := []string{job.Hint, final.Text, final.Action}
+	for _, s := range job.Steps {
+		texts = append(texts, s.Detail)
+	}
+	_, calls := e.rep.snapshot()
+	for _, c := range calls {
+		texts = append(texts, c.Text, c.Action)
+	}
+	for _, s := range texts {
+		if strings.Contains(s, "пароль") || strings.Contains(s, "HTTP 401") || strings.Contains(s, "panel.example.com") {
+			t.Fatalf("причина отказа панели дошла до владельца: %q", s)
+		}
+	}
+	if final.Action != ActVPSPanel("Main") {
+		t.Fatalf("действие: %q", final.Action)
 	}
 }

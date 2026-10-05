@@ -109,6 +109,54 @@ type fakeSelfHosted struct {
 	checkRes  selfhostedamnezia.CheckResult
 	issued    []string
 	issueErr  error
+	clients   []selfhostedamnezia.Client
+	revoked   []string // «инстанс:ключ»
+	revokeErr error
+	listErr   error
+}
+
+func (f *fakeSelfHosted) Clients(_ context.Context, id string) ([]selfhostedamnezia.Client, selfhostedamnezia.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, selfhostedamnezia.Instance{}, f.listErr
+	}
+	i := f.find(id)
+	if i < 0 {
+		return nil, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrInstanceNotFound
+	}
+	return append([]selfhostedamnezia.Client{}, f.clients...), f.instances[i], nil
+}
+
+func (f *fakeSelfHosted) Revoke(_ context.Context, id, publicKey string) (selfhostedamnezia.Client, selfhostedamnezia.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.revokeErr != nil {
+		return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, f.revokeErr
+	}
+	i := f.find(id)
+	if i < 0 {
+		return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrInstanceNotFound
+	}
+	for k, c := range f.clients {
+		if c.PublicKey == publicKey {
+			f.clients = append(f.clients[:k:k], f.clients[k+1:]...)
+			f.revoked = append(f.revoked, id+":"+publicKey)
+			return c, f.instances[i], nil
+		}
+	}
+	return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrClientNotFound
+}
+
+func (f *fakeSelfHosted) TrustNewHostKey(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := f.find(id)
+	if i < 0 {
+		return selfhostedamnezia.ErrInstanceNotFound
+	}
+	f.instances[i].SSHHostKey = ""
+	return nil
 }
 
 func (f *fakeSelfHosted) List() ([]selfhostedamnezia.Instance, error) {

@@ -204,6 +204,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if strings.HasPrefix(checkName, "tunnel_") || checkName == "dns" {
 			args.Neighbors = di.collectNeighbors(userID, checkName)
 		}
+		if checkName == "dns_ru" {
+			args.Neighbors = di.dnsRuNeighbors(userID)
+		}
 		text := FormatHard(args)
 		// Под тревогой ровно две кнопки: открыть роутер в приложении (когда
 		// база настроена) и отложить эту проверку на час. Командные кнопки
@@ -301,6 +304,20 @@ func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []Neig
 		return nil
 	}
 	return BuildNeighborSummaries(rows, excludeCheck)
+}
+
+// dnsRuNeighbors -- сосед для тревоги dns_ru: общая проверка dns, если у
+// роутера она сейчас в аварии. Ошибка чтения -- как нет аварии (украшение).
+func (di *Dispatcher) dnsRuNeighbors(userID int64) []NeighborSummary {
+	st, err := di.d.State().Get(userID, neighborDNSCheck)
+	if err != nil {
+		slog.Warn("dnsRuNeighbors: state lookup failed", "user_id", userID, "err", err)
+		return nil
+	}
+	if st.CurrentStatus != "hard" {
+		return nil
+	}
+	return []NeighborSummary{{CheckName: neighborDNSCheck, Status: "hard"}}
 }
 
 // BuildNeighborSummaries projects events.LatestEventsByPrefix rows into

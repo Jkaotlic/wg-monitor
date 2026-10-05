@@ -33,7 +33,7 @@ func fakeFirmware(commitAnswer string, commitErr error, before string, after ...
 		case "-c components commit":
 			committed = true
 			return nil, nil
-		case "-c show log 40":
+		case "-c show log 400":
 			if !committed {
 				return []byte(before), nil
 			}
@@ -45,6 +45,10 @@ func fakeFirmware(commitAnswer string, commitErr error, before string, after ...
 		return nil, fmt.Errorf("unexpected %q", cmd)
 	}
 	rci := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/show/log" {
+			// Журнал по умолчанию читается запасным путём ndmc.
+			return nil, fmt.Errorf("rci: HTTP 404: %w", ErrRCIUnreachable)
+		}
 		if path == "/rci/components/list" {
 			// Проверка «есть ли что ставить» перед commit: по умолчанию статус
 			// не получен -- установка идёт как раньше. См. withList.
@@ -88,7 +92,7 @@ func TestInstallFirmware_RCICommitStarted(t *testing.T) {
 	if countCalls(*calls, "-c components commit") != 0 {
 		t.Fatalf("commit ушёл ещё и через ndmc: %v", *calls)
 	}
-	if (*calls)[0] != "-c show log 40" {
+	if (*calls)[0] != "-c show log 400" {
 		t.Fatalf("журнал «до» не прочитан перед commit: %v", *calls)
 	}
 }
@@ -115,7 +119,7 @@ func TestInstallFirmware_RCIErrorObjectIsError(t *testing.T) {
 	if countCalls(*calls, "-c components commit") != 0 {
 		t.Fatalf("после отказа RCI commit повторён через ndmc: %v", *calls)
 	}
-	if countCalls(*calls, "-c show log 40") != 1 {
+	if countCalls(*calls, "-c show log 400") != 1 {
 		t.Fatalf("после отказа RCI журнал смотреть незачем: %v", *calls)
 	}
 }
@@ -217,7 +221,7 @@ func TestInstallFirmware_RCITimeoutThenRebootIsStarted(t *testing.T) {
 	exec, rci, calls := fakeFirmware("", errors.New("rci /rci/components/commit: context deadline exceeded"), logBefore, after)
 	// Журнал «после» отдаётся и без подтверждённого commit: запрос ушёл.
 	committedExec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if strings.Join(args, " ") == "-c show log 40" && countCalls(*calls, rciCommitCall) > 0 {
+		if strings.Join(args, " ") == "-c show log 400" && countCalls(*calls, rciCommitCall) > 0 {
 			return []byte(after), nil
 		}
 		return exec(ctx, name, args...)
@@ -236,7 +240,7 @@ func TestInstallFirmware_RCITimeoutThenFailureIsInterrupted(t *testing.T) {
 	after := logBefore + "W [Oct 02 11:31:54] ndm: Components::Manager: update interrupted.\n"
 	exec, rci, calls := fakeFirmware("", errors.New("rci: timeout"), logBefore, after)
 	committedExec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if strings.Join(args, " ") == "-c show log 40" && countCalls(*calls, rciCommitCall) > 0 {
+		if strings.Join(args, " ") == "-c show log 400" && countCalls(*calls, rciCommitCall) > 0 {
 			return []byte(after), nil
 		}
 		return exec(ctx, name, args...)
@@ -337,14 +341,14 @@ func TestInstallFirmware_RCIWatchesLongerThanNdmc(t *testing.T) {
 	if _, err := InstallFirmware(context.Background(), exec, rci); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCalls(*calls, "-c show log 40"); got != 1+7 {
+	if got := countCalls(*calls, "-c show log 400"); got != 1+7 {
 		t.Fatalf("путь RCI: взглядов в журнал %d, ждали 8", got)
 	}
 	exec, _, calls = fakeFirmware("", nil, logBefore, logBefore)
 	if _, err := InstallFirmware(context.Background(), exec, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := countCalls(*calls, "-c show log 40"); got != 1+2 {
+	if got := countCalls(*calls, "-c show log 400"); got != 1+2 {
 		t.Fatalf("путь ndmc: взглядов в журнал %d, ждали 3", got)
 	}
 }
@@ -372,7 +376,7 @@ func TestInstallFirmware_RebootLineIsStartedAtOnce(t *testing.T) {
 	if err != nil || msg != FirmwareStartedMsg {
 		t.Fatalf("%q %v", msg, err)
 	}
-	if got := countCalls(*calls, "-c show log 40"); got != 2 {
+	if got := countCalls(*calls, "-c show log 400"); got != 2 {
 		t.Fatalf("после строки о перезагрузке окно не закрыто: взглядов в журнал %d", got)
 	}
 }
@@ -644,5 +648,151 @@ func TestVersionAudit_FirmwareFromRCI(t *testing.T) {
 	}
 	if va.FirmwareCurrent != "5.02.A.9.0-0" || va.FirmwareAvail != "5.02.B.0.0-0" {
 		t.Fatalf("va = %+v", va)
+	}
+}
+
+// Шумный журнал: нужная строка о перезагрузке за пределами 40 последних.
+// Окно запроса должно её захватывать -- и через RCI, и запасным путём ndmc.
+func noisyLog(total int) string {
+	var b strings.Builder
+	for i := 0; i < total; i++ {
+		fmt.Fprintf(&b, "I [Oct 02 11:31:%02d] ndm: Core::Syslog: noise %d.\n", i%60, i)
+	}
+	return b.String()
+}
+
+func TestInstallFirmware_NoisyLogRebootBeyond40ViaRCI(t *testing.T) {
+	noWait(t)
+	exec, rci, _ := fakeFirmware(`{"continued": false}`, nil, logBefore, logBefore)
+	// «Перезагрузка» стоит под 100 шумными строками: окно в 40 её не видит.
+	entries := `{"log":{"1":{"label":"I","timestamp":"Oct 02 11:32:34","message":"ndm: Core::System::RebootManager: activated reboot."}`
+	for i := 2; i < 102; i++ {
+		entries += fmt.Sprintf(`,"%d":{"label":"I","timestamp":"Oct 02 11:32:50","message":"ndm: Core::Syslog: noise %d."}`, i, i)
+	}
+	entries += "}}"
+	var asked []byte
+	committed := false
+	wrapped := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/components/commit" {
+			committed = true
+		}
+		if path == "/rci/show/log" {
+			asked = body
+			if !committed {
+				return []byte(`{"log":{"1":{"label":"I","timestamp":"Oct 02 11:30:37","message":"ndm: Core::System::StartupConfig: configuration saved."}}}`), nil
+			}
+			return []byte(entries), nil
+		}
+		return rci(ctx, method, path, body)
+	}
+	msg, err := InstallFirmware(context.Background(), exec, wrapped)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+	if !strings.Contains(string(asked), `"max-lines":400`) {
+		t.Fatalf("окно журнала не расширено: %s", asked)
+	}
+}
+
+func TestInstallFirmware_NoisyLogRebootBeyond40ViaNdmc(t *testing.T) {
+	noWait(t)
+	tail := noisyLog(100)
+	after := logBefore + "I [Oct 02 11:32:34] ndm: Core::System::RebootManager: activated reboot.\n" + tail
+	var window string
+	base, rci, _ := fakeFirmware(`{"continued": false}`, nil, logBefore, after)
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmd := strings.Join(args, " ")
+		if strings.HasPrefix(cmd, "-c show log ") {
+			window = cmd
+			// Настоящий роутер отдаёт только N последних строк.
+			var n int
+			fmt.Sscanf(cmd, "-c show log %d", &n)
+			out, err := base(ctx, name, "-c", "show log 400")
+			all := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+			if n < len(all) {
+				all = all[len(all)-n:]
+			}
+			return []byte(strings.Join(all, "\n") + "\n"), err
+		}
+		return base(ctx, name, args...)
+	}
+	msg, err := InstallFirmware(context.Background(), exec, rci)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v (окно %q)", msg, err, window)
+	}
+}
+
+func TestRCILogText_Shapes(t *testing.T) {
+	for _, body := range []string{
+		`{"log":[{"label":"E","timestamp":"Oct 02 11:31:54","message":"ndm: Core::Ndss: cannot connect."}]}`,
+		`{"log":{"2":{"message":"b"},"10":{"message":"c"},"1":{"label":"E","timestamp":"Oct 02 11:31:54","message":"ndm: Core::Ndss: cannot connect."}}}`,
+	} {
+		txt, ok := rciLogText([]byte(body))
+		if !ok || !strings.HasPrefix(txt, "E [Oct 02 11:31:54] ndm: Core::Ndss: cannot connect.") {
+			t.Fatalf("%q ok=%v", txt, ok)
+		}
+	}
+	if _, ok := rciLogText([]byte(`{"status":[]}`)); ok {
+		t.Fatal("не журнал принят за журнал")
+	}
+}
+
+// RCI отвечает объектом ошибки с HTTP 200 на неизвестный параметр: это не
+// журнал, и читать надо запасным путём ndmc.
+func TestRCILogText_ErrorObjectIsNotLog(t *testing.T) {
+	if _, ok := rciLogText([]byte(`{"status":[{"status":"error","code":"1","ident":"Core::Rci","message":"unknown parameter."}]}`)); ok {
+		t.Fatal("объект ошибки принят за журнал")
+	}
+}
+
+func TestInstallFirmware_RCIErrorObjectFallsBackToNdmcLog(t *testing.T) {
+	noWait(t)
+	after := logBefore + "I [Oct 02 11:32:34] ndm: Core::System::RebootManager: activated reboot.\n"
+	base, rci, _ := fakeFirmware(`{"continued": false}`, nil, logBefore, after)
+	wrapped := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		if path == "/rci/show/log" {
+			return []byte(`{"status":[{"status":"error","message":"unknown parameter."}]}`), nil
+		}
+		return rci(ctx, method, path, body)
+	}
+	msg, err := InstallFirmware(context.Background(), base, wrapped)
+	if err != nil || msg != FirmwareStartedMsg {
+		t.Fatalf("%q %v", msg, err)
+	}
+}
+
+// Снимок «до» через RCI, а опрос не смог бы дать те же строки другим путём:
+// путь закреплён на всю установку, старая «update interrupted» не становится
+// свежим провалом.
+func TestInstallFirmware_LogPathPinnedNoFalseFailure(t *testing.T) {
+	noWait(t)
+	oldFail := "E [Oct 01 09:00:00] ndm: Components::Manager: update interrupted.\n"
+	rciOld := `{"log":{"1":{"label":"W","timestamp":"Oct 01 09:00:00","message":"ndm: Components::Manager: update interrupted."}}}`
+	base, rci, _ := fakeFirmware(`{"continued": false}`, nil, oldFail, oldFail)
+	committed := false
+	n := 0
+	wrapped := func(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+		switch path {
+		case "/rci/components/commit":
+			committed = true
+		case "/rci/show/log":
+			if !committed {
+				return []byte(rciOld), nil
+			}
+			n++
+			return nil, errors.New("rci: HTTP 500") // опрос по RCI не отвечает
+		}
+		return rci(ctx, method, path, body)
+	}
+	// ndmc отдаёт ту же старую строку в своём формате.
+	msg, err := InstallFirmware(context.Background(), base, wrapped)
+	if err != nil {
+		t.Fatalf("старая строка прочитана как свежий провал: %v", err)
+	}
+	if msg != FirmwareUnconfirmedMsg {
+		t.Fatalf("msg=%q", msg)
+	}
+	if n == 0 {
+		t.Fatal("опрос по RCI не вызывался")
 	}
 }

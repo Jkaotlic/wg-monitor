@@ -166,3 +166,80 @@ func TestAwgmPartialAnswerHasNoVerdict(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// После старта агента адреса выхода есть по всем работающим VPN-туннелям
+// сразу, а не по одному за Every (с тремя туннелями -- через 15 минут).
+func TestRunMeasuresAllRunningTunnelsRightAfterStart(t *testing.T) {
+	_, cli := newFakeRouter(t, ipOK)
+	p := &Prober{Client: cli, Every: time.Hour, Own: ownSame}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if snap := p.Snapshot(); snap != nil && len(snap.Tunnels) == 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("через 3 с после старта замеры: %+v, хотим awg10 и awg11", p.Snapshot())
+}
+
+// После перезагрузки роутера awg-manager поднимается позже агента: первый
+// запрос списка туннелей падает. Прогрев повторяет его, а не уходит ждать
+// полный Every.
+func TestWarmupRetriesWhenTunnelListFails(t *testing.T) {
+	old := warmupRetry
+	warmupRetry = 10 * time.Millisecond
+	t.Cleanup(func() { warmupRetry = old })
+	var listCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			if listCalls.Add(1) <= 2 {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":` + threeTunnels + `}}`))
+		case "/api/test/ip":
+			ipOK(w, r)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := &Prober{Client: awgmgr.New(srv.URL), Now: newClock().now, Own: ownSame}
+	p.Warmup(context.Background())
+	if snap := p.Snapshot(); snap == nil || len(snap.Tunnels) != 2 {
+		t.Fatalf("прогрев сдался на упавшем списке туннелей: %+v (запросов списка %d)", snap, listCalls.Load())
+	}
+}
+
+// Провалы test/ip на прогреве (awg-manager ещё не готов) не ставят его на
+// часовую паузу: следующий плановый замер снова спрашивает awg-manager.
+func TestWarmupFailuresDoNotPauseAwgm(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	f, cli := newFakeRouter(t, func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			w.WriteHeader(500)
+			return
+		}
+		ipOK(w, r)
+	})
+	c := newClock()
+	p := &Prober{Client: cli, Now: c.now, PerTunnel: 20 * time.Minute, Own: ownSame}
+	p.Warmup(context.Background())
+	if n := f.ipCalls.Load(); n != 2 {
+		t.Fatalf("прогрев спросил awg-manager %d раз, ждали 2", n)
+	}
+	fail.Store(false)
+	c.add(21 * time.Minute)
+	p.Step(context.Background())
+	if n := f.ipCalls.Load(); n != 3 {
+		t.Fatalf("после прогрева awg-manager на паузе: вызовов %d, ждали 3", n)
+	}
+	if got := p.Snapshot().Tunnels["awg10"]; got.Source != "awgm" {
+		t.Fatalf("замер после прогрева не от awg-manager: %+v", got)
+	}
+}

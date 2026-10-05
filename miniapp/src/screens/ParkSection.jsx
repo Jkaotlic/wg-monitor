@@ -516,6 +516,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
 
           <div class="card card-rows park-backend">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
+            {backend.secretsWarning && <p class="state state-error">{backend.secretsWarning}</p>}
             {watchdog && (
               <div class={`park-watchdog park-watchdog-${watchdog.tone}`}>
                 <p class="park-watchdog-line">{watchdog.title}: {watchdog.text}</p>

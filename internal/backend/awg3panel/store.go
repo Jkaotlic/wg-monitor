@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 // DefaultStoreName -- файл панелей; кладётся рядом с amnezia-selfhosted.json.
@@ -71,7 +73,7 @@ type Store struct {
 }
 
 func LoadStore(path string) (Store, error) {
-	body, err := os.ReadFile(path)
+	body, err := sealedfile.ReadFile(path, sealedfile.DomainAwg3)
 	if errors.Is(err, os.ErrNotExist) {
 		return Store{Version: 1}, nil
 	}
@@ -89,7 +91,8 @@ func LoadStore(path string) (Store, error) {
 	return st, nil
 }
 
-// SaveStore -- целиком, атомарно (временный файл 0600 → rename), каталог 0700.
+// SaveStore -- целиком, атомарно (временный файл 0600 → fsync → rename),
+// каталог 0700.
 func SaveStore(path string, st Store) error {
 	if st.Version == 0 {
 		st.Version = 1
@@ -105,34 +108,13 @@ func SaveStore(path string, st Store) error {
 	if err != nil {
 		return fmt.Errorf("запись панелей: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".awg3-panels-*.tmp")
-	if err != nil {
-		return fmt.Errorf("временный файл панелей: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("права файла панелей: %w", err)
-	}
-	if _, err := tmp.Write(append(body, '\n')); err != nil {
-		_ = tmp.Close()
+	// Атомарно (временный файл 0600, fsync, rename): без fsync при отвале
+	// питания на диске мог оказаться пустой файл, и секреты панелей терялись
+	// молча. С ключом шифрования -- шифр (v0.55, B1).
+	if err := sealedfile.WriteFile(path, sealedfile.DomainAwg3, append(body, '\n')); err != nil {
 		return fmt.Errorf("запись файла панелей: %w", err)
 	}
-	// Sync перед переименованием: без него при отвале питания после rename
-	// на диске может оказаться пустой или обрезанный файл (данные ещё в
-	// буфере ОС) -- секреты панелей теряются молча.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("синхронизация файла панелей: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("запись файла панелей: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("замена файла панелей: %w", err)
-	}
-	return os.Chmod(path, 0o600)
+	return nil
 }
 
 // FieldError -- поле формы не прошло проверку. Reason -- для человека и

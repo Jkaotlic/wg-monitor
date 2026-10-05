@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy } from '../src/labels.js'
+import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy, tunnelStateLabel } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -212,5 +212,47 @@ describe('checkState — подпись и тон строки', () => {
     expect(checkState({ check_name: 'dns', status: 'ok' })).toEqual({ label: 'работает', tone: 'ok' })
     expect(checkState({ check_name: 'dns', status: 'fail' })).toEqual({ label: 'не работает', tone: 'danger' })
     expect(checkState({ check_name: 'dns', status: 'pending' })).toEqual({ label: 'pending', tone: 'muted' })
+  })
+})
+
+// A1.1 (v0.55): проверка главнее -- упавшая проверка не даёт слова «работает».
+describe('tunnelStateLabel: проверка главнее', () => {
+  it('поднят, проверка провалена -- «поднят, но не отвечает»', () => {
+    const t = { enabled: true, run_state: 'running', handshake_age_sec: 5, status: 'fail' }
+    expect(tunnelStateLabel(t)).toBe('поднят, но не отвечает')
+    expect(tunnelStateLabel({ ...t, status: 'dead' })).toBe('поднят, но не отвечает')
+  })
+  it('проверка жива -- «работает»; выключенный остаётся выключенным', () => {
+    expect(tunnelStateLabel({ enabled: true, run_state: 'running', handshake_age_sec: 5, status: 'ok' })).toBe('работает')
+    expect(tunnelStateLabel({ enabled: false, status: 'fail' })).toBe('выключен')
+  })
+})
+
+// Выбор цели в «Маршрутах» и «Добавить сайт»: проверка пришла, но ничего не
+// проверила -- «работает» сказать нельзя, слово то же, что в удалении
+// VPN-туннеля.
+describe('tunnelTargetLabel: непроверенное состояние', () => {
+  it('поднят, проверка не проверила -- «поднят, не проверено»', async () => {
+    const { tunnelTargetLabel } = await import('../src/labels.js')
+    expect(tunnelTargetLabel({ live: 'up', checkUnverified: true })).toBe('поднят, не проверено')
+    expect(tunnelTargetLabel({ live: 'up' })).toBe('работает')
+    expect(tunnelTargetLabel({ live: 'up', checkFailed: true, checkUnverified: true })).toBe('поднят, но не отвечает')
+    expect(tunnelTargetLabel({ live: 'down', checkUnverified: true })).toBe('выключен')
+  })
+})
+
+// dns_ru (v0.55, спека C) -- сервер имён, которому роутер отдал русские зоны.
+// Бот называет проверку «сервер имён для русских сайтов» (checkHumanName в
+// alerts/format.go) и говорит «Русские сайты могут не открываться» --
+// приложение говорит теми же словами.
+describe('dns_ru говорит о русских сайтах', () => {
+  it('в списке проверок', () => {
+    expect(checkLabel('dns_ru')).toBe('Сервер имён для русских сайтов')
+  })
+  it('в карточке тревоги', () => {
+    const copy = incidentCopy('dns_ru')
+    expect(copy.what).toBe('Русские сайты могут не открываться')
+    expect(copy.why).toContain('Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов')
+    for (const w of ['dns_ru', 'DNS', 'апстрим', 'DoT']) expect(copy.why).not.toContain(w)
   })
 })

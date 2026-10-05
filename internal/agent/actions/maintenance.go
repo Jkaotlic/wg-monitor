@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,7 +196,7 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		}
 	}
 	before := map[string]bool{}
-	beforeLines, beforeErr := firmwareLogLines(ctx, exec)
+	beforeLines, logVia, beforeErr := firmwareLogLines(ctx, exec, rci, "")
 	for _, l := range beforeLines {
 		before[l] = true
 	}
@@ -216,7 +218,9 @@ func InstallFirmware(ctx context.Context, exec ExecFunc, rci RCIFunc) (string, e
 		if err := watch.sleep(ctx); err != nil {
 			break
 		}
-		lines, err := firmwareLogLines(ctx, exec)
+		// Путь чтения закреплён снимком «до»: строки RCI и ndmc отличаются
+		// форматом, и смешение путей выдало бы старые строки за свежие.
+		lines, _, err := firmwareLogLines(ctx, exec, rci, logVia)
 		if err != nil {
 			continue // неудачный взгляд = «новых строк нет»
 		}
@@ -324,21 +328,117 @@ func isComponentsFailure(l string) bool {
 	return false
 }
 
+// firmwareLogWindow -- сколько последних записей журнала просим у роутера.
+// 40 терялось на шумном журнале: строка о провале или перезагрузке
+// оказывалась за окном, и установка выглядела «неподтверждённой».
+const firmwareLogWindow = 400
+
 // firmwareLogLines -- строки журнала про компоненты, Ndss и перезагрузку, в порядке журнала
 // (от него зависит понятный текст ошибки).
-func firmwareLogLines(ctx context.Context, exec ExecFunc) ([]string, error) {
-	out, err := exec(ctx, "ndmc", "-c", "show log 40")
-	if err != nil {
-		return nil, err
+//
+// Журнал читаем тем же путём, что и запускаем установку: через локальный RCI
+// (show/log). Роутер без RCI или не отдавший журнал отвечает старым путём ndmc
+// с тем же окном.
+func firmwareLogLines(ctx context.Context, exec ExecFunc, rci RCIFunc, pin string) ([]string, string, error) {
+	var text, via string
+	if rci != nil && pin != "ndmc" {
+		if body, err := rci(ctx, "POST", "/rci/show/log", []byte(fmt.Sprintf(`{"max-lines":%d}`, firmwareLogWindow))); err == nil {
+			if t, ok := rciLogText(body); ok {
+				text, via = t, "rci"
+			}
+		}
+		if pin == "rci" && via == "" {
+			// Закреплённый путь не ответил -- «новых строк нет», а не повод
+			// читать другим форматом.
+			return nil, pin, errors.New("rci show/log: no log in the answer")
+		}
+	}
+	if via == "" {
+		out, err := exec(ctx, "ndmc", "-c", fmt.Sprintf("show log %d", firmwareLogWindow))
+		if err != nil {
+			return nil, "", err
+		}
+		text, via = string(out), "ndmc"
 	}
 	var lines []string
-	for _, raw := range strings.Split(string(out), "\n") {
+	for _, raw := range strings.Split(text, "\n") {
 		l := strings.TrimSpace(strings.ReplaceAll(raw, "\x1b[K", ""))
 		if strings.Contains(l, "Components::") || strings.Contains(l, "Core::Ndss") || isFirmwareGoingLine(l) {
 			lines = append(lines, l)
 		}
 	}
-	return lines, nil
+	return lines, via, nil
+}
+
+// rciLogText переводит ответ RCI show/log в строки вида «I [Oct 02 11:31:54]
+// ndm: Components::Manager: …», как у ndmc. Записи -- объекты с полем message
+// (label и timestamp необязательны) под ключом log в массиве или в словаре по номерам;
+// порядок словаря -- по номеру записи. ok=false -- ответ не журнал, нужен
+// запасной путь.
+func rciLogText(body []byte) (string, bool) {
+	var root any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return "", false
+	}
+	var entries []map[string]any
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		case map[string]any:
+			if _, ok := x["message"].(string); ok {
+				entries = append(entries, x)
+				return
+			}
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool {
+				a, ea := strconv.Atoi(keys[i])
+				b, eb := strconv.Atoi(keys[j])
+				if ea == nil && eb == nil {
+					return a < b
+				}
+				return keys[i] < keys[j]
+			})
+			for _, k := range keys {
+				walk(x[k])
+			}
+		}
+	}
+	// Журнал -- только под ключом log: объект ошибки RCI с полем message
+	// (HTTP 200 на неизвестный параметр) журналом не считается.
+	m, ok := root.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	l, ok := m["log"]
+	if !ok {
+		return "", false
+	}
+	walk(l)
+	if len(entries) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		label, _ := e["label"].(string)
+		ts, _ := e["timestamp"].(string)
+		msg, _ := e["message"].(string)
+		if label == "" {
+			label = "I"
+		}
+		if ts != "" {
+			fmt.Fprintf(&b, "%s [%s] %s\n", label, ts, msg)
+		} else {
+			fmt.Fprintf(&b, "%s [] %s\n", label, msg)
+		}
+	}
+	return b.String(), true
 }
 
 // logMessage -- «E [Sep 30 11:31:54] ndm: Core::Ndss: …» → «Core::Ndss: …».
