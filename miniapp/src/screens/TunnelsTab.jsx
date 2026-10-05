@@ -4,7 +4,7 @@ import { useCommand } from '../useCommand.js'
 import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable, listAutorepair } from '../api.js'
 import { autorepairBadge } from '../autorepair.js'
 import { Pill } from '../ui/Pill.jsx'
-import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
+import { parseRouteSnapshot, rememberRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
@@ -203,7 +203,10 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   }, [routerID])
 
   useEffect(() => {
-    if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
+    if (result?.status !== 'ok') return
+    const snap = parseRouteSnapshot(result.output)
+    rememberRouteSnapshot(routerID, snap)
+    setSnapshot(snap)
   }, [result])
 
   // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».

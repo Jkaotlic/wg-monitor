@@ -35,9 +35,12 @@ describe('реплей workrouter 18.09: старый агент (несущий
     expect(s.reserve).toBeUndefined()
   })
 
-  it('заголовок не называет ни одного туннеля', () => {
-    expect(s.headline.verdict).not.toContain('vpn-nl')
+  // Несущим -- ни одного; упавший называется как упавший (ревью B1: без
+  // reserve_only_alert вердикт -- про то, что ведётся через него).
+  it('заголовок не называет несущим ни одного туннеля', () => {
+    expect(s.headline.verdict).not.toMatch(/через «vpn-nl»/)
     expect(s.headline.verdict).not.toContain('vpn-hip')
+    expect(s.headline.tag).not.toMatch(/запасн/)
   })
 })
 

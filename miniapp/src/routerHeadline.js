@@ -74,7 +74,10 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   // Бэкенд старше v0.56 (без carrier_basis) и экран без списка туннелей --
   // имя главного выхода, которое дал сервер.
   const via = carrier ? lineVia(carrier, traffic) : traffic?.carrier_basis ? '' : traffic?.egress_tunnel_name || ''
-  if ((traffic?.mode === 'vpn' || traffic?.mode === 'split') && carrier && !carrierAlive({ traffic, tunnels, incidents })) {
+  // Режим тут не важен: и при «напрямую» по главному выходу, и при
+  // неизвестном главном выходе политика ведёт заблокированное в несущего
+  // (ревью B1). На sing-box несущего нет вовсе.
+  if (traffic?.mode !== 'singbox' && carrier && !carrierAlive({ traffic, tunnels, incidents })) {
     return {
       tone: 'warn',
       cold: true,
@@ -110,6 +113,19 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
       verdict: via
         ? `Заблокированное открывается через «${via}». Остальное идёт напрямую, как обычно.`
         : 'Заблокированное открывается через VPN-туннели обхода, какой взять — решают правила. Остальное идёт напрямую, как обычно.',
+    }
+  }
+
+  // Главный выход роутер не назвал, но несущего обхода знают (сводка
+  // политик или снимок маршрутов): «роутер не сообщил» было бы неправдой
+  // (ревью B1). Про остальной трафик молчим -- его маршрут и неизвестен.
+  if ((traffic?.mode === 'unknown' || !traffic?.mode) && carrier) {
+    return {
+      tone: 'sig',
+      cold: false,
+      stale,
+      tag: 'всё работает',
+      verdict: `Заблокированное открывается через «${via}».`,
     }
   }
 
@@ -222,13 +238,20 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
     // адреса, старый агент молчит): назвать живой VPN-туннель -- угадать.
     // В песочнице sandbox-broken так «Роутер» называл vpn-de, а вкладка --
     // vpn-nl.
+    // Тег нейтральный: упасть мог и запасной, и несущий -- «работает на
+    // запасном» было бы догадкой (ревью B1). Что упал именно запасной,
+    // подтверждает только сервер (reserve_only_alert).
     const alive = tunnels.find((t) => isAlive(t, incidents) && `tunnel_${t.tunnel_id}` !== name)
     if (alive) {
+      const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
+      const deadName = lineName(dead) || name.slice('tunnel_'.length)
       return {
         ...base,
         tone: 'warn',
-        tag: 'работает на запасном VPN-туннеле',
-        verdict: 'Один VPN-туннель упал, обход идёт через оставшиеся. Починить упавший всё равно стоит: запаса стало меньше.',
+        tag: 'один VPN-туннель упал',
+        verdict: only
+          ? 'Один VPN-туннель упал, обход идёт через оставшиеся. Починить упавший всё равно стоит: запаса стало меньше.'
+          : `«${deadName}» не отвечает: то, что роутер ведёт через него, может не открываться.`,
       }
     }
   }

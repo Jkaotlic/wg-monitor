@@ -32,6 +32,25 @@ export function carrierDeadByServer(traffic) {
   return Boolean(traffic?.carrier_basis) && Boolean(traffic?.carrier_tunnel_id) && traffic.carrier_alive === false
 }
 
+// Несущий по снимку маршрутов роутера (route_status), когда сервер его не
+// знает (carrier_basis none). active_tunnel_id политики в снимке -- слово
+// самого роутера, а не догадка: «первым поднятым» оно не является (ревью
+// B1). Политик через VPN несколько -- та, что несёт больше правил, как у
+// сервера. sing-box и «напрямую» не трогаем: там несущего нет. Живость
+// сервер не сказал (carrier_alive не задан) -- её решают проверки туннеля.
+export function withSnapshotCarrier(traffic, snapshot) {
+  if (!traffic || traffic.carrier_basis !== 'none' || traffic.mode === 'singbox' || traffic.mode === 'direct') return traffic
+  const ids = new Set((Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []).map((t) => t.id))
+  let best = null
+  for (const p of Array.isArray(snapshot?.policies) ? snapshot.policies : []) {
+    if (!p?.active_tunnel_id || p.via_vpn === false || !ids.has(p.active_tunnel_id)) continue
+    if (!best || (p.dns ?? 0) > (best.dns ?? 0)) best = p
+  }
+  if (!best) return traffic
+  const { carrier_alive: _alive, ...rest } = traffic
+  return { ...rest, carrier_tunnel_id: best.active_tunnel_id, carrier_basis: 'snapshot' }
+}
+
 export function carrierLine({ traffic, tunnels }) {
   const id = carrierID(traffic)
   if (!id) return null

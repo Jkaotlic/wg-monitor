@@ -6,6 +6,7 @@
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
 import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
+import { withSnapshotCarrier } from './trafficPath.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -132,13 +133,16 @@ function firstVPNPolicy(policies, byID) {
 //   none    -- ни одна политика не ведёт в VPN-туннель.
 // Без traffic.carrier_basis (бэкенд старше v0.56, тесты раскладки) несущим
 // остаётся активное звено первой VPN-политики снимка -- слово роутера.
-export function tunnelsView(snapshot, traffic) {
+export function tunnelsView(snapshot, serverTraffic) {
   const empty = { state: 'none', active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
   if (tunnels.length === 0) return empty
 
   const byID = new Map(tunnels.map((t) => [t.id, t]))
+  // Сервер несущего не знает -- активное звено из снимка роутера, тем же
+  // правилом, что у экрана «Роутер» (withSnapshotCarrier).
+  const traffic = withSnapshotCarrier(serverTraffic, snapshot)
 
   if (traffic?.mode === 'singbox') {
     const p = firstVPNPolicy(policies, byID)
@@ -151,10 +155,12 @@ export function tunnelsView(snapshot, traffic) {
     carrierID = traffic.carrier_tunnel_id && byID.has(traffic.carrier_tunnel_id) ? traffic.carrier_tunnel_id : ''
     if (!carrierID) {
       // Несущего нет. «Ни один VPN-туннель не несёт трафик» -- только когда
-      // и сервер говорит «напрямую»; иначе -- не знаем, и не гадаем.
-      const p = firstVPNPolicy(policies, byID)
+      // и сервер говорит «напрямую»; иначе -- не знаем, и не гадаем (старый
+      // агент без active_tunnel_id в политиках снимка -- тоже «не знаем»,
+      // ревью B1: шапка «Роутера» на тех же данных говорит «всё работает»).
+      const p = firstVPNPolicy(policies, byID) ?? policies.find((x) => x.via_vpn && (x.interfaces ?? []).some((l) => l.tunnel_id && byID.has(l.tunnel_id)))
       const chain = chainOf(p, byID, '')
-      const state = traffic.mode === 'direct' || !p ? 'none' : 'unknown'
+      const state = traffic.mode === 'direct' ? 'none' : 'unknown'
       return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
     }
   } else {

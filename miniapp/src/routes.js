@@ -74,6 +74,25 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
   }
 }
 
+// Последний снимок маршрутов каждого роутера, который видело приложение
+// (вкладки «VPN-туннели» и «Маршруты»). Экран «Роутер» снимок сам не
+// спрашивает -- это команда роутеру; но когда сервер несущего не знает, он
+// берёт активное звено из недавнего снимка, чтобы назвать того же, что
+// вкладка (B1, withSnapshotCarrier).
+const ROUTE_SNAPSHOT_MAX_AGE_MS = 10 * 60_000
+const routeSnapshots = new Map()
+
+export function rememberRouteSnapshot(routerID, snapshot, now = Date.now()) {
+  if (routerID == null || !snapshot) return
+  routeSnapshots.set(String(routerID), { snapshot, at: now })
+}
+
+export function recentRouteSnapshot(routerID, now = Date.now()) {
+  const hit = routeSnapshots.get(String(routerID))
+  if (!hit || now - hit.at > ROUTE_SNAPSHOT_MAX_AGE_MS) return null
+  return hit.snapshot
+}
+
 export function parseRouteSnapshot(output) {
   if (typeof output !== 'string' || output === '') return null
   try {

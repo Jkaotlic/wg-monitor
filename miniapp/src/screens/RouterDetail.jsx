@@ -3,7 +3,8 @@ import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, 
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve, withSnapshotCarrier } from '../trafficPath.js'
+import { recentRouteSnapshot } from '../routes.js'
 import { whenText, sinceText, untilText } from '../when.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
@@ -284,7 +285,11 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
   const [tunnels, setTunnels] = useState([])
-  const [traffic, setTraffic] = useState(null)
+  const [serverTraffic, setTraffic] = useState(null)
+  // Сервер несущего не знает -- активное звено из недавнего снимка маршрутов
+  // роутера (его снимали вкладки «VPN-туннели» и «Маршруты»): шапка и схема
+  // называют того же, что вкладка (B1). Команду роутеру отсюда не шлём.
+  const traffic = withSnapshotCarrier(serverTraffic, recentRouteSnapshot(id))
   const [error, setError] = useState(null)
   const loadSeq = useRef(0)
   // Версии -- один раз на роутер, не с пульсом: сервер отмечает новости

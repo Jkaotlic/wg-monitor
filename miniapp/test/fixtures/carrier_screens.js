@@ -104,10 +104,10 @@ export const CARRIER_SCENARIOS = [
     expect: { name: null },
   },
   {
-    // Старый агент без сводки политик, поднятых два: несущего выбирают
-    // правила, сервер его не знает -- и экраны не гадают, даже вкладка, у
-    // которой в снимке есть активное звено.
-    title: 'несущий неизвестен',
+    // Сервер несущего не знает (старый агент без сводки политик), а снимок
+    // маршрутов роутера называет активное звено -- это слово роутера, а не
+    // «первый running» (первым стоит мёртвый vpn-nl). Оба экрана называют его.
+    title: 'сервер не знает, снимок роутера называет',
     router: ONLINE,
     incidents: [{ check_name: 'tunnel_awg10' }],
     events: {
@@ -122,6 +122,87 @@ export const CARRIER_SCENARIOS = [
       policies: [policy('awg14', [['awg14', 'vpn-hip', 'active'], ['awg10', 'vpn-nl', 'fallback']])],
     },
     checks: { tunnels: [{ tunnel_id: 'awg10', status: 'fail' }, { tunnel_id: 'awg14', status: 'ok' }] },
+    expect: { name: 'vpn-hip', alive: true },
+  },
+  {
+    // Старый агент, в политиках снимка нет active_tunnel_id: несущего не
+    // знает никто. Шапка -- «всё работает» (правила уводят), вкладка --
+    // «не знаем», а не красное «ни один VPN-туннель не несёт трафик».
+    title: 'старый агент, политики без активного звена',
+    router: { status: 'ok', last_seen_age_sec: 10 },
+    incidents: [],
+    events: {
+      tunnels: [
+        { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'ok' },
+        { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'ok' },
+      ],
+      traffic: { mode: 'split', contested_default: true, carrier_basis: 'none', carrier_alive: false },
+    },
+    snapshot: {
+      tunnels: [snapTunnel('awg10', 'vpn-nl', 'up'), snapTunnel('awg14', 'vpn-hip', 'up')],
+      policies: [{ ...policy('', [['awg14', 'vpn-hip', 'active'], ['awg10', 'vpn-nl', 'fallback']]), active_tunnel_id: undefined }],
+    },
+    checks: { tunnels: [{ tunnel_id: 'awg10', status: 'ok' }, { tunnel_id: 'awg14', status: 'ok' }] },
+    expect: { name: null, headlineTone: 'sig' },
+  },
+  {
+    // То же, но один VPN-туннель упал: кто из двух нёс -- неизвестно, и
+    // «работает на запасном» было бы догадкой.
+    title: 'несущий неизвестен, один VPN-туннель упал',
+    router: ONLINE,
+    incidents: [{ check_name: 'tunnel_awg10' }],
+    events: {
+      tunnels: [
+        { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'fail' },
+        { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'ok' },
+      ],
+      traffic: { mode: 'split', contested_default: true, carrier_basis: 'none', carrier_alive: false },
+    },
+    snapshot: {
+      tunnels: [snapTunnel('awg10', 'vpn-nl', 'up'), snapTunnel('awg14', 'vpn-hip', 'up')],
+      policies: [{ ...policy('', [['awg14', 'vpn-hip', 'active'], ['awg10', 'vpn-nl', 'fallback']]), active_tunnel_id: undefined }],
+    },
+    checks: { tunnels: [{ tunnel_id: 'awg10', status: 'fail' }, { tunnel_id: 'awg14', status: 'ok' }] },
     expect: { name: null },
+  },
+  {
+    // Главный выход напрямую, а несущий политики лежит: не «трафик идёт
+    // напрямую», а «VPN-туннель обхода не отвечает» -- на обоих экранах.
+    title: 'напрямую, несущий политики мёртв',
+    router: { status: 'ok', last_seen_age_sec: 10 },
+    incidents: [],
+    events: {
+      tunnels: [
+        { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'stopped', status: 'fail' },
+        { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'stopped', status: 'ok' },
+      ],
+      traffic: { mode: 'direct', carrier_tunnel_id: 'awg10', carrier_basis: 'policy', carrier_alive: false },
+    },
+    snapshot: {
+      tunnels: [snapTunnel('awg10', 'vpn-nl', 'down'), snapTunnel('awg14', 'vpn-hip', 'stopped')],
+      policies: [policy('awg10', [['awg10', 'vpn-nl', 'active'], ['awg14', 'vpn-hip', 'fallback']])],
+    },
+    checks: { tunnels: [{ tunnel_id: 'awg10', status: 'fail' }, { tunnel_id: 'awg14', status: 'ok' }] },
+    expect: { name: 'vpn-nl', alive: false, headlineTag: 'VPN-туннель обхода не отвечает' },
+  },
+  {
+    // Главный выход роутер не назвал (routeTag не прочитан), а несущий
+    // политики известен и жив: шапка называет его, а не «роутер не сообщил».
+    title: 'главный выход неизвестен, несущий политики жив',
+    router: { status: 'ok', last_seen_age_sec: 10 },
+    incidents: [],
+    events: {
+      tunnels: [
+        { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'ok' },
+        { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'ok', matrix_latency_ms: 70 },
+      ],
+      traffic: { mode: 'unknown', carrier_tunnel_id: 'awg14', carrier_basis: 'policy', carrier_alive: true },
+    },
+    snapshot: {
+      tunnels: [snapTunnel('awg10', 'vpn-nl', 'up'), snapTunnel('awg14', 'vpn-hip', 'up')],
+      policies: [policy('awg14', [['awg14', 'vpn-hip', 'active'], ['awg10', 'vpn-nl', 'fallback']])],
+    },
+    checks: { tunnels: [{ tunnel_id: 'awg10', status: 'ok' }, { tunnel_id: 'awg14', status: 'ok' }] },
+    expect: { name: 'vpn-hip', alive: true },
   },
 ]
