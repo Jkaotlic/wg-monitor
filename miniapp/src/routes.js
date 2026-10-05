@@ -62,10 +62,18 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
   // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
   // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
   const unchecked = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
-  if (!snapshot || (failing.size === 0 && unchecked.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
+  // И в обратную сторону (Fix 3 v0.56): последняя проверка -- ok и роутер в
+  // ней сказал running, а снимок маршрутов -- «down». Проверки и счёт зовут
+  // его работающим; строка, «Порядок подхвата» и «Маршруты» -- тоже.
+  // Выключенный настройкой не трогаем.
+  const passing = new Set(
+    (events?.tunnels ?? []).filter((t) => t?.status === 'ok' && t?.run_state === 'running').map((t) => t.tunnel_id),
+  )
+  if (!snapshot || (failing.size === 0 && unchecked.size === 0 && passing.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
+      if (passing.has(t.id) && tunnelLive(t) === 'down' && !tunnelSwitchedOff(t)) return { ...t, status: 'running', check_ok: true }
       if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
       // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
       if (failing.has(t.id)) return { ...t, status: 'dead', check_failed: true }
