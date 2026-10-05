@@ -60,6 +60,10 @@ type Instance struct {
 	SSHPort       int      `json:"ssh_port,omitempty"`
 	SSHUser       string   `json:"ssh_user,omitempty"`
 	SSHPassword   string   `json:"ssh_password,omitempty"`
+	// SSHHostKey -- отпечаток ключа хоста (ssh.FingerprintSHA256, «SHA256:…»),
+	// запомненный при первом удачном входе (v0.55, B2). Пусто -- ещё не входили
+	// или админ доверился новому ключу. Из формы не приходит.
+	SSHHostKey string `json:"ssh_host_key,omitempty"`
 }
 
 type Store struct {
@@ -382,6 +386,7 @@ func (s *Store) normalize() {
 		inst.SSHHost = strings.TrimSpace(inst.SSHHost)
 		inst.SSHUser = strings.TrimSpace(inst.SSHUser)
 		inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
+		inst.SSHHostKey = strings.TrimSpace(inst.SSHHostKey)
 		if inst.SSHHost != "" {
 			if inst.SSHPort == 0 {
 				inst.SSHPort = 22
@@ -389,6 +394,8 @@ func (s *Store) normalize() {
 			if inst.SSHUser == "" {
 				inst.SSHUser = "root"
 			}
+		} else {
+			inst.SSHHostKey = ""
 		}
 		if inst.ID == s.ActiveID && inst.Enabled {
 			activeSeen = true
@@ -455,6 +462,10 @@ func mergeInstance(old, next Instance) Instance {
 	if next.SSHPassword == "" {
 		next.SSHPassword = old.SSHPassword
 	}
+	// Отпечаток ключа -- только для того же адреса SSH.
+	if next.SSHHostKey == "" && next.SSHHost == old.SSHHost && next.SSHPort == old.SSHPort {
+		next.SSHHostKey = old.SSHHostKey
+	}
 	return next
 }
 
@@ -491,6 +502,9 @@ type RemoteDockerRunner struct {
 	User      string
 	Password  string
 	Container string
+	// HostKey -- проверка ключа хоста (v0.55, B2). Пустая политика -- вход
+	// отказан: без проверки ключа пароль не уходит.
+	HostKey HostKeyPolicy
 }
 
 func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
@@ -507,19 +521,31 @@ func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
+	hk := &hostKeyCheck{policy: r.HostKey}
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(r.Password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hk.callback,
 		Timeout:         15 * time.Second,
 	}
 	conn, chans, reqs, err := ssh.NewClientConn(rawConn, addr, cfg)
 	if err != nil {
 		_ = rawConn.Close()
+		switch {
+		case hk.changed:
+			return nil, fmt.Errorf("ssh host key %s: %w", addr, ErrHostKeyChanged)
+		case hk.refused:
+			return nil, fmt.Errorf("ssh host key %s: %w", addr, errNoHostKeyPolicy)
+		}
 		return nil, fmt.Errorf("ssh auth %s: %w", addr, err)
 	}
 	client := ssh.NewClient(conn, chans, reqs)
 	defer client.Close()
+	// Вход удался -- первый ключ запоминается до любой команды. Не записался --
+	// команды нет: иначе следующий вход снова поверил бы любому ключу.
+	if err := hk.remember(); err != nil {
+		return nil, fmt.Errorf("ssh host key %s: %w", addr, err)
+	}
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("ssh session %s: %w", addr, err)
@@ -542,12 +568,12 @@ func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte
 	return stdout.Bytes(), nil
 }
 
-func runnerForConfig(cfg Config) Runner {
+func runnerForConfig(cfg Config, hostKey HostKeyPolicy) Runner {
 	cfg = cfg.withDefaults()
 	if cfg.SSHHost != "" && cfg.SSHPassword != "" {
 		return RemoteDockerRunner{
 			Host: cfg.SSHHost, Port: cfg.SSHPort, User: cfg.SSHUser,
-			Password: cfg.SSHPassword, Container: cfg.Container,
+			Password: cfg.SSHPassword, Container: cfg.Container, HostKey: hostKey,
 		}
 	}
 	return DockerRunner{Container: cfg.Container}
@@ -572,14 +598,6 @@ type IssuedConfig struct {
 	Config     []byte
 	ServerConf []byte
 	Clients    []byte
-}
-
-func Issue(ctx context.Context, cfg Config, name string) (IssuedConfig, error) {
-	cfg = cfg.withDefaults()
-	if !cfg.Ready() {
-		return IssuedConfig{}, errors.New("self-hosted Amnezia is not configured")
-	}
-	return IssueWithRunner(ctx, cfg, runnerForConfig(cfg), name, time.Now())
 }
 
 func IssueWithRunner(ctx context.Context, cfg Config, runner Runner, name string, now time.Time) (IssuedConfig, error) {
