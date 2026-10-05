@@ -977,7 +977,7 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 	case "external_reach":
 		return diagnoseExternalReach(d, ns)
 	case "dns_ru":
-		return dnsRuDiagnose
+		return dnsRuDiagnoseFor(ns)
 	case "resolver_guard":
 		switch {
 		case resolverGuardNoFallback(d):
@@ -1605,10 +1605,27 @@ const (
 	dnsRuWhatBroke         = "Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов"
 	dnsRuImpact            = "Банки, госуслуги, магазины и другие русские сайты могут не открываться или открываться через раз, пока сервер не ответит."
 	dnsRuDiagnose          = "Обычно так бывает при сбое у самого сервера имён или по дороге к нему у провайдера. Заграничные серверы имён при этом отвечают, поэтому общая проверка поиска сайтов молчит, а эта — нет."
+	dnsRuDiagnoseBoth      = "Обычно так бывает при сбое у самого сервера имён или по дороге к нему у провайдера. Общая проверка поиска сайтов тоже в аварии: не отвечают и другие серверы имён, не только русские."
 	dnsRuAdvice            = "Чаще всего это проходит само за несколько минут — бот напишет, когда сервер снова ответит. Если русские сайты не открываются дольше получаса, перезагрузите роутер. Не помогло — напишите тому, кто настраивал роутер."
 	dnsRuRecoveredHeadline = "Сервер имён для русских сайтов снова отвечает"
 	dnsRuGoneHeadline      = "В настройках роутера больше нет отдельного сервера имён для русских сайтов"
 )
+
+// neighborDNSCheck -- соседская запись «общая проверка dns сейчас в аварии
+// (HARD)». Её добавляет диспетчер к тревоге dns_ru (collectDNSRuNeighbors).
+const neighborDNSCheck = "dns"
+
+// dnsRuDiagnoseFor -- «общая проверка поиска сайтов молчит» верна, только
+// пока проверка dns не в аварии: порог dns -- 2 из 3 серверов, и два русских
+// сервера против одного заграничного роняют обе проверки сразу.
+func dnsRuDiagnoseFor(ns []NeighborSummary) string {
+	for _, n := range ns {
+		if n.CheckName == neighborDNSCheck && n.Status == "hard" {
+			return dnsRuDiagnoseBoth
+		}
+	}
+	return dnsRuDiagnose
+}
 
 func writeDNSRuWhatBroke(b *strings.Builder, d map[string]any) {
 	b.WriteString(dnsRuWhatBroke + ".\n")

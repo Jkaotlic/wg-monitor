@@ -79,3 +79,22 @@ func TestDNSRuWakeLabel(t *testing.T) {
 		t.Errorf("wakeCheckLabel = %q", got)
 	}
 }
+
+// Две русских серверa против одного заграничного роняют и dns (порог 2/3):
+// фраза «общая проверка молчит» тогда ложна.
+func TestDNSRuDiagnoseDependsOnDNSAlert(t *testing.T) {
+	chk := wire.Check{Name: "dns_ru", Status: "fail", Details: dnsRuDownDetails()}
+	base := HardArgs{Nickname: "router-a", CheckName: "dns_ru", HardSince: time.Now(), ConsecFails: 3, Check: chk}
+	alone := FormatHard(base)
+	if !strings.Contains(alone, "общая проверка поиска сайтов молчит") {
+		t.Errorf("без аварии dns фраза должна остаться:\n%s", alone)
+	}
+	base.Neighbors = []NeighborSummary{{CheckName: "dns", Status: "hard"}}
+	both := FormatHard(base)
+	if strings.Contains(both, "поиска сайтов молчит") {
+		t.Errorf("при аварии dns фраза ложна:\n%s", both)
+	}
+	if !strings.Contains(both, "тоже в аварии") {
+		t.Errorf("нет правды про обе проверки:\n%s", both)
+	}
+}
