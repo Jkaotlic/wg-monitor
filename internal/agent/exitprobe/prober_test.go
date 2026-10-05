@@ -166,3 +166,21 @@ func TestAwgmPartialAnswerHasNoVerdict(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// После старта агента адреса выхода есть по всем работающим VPN-туннелям
+// сразу, а не по одному за Every (с тремя туннелями -- через 15 минут).
+func TestRunMeasuresAllRunningTunnelsRightAfterStart(t *testing.T) {
+	_, cli := newFakeRouter(t, ipOK)
+	p := &Prober{Client: cli, Every: time.Hour, Own: ownSame}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if snap := p.Snapshot(); snap != nil && len(snap.Tunnels) == 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("через 3 с после старта замеры: %+v, хотим awg10 и awg11", p.Snapshot())
+}

@@ -18,9 +18,9 @@ const (
 	// awgmPause -- сколько не спрашивать awg-manager после двух отказов
 	// подряд или ответа «не умею»: не долбим сломанное каждые 5 минут.
 	awgmPause = time.Hour
-	// firstDelay -- первый замер не в момент старта: агент и так занят
-	// первым отчётом, а после перезагрузки роутера туннели ещё поднимаются.
-	firstDelay = time.Minute
+	// warmupBudget -- сколько даём первому обходу после старта: каждый
+	// работающий VPN-туннель меряется сразу, а не по одному за Every.
+	warmupBudget = 2 * time.Minute
 )
 
 // Prober меряет адрес выхода по кругу, по одному VPN-туннелю раз в Every,
@@ -211,16 +211,34 @@ func (p *Prober) Snapshot() *wire.ExitFacts {
 	return out
 }
 
-// Run -- замер раз в Every до отмены ctx.
+// Warmup -- первый обход после старта агента: меряет все работающие
+// VPN-туннели подряд, пока Step находит, кого мерить. Без него после
+// перезапуска агента адреса выхода появлялись по одному раз в Every.
+func (p *Prober) Warmup(ctx context.Context) {
+	for ctx.Err() == nil {
+		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		id := p.Step(sctx)
+		cancel()
+		if id == "" {
+			return
+		}
+	}
+}
+
+// Run -- первый обход сразу после старта, дальше замер раз в Every до
+// отмены ctx.
 func (p *Prober) Run(ctx context.Context) {
 	every := p.Every
 	if every <= 0 {
 		every = defaultEvery
 	}
+	wctx, wcancel := context.WithTimeout(ctx, warmupBudget)
+	p.Warmup(wctx)
+	wcancel()
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(firstDelay):
+	case <-time.After(every):
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
