@@ -38,7 +38,7 @@ func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string, firmwareL
 	res := lookupRoute(domain, in, func(tag string) ([]string, error) {
 		return c.GeoExpand(ctx, "geosite", tag)
 	})
-	b, err := json.Marshal(withFirmwareLists(res, firmwareLists))
+	b, err := json.Marshal(withFirmwareLists(res, firmwareLists, ndmsDNSRules(in.dns)))
 	if err != nil {
 		return "", err
 	}
@@ -48,8 +48,13 @@ func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string, firmwareL
 // withFirmwareLists добавляет пометку о собственных списках сайтов прошивки:
 // они в проверку не входят, и ответ «по правилам» без оговорки был бы
 // уверенным не про всё. Без признака ответ не меняется.
-func withFirmwareLists(res wire.RouteLookupResult, groups int) wire.RouteLookupResult {
-	if groups <= 0 {
+//
+// Правила awg-manager с backend=ndms сам awg-manager и заводит в прошивке
+// группами `object-group fqdn` (живого образца нет -- решение контролёра
+// v0.56, ревью I2): их группы -- не чужие списки, и эта проверка их и так
+// видит. Пометка -- только когда групп больше, чем таких правил.
+func withFirmwareLists(res wire.RouteLookupResult, groups, ndmsRules int) wire.RouteLookupResult {
+	if groups <= ndmsRules || groups <= 0 {
 		return res
 	}
 	res.FirmwareLists = groups
@@ -57,6 +62,19 @@ func withFirmwareLists(res wire.RouteLookupResult, groups int) wire.RouteLookupR
 		res.Notes = append(slices.Clone(res.Notes), lookupNoteFirmwareLists)
 	}
 	return res
+}
+
+// ndmsDNSRules -- сколько правил awg-manager исполняет сама прошивка
+// (backend=ndms), включённых и выключенных: группа в конфиге прошивки у
+// правила есть в обоих случаях.
+func ndmsDNSRules(rules []awgmgr.DNSRoute) int {
+	n := 0
+	for _, r := range rules {
+		if r.Backend == "ndms" {
+			n++
+		}
+	}
+	return n
 }
 
 // lookupRoute is the pure core of route_lookup: which enabled rules name the

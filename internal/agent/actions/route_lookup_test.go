@@ -526,15 +526,37 @@ func TestLookupRoute_NdmsRuleCarriesFirmwareSource(t *testing.T) {
 
 func TestWithFirmwareLists(t *testing.T) {
 	base := wire.RouteLookupResult{Domain: "example.com", Notes: []string{"ip_rules_unchecked"}}
-	got := withFirmwareLists(base, 2)
-	if got.FirmwareLists != 2 || !slices.Contains(got.Notes, lookupNoteFirmwareLists) || !slices.Contains(got.Notes, "ip_rules_unchecked") {
+	// Групп больше, чем правил awg-manager с backend=ndms: есть чужие списки.
+	got := withFirmwareLists(base, 3, 2)
+	if got.FirmwareLists != 3 || !slices.Contains(got.Notes, lookupNoteFirmwareLists) || !slices.Contains(got.Notes, "ip_rules_unchecked") {
 		t.Fatalf("с признаком: %+v", got)
 	}
-	if again := withFirmwareLists(got, 2); len(again.Notes) != len(got.Notes) {
+	if again := withFirmwareLists(got, 3, 2); len(again.Notes) != len(got.Notes) {
 		t.Fatalf("пометка задвоилась: %+v", again.Notes)
 	}
-	none := withFirmwareLists(base, 0)
+	none := withFirmwareLists(base, 0, 0)
 	if none.FirmwareLists != 0 || slices.Contains(none.Notes, lookupNoteFirmwareLists) {
 		t.Fatalf("без признака есть пометка: %+v", none)
+	}
+	// v0.56, ревью I2: N групп = N ndms-правил -- это группы самого
+	// awg-manager, а не чужие списки: пометки нет.
+	own := withFirmwareLists(base, 2, 2)
+	if own.FirmwareLists != 0 || slices.Contains(own.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("группы awg-manager приняты за чужие: %+v", own)
+	}
+	if fewer := withFirmwareLists(base, 1, 2); slices.Contains(fewer.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("групп меньше, чем ndms-правил, -- пометка: %+v", fewer)
+	}
+}
+
+func TestNDMSDNSRules_CountsOnlyNDMSBackend(t *testing.T) {
+	rules := []awgmgr.DNSRoute{
+		{ID: "a", Backend: "ndms", Enabled: true},
+		{ID: "b", Backend: "ndms", Enabled: false},
+		{ID: "c", Backend: "hydraroute", Enabled: true},
+		{ID: "d", Backend: "", Enabled: true},
+	}
+	if got := ndmsDNSRules(rules); got != 2 {
+		t.Fatalf("ndms-правил: %d, ждали 2", got)
 	}
 }

@@ -352,10 +352,18 @@ func noteRunningConfig(rc string) {
 
 // readDNSEndpoints читает апстримы DNS из running-config роутера.
 func readDNSEndpoints(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
+	return readDNSEndpointsVia(ctx, checks.OSExec{})
+}
+
+// readDNSEndpointsVia -- то же чтение через заданный запуск команд. Сбой
+// чтения сбрасывает признак списков прошивки в 0: число из прошлого
+// удачного чтения выдавалось бы за нынешнее (ревью v0.56, I2).
+func readDNSEndpointsVia(ctx context.Context, r keenetic.CmdRunner) ([]keenetic.DNSEndpoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	rc, err := keenetic.NDMC{Runner: checks.OSExec{}}.Show(ctx, "running-config")
+	rc, err := keenetic.NDMC{Runner: r}.Show(ctx, "running-config")
 	if err != nil {
+		firmwareSiteGroups.Store(0)
 		return nil, err
 	}
 	noteRunningConfig(rc)

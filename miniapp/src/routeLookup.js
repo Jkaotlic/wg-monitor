@@ -11,7 +11,9 @@ const NOTE_TEXT = {
   regexp_unchecked: 'Часть правил записана шаблоном — их не проверить',
   policies_unknown: 'Роутер не отдал общие наборы правил',
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
-  firmware_lists: 'На роутере есть собственные списки сайтов прошивки — они в эту проверку не входят',
+  // Агент ставит пометку, только когда групп сайтов в прошивке больше, чем
+  // правил «awg-manager», исполняемых прошивкой (ревью v0.56, I2).
+  firmware_lists: 'На роутере, похоже, есть списки сайтов прошивки, заведённые не через «awg-manager», — они в эту проверку не входят',
 }
 const GEO_EXPAND_FAILED = 'geo_expand_failed:'
 const EXIT_UNRECOGNIZED = 'exit_unrecognized:'
@@ -104,7 +106,9 @@ export function lookupAnswer(result) {
   // это ответ, догадка -- нет: здесь оговорка и warn, а не уверенное ok.
   const unchecked = codes.some((c) => c === 'regexp_unchecked' || (typeof c === 'string' && c.startsWith(GEO_EXPAND_FAILED)))
   const hedged = Boolean(r.by_default) && unchecked
-  const tone = codes.includes('hr_not_running') || codes.includes('firmware_lists') || hedged ? 'warn' : 'ok'
+  // Пометка о списках прошивки -- оговорка о полноте, а не тревога: тон
+  // нейтральный (ревью v0.56, I2).
+  const tone = codes.includes('hr_not_running') || hedged ? 'warn' : 'ok'
   const noRule = hedged
     ? `Правил для ${site} не нашлось, но часть правил проверить не удалось — сайт, скорее всего, пойдёт`
     : `Правил для ${site} нет — сайт пойдёт`
