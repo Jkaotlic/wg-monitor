@@ -89,10 +89,19 @@ func TestDNSRuDiagnoseDependsOnDNSAlert(t *testing.T) {
 	if !strings.Contains(alone, "общая проверка поиска сайтов молчит") {
 		t.Errorf("без аварии dns фраза должна остаться:\n%s", alone)
 	}
+	base.Check.Details["router_resolves"] = true
 	base.Neighbors = []NeighborSummary{{CheckName: "dns", Status: "hard"}}
 	both := FormatHard(base)
 	if strings.Contains(both, "поиска сайтов молчит") {
 		t.Errorf("при аварии dns фраза ложна:\n%s", both)
+	}
+	for _, lie := range []string{"не отвечают и другие", "не только русские"} {
+		if strings.Contains(both, lie) {
+			t.Errorf("взаимоисключающая фраза %q:\n%s", lie, both)
+		}
+	}
+	if !strings.Contains(both, "одна поломка, а не две") {
+		t.Errorf("нет «одна поломка»:\n%s", both)
 	}
 	if !strings.Contains(both, "тоже в аварии") {
 		t.Errorf("нет правды про обе проверки:\n%s", both)
