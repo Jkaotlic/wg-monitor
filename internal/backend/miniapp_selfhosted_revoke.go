@@ -17,6 +17,11 @@ import (
 type miniappSelfHostedInUse struct {
 	Router string `json:"router"`
 	Tunnel string `json:"tunnel"`
+	// Likely -- самое новое подключение роутера: «скорее всего, им». Остальные
+	// подключения того же роутера -- «возможно»: файл в личку выпускается под
+	// тем же именем, а выдача могла не дойти до роутера, так что по имени
+	// наверняка не сказать, какое из них несёт туннель.
+	Likely bool `json:"likely"`
 }
 
 type miniappSelfHostedClient struct {
@@ -28,13 +33,15 @@ type miniappSelfHostedClient struct {
 	InUse     *miniappSelfHostedInUse `json:"in_use"`
 }
 
-// miniappSelfHostedLiveTunnels -- для каждого подключения: какой роутер живёт
-// им прямо сейчас. Подключение выдано роутеру, если его имя «wgmon-<ник>-…»
-// (ClientNameBelongsTo), а у роутера есть VPN-туннель с именем
-// TunnelName(сервер, ник); из подключений роутера живёт последнее по времени --
-// каждая выдача заменяет туннель того же имени. Происхождения конфига для
-// своих серверов система не пишет, поэтому по имени, а не по таблице
-// происхождения. Роутеры без подходящих подключений не опрашиваются.
+// miniappSelfHostedLiveTunnels -- для каждого подключения: не живёт ли им
+// VPN-туннель роутера. Подключение выдано роутеру, если его имя «wgmon-<ник>-…»
+// (ClientNameBelongsTo). Если у роутера есть текущий VPN-туннель с именем
+// TunnelName(сервер, ник), помечаются ВСЕ подключения этого роутера: самое
+// новое -- Likely, остальные -- «возможно». Выбрать одно нельзя: файл в личку
+// (miniapp_send_conf.go) выпускается под тем же именем без импорта на роутер, а
+// импорт мог и не дойти -- туннель тогда несёт более раннее. Происхождения
+// конфига для своих серверов система не пишет, поэтому по имени. Роутеры без
+// подходящих подключений не опрашиваются.
 func miniappSelfHostedLiveTunnels(d Deps, instID string, clients []selfhostedamnezia.Client) map[string]miniappSelfHostedInUse {
 	out := map[string]miniappSelfHostedInUse{}
 	users, err := d.DB.Users().GetAll()
@@ -43,15 +50,17 @@ func miniappSelfHostedLiveTunnels(d Deps, instID string, clients []selfhostedamn
 	}
 	for _, u := range users {
 		newest := -1
+		var mine []int
 		for i, c := range clients {
 			if !selfhostedamnezia.ClientNameBelongsTo(c.Name, u.Nickname) {
 				continue
 			}
+			mine = append(mine, i)
 			if newest < 0 || !c.CreatedAt.Before(clients[newest].CreatedAt) {
 				newest = i
 			}
 		}
-		if newest < 0 {
+		if len(mine) == 0 {
 			continue
 		}
 		want := selfhostedamnezia.TunnelName(instID, u.Nickname)
@@ -61,7 +70,9 @@ func miniappSelfHostedLiveTunnels(d Deps, instID string, clients []selfhostedamn
 		}
 		for _, row := range miniappCurrentRows(d, u.ID, rows) {
 			if tu, ok := miniappTunnelFromEvent(row); ok && tu.Name == want {
-				out[clients[newest].PublicKey] = miniappSelfHostedInUse{Router: u.Nickname, Tunnel: want}
+				for _, i := range mine {
+					out[clients[i].PublicKey] = miniappSelfHostedInUse{Router: u.Nickname, Tunnel: want, Likely: i == newest}
+				}
 				break
 			}
 		}
@@ -127,7 +138,8 @@ func miniappSelfHostedRevokeHandler(d Deps) http.HandlerFunc {
 			miniappSelfHostedClientsError(d, w, "отзыв подключения", "selfhosted_revoke_failed", err)
 			return
 		}
-		// Ключ подключения в журнал не пишется: только имя и адрес.
+		// В успешной записи только имя и адрес. Открытый ключ подключения не секрет,
+		// но и в запись об успехе он не идёт.
 		miniappCabinetLogger(d).Info("свой сервер: подключение отозвано", "instance", id, "client", c.Name, "address", c.Address)
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -146,6 +158,8 @@ func miniappSelfHostedClientsError(d Deps, w http.ResponseWriter, op, failCode s
 	case errors.Is(err, selfhostedamnezia.ErrInstanceNotFound), errors.Is(err, selfhostedamnezia.ErrInstanceDisabled), errors.Is(err, selfhostedamnezia.ErrInstanceNotReady):
 		writeMiniappSelfHostedError(d, w, op, err)
 	default:
+		// Текст сбоя -- в журнал (в нём может быть открытый ключ подключения из
+		// команды; секретов там нет), наружу он не идёт.
 		miniappCabinetLogger(d).Warn("свой сервер: "+op+" не удался", "err", err)
 		writeMiniappCabinetError(w, http.StatusBadGateway, failCode)
 	}

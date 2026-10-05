@@ -334,6 +334,31 @@ func seedRevokeClients(t *testing.T, env *cabinetEnv, withTunnel bool) {
 	}
 }
 
+// Туннель поднят подключением A, затем админ взял файл в личку для того же
+// роутера -- появилось B (импорта не было). Отзыв A убил бы туннель, поэтому
+// предупреждение стоит и на A.
+func TestMiniappSelfHostedClientsFileToDMAfterImportStillWarnsOnOlder(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedRevokeClients(t, env, true)
+	rec := env.do(t, cabAdmin, http.MethodGet, "/v1/miniapp/selfhosted/dacha/clients", "")
+	var resp struct {
+		Clients []struct {
+			ID    string `json:"id"`
+			InUse *struct {
+				Likely bool `json:"likely"`
+			} `json:"in_use"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Clients {
+		if c.ID == revKeyA && (c.InUse == nil || c.InUse.Likely) {
+			t.Fatalf("у прежнего подключения нет предупреждения «возможно»: %s", rec.Body.String())
+		}
+	}
+}
+
 func TestMiniappSelfHostedClientsListWarnsAboutLiveTunnel(t *testing.T) {
 	env := newCabinetEnv(t)
 	seedRevokeClients(t, env, true)
@@ -349,17 +374,23 @@ func TestMiniappSelfHostedClientsListWarnsAboutLiveTunnel(t *testing.T) {
 			InUse   *struct {
 				Router string `json:"router"`
 				Tunnel string `json:"tunnel"`
+				Likely bool   `json:"likely"`
 			} `json:"in_use"`
 		} `json:"clients"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Clients) != 3 {
 		t.Fatalf("%v %s", err, rec.Body.String())
 	}
-	// Живёт туннель только последним подключением роутера; прежнее и чужое -- нет.
+	// Туннель роутера жив: помечены ВСЕ его подключения (файл в личку выдаётся
+	// под тем же именем, и по имени не сказать, какое несёт туннель). Самое
+	// новое -- «скорее всего», прежнее -- «возможно»; чужое не помечено.
 	for _, c := range resp.Clients {
-		wantUse := c.ID == revKeyB
+		wantUse := c.ID == revKeyA || c.ID == revKeyB
 		if (c.InUse != nil) != wantUse {
 			t.Errorf("%s: in_use=%v, ждали %v", c.Name, c.InUse, wantUse)
+		}
+		if c.InUse != nil && c.InUse.Likely != (c.ID == revKeyB) {
+			t.Errorf("%s: likely=%v", c.Name, c.InUse.Likely)
 		}
 		if c.InUse != nil && (c.InUse.Router != "router-owned" || c.InUse.Tunnel != selfhostedamnezia.TunnelName("dacha", "router-owned")) {
 			t.Errorf("in_use: %+v", c.InUse)

@@ -15,6 +15,8 @@ type revokeRunner struct {
 	files map[string][]byte
 	wg    [][]string
 	wgErr error
+	// failWrite -- путь файла, запись которого падает (пока не очищен).
+	failWrite string
 }
 
 const (
@@ -41,6 +43,9 @@ func (r *revokeRunner) Run(_ context.Context, args []string, stdin []byte) ([]by
 	case len(args) >= 2 && args[0] == "cat":
 		return append([]byte{}, r.files[args[1]]...), nil
 	case len(args) >= 5 && args[0] == "sh":
+		if r.failWrite != "" && args[4] == r.failWrite+".wgmon.tmp" {
+			return nil, errors.New("disk full")
+		}
 		r.files[args[4]] = append([]byte{}, stdin...)
 	case len(args) >= 4 && args[0] == "mv":
 		r.files[args[3]] = r.files[args[2]]
@@ -171,5 +176,48 @@ func TestClientNameBelongsTo(t *testing.T) {
 		if got := ClientNameBelongsTo(c.name, c.nick); got != c.want {
 			t.Errorf("%q / %q: %v, ждали %v", c.name, c.nick, got, c.want)
 		}
+	}
+}
+
+// Частичный отзыв: wg прошёл, дальше запись упала -- повтор дочищает остальное.
+func TestRevokePartialFailuresAreCompletedByRetry(t *testing.T) {
+	cases := []struct {
+		name, failPath string
+		check          func(t *testing.T, r *revokeRunner)
+	}{
+		{"конфиг не записался", "/opt/amnezia/awg/awg0.conf", func(t *testing.T, r *revokeRunner) {
+			if !strings.Contains(string(r.files["/opt/amnezia/awg/awg0.conf"]), pubA) || !strings.Contains(string(r.files["/opt/amnezia/awg/clientsTable"]), pubA) {
+				t.Fatal("после сбоя файлы должны быть целы")
+			}
+		}},
+		{"конфиг записан, таблица нет", "/opt/amnezia/awg/clientsTable", func(t *testing.T, r *revokeRunner) {
+			if strings.Contains(string(r.files["/opt/amnezia/awg/awg0.conf"]), pubA) || !strings.Contains(string(r.files["/opt/amnezia/awg/clientsTable"]), pubA) {
+				t.Fatal("конфиг должен быть записан, таблица -- нет")
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRevokeRunner()
+			s := revokeService(t, r)
+			r.failWrite = tc.failPath
+			if _, _, err := s.Revoke(context.Background(), "home", pubA); err == nil {
+				t.Fatal("ждали ошибку записи")
+			}
+			if len(r.wg) != 1 {
+				t.Fatalf("wg до сбоя записи должен пройти: %v", r.wg)
+			}
+			tc.check(t, r)
+			r.failWrite = ""
+			if _, _, err := s.Revoke(context.Background(), "home", pubA); err != nil {
+				t.Fatalf("повтор: %v", err)
+			}
+			if strings.Contains(string(r.files["/opt/amnezia/awg/awg0.conf"]), pubA) || strings.Contains(string(r.files["/opt/amnezia/awg/clientsTable"]), pubA) {
+				t.Fatal("после повтора подключение осталось в файлах")
+			}
+			if !strings.Contains(string(r.files["/opt/amnezia/awg/awg0.conf"]), pubB) || !strings.Contains(string(r.files["/opt/amnezia/awg/clientsTable"]), pubB) {
+				t.Fatal("повтор задел чужое подключение")
+			}
+		})
 	}
 }
