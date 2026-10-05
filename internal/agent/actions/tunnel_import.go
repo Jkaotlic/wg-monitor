@@ -290,7 +290,11 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 
 	// Determine preferred backend from existing tunnels so the new tunnel
 	// uses the same backend (e.g. nativewg) rather than the system default.
-	backend := preferredBackend(ctx, client, requestedBackend)
+	// Замене по target_id бэкенд не нужен: он берётся у самого туннеля.
+	backend := ""
+	if targetID == "" {
+		backend = preferredBackend(ctx, client, requestedBackend)
+	}
 
 	var result strings.Builder
 	var newID string
@@ -318,8 +322,17 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 			slog.Warn("tunnel import failed", "target_id", targetID, "stage", "replace", "err", err)
 			return "", fmt.Errorf("replace tunnel: %w", err)
 		}
-		newID = newTun.ID
-		fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", target.Name, newTun.ID)
+		// Замена обязана остаться в том же туннеле: на его id держатся наборы
+		// правил и настройка автопочинки. Другой id -- это уже не «на месте».
+		// Пустой id -- awg-manager его не назвал; замена шла по id в адресе.
+		switch newTun.ID {
+		case "", target.ID:
+			newID = target.ID
+		default:
+			slog.Warn("tunnel import failed", "target_id", targetID, "stage", "replace-id", "got_id", newTun.ID)
+			return "", fmt.Errorf("tunnel_import: replace of %s returned another tunnel id %s", target.ID, newTun.ID)
+		}
+		fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", target.Name, newID)
 	} else if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -388,12 +401,18 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 	}
 
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {
-		if imported, ferr := findTunnelByID(ctx, client, newID); ferr == nil && tunnelLooksStarted(*imported) {
-			if changed, perr := addTunnelToHydraRoutePolicies(ctx, client, *imported); perr != nil {
-				slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
-				fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
-			} else if changed > 0 {
-				fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s targets=%d", imported.InterfaceName, changed)
+		// Замена по target_id наборов правил не трогает: членство в них -- по
+		// id туннеля, а он тот же. Дописать туннель во все политики HydraRoute
+		// Neo значило бы вернуть его туда, откуда человек его убрал. Перезапуск
+		// ниже подхватит новый конфиг.
+		if targetID == "" {
+			if imported, ferr := findTunnelByID(ctx, client, newID); ferr == nil && tunnelLooksStarted(*imported) {
+				if changed, perr := addTunnelToHydraRoutePolicies(ctx, client, *imported); perr != nil {
+					slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
+					fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
+				} else if changed > 0 {
+					fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s targets=%d", imported.InterfaceName, changed)
+				}
 			}
 		}
 		out, execErr := exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")

@@ -311,3 +311,79 @@ func TestImportTunnel_TargetIDKeepsBackend(t *testing.T) {
 		t.Fatalf("бэкенд в replace = %q, want kernel", f.replaceBack)
 	}
 }
+
+// targetHRServer -- awg-manager с HydraRoute Neo: пишет каждый путь, который
+// дёрнули. replaceID -- что replace вернёт как id нового туннеля.
+func targetHRServer(t *testing.T, replaceID string) (*[]string, *httptest.Server) {
+	t.Helper()
+	var paths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg12","name":"Нидерланды","interfaceName":"opkgtun12","ndmsName":"OpkgTun12","enabled":true,"status":"running","backend":"kernel"}]}}`))
+	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"` + replaceID + `","name":"Нидерланды"}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:Video","name":"Video","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["nwg1"]}]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/update", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return &paths, srv
+}
+
+// Замена на месте не трогает наборы правил: членство в них -- по id туннеля,
+// а id тот же. Дописывание туннеля во все политики HydraRoute Neo добавило бы
+// его туда, откуда человек его убрал. Перезапуск HydraRoute Neo остаётся.
+func TestImportTunnel_TargetIDLeavesPolicies(t *testing.T) {
+	paths, srv := targetHRServer(t, "awg12")
+	var execs []string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		execs = append(execs, strings.Join(append([]string{name}, args...), " "))
+		return []byte("ok"), nil
+	}
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "amnezia_nl", true, "", "awg12")
+	if err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	for _, p := range *paths {
+		if strings.HasPrefix(p, "/api/routing/") || p == "/api/dns-routes/update" || p == "/api/dns-routes/list" {
+			t.Fatalf("замена на месте полезла в наборы правил: %s (все пути %v)", p, *paths)
+		}
+	}
+	if len(execs) != 1 || execs[0] != "/opt/etc/init.d/S99hrneo restart" {
+		t.Fatalf("перезапуск HydraRoute Neo: %+v", execs)
+	}
+}
+
+// awg-manager вернул после замены другой id -- это уже не «тот же туннель»:
+// ошибка, а не тихий успех.
+func TestImportTunnel_TargetIDMismatchFails(t *testing.T) {
+	_, srv := targetHRServer(t, "awg77")
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil }
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	_, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "amnezia_nl", true, "", "awg12")
+	if err == nil || !strings.Contains(err.Error(), "awg77") {
+		t.Fatalf("err = %v, ждали ошибку про чужой id", err)
+	}
+}
