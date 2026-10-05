@@ -93,7 +93,9 @@ export function backupFor(snapshot, tunnelID) {
     if (!links.some((i) => i.tunnel_id === tunnelID) && p.active_tunnel_id !== tunnelID) continue
     if (links.length > 0 && links[0].tunnel_id !== tunnelID && links.some((i) => i.tunnel_id === tunnelID)) {
       const activeID = p.active_tunnel_id || links.find((i) => i.role === 'active')?.tunnel_id
-      if (activeID === tunnelID) return { known: true, name: '', carrier: '', reserve: true, self: true }
+      // Несёт трафик сам -- только если сам жив: иначе он и есть «нет рабочего».
+      const selfLink = links.find((i) => i.tunnel_id === tunnelID)
+      if (activeID === tunnelID && selfLink && alive(selfLink)) return { known: true, name: '', carrier: '', reserve: true, self: true }
       const live = (i) => i.tunnel_id !== tunnelID && alive(i)
       const carrier = links.find((i) => i.tunnel_id === activeID && live(i)) || links.find(live)
       return { known: true, name: '', carrier: carrier ? nameOf(carrier) : '', reserve: true, self: false }

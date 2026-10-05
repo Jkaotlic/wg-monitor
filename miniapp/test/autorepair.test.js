@@ -121,6 +121,11 @@ describe('backupFor', () => {
     const s = { tunnels: tun, policies: [{ active_tunnel_id: 'b', interfaces: [{ tunnel_id: 'a', role: 'fallback', available: true }, { tunnel_id: 'b', role: 'active', available: true }] }] }
     expect(backupFor(s, 'b')).toEqual({ known: true, name: '', carrier: '', reserve: true, self: true })
   })
+  it('резерв несёт трафик сам, но его проверка провалена -- «нет рабочего», а не «через него самого»', () => {
+    const tun = [{ id: 'a', name: 'vpn-nl', status: 'dead' }, { id: 'b', name: 'vpn-de', status: 'dead' }]
+    const s = { tunnels: tun, policies: [{ active_tunnel_id: 'b', interfaces: [{ tunnel_id: 'a', role: 'fallback', available: true }, { tunnel_id: 'b', role: 'active', available: true }] }] }
+    expect(backupFor(s, 'b')).toEqual({ known: true, name: '', carrier: '', reserve: true, self: false })
+  })
   it('нет снимка -- не знаем', () => {
     expect(backupFor(null, 'a')).toEqual({ known: false, name: '', carrier: '', reserve: false, self: false })
     expect(backupFor({ tunnels: [] }, 'a')).toEqual({ known: false, name: '', carrier: '', reserve: false, self: false })
