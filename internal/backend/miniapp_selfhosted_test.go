@@ -320,6 +320,12 @@ func TestMiniappSelfHostedHostKey(t *testing.T) {
 	if rec.Code != http.StatusNoContent || env.vps.instances[0].SSHHostKey != pending || env.vps.instances[0].SSHHostKeyPending != "" {
 		t.Fatalf("подтверждение: %d %s %+v", rec.Code, rec.Body.String(), env.vps.instances[0])
 	}
+	// Ожидающего больше нет -- подтверждать нечего, отдельными словами.
+	rec = env.do(t, cabAdmin, http.MethodPost, confirm, `{"confirm":"Дом","fingerprint":"`+pending+`"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "host_key_nothing_pending" ||
+		msg != "Подтверждать нечего — ключ сервера уже доверенный или сменился адрес" {
+		t.Fatalf("подтверждение без ожидающего: %d %s", rec.Code, rec.Body.String())
+	}
 
 	env.vps.issueErr = &selfhostedamnezia.HostKeyChangedError{Label: "Дом"}
 	rec = env.do(t, cabAdmin, http.MethodPost, sendConfPath, `{"provider":"selfhosted","instance_id":"dacha"}`)

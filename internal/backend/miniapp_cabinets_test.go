@@ -157,7 +157,10 @@ func (f *fakeSelfHosted) ConfirmHostKey(id, fingerprint string) error {
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
 	inst := &f.instances[i]
-	if inst.SSHHostKeyPending == "" || inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
+	if inst.SSHHostKeyPending == "" {
+		return selfhostedamnezia.ErrHostKeyNothingPending
+	}
+	if inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
 		return selfhostedamnezia.ErrHostKeyNotPending
 	}
 	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = inst.SSHHostKeyPending, "", time.Time{}

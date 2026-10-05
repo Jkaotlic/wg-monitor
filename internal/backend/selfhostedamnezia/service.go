@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"regexp"
@@ -27,6 +28,7 @@ type Service struct {
 	legacy    Config
 	newRunner func(Config, HostKeyPolicy) Runner
 	now       func() time.Time
+	log       *slog.Logger // nil -- slog.Default()
 
 	storeMu   sync.Mutex
 	instLocks sync.Map // id -> *sync.Mutex

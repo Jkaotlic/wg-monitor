@@ -3,6 +3,7 @@ package selfhostedamnezia
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -36,10 +37,15 @@ func (e *HostKeyChangedError) Unwrap() error { return ErrHostKeyChanged }
 // предъявил последним (или ожидающего нет вовсе): доверие не меняется.
 var ErrHostKeyNotPending = errors.New("host key fingerprint is not the pending one")
 
+// ErrHostKeyNothingPending -- подтверждать нечего: ожидающего ключа нет
+// (доверенный уже совпадает с сервером или адрес SSH сменился).
+var ErrHostKeyNothingPending = errors.New("no pending host key to confirm")
+
 // HostKeyPolicy -- чего ждать от ключа хоста. Known -- запомненный отпечаток
 // («SHA256:…»); пусто -- первый вход, предъявленный ключ запоминает Remember,
 // но только после удачного входа по паролю. Refused -- куда записать
-// отпечаток, получивший отказ (ожидающий подтверждения, v0.56, C1).
+// отпечаток, получивший отказ (ожидающий подтверждения, v0.56, C1). Matched --
+// вход с доверенным ключом удался: устаревший ожидающий стирается.
 //
 // Один раннер -- несколько входов (выпуск читает четыре файла, каждый --
 // отдельный вход). pinned -- общий для копий политики отпечаток, который
@@ -49,6 +55,7 @@ type HostKeyPolicy struct {
 	Known    string
 	Remember func(fingerprint string) error
 	Refused  func(fingerprint string) error
+	Matched  func(fingerprint string) error
 	pinned   *pinnedHostKey
 }
 
@@ -107,9 +114,17 @@ func (c *hostKeyCheck) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
 	return nil
 }
 
-// remember -- после удачного входа: первый ключ записывается.
+// remember -- после удачного входа: первый ключ записывается; совпал
+// доверенный -- устаревший ожидающий стирается (сбой стирания вход не валит:
+// ключ проверен, Matched сам пишет в журнал).
 func (c *hostKeyCheck) remember() error {
-	if c.known != "" || c.seen == "" {
+	if c.seen == "" {
+		return nil
+	}
+	if c.known != "" {
+		if c.seen == c.known && c.policy.Matched != nil {
+			_ = c.policy.Matched(c.seen)
+		}
 		return nil
 	}
 	if err := c.policy.Remember(c.seen); err != nil {
@@ -127,8 +142,21 @@ func (s *Service) hostKeyPolicy(inst Instance) HostKeyPolicy {
 		Remember: func(fp string) error {
 			return s.rememberHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
 		},
+		// Сбой записи ожидающего не молчит: карточке тогда нечего
+		// подтвердить, а входы стоят -- админ должен увидеть причину в журнале.
 		Refused: func(fp string) error {
-			return s.rememberPendingHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
+			err := s.rememberPendingHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
+			if err != nil {
+				s.logger().Error("свой сервер: ожидающий ключ хоста не записан", "instance", inst.ID, "fingerprint", fp, "err", err)
+			}
+			return err
+		},
+		Matched: func(fp string) error {
+			err := s.clearPendingHostKey(inst.ID, inst.SSHHost, inst.SSHPort, fp)
+			if err != nil {
+				s.logger().Error("свой сервер: устаревший ожидающий ключ хоста не стёрт", "instance", inst.ID, "err", err)
+			}
+			return err
 		},
 	}
 }
@@ -192,10 +220,43 @@ func (s *Service) rememberPendingHostKey(id, host string, port int, fp string) e
 	return err
 }
 
+// clearPendingHostKey стирает ожидающий после удачного входа с доверенным
+// ключом fp: сервер снова предъявляет прежний ключ, подтверждать нечего.
+// Ожидающего нет, адрес/порт сменили или доверенный уже другой -- файл не
+// пишется.
+func (s *Service) clearPendingHostKey(id, host string, port int, fp string) error {
+	err := s.update(func(st *Store) error {
+		for i := range st.Instances {
+			inst := &st.Instances[i]
+			if inst.ID != id {
+				continue
+			}
+			if inst.SSHHostKeyPending == "" || inst.SSHHost != host || inst.SSHPort != port || inst.SSHHostKey != fp {
+				return errUnchanged
+			}
+			inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", time.Time{}
+			return nil
+		}
+		return errUnchanged
+	})
+	if errors.Is(err, errUnchanged) {
+		return nil
+	}
+	return err
+}
+
+func (s *Service) logger() *slog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return slog.Default()
+}
+
 // ConfirmHostKey -- «Подтвердить ключ сервера SHA256:…» (v0.56, C1): админ
 // подтверждает именно тот отпечаток, что видел в карточке. Он должен совпасть
-// с ожидающим -- тогда становится доверенным, ожидающий стирается. Иначе
-// ErrHostKeyNotPending и ничего не меняется. Право и подтверждение именем --
+// с ожидающим -- тогда становится доверенным, ожидающий стирается. Не
+// совпал -- ErrHostKeyNotPending, ожидающего нет -- ErrHostKeyNothingPending;
+// ничего не меняется. Право и подтверждение именем --
 // на стороне обработчика.
 func (s *Service) ConfirmHostKey(id, fingerprint string) error {
 	id = strings.ToLower(strings.TrimSpace(id))
@@ -206,7 +267,10 @@ func (s *Service) ConfirmHostKey(id, fingerprint string) error {
 			if inst.ID != id {
 				continue
 			}
-			if inst.SSHHostKeyPending == "" || fingerprint != inst.SSHHostKeyPending {
+			if inst.SSHHostKeyPending == "" {
+				return ErrHostKeyNothingPending
+			}
+			if fingerprint != inst.SSHHostKeyPending {
 				return ErrHostKeyNotPending
 			}
 			inst.SSHHostKey = fingerprint

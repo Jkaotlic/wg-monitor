@@ -196,13 +196,13 @@ func (s *sandboxSelfHosted) Check(_ context.Context, id string) (selfhostedamnez
 		s.mu.Unlock()
 		return selfhostedamnezia.CheckResult{OK: false, Message: (&selfhostedamnezia.HostKeyChangedError{Label: inst.Label}).Error()}, nil
 	}
-	if inst.SSHHostKey == "" {
-		s.mu.Lock()
-		if j := s.index(id); j >= 0 {
-			s.instances[j].SSHHostKey = presented
-		}
-		s.mu.Unlock()
+	// Первый вход запоминает ключ; вход с доверенным стирает устаревший ожидающий.
+	s.mu.Lock()
+	if j := s.index(id); j >= 0 {
+		s.instances[j].SSHHostKey = presented
+		s.instances[j].SSHHostKeyPending, s.instances[j].SSHHostKeyPendingAt = "", time.Time{}
 	}
+	s.mu.Unlock()
 	return selfhostedamnezia.CheckResult{OK: true, Message: "Подключение есть: контейнер «amnezia-awg2» отвечает"}, nil
 }
 
@@ -214,7 +214,10 @@ func (s *sandboxSelfHosted) ConfirmHostKey(id, fingerprint string) error {
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
 	inst := &s.instances[i]
-	if inst.SSHHostKeyPending == "" || inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
+	if inst.SSHHostKeyPending == "" {
+		return selfhostedamnezia.ErrHostKeyNothingPending
+	}
+	if inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
 		return selfhostedamnezia.ErrHostKeyNotPending
 	}
 	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = inst.SSHHostKeyPending, "", time.Time{}
