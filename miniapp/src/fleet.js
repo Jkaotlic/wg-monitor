@@ -88,16 +88,32 @@ export function batchProgress(state) {
 // Сводка парка для широкого экрана, когда роутер не выбран: три числа и
 // карточки того, что требует рук. Молчащий -- отдельно от тревоги: у
 // тревоги есть что чинить, у молчащего сначала надо вернуть связь.
-function bucket(router) {
+// Корзина роутера -- одна на плитки сводки и чипы фильтра (A1.6): корзина по
+// тому же статусу, что подпись строки (reachStatus), -- молчащая тревога лежит
+// там, где её подписывает пилюля: «спит» у спящего, «молчит» у выключенного.
+// Роутер без единого отчёта -- «молчит», какой бы статус ни стоял.
+export function routerBucket(router) {
   if (router?.last_seen_age_sec == null) return 'silent'
-  if (isStale(router)) return 'silent'
-  if (router.status === 'alert') return 'attention'
-  return 'ok'
+  switch (reachStatus(router)) {
+    case 'alert':
+      return 'alert'
+    case 'online':
+      return 'online'
+    case 'sleeping':
+      return 'sleeping'
+    default:
+      return 'silent'
+  }
+}
+
+function bucket(router) {
+  const b = routerBucket(router)
+  return b === 'alert' ? 'attention' : b === 'online' ? 'ok' : b
 }
 
 export function fleetSummary(routers = []) {
   const sorted = sortByUrgency(routers)
-  const out = { total: sorted.length, ok: 0, attention: 0, silent: 0, broken: [] }
+  const out = { total: sorted.length, ok: 0, attention: 0, sleeping: 0, silent: 0, broken: [] }
   for (const r of sorted) {
     const b = bucket(r)
     out[b]++
@@ -112,6 +128,7 @@ export function fleetSummary(routers = []) {
 export function stateCountLabel(kind, n) {
   if (kind === 'ok') return 'в порядке'
   if (kind === 'attention') return pluralRu(n, 'тревога', 'тревоги', 'тревог')
+  if (kind === 'sleeping') return pluralRu(n, 'спит', 'спят', 'спят')
   return pluralRu(n, 'молчит', 'молчат', 'молчат')
 }
 
@@ -119,10 +136,11 @@ export function stateCountLabel(kind, n) {
 export function fleetSummaryLine(s) {
   const total = s?.total ?? 0
   if (!total) return 'Роутеров пока нет.'
-  if (!s.attention && !s.silent) return total === 1 ? 'Роутер в порядке.' : `Все ${total} в порядке.`
+  if (!s.attention && !s.silent && !s.sleeping) return total === 1 ? 'Роутер в порядке.' : `Все ${total} в порядке.`
   const parts = []
   if (s.attention) parts.push(`${s.attention} ${stateCountLabel('attention', s.attention)}`)
   if (s.silent) parts.push(`${s.silent} ${stateCountLabel('silent', s.silent)}`)
+  if (s.sleeping) parts.push(`${s.sleeping} ${stateCountLabel('sleeping', s.sleeping)}`)
   if (s.ok) parts.push(`${s.ok} ${stateCountLabel('ok', s.ok)}`)
   return `${total} ${pluralRu(total, 'роутер', 'роутера', 'роутеров')}: ${parts.join(', ')}.`
 }

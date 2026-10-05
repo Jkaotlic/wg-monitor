@@ -29,6 +29,12 @@ describe('один словарь состояний (спека п. 2.3)', () =
       r({ id: 4 }),
     ])
     expect(fleetSummaryLine(mixed)).toBe('4 роутера: 1 тревога, 2 молчат, 1 в порядке.')
+    const withSleeper = fleetSummary([
+      r({ id: 1, status: 'sleeping', last_seen_age_sec: 3600 }),
+      r({ id: 2, status: 'offline', last_seen_age_sec: 9000 }),
+      r({ id: 3 }),
+    ])
+    expect(fleetSummaryLine(withSleeper)).toBe('3 роутера: 1 молчит, 1 спит, 1 в порядке.')
     expect(fleetSummaryLine(fleetSummary([]))).toBe('Роутеров пока нет.')
   })
 })

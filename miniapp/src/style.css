@@ -2994,7 +2994,7 @@ body {
    (@media ниже). */
 .fleet-counts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--fleet-count-cols, 3), minmax(0, 1fr));
   gap: var(--sp-2);
   margin-bottom: var(--sp-3);
 }
@@ -3012,6 +3012,7 @@ body {
 
 .fleet-count-ok { border-top-color: var(--ok); }
 .fleet-count-attention { border-top-color: var(--bad); }
+.fleet-count-sleeping { border-top-color: var(--warn); }
 .fleet-count-silent { border-top-color: var(--warn); }
 
 .fleet-count-value {
@@ -4792,7 +4793,7 @@ body {
   /* --- Сводка парка --- */
   .fleet-counts {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--fleet-count-cols, 3), minmax(0, 1fr));
     gap: var(--sp-4);
   }
 
@@ -4809,6 +4810,7 @@ body {
 
   .fleet-count-ok { border-top-color: var(--ok); }
   .fleet-count-attention { border-top-color: var(--bad); }
+  .fleet-count-sleeping { border-top-color: var(--warn); }
   .fleet-count-silent { border-top-color: var(--warn); }
 
   .fleet-count-value {
