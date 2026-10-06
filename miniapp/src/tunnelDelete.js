@@ -43,7 +43,7 @@ export function tunnelList(snapshot, incidents = []) {
   const alarmed = new Set((incidents ?? []).map((i) => i?.check_name).filter((n) => typeof n === 'string' && n.startsWith('tunnel_')).map((n) => n.slice('tunnel_'.length)))
   return tunnelRows(snapshot)
     .filter((r) => isManaged(r.type))
-    .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id), alarmed.has(r.id)) }))
+    .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id), alarmed.has(r.id) || Boolean(meta.get(r.id)?.alarm_open)) }))
 }
 
 // Счёт для вкладки -- ТЕМ ЖЕ определением, что на «Роутере» и «Проверках»:

@@ -7,6 +7,7 @@
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
 import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 import { withSnapshotCarrier } from './trafficPath.js'
+import { ALARM_OPEN_LABEL } from './tunnelDelete.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -24,11 +25,13 @@ function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
   // или сервер сказал carrier_alive=false): трафик в него уходит и теряется --
   // «Работает сейчас» было бы неправдой.
   if (link.tunnel_id && link.tunnel_id === activeTunnelID) {
-    if (live === 'down' || carrierDead) return 'activeDown'
+    if (live === 'down' || carrierDead || tunnel?.alarm_open) return 'activeDown'
     // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
     // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
     return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
   }
+  // Тревога открыта, проверка уже ok: «отвечает» сказать нельзя.
+  if (tunnel?.alarm_open) return 'down'
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
   if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
@@ -82,7 +85,7 @@ function chainOf(policy, byID, activeTunnelID, opts) {
       code: link.tunnel_id || link.bind,
       bind: link.bind,
       role,
-      note: ROLE_NOTE[role],
+      note: tunnel?.alarm_open && (role === 'down' || role === 'activeDown') ? ALARM_OPEN_LABEL : ROLE_NOTE[role],
       handshakeAgeSec: role === 'active' ? age : null,
       // Имя NDMS-интерфейса -- единственный способ включить или выключить
       // туннель (агент делает это ndmc'ом). Пусто у opkg-туннелей: их в NDMS
@@ -188,7 +191,9 @@ export function tunnelsView(snapshot, serverTraffic) {
     code: activeTunnel.id,
     iface: activeTunnel.iface ?? '',
     // Сервер сказал «не отвечает» -- карточка не скажет «поднят».
-    live: carrierDead ? 'down' : tunnelLive(activeTunnel),
+    live: carrierDead || activeTunnel.alarm_open ? 'down' : tunnelLive(activeTunnel),
+    // Тревога открыта, а последняя проверка ok: слова героя -- те же, что в списке.
+    alarmOpen: Boolean(activeTunnel.alarm_open),
     checkUnknown: Boolean(activeTunnel.verdict_unknown),
     // Проверка пришла, но ничего не проверила (unknown, v0.46).
     unverified: Boolean(activeTunnel.check_unverified),

@@ -83,6 +83,19 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
   }
 }
 
+// Открытая тревога по VPN-туннелю (снимается за 2-3 удачных отчёта): метка
+// alarm_open на снимке -- одна на экран VPN-туннеля, героя и цепочку вкладки.
+// Список и счёт читают те же тревоги напрямую. Выключенный настройкой не
+// трогаем, уже упавший -- тоже: он и так «не отвечает».
+export function withOpenAlarms(snapshot, incidents) {
+  const names = new Set((incidents ?? []).map((i) => i?.check_name).filter((n) => typeof n === 'string'))
+  if (!snapshot || names.size === 0 || !Array.isArray(snapshot.tunnels)) return snapshot
+  return {
+    ...snapshot,
+    tunnels: snapshot.tunnels.map((t) => (names.has(`tunnel_${t.id}`) && tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, alarm_open: true } : t)),
+  }
+}
+
 // Последний снимок маршрутов каждого роутера, который видело приложение
 // (вкладки «VPN-туннели» и «Маршруты»). Экран «Роутер» снимок сам не
 // спрашивает -- это команда роутеру; но когда сервер несущего не знает, он

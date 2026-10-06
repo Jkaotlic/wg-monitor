@@ -4,10 +4,10 @@ import { useCommand } from '../useCommand.js'
 import { fetchRouterSettings, fetchRouterChecksWithIncidents, fetchAwg3Issuable, listAutorepair } from '../api.js'
 import { autorepairBadge } from '../autorepair.js'
 import { Pill } from '../ui/Pill.jsx'
-import { parseRouteSnapshot, rememberCommandSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
+import { parseRouteSnapshot, rememberCommandSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict, withOpenAlarms } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, tunnelsTabSummary } from '../tunnelDelete.js'
+import { tunnelList, tunnelsTabSummary, ALARM_OPEN_LABEL } from '../tunnelDelete.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
@@ -225,7 +225,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     }
   }, [routerID, result])
 
-  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
+  const shown = withOpenAlarms(withCheckVerdict(snapshot, checks, { failed: checksFailed }), checks?.incidents)
   // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
   // traffic из того же ответа /events, что и проверки.
   const view = tunnelsView(shown, checks?.traffic)
@@ -376,7 +376,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
             {view.active.live === 'down' ? (
-              <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
+              <StateTag tone="danger">{view.active.alarmOpen ? ALARM_OPEN_LABEL : 'VPN-туннель не отвечает'}</StateTag>
             ) : view.active.checkUnknown ? (
               <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
             ) : view.active.unverified ? (
@@ -398,6 +398,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 note={
                   view.active.handshakeAgeSec == null
                     ? 'роутер не сообщил'
+                    : view.active.alarmOpen
+                      ? 'назад, тревога ещё открыта'
                     : view.active.live === 'down'
                       ? 'назад, но трафик не проходит'
                       : view.active.checkUnknown
