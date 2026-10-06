@@ -7,6 +7,7 @@
 // Пока экран только показывает.
 
 import { rulesCount, pluralRu } from './labels.js'
+import { withSnapshotCarrier } from './trafficPath.js'
 
 // Жив ли туннель прямо сейчас. Судить об этом можно ТОЛЬКО по status:
 // поле enabled в снимке отвечает на другой вопрос -- годится ли интерфейс
@@ -61,10 +62,18 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
   // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
   // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
   const unchecked = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
-  if (!snapshot || (failing.size === 0 && unchecked.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
+  // И в обратную сторону (Fix 3 v0.56): последняя проверка -- ok и роутер в
+  // ней сказал running, а снимок маршрутов -- «down». Проверки и счёт зовут
+  // его работающим; строка, «Порядок подхвата» и «Маршруты» -- тоже.
+  // Выключенный настройкой не трогаем.
+  const passing = new Set(
+    (events?.tunnels ?? []).filter((t) => t?.status === 'ok' && t?.run_state === 'running').map((t) => t.tunnel_id),
+  )
+  if (!snapshot || (failing.size === 0 && unchecked.size === 0 && passing.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
+      if (passing.has(t.id) && tunnelLive(t) === 'down' && !tunnelSwitchedOff(t)) return { ...t, status: 'running', check_ok: true }
       if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
       // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
       if (failing.has(t.id)) return { ...t, status: 'dead', check_failed: true }
@@ -72,6 +81,48 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
       return t
     }),
   }
+}
+
+// Открытая тревога по VPN-туннелю (снимается за 2-3 удачных отчёта): метка
+// alarm_open на снимке -- одна на экран VPN-туннеля, героя и цепочку вкладки.
+// Список и счёт читают те же тревоги напрямую. Выключенный настройкой не
+// трогаем, уже упавший -- тоже: он и так «не отвечает».
+export function withOpenAlarms(snapshot, incidents) {
+  const names = new Set((incidents ?? []).map((i) => i?.check_name).filter((n) => typeof n === 'string'))
+  if (!snapshot || names.size === 0 || !Array.isArray(snapshot.tunnels)) return snapshot
+  return {
+    ...snapshot,
+    tunnels: snapshot.tunnels.map((t) => (names.has(`tunnel_${t.id}`) && tunnelLive(t) === 'up' && !tunnelSwitchedOff(t) ? { ...t, alarm_open: true } : t)),
+  }
+}
+
+// Последний снимок маршрутов каждого роутера, который видело приложение
+// (вкладки «VPN-туннели» и «Маршруты»). Экран «Роутер» снимок сам не
+// спрашивает -- это команда роутеру; но когда сервер несущего не знает, он
+// берёт активное звено из недавнего снимка, чтобы назвать того же, что
+// вкладка (B1, withSnapshotCarrier).
+const ROUTE_SNAPSHOT_MAX_AGE_MS = 2 * 60_000
+const routeSnapshots = new Map()
+
+export function rememberRouteSnapshot(routerID, snapshot, now = Date.now()) {
+  if (routerID == null || !snapshot) return
+  routeSnapshots.set(String(routerID), { snapshot, at: now })
+}
+
+// Ответ route_status ложится в кеш под роутером, ДЛЯ КОТОРОГО его спрашивали
+// (useCommand ставит его в result.for_router), а не под открытый сейчас:
+// опоздавший ответ прошлого роутера иначе лёг бы под id нового. Возвращает
+// true, если ответ -- про открытый сейчас роутер и его можно показывать.
+export function rememberCommandSnapshot(currentRouterID, result, snapshot, now = Date.now()) {
+  const owner = result?.for_router ?? currentRouterID
+  rememberRouteSnapshot(owner, snapshot, now)
+  return String(owner) === String(currentRouterID)
+}
+
+export function recentRouteSnapshot(routerID, now = Date.now()) {
+  const hit = routeSnapshots.get(String(routerID))
+  if (!hit || now - hit.at > ROUTE_SNAPSHOT_MAX_AGE_MS) return null
+  return hit.snapshot
 }
 
 export function parseRouteSnapshot(output) {
@@ -111,13 +162,21 @@ function rulesThrough(snapshot, tunnelID) {
   return row?.total ?? 0
 }
 
-export function routingVerdict(snapshot) {
+// traffic -- ответ сервера (/events) с несущим (B1): «Маршруты» говорят о
+// несущем то же, что «Роутер» и «VPN-туннели». Без traffic.carrier_basis
+// (бэкенд старше v0.56, проверки не загрузились) -- прежний вывод по
+// настройке «основной маршрут» из снимка.
+// incidents -- открытые тревоги из того же ответа, что у «Роутера»
+// (fetchRouterChecksWithIncidents): несущий с открытой тревогой по нему --
+// не «обход идёт», как и на «Роутере» (carrierAlive, I1).
+export function routingVerdict(snapshot, traffic, incidents = []) {
   const partial = Boolean(snapshot?.warnings?.length)
 
   // Порядок важен: sing-box выбирает маршрут для каждого адреса отдельно,
   // поэтому единого ответа "напрямую или через VPN" тут не существует, и
-  // любой другой вердикт был бы враньём.
-  if (snapshot?.singbox_router?.enabled) {
+  // любой другой вердикт был бы враньём. Сервер знает это по проверке
+  // роутера, даже когда снимок о sing-box молчит.
+  if (snapshot?.singbox_router?.enabled || traffic?.mode === 'singbox') {
     return {
       mode: 'unknown',
       partial,
@@ -128,6 +187,44 @@ export function routingVerdict(snapshot) {
   }
 
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
+
+  // Несущий по одному правилу (сервер, а без него -- активное звено снимка).
+  // «Главный VPN-туннель» по настройке default_route -- другой вопрос, и
+  // отвечать им на «куда идёт обход» значило спорить с соседними экранами.
+  if (traffic?.carrier_basis) {
+    const tr = withSnapshotCarrier(traffic, snapshot)
+    const t = tr.carrier_tunnel_id ? tunnels.find((x) => x.id === tr.carrier_tunnel_id) : null
+    if (t) {
+      const name = t.name || t.id
+      const alarmed = (incidents ?? []).some((i) => i?.check_name === `tunnel_${t.id}`)
+      if (tr.carrier_alive === false || tunnelLive(t) === 'down' || alarmed) {
+        return {
+          mode: 'unknown',
+          partial,
+          title: `VPN-туннель обхода «${name}» не отвечает`,
+          detail: 'Заблокированное роутер ведёт через него — такие сайты могут не открываться.',
+        }
+      }
+      const n = rulesThrough(snapshot, t.id)
+      return {
+        mode: 'vpn',
+        partial,
+        title: `Обход идёт через «${name}»`,
+        detail: n > 0
+          ? `В VPN-туннель отправлено ${rulesCount(n)} — только они и идут через обход.`
+          : 'Через него пока ничего не отправлено — весь трафик идёт напрямую.',
+      }
+    }
+    if (tr.mode !== 'direct') {
+      return {
+        mode: 'unknown',
+        partial,
+        title: 'Какой VPN-туннель несёт обход, роутер не сообщил',
+        detail: 'Гадать по настройкам не будем: состояние каждого VPN-туннеля — ниже.',
+      }
+    }
+  }
+
   // default_route -- это НАСТРОЙКА туннеля, а не факт о трафике: выключенный
   // туннель остаётся с ней и претендентом на основной маршрут быть не может.
   // Поэтому спорящими считаются только те, про кого не известно, что они

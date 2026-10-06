@@ -213,6 +213,12 @@ func miniappHistoryHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 			return
 		}
+		if bypassLeakHidden(d, check) {
+			// Тихий режим: истории этой проверки экран не видит.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(w).Encode(miniappHistoryResp{})
+			return
+		}
 		events, err := d.DB.Events().ListSince(routerID, check, time.Now().Add(-miniappHistoryWindow))
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "history lookup failed")

@@ -10,6 +10,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 // FreshConfigForRouter у фейковой панели -- здесь, рядом с тестами источника
@@ -371,5 +372,41 @@ func TestRepairSource_Awg3PanelCauseNotInAction(t *testing.T) {
 	}
 	if strings.Contains(nh.Action, "пароль") || strings.Contains(nh.Action, "пересохраните") {
 		t.Fatalf("причина панели в действии для владельца: %q", nh.Action)
+	}
+}
+
+// Зашифрованный файл кабинета без ключа -- автопочинка говорит правду:
+// не «обновите ключ кабинета» (он цел), а «напишите администратору».
+const sealedAdminAction = "ключи кабинетов на сервере не открываются — напишите администратору"
+
+func needHumanAction(t *testing.T, label string, err error) {
+	t.Helper()
+	var nh *linkrepair.NeedHuman
+	if !errors.As(err, &nh) {
+		t.Fatalf("%s: ждали NeedHuman, получили %v", label, err)
+	}
+	if nh.Action != sealedAdminAction {
+		t.Fatalf("%s: действие %q, ждали %q", label, nh.Action, sealedAdminAction)
+	}
+}
+
+func TestRepairSource_SealedAccountNeedsAdmin(t *testing.T) {
+	for _, prov := range []string{"amnezia", "hidemyname"} {
+		cab := &fakeCabinet{accounts: map[string]VPNAccount{prov: {Provider: prov, KeyProblem: "cabinet_key_wrong", Note: "x"}}}
+		src, id := repairSourceEnv(t, cab, &fakeAwg3{})
+		_, err := src.Options(context.Background(), id, prov)
+		needHumanAction(t, prov+" Options", err)
+		_, err = src.HasRoom(context.Background(), id, prov)
+		needHumanAction(t, prov+" HasRoom", err)
+	}
+}
+
+func TestRepairSource_SealedIssueNeedsAdmin(t *testing.T) {
+	for _, cause := range []error{sealedfile.ErrKeyMissing, sealedfile.ErrUnreadable} {
+		for _, prov := range []string{"amnezia", "hidemyname"} {
+			src, id := repairSourceEnv(t, &fakeCabinet{err: cause}, &fakeAwg3{})
+			_, err := src.Issue(context.Background(), id, prov, "nl")
+			needHumanAction(t, prov+" Issue", err)
+		}
 	}
 }

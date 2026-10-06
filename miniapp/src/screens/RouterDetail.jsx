@@ -3,7 +3,8 @@ import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, 
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
-import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve } from '../trafficPath.js'
+import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve, withSnapshotCarrier } from '../trafficPath.js'
+import { recentRouteSnapshot } from '../routes.js'
 import { whenText, sinceText, untilText } from '../when.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
@@ -25,9 +26,8 @@ import {
   checkLabel,
   tunnelOf,
   checkState as checkStateOf,
-  workingTunnelCount,
+  tunnelCountSummary,
   workingTunnelNote,
-  uncheckedTunnelCount,
   commandOutcomeLabel,
   incidentCopy,
   legendLabel,
@@ -284,7 +284,11 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
   const [tunnels, setTunnels] = useState([])
-  const [traffic, setTraffic] = useState(null)
+  const [serverTraffic, setTraffic] = useState(null)
+  // Сервер несущего не знает -- активное звено из недавнего снимка маршрутов
+  // роутера (его снимали вкладки «VPN-туннели» и «Маршруты»): шапка и схема
+  // называют того же, что вкладка (B1). Команду роутеру отсюда не шлём.
+  const traffic = withSnapshotCarrier(serverTraffic, recentRouteSnapshot(id))
   const [error, setError] = useState(null)
   const loadSeq = useRef(0)
   // Версии -- один раз на роутер, не с пульсом: сервер отмечает новости
@@ -431,9 +435,12 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
-  const liveCount = workingTunnelCount(tunnels, incidents)
+  // Один счёт на экран: свои / работают / не проверено -- одним вызовом.
+  const counts = tunnelCountSummary(tunnels, incidents)
+  const liveCount = counts.working
+  const ownTotal = counts.total
   // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
-  const uncheckedCount = uncheckedTunnelCount(tunnels)
+  const uncheckedCount = counts.unchecked
 
   // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
   // а не картинка и подпись к ней. Холодная подсветка включается тем же
@@ -498,7 +505,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
           headline.stale
             ? 'роутер молчит — данные устарели'
             : tunnels.length
-              ? workingTunnelNote(liveCount, tunnels.length, uncheckedCount)
+              ? workingTunnelNote(liveCount, ownTotal, uncheckedCount)
               : 'роутер не сообщил ни одного'
         }
         tone={!headline.stale && tunnels.length && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}

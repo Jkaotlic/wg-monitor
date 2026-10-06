@@ -102,23 +102,87 @@ func loadPrivateKeySigner(path, passphrase string) (ssh.Signer, error) {
 	return signer, nil
 }
 
-func ConnectSSHInsecureCaptureKey(host string, port int, user, password string) (*SSH, ssh.PublicKey, error) {
+// errHostKeyCaptured -- сторожевая ошибка: ключ сервера снят, рукопожатие
+// прервано до любой аутентификации.
+var errHostKeyCaptured = errors.New("ssh: host key captured, handshake aborted before authentication")
+
+// CaptureHostKey снимает открытый ключ сервера, не отправляя никаких
+// учётных данных: список методов входа пуст, а проверка ключа сохраняет его
+// и возвращает сторожевую ошибку, так что рукопожатие обрывается раньше, чем
+// клиент дойдёт до аутентификации. Пароль неподтверждённому ключу не уходит.
+func CaptureHostKey(host string, port int) (ssh.PublicKey, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	var seen ssh.PublicKey
 	cfg := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{ssh.Password(password)},
+		User: "probe",
+		Auth: nil,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			seen = key
-			return nil
+			return errHostKeyCaptured
 		},
 		Timeout: 10 * time.Second,
 	}
 	c, err := ssh.Dial("tcp", addr, cfg)
-	if err != nil {
-		return nil, nil, diagnoseSSHErr(addr, err)
+	if c != nil {
+		c.Close()
 	}
-	return &SSH{client: c, host: addr}, seen, nil
+	if seen != nil {
+		return seen, nil
+	}
+	if err == nil {
+		err = errors.New("сервер не предъявил ключ")
+	}
+	return nil, diagnoseSSHErr(addr, err)
+}
+
+// SavedHostKey возвращает ключ, записанный в known_hosts под alias (nil, если
+// записи нет). Нужен, чтобы показать оператору старый отпечаток рядом с новым.
+func (k *KnownHosts) SavedHostKey(alias string) ssh.PublicKey {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	hostKey := normaliseHostKey(alias)
+	cb, err := knownhosts.New(k.path)
+	if err != nil {
+		return nil
+	}
+	// Заведомо чужой ключ вызывает KeyError, в котором лежит сохранённый.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil
+	}
+	probe, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		return nil
+	}
+	err = cb(hostKey, fakeAddr(hostKey), probe.PublicKey())
+	var keyErr *knownhosts.KeyError
+	if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+		return keyErr.Want[0].Key
+	}
+	return nil
+}
+
+// Snapshot читает known_hosts целиком, чтобы потом вернуть как было.
+func (k *KnownHosts) Snapshot() ([]byte, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return os.ReadFile(k.path)
+}
+
+// Restore возвращает known_hosts к снимку.
+func (k *KnownHosts) Restore(data []byte) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	tmp := k.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, k.path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func isHostKeyChangedErr(err error) bool {
@@ -473,16 +537,9 @@ func (k *KnownHosts) ReplaceHostKey(alias string, pub ssh.PublicKey) error {
 	defer k.mu.Unlock()
 
 	hostKey := normaliseHostKey(alias)
-	if _, err := ForgetKnownHost(k.path, stripPort(hostKey)); err != nil {
-		return err
-	}
-	line := knownhosts.Line([]string{hostKey}, pub)
-	f, err := os.OpenFile(k.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(line + "\n")
+	// Убрать старую строку и записать новую -- одной атомарной записью: файл
+	// ни в какой момент не остаётся без ключа хоста (Fix 3 v0.56).
+	_, err := rewriteKnownHosts(k.path, stripPort(hostKey), knownhosts.Line([]string{hostKey}, pub))
 	return err
 }
 

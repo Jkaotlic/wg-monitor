@@ -1,17 +1,17 @@
 import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { fetchRouterSettings, fetchRouterChecks, fetchAwg3Issuable, listAutorepair } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecksWithIncidents, fetchAwg3Issuable, listAutorepair } from '../api.js'
 import { autorepairBadge } from '../autorepair.js'
 import { Pill } from '../ui/Pill.jsx'
-import { parseRouteSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict } from '../routes.js'
+import { parseRouteSnapshot, rememberCommandSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict, withOpenAlarms } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { tunnelList, tunnelsTabSummary, ALARM_OPEN_LABEL } from '../tunnelDelete.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
 import { trafficSummary, trafficView } from '../traffic.js'
-import { humanAge } from '../labels.js'
+import { humanAge, pluralRu, rulesCount } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -200,7 +200,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   }, [routerID])
 
   useEffect(() => {
-    if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
+    if (result?.status !== 'ok') return
+    const snap = parseRouteSnapshot(result.output)
+    if (rememberCommandSnapshot(routerID, result, snap)) setSnapshot(snap)
   }, [result])
 
   // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
@@ -209,7 +211,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const [checksFailed, setChecksFailed] = useState(false)
   useEffect(() => {
     let alive = true
-    fetchRouterChecks(routerID)
+    fetchRouterChecksWithIncidents(routerID)
       .then((ev) => {
         if (!alive) return
         setChecks(ev)
@@ -223,9 +225,14 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     }
   }, [routerID, result])
 
-  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
-  const view = tunnelsView(shown)
-  const list = tunnelList(shown)
+  const shown = withOpenAlarms(withCheckVerdict(snapshot, checks, { failed: checksFailed }), checks?.incidents)
+  // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
+  // traffic из того же ответа /events, что и проверки.
+  const view = tunnelsView(shown, checks?.traffic)
+  // Тревоги -- в подпись строк: строка говорит то же, что считает счёт (Fix 2).
+  const list = tunnelList(shown, checks?.incidents)
+  // Счёт, заголовок и подпись -- одной функцией, с тревогами (I1, M2).
+  const summary = tunnelsTabSummary(list, checks)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
@@ -369,7 +376,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
             {view.active.live === 'down' ? (
-              <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
+              <StateTag tone="danger">{view.active.alarmOpen ? ALARM_OPEN_LABEL : 'VPN-туннель не отвечает'}</StateTag>
             ) : view.active.checkUnknown ? (
               <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
             ) : view.active.unverified ? (
@@ -391,6 +398,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 note={
                   view.active.handshakeAgeSec == null
                     ? 'роутер не сообщил'
+                    : view.active.alarmOpen
+                      ? 'назад, тревога ещё открыта'
                     : view.active.live === 'down'
                       ? 'назад, но трафик не проходит'
                       : view.active.checkUnknown
@@ -398,7 +407,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                       : 'назад, канал живой'
                 }
               />
-              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.active.rulesNote || undefined} />
+              <Stat label="несёт" value={view.active.rules} unit={pluralRu(view.active.rules, 'правило', 'правила', 'правил')} note={view.active.rulesNote || undefined} />
             </div>
             {/* Несущий VPN-туннель не managed-типа не попадает в «Все VPN-туннели»,
                 а значит и на свой экран: замена конфига -- здесь (финал п. 1). */}
@@ -411,7 +420,31 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {snapshot && !view.active && (
+      {snapshot && view.state === 'singbox' && (
+        <Section title="VPN-туннели обхода">
+          <Hero>
+            <StateTag>настроено, маршрут выбирается по адресу</StateTag>
+            <p class="traffic-detail" style="padding-bottom:16px">
+              Роутер выбирает VPN-туннель для каждого адреса отдельно, поэтому одного, который несёт весь обход, здесь нет.
+            </p>
+          </Hero>
+        </Section>
+      )}
+
+      {/* Сервер не назвал несущего: гадать по «первому поднятому» нельзя --
+          так «Роутер» и эта вкладка называли разные VPN-туннели (B1). */}
+      {snapshot && view.state === 'unknown' && (
+        <Section title="VPN-туннель, который несёт трафик">
+          <Hero cold>
+            <StateTag tone="warn">роутер не сообщил, какой несёт трафик</StateTag>
+            <p class="traffic-detail" style="padding-bottom:16px">
+              Какой VPN-туннель несёт обход, роутер не сообщил — гадать не будем. Их состояние — ниже.
+            </p>
+          </Hero>
+        </Section>
+      )}
+
+      {snapshot && view.state === 'none' && (
         <Section title="VPN-туннель, который работает">
           <Hero cold>
             <StateTag tone="danger">ни один VPN-туннель не несёт трафик</StateTag>
@@ -461,7 +494,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               }))}
             />
             <p class="card-foot">
-              Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.
+              {view.state === 'singbox'
+                ? 'Маршрут для каждого адреса выбирает роутер среди настроенных VPN-туннелей.'
+                : 'Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.'}
             </p>
           </div>
         </Section>
@@ -489,7 +524,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           и «не используются» выше отвечают на другие вопросы и не содержат
           всех VPN-туннелей сразу. */}
       {list.length > 0 && (
-        <Section title={`${TUNNEL_TEXTS.listTitle} · ${list.length}`}>
+        <Section title={summary.title}>
+          {/* Тот же счёт и те же слова, что на «Роутере» и «Проверках» (B3). */}
+          <p class="state">{summary.note}</p>
           <ul class="card list-reset">
             {list.map((t) => (
               <ListRow
@@ -507,7 +544,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
           единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
       <ul class="card list-reset tunnels-more" style="margin-top:12px">
-        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? `${view.active.rules} назн.` : undefined} onClick={onOpenRoutes} />
+        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? rulesCount(view.active.rules) : undefined} onClick={onOpenRoutes} />
       </ul>
 
       {layer === 'tunnel' && (

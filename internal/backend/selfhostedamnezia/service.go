@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"regexp"
@@ -27,6 +28,7 @@ type Service struct {
 	legacy    Config
 	newRunner func(Config, HostKeyPolicy) Runner
 	now       func() time.Time
+	log       *slog.Logger // nil -- slog.Default()
 
 	storeMu   sync.Mutex
 	instLocks sync.Map // id -> *sync.Mutex
@@ -87,7 +89,8 @@ func (s *Service) update(fn func(*Store) error) error {
 
 func (s *Service) Create(inst Instance) error {
 	inst = cleanInstance(inst)
-	inst.SSHHostKey = "" // отпечаток не приходит из формы: его запоминает первый вход
+	// Отпечатки не приходят из формы: доверенный запоминает первый вход.
+	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", "", time.Time{}
 	if err := ValidateInstance(inst); err != nil {
 		return err
 	}
@@ -113,12 +116,13 @@ func (s *Service) Update(id string, inst Instance) error {
 				continue
 			}
 			inst.Enabled = cur.Enabled
-			// Отпечаток ключа хоста не приходит из формы: он остаётся, пока
-			// адрес и порт SSH те же, и сбрасывается при смене сервера --
-			// новый запомнит первый удачный вход.
-			inst.SSHHostKey = ""
+			// Отпечатки ключа хоста не приходят из формы: доверенный и
+			// ожидающий остаются, пока адрес и порт SSH те же, и стираются при
+			// смене сервера -- новый доверенный запомнит первый удачный вход.
+			inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", "", time.Time{}
 			if inst.SSHHost != "" && inst.SSHHost == cur.SSHHost && inst.SSHPort == cur.SSHPort {
 				inst.SSHHostKey = cur.SSHHostKey
+				inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = cur.SSHHostKeyPending, cur.SSHHostKeyPendingAt
 			}
 			if inst.SSHHost != "" && inst.SSHPassword == "" {
 				// Сохранённый пароль -- только для того же входа. Сменили адрес,
@@ -240,6 +244,7 @@ func cleanInstance(inst Instance) Instance {
 	inst.SSHUser = strings.TrimSpace(inst.SSHUser)
 	if inst.SSHHost == "" {
 		inst.SSHPort, inst.SSHUser, inst.SSHPassword, inst.SSHHostKey = 0, "", "", ""
+		inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", time.Time{}
 		return inst
 	}
 	if inst.SSHPort == 0 {

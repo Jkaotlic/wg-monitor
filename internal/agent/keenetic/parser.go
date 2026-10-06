@@ -118,3 +118,18 @@ func ParseDNSEndpoints(cfg string) []DNSEndpoint {
 	}
 	return out
 }
+
+// CountFQDNGroups считает собственные списки сайтов прошивки: строки верхнего
+// уровня `object-group fqdn ...` в running-config. Только факт и число --
+// содержимое групп не разбирается и наружу не уходит: живого образца синтаксиса
+// нет, а догадка о составе списка была бы выдана за ответ.
+func CountFQDNGroups(cfg string) int {
+	n := 0
+	for _, line := range strings.Split(cfg, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, "object-group fqdn") {
+			n++
+		}
+	}
+	return n
+}

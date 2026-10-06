@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -148,14 +149,21 @@ func (f *fakeSelfHosted) Revoke(_ context.Context, id, publicKey string) (selfho
 	return selfhostedamnezia.Client{}, selfhostedamnezia.Instance{}, selfhostedamnezia.ErrClientNotFound
 }
 
-func (f *fakeSelfHosted) TrustNewHostKey(id string) error {
+func (f *fakeSelfHosted) ConfirmHostKey(id, fingerprint string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	i := f.find(id)
 	if i < 0 {
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
-	f.instances[i].SSHHostKey = ""
+	inst := &f.instances[i]
+	if inst.SSHHostKeyPending == "" {
+		return selfhostedamnezia.ErrHostKeyNothingPending
+	}
+	if inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
+		return selfhostedamnezia.ErrHostKeyNotPending
+	}
+	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = inst.SSHHostKeyPending, "", time.Time{}
 	return nil
 }
 

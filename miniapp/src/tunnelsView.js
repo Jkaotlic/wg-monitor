@@ -6,6 +6,8 @@
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
 import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
+import { withSnapshotCarrier } from './trafficPath.js'
+import { ALARM_OPEN_LABEL } from './tunnelDelete.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -17,16 +19,19 @@ import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 // решении там, где случилась поломка, и подсовывал кнопку «включить» VPN-туннелю,
 // который и так включён. Различение бесплатное: enabled -- это настройка,
 // status -- факт, и они приходят порознь.
-function chainRole(link, tunnel, activeTunnelID) {
+function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
   const live = tunnelLive(tunnel ?? {})
-  // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict):
-  // трафик в него уходит и теряется -- «Работает сейчас» было бы неправдой.
+  // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict,
+  // или сервер сказал carrier_alive=false): трафик в него уходит и теряется --
+  // «Работает сейчас» было бы неправдой.
   if (link.tunnel_id && link.tunnel_id === activeTunnelID) {
-    if (live === 'down') return 'activeDown'
+    if (live === 'down' || carrierDead || tunnel?.alarm_open) return 'activeDown'
     // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
     // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
     return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
   }
+  // Тревога открыта, проверка уже ok: «отвечает» сказать нельзя.
+  if (tunnel?.alarm_open) return 'down'
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
   if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
@@ -66,21 +71,114 @@ function rulesNote(row, policy) {
   return name ? `общий набор «${name}»` : ''
 }
 
-export function tunnelsView(snapshot) {
-  const empty = { active: null, policyName: '', chain: [], unused: [] }
+// Цепочка политики звеньями. activeTunnelID -- кого отметить несущим; пусто --
+// никого (несущий неизвестен: звенья показываем, роль «работает сейчас» -- нет).
+function chainOf(policy, byID, activeTunnelID, opts) {
+  return (policy?.interfaces ?? []).map((link) => {
+    const tunnel = link.tunnel_id ? byID.get(link.tunnel_id) : undefined
+    const role = chainRole(link, tunnel, activeTunnelID, opts)
+    const age = tunnel?.has_handshake ? (tunnel.handshake_age_sec ?? null) : null
+    return {
+      tunnelID: link.tunnel_id ?? '',
+      name: link.name || link.bind,
+      title: lineTitle(link.name),
+      code: link.tunnel_id || link.bind,
+      bind: link.bind,
+      role,
+      note: tunnel?.alarm_open && (role === 'down' || role === 'activeDown') ? ALARM_OPEN_LABEL : ROLE_NOTE[role],
+      handshakeAgeSec: role === 'active' ? age : null,
+      // Имя NDMS-интерфейса -- единственный способ включить или выключить
+      // туннель (агент делает это ndmc'ом). Пусто у opkg-туннелей: их в NDMS
+      // нет, и кнопки под ними быть не должно.
+      ndmsName: tunnel?.ndms_name ?? '',
+      live: tunnel ? tunnelLive(tunnel) : 'unknown',
+    }
+  })
+}
+
+// Только свои туннели: WAN и системные записи каталога NDMS сюда не
+// попадают -- предложить поднять провайдера было бы бессмысленно.
+function unusedOf(tunnels, chain) {
+  const inChain = new Set(chain.map((c) => c.tunnelID).filter(Boolean))
+  return tunnels
+    .filter((t) => t.type === 'managed' && !inChain.has(t.id))
+    .map((t) => ({
+      id: t.id,
+      name: t.name || t.id,
+      title: lineTitle(t.name),
+      code: t.id,
+      live: tunnelLive(t),
+      ndmsName: t.ndms_name ?? '',
+    }))
+}
+
+// Ведущей считается политика, чьё активное звено -- наш туннель. Политика,
+// уходящая мимо VPN, живым VPN-туннелем не является: её звено -- провайдер, и
+// карточка "VPN-туннель поднят" на нём была бы неправдой.
+function firstVPNPolicy(policies, byID) {
+  return policies.find((p) => p.active_tunnel_id && byID.has(p.active_tunnel_id))
+}
+
+// tunnelsView -- раскладка вкладки. traffic -- ответ сервера
+// (/routers/{id}/events: traffic) с несущим, посчитанным тем же правилом,
+// что у экрана «Роутер» (B1, v0.56): carrier_tunnel_id + carrier_basis.
+// Вкладка берёт политику, чьё активное звено = несущий, и не угадывает.
+//
+// state:
+//   carrier -- несущий назван (active заполнен);
+//   singbox -- маршрут выбирается для каждого адреса: политика «настроена»,
+//              несущего нет;
+//   unknown -- сервер несущего не назвал или проверки не загрузились;
+//   none    -- ни одна политика не ведёт в VPN-туннель.
+// Без traffic.carrier_basis (бэкенд старше v0.56, тесты раскладки) несущим
+// остаётся активное звено первой VPN-политики снимка -- слово роутера.
+export function tunnelsView(snapshot, serverTraffic) {
+  const empty = { state: 'none', active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
   if (tunnels.length === 0) return empty
 
   const byID = new Map(tunnels.map((t) => [t.id, t]))
+  // Сервер несущего не знает -- активное звено из снимка роутера, тем же
+  // правилом, что у экрана «Роутер» (withSnapshotCarrier).
+  const traffic = withSnapshotCarrier(serverTraffic, snapshot)
 
-  // Ведущей считается политика, чьё активное звено -- наш туннель. Политика,
-  // уходящая мимо VPN, живым VPN-туннелем не является: её звено -- провайдер, и
-  // карточка "VPN-туннель поднят" на нём была бы неправдой.
-  const policy = policies.find((p) => p.active_tunnel_id && byID.has(p.active_tunnel_id))
-  if (!policy) return { ...empty, unused: [] }
+  if (traffic?.mode === 'singbox') {
+    const p = firstVPNPolicy(policies, byID)
+    // sing-box выбирает маршрут для каждого адреса: несущего нет, и звенья
+    // называются по своему состоянию. Подпись режима -- у вкладки, а не у
+    // строки VPN-туннеля (песочница v0.56: строка vpn-nl была озаглавлена
+    // «Настроено, маршрут выбирается по адресу»).
+    const chain = chainOf(p, byID, '')
+    return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
+  }
 
-  const activeTunnel = byID.get(policy.active_tunnel_id)
+  let carrierID
+  if (traffic?.carrier_basis) {
+    carrierID = traffic.carrier_tunnel_id && byID.has(traffic.carrier_tunnel_id) ? traffic.carrier_tunnel_id : ''
+    if (!carrierID) {
+      // Несущего нет. «Ни один VPN-туннель не несёт трафик» -- только когда
+      // и сервер говорит «напрямую»; иначе -- не знаем, и не гадаем (старый
+      // агент без active_tunnel_id в политиках снимка -- тоже «не знаем»,
+      // ревью B1: шапка «Роутера» на тех же данных говорит «всё работает»).
+      const p = firstVPNPolicy(policies, byID) ?? policies.find((x) => x.via_vpn && (x.interfaces ?? []).some((l) => l.tunnel_id && byID.has(l.tunnel_id)))
+      const chain = chainOf(p, byID, '')
+      const state = traffic.mode === 'direct' ? 'none' : 'unknown'
+      return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
+    }
+  } else {
+    carrierID = firstVPNPolicy(policies, byID)?.active_tunnel_id ?? ''
+    if (!carrierID) return { ...empty, unused: [] }
+  }
+
+  // Политика несущего: та, чьё активное звено -- он; снимок мог разойтись с
+  // проверками сервера на один отчёт -- тогда та, где он хотя бы звено.
+  const policy =
+    policies.find((p) => p.active_tunnel_id === carrierID) ??
+    policies.find((p) => (p.interfaces ?? []).some((l) => l.tunnel_id === carrierID))
+  const carrierDead = Boolean(traffic?.carrier_basis) && traffic.carrier_alive === false
+
+  const activeTunnel = byID.get(carrierID)
   const activeRow = tunnelRows(snapshot).find((r) => r.id === activeTunnel.id)
   const active = {
     id: activeTunnel.id,
@@ -92,7 +190,10 @@ export function tunnelsView(snapshot) {
     title: lineTitle(activeTunnel.name),
     code: activeTunnel.id,
     iface: activeTunnel.iface ?? '',
-    live: tunnelLive(activeTunnel),
+    // Сервер сказал «не отвечает» -- карточка не скажет «поднят».
+    live: carrierDead || activeTunnel.alarm_open ? 'down' : tunnelLive(activeTunnel),
+    // Тревога открыта, а последняя проверка ok: слова героя -- те же, что в списке.
+    alarmOpen: Boolean(activeTunnel.alarm_open),
     checkUnknown: Boolean(activeTunnel.verdict_unknown),
     // Проверка пришла, но ничего не проверила (unknown, v0.46).
     unverified: Boolean(activeTunnel.check_unverified),
@@ -101,46 +202,12 @@ export function tunnelsView(snapshot) {
     // у политики поля static нет (wire.RoutePolicySummary), статические
     // маршруты агент считает на туннель (MINI-09). Число -- то же, что в
     // строке туннеля раскладки (tunnelRows).
-    rules: activeRow?.total ?? (policy.dns ?? 0),
+    rules: activeRow?.total ?? (policy?.dns ?? 0),
     // Подпись описывает то же число (review v0.46, п. 6): «общий набор» --
     // только когда своих правил у туннеля нет.
     rulesNote: rulesNote(activeRow, policy),
   }
 
-  const chain = (policy.interfaces ?? []).map((link) => {
-    const tunnel = link.tunnel_id ? byID.get(link.tunnel_id) : undefined
-    const role = chainRole(link, tunnel, policy.active_tunnel_id)
-    const age = tunnel?.has_handshake ? (tunnel.handshake_age_sec ?? null) : null
-    return {
-      tunnelID: link.tunnel_id ?? '',
-      name: link.name || link.bind,
-      title: lineTitle(link.name),
-      code: link.tunnel_id || link.bind,
-      bind: link.bind,
-      role,
-      note: ROLE_NOTE[role],
-      handshakeAgeSec: role === 'active' ? age : null,
-      // Имя NDMS-интерфейса -- единственный способ включить или выключить
-      // туннель (агент делает это ndmc'ом). Пусто у opkg-туннелей: их в NDMS
-      // нет, и кнопки под ними быть не должно.
-      ndmsName: tunnel?.ndms_name ?? '',
-      live: tunnel ? tunnelLive(tunnel) : 'unknown',
-    }
-  })
-
-  const inChain = new Set(chain.map((c) => c.tunnelID).filter(Boolean))
-  // Только свои туннели: WAN и системные записи каталога NDMS сюда не
-  // попадают -- предложить поднять провайдера было бы бессмысленно.
-  const unused = tunnels
-    .filter((t) => t.type === 'managed' && !inChain.has(t.id))
-    .map((t) => ({
-      id: t.id,
-      name: t.name || t.id,
-      title: lineTitle(t.name),
-      code: t.id,
-      live: tunnelLive(t),
-      ndmsName: t.ndms_name ?? '',
-    }))
-
-  return { active, policyName: policy.name ?? '', chain, unused }
+  const chain = chainOf(policy, byID, carrierID, { carrierDead })
+  return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
 }

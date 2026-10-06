@@ -4178,6 +4178,19 @@ body {
   margin-bottom: var(--sp-2);
 }
 
+/* C1: «было» и «сейчас» -- строками; в кнопке подтверждения отпечаток целиком,
+   он без пробелов -- переносится по любому знаку, а не распирает экран. */
+.selfhosted-hostkey-row .selfhosted-hostkey-label {
+  margin-top: var(--sp-2);
+}
+
+.selfhosted-hostkey-confirm {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
+  height: auto;
+}
+
 /* Выданные подключения (B3): строка на подключение, предупреждение о живом
    VPN-туннеле -- цветом тревоги, имя клиента длинное -- переносится. */
 .selfhosted-client {

@@ -20,14 +20,17 @@ const (
 	lookupNoteRegexpUnchecked  = "regexp_unchecked"
 	lookupNoteGeoExpandFailed  = "geo_expand_failed:" // + тег
 	lookupNoteExitUnrecognized = "exit_unrecognized:" // + имя подключения
+	lookupNoteFirmwareLists    = "firmware_lists"
 )
 
 // RouteLookup answers where one site goes according to the router's own rules
 // and returns the answer JSON-encoded for wire.CommandResult.Output.
 //
 // Read-only: it reads the same inputs as RouteStatus and asks awg-manager to
-// expand geosite tags, nothing else.
-func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string) (string, error) {
+// expand geosite tags, nothing else. firmwareLists -- сколько собственных
+// списков сайтов прошивки видно в уже читаемом running-config (0 -- нет или не
+// читалось): число лишь помечается в ответе, новых чтений конфига здесь нет.
+func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string, firmwareLists int) (string, error) {
 	in, err := fetchRouteInputs(ctx, c)
 	if err != nil {
 		return "", err
@@ -35,11 +38,43 @@ func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string) (string, 
 	res := lookupRoute(domain, in, func(tag string) ([]string, error) {
 		return c.GeoExpand(ctx, "geosite", tag)
 	})
-	b, err := json.Marshal(res)
+	b, err := json.Marshal(withFirmwareLists(res, firmwareLists, ndmsDNSRules(in.dns)))
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// withFirmwareLists добавляет пометку о собственных списках сайтов прошивки:
+// они в проверку не входят, и ответ «по правилам» без оговорки был бы
+// уверенным не про всё. Без признака ответ не меняется.
+//
+// Правила awg-manager с backend=ndms сам awg-manager и заводит в прошивке
+// группами `object-group fqdn` (живого образца нет -- решение контролёра
+// v0.56, ревью I2): их группы -- не чужие списки, и эта проверка их и так
+// видит. Пометка -- только когда групп больше, чем таких правил.
+func withFirmwareLists(res wire.RouteLookupResult, groups, ndmsRules int) wire.RouteLookupResult {
+	if groups <= ndmsRules || groups <= 0 {
+		return res
+	}
+	res.FirmwareLists = groups
+	if !slices.Contains(res.Notes, lookupNoteFirmwareLists) {
+		res.Notes = append(slices.Clone(res.Notes), lookupNoteFirmwareLists)
+	}
+	return res
+}
+
+// ndmsDNSRules -- сколько правил awg-manager исполняет сама прошивка
+// (backend=ndms), включённых и выключенных: группа в конфиге прошивки у
+// правила есть в обоих случаях.
+func ndmsDNSRules(rules []awgmgr.DNSRoute) int {
+	n := 0
+	for _, r := range rules {
+		if r.Backend == "ndms" {
+			n++
+		}
+	}
+	return n
 }
 
 // lookupRoute is the pure core of route_lookup: which enabled rules name the
@@ -90,10 +125,16 @@ func lookupRoute(domain string, in routeInputs, expand func(tag string) ([]strin
 		if via == wire.LookupViaUnknown && in.policiesUnknown {
 			notes.add(lookupNotePoliciesUnknown)
 		}
-		res.Matches = append(res.Matches, wire.RouteLookupMatch{
+		m := wire.RouteLookupMatch{
 			RuleName: firstNonEmptyRoute(r.Name, r.ID), Pattern: pattern,
 			Via: via, TunnelID: id, TunnelName: name,
-		})
+		}
+		// Правило со списком прошивки awg-manager ведёт сам роутер, не
+		// движок: так и сказать, а не молчать об источнике.
+		if strings.EqualFold(strings.TrimSpace(r.Backend), "ndms") {
+			m.Source = wire.LookupSourceFirmwareViaAWGM
+		}
+		res.Matches = append(res.Matches, m)
 	}
 	// Статический маршрут -- правило по адресу сети: по имени сайта его не
 	// проверить, а сайт может оказаться за ним.

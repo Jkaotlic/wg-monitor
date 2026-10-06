@@ -8,6 +8,8 @@ const A = vi.hoisted(() => ({ snap: null, role: 'owner', settings: null, issuabl
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running' }] }),
+  // Вкладки читают проверки вместе с тревогами (I1): тот же ответ, тревог нет.
+  fetchRouterChecksWithIncidents: (id) => Promise.resolve((() => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running' }] }))(id)).then((ev) => ({ incidents: [], ...ev })),
   fetchRouterSettings: (routerID) => {
     A.settingsCalls++
     return A.settings ? A.settings(routerID) : Promise.resolve({ role: A.role })

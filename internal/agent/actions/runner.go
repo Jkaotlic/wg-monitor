@@ -101,6 +101,11 @@ type Runner struct {
 	// настройки роутера могли измениться. Сборка агента отпускает здесь кеш
 	// проверки раздельного DNS. nil -- звать некого.
 	DNSChanged func()
+	// FirmwareSiteGroups -- сколько собственных списков сайтов прошивки
+	// (object-group fqdn) видно в running-config, который агент и так читает
+	// для проверок DNS; значение от последнего такого чтения. nil или 0 --
+	// пометка в route_lookup не ставится.
+	FirmwareSiteGroups func() int
 	// Version is the agent's own currently-running version (main.Version at
 	// process start — the same value reported as AgentVersion in
 	// heartbeats). self_update's downgrade guard refuses an older target
@@ -833,7 +838,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		// Только чтение: замок routeMu не берётся. Вопрос «куда пойдёт сайт»
 		// не должен ждать чужой правки маршрутов, а правка -- его.
-		out, err := RouteLookup(ctx, r.AwgClient, target.Value)
+		fw := 0
+		if r.FirmwareSiteGroups != nil {
+			fw = r.FirmwareSiteGroups()
+		}
+		out, err := RouteLookup(ctx, r.AwgClient, target.Value, fw)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

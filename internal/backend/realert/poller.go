@@ -35,6 +35,11 @@ type Config struct {
 	// AdminUserID -- Telegram-номер админа, 0 -- не настроен. Напоминания
 	// тоже уходят админу (решение оператора 15.09: «всё подряд»).
 	AdminUserID int64
+	// BypassLeakEnabled -- alerts.bypass_leak.enabled. Выключен (тихий
+	// режим) -- по bypass_leak нет ни первой тревоги (backend/handler.go),
+	// ни напоминаний: открытая HARD-строка могла остаться с тех пор, как
+	// флаг был включён (ревью v0.56, M4).
+	BypassLeakEnabled bool
 }
 
 const (
@@ -250,6 +255,21 @@ func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.Neig
 	return alerts.BuildNeighborSummaries(rows, checkName)
 }
 
+// neighborsFor -- соседи для напоминания: у bypass_leak это VPN-туннели
+// роутера, кроме несущего (как у первой тревоги), у прочих --
+// neighborSummaries.
+func (p *Poller) neighborsFor(userID int64, checkName string, d map[string]any) []alerts.NeighborSummary {
+	if checkName != alerts.BypassLeakCheck {
+		return p.neighborSummaries(userID, checkName)
+	}
+	rows, err := p.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", p.now().Add(-alerts.NeighborFreshWindow))
+	if err != nil {
+		slog.Warn("realert: neighborsFor events lookup failed", "user_id", userID, "err", err)
+		return nil
+	}
+	return alerts.BuildNeighborSummaries(rows, alerts.NeighborExclude(checkName, d))
+}
+
 func (p *Poller) tick(ctx context.Context) {
 	now := p.now()
 	if p.rateLimitActive(now) {
@@ -271,6 +291,9 @@ func (p *Poller) tick(ctx context.Context) {
 		usersByID[u.ID] = u
 	}
 	for _, sh := range stale {
+		if sh.CheckName == alerts.BypassLeakCheck && !p.cfg.BypassLeakEnabled {
+			continue // тихий режим: напоминаний, как и тревоги, нет (M4)
+		}
 		u, ok := usersByID[sh.UserID]
 		if !ok {
 			one, err := p.d.Users().GetByID(sh.UserID)
@@ -302,7 +325,7 @@ func (p *Poller) tick(ctx context.Context) {
 			continue
 		}
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
-		neighbors := p.neighborSummaries(sh.UserID, sh.CheckName)
+		neighbors := p.neighborsFor(sh.UserID, sh.CheckName, check.Details)
 		text := alerts.FormatRealert(alerts.RealertArgs{
 			Nickname:     u.Nickname,
 			CheckName:    sh.CheckName,

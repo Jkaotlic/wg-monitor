@@ -98,7 +98,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/check", reqID(auth(miniappSelfHostedCheckHandler(d))))
 	mux.Handle("GET /v1/miniapp/selfhosted/{inst}/clients", reqID(auth(miniappSelfHostedClientsHandler(d))))
 	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/clients/revoke", reqID(auth(miniappSelfHostedRevokeHandler(d))))
-	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/trust-host-key", reqID(auth(miniappSelfHostedTrustHostKeyHandler(d))))
+	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/confirm-host-key", reqID(auth(miniappSelfHostedConfirmHostKeyHandler(d))))
 	// awg3-панели оператора (v0.49): только админ, гейт внутри обработчиков.
 	mux.Handle("GET /v1/miniapp/awg3panels", reqID(auth(miniappAwg3ListHandler(d))))
 	mux.Handle("POST /v1/miniapp/awg3panels", reqID(auth(miniappAwg3CreateHandler(d))))
@@ -578,6 +578,9 @@ func miniappCurrentRows(d Deps, routerID int64, rows []db.EventRow) []db.EventRo
 	}
 	out := make([]db.EventRow, 0, len(rows))
 	for _, row := range rows {
+		if bypassLeakHidden(d, row.CheckName) {
+			continue
+		}
 		// dns_ru -- то же: строки нет, когда ру-апстримов в настройках нет.
 		if (row.CheckName == resolverGuardCheck || row.CheckName == dnsRuCheck) && haveHeartbeat && row.TS.Before(heartbeatTS) {
 			continue
@@ -722,7 +725,14 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 		}
 		// Запрашиваем на одну строку больше предела: только так видно, что
 		// строки кончились не потому, что событий больше нет.
-		rows, err := d.DB.Events().ListAllSince(routerID, since, limit+1)
+		// Скрытая строка (тихий режим bypass_leak) отсекается в самой выборке:
+		// после обрезки по пределу она съела бы бюджет ленты и поставила бы
+		// «обрезано».
+		hidden := ""
+		if bypassLeakHidden(d, bypassLeakCheck) {
+			hidden = bypassLeakCheck
+		}
+		rows, err := d.DB.Events().ListAllSinceExcept(routerID, since, limit+1, hidden)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "timeline lookup failed")
 			return

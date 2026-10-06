@@ -5,6 +5,7 @@ import { useCommand } from '../useCommand.js'
 import { thresholdRows, auditRows, firmwareStatus, panelRow, agentRow } from '../settings.js'
 import { versionsRows, unknownLine, installedRows, checkedAtText } from '../versions.js'
 import { localSheet } from '../sheet.js'
+import { agentVersionKnown, AGENT_VERSION_UNKNOWN_NOTE } from '../agentConfig.js'
 import {
   MAINT_TEXTS,
   mayMaintain,
@@ -392,7 +393,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
         {rebootBlock}
         {maintain && openSheet && (
           <Section title="Службы и пакеты">
-            {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
+            {!agentReady && <p class="hint">{agentVersionKnown(settings?.agent_version) ? MAINT_TEXTS.tooOld : AGENT_VERSION_UNKNOWN_NOTE}</p>}
             {agentReady && hrneoButtonVisible(versions) && (
               <button
                 type="button"

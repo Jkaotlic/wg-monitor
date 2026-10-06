@@ -719,6 +719,7 @@ func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
 		{"свой DNS-сервер молчит, запасных нет", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
 		{"запасные DNS-серверы не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 		{"сервер имён для русских сайтов молчит", "dns_ru", dnsRuDownDetails()},
+		{"VPN-туннель не меняет адрес", "bypass_leak", bypassLeakDetails("ok")},
 		{"сервисы не открываются через VPN-туннель", "external_reach", map[string]any{
 			"targets_total": 2, "via_interface": "nwg0",
 			"targets_failed": []any{
@@ -792,6 +793,7 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 		{"свой DNS-сервер, запасные недоступны", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
 		{"свой DNS-сервер, запасные не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 		{"сервер имён для русских сайтов", "dns_ru", dnsRuDownDetails()},
+		{"VPN-туннель не меняет адрес", "bypass_leak", bypassLeakDetails("fail")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1158,6 +1160,8 @@ func TestAlertSaysVPNTunnelNotLine(t *testing.T) {
 			"targets_failed": []any{map[string]any{"name": "youtube", "err": "i/o timeout"}, map[string]any{"name": "telegram", "err": "i/o timeout"}}}, nil},
 		{"сервисы не открываются, соседи молчат", "external_reach", map[string]any{"targets_total": 3}, dead},
 		{"сервер имён для русских сайтов молчит", "dns_ru", dnsRuDownDetails(), alive},
+		{"VPN-туннель не меняет адрес, резерв жив", "bypass_leak", bypassLeakDetails("ok"), alive},
+		{"VPN-туннель не меняет адрес, резерва нет", "bypass_leak", bypassLeakDetails("ok"), dead},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

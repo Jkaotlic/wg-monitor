@@ -555,3 +555,33 @@ func TestAutorepair_GetOptionUnconfirmed(t *testing.T) {
 		t.Fatalf("ответ: option=%q unconfirmed=%v", r.Option, r.OptionUnconfirmed)
 	}
 }
+
+// Зашифрованный файл кабинета без ключа: экран автопочинки говорит про ключ
+// шифрования теми же словами и кодом, что экран кабинетов, а не «кабинет не
+// подключён»; выбрать такой источник нельзя.
+func TestAutorepair_SealedCabinetSpeaksAboutKey(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	env.cab.accounts["amnezia"] = VPNAccount{Provider: "amnezia", Label: "Amnezia Premium",
+		KeyProblem: "cabinet_key_missing", Note: "что-то своё"}
+	rec := env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", "")
+	resp := decodeAutorepair(t, rec.Body.Bytes())
+	var found bool
+	for _, s := range resp.Sources {
+		if s.Provider != "amnezia" {
+			continue
+		}
+		found = true
+		if s.OK || s.Code != "cabinet_key_missing" || !strings.Contains(s.Note, "напишите администратору") {
+			t.Fatalf("источник: %+v", s)
+		}
+	}
+	if !found {
+		t.Fatal("источника «Amnezia Premium» нет в ответе")
+	}
+	rec = env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
+		`{"enabled":true,"provider":"amnezia","option":"nl"}`)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "cabinet_key_missing") {
+		t.Fatalf("код %d, хотим 503 cabinet_key_missing: %s", rec.Code, rec.Body.String())
+	}
+}

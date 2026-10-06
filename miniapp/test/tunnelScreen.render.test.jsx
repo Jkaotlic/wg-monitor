@@ -32,6 +32,8 @@ vi.mock('../src/api.js', async (importOriginal) => {
     // role === null -- роль ещё не пришла.
     // checks -- ответ «событий» с проверками VPN-туннелей; null -- как раньше.
     fetchRouterChecks: (id) => (mocks.checks ? Promise.resolve(mocks.checks) : real.fetchRouterChecks(id)),
+    // Вкладки читают проверки вместе с тревогами (I1): тот же ответ, тревог нет.
+    fetchRouterChecksWithIncidents: (id) => Promise.resolve(((id) => (mocks.checks ? Promise.resolve(mocks.checks) : real.fetchRouterChecks(id)))(id)).then((ev) => ({ incidents: [], ...ev })),
     fetchRouterSettings: () => (mocks.role === null ? new Promise(() => {}) : Promise.resolve({ role: mocks.role })),
     // Контракт части 1: пока сервер ждёт снимок роутера -- {state:'checking'},
     // итог -- {state:'queued', cmd_id}.

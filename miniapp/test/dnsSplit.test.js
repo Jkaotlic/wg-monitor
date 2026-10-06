@@ -13,10 +13,30 @@ const allText = (v) =>
 
 describe('dnsSplitView', () => {
   it('старый агент: проверка появится после обновления, а не «нет данных»', () => {
-    const v = dnsSplitView([{ check_name: 'dns', status: 'ok' }])
+    const v = dnsSplitView([{ check_name: 'dns', status: 'ok' }], { agentVersion: 'v0.30.2' })
     expect(v.missing).toBe(true)
     expect(v.note).toBe('Эта проверка появится после обновления агента на роутере.')
     expect(v.rows).toEqual([])
+  })
+
+  it('B2: агент с проверкой (v0.31+) -- «ещё не пришла», обновлять агента не просим', () => {
+    for (const agentVersion of ['v0.31.0', 'v0.54.1']) {
+      const v = dnsSplitView([{ check_name: 'dns', status: 'ok' }], { agentVersion })
+      expect(v.missing).toBe(true)
+      expect(v.note).toBe('Проверка ещё не пришла: она приходит с каждым отчётом роутера.')
+      expect(v.note).not.toContain('обновления')
+    }
+  })
+
+  it('B2: версия агента неизвестна -- не обещаем обновление и не врём про «ещё не пришла»', () => {
+    for (const agentVersion of [undefined, '', 'garbage']) {
+      const n = dnsSplitView([{ check_name: 'dns', status: 'ok' }], { agentVersion }).note
+      expect(n).toContain('Версию агента роутер не сообщил')
+      expect(n).not.toContain('появится после обновления')
+    }
+    const v = dnsSplitView([{ check_name: 'dns', status: 'ok' }])
+    expect(v.note).toContain('Версию агента роутер не сообщил')
+    expect(v.note).not.toContain('появится после обновления')
   })
 
   it('зоны группируются по вердикту, одна строка на группу, имена зон по-человечески', () => {

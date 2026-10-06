@@ -67,7 +67,7 @@ func TestLookupRoute_PlainDomainRule(t *testing.T) {
 	if res.Domain != "chat.example.com" {
 		t.Fatalf("domain = %q", res.Domain)
 	}
-	want := wire.RouteLookupMatch{RuleName: "Работа", Pattern: "example.com", Via: wire.LookupViaTunnel, TunnelID: "awg1", TunnelName: "vpn-nl"}
+	want := wire.RouteLookupMatch{RuleName: "Работа", Pattern: "example.com", Via: wire.LookupViaTunnel, TunnelID: "awg1", TunnelName: "vpn-nl", Source: wire.LookupSourceFirmwareViaAWGM}
 	if len(res.Matches) != 1 || res.Matches[0] != want {
 		t.Fatalf("matches = %+v", res.Matches)
 	}
@@ -504,5 +504,59 @@ func TestRunner_RouteLookup_Dispatch(t *testing.T) {
 	}
 	if got.Domain != "api.claude.ai" || got.Verdict != wire.LookupViaTunnel || got.TunnelName != "vpn-nl" {
 		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestLookupRoute_NdmsRuleCarriesFirmwareSource(t *testing.T) {
+	in := lookupInputs(
+		awgmgr.DNSRoute{ID: "ndms:work", Name: "Работа", Backend: "ndms", Enabled: true,
+			Domains: []string{"example.com"}, Routes: boundTo("opkgtun1")},
+		awgmgr.DNSRoute{ID: "hr:x", Name: "Движок", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"example.net"}, Routes: boundTo("opkgtun1")},
+	)
+	res := lookupRoute("example.com", in, noExpand(t))
+	if len(res.Matches) != 1 || res.Matches[0].Source != wire.LookupSourceFirmwareViaAWGM {
+		t.Fatalf("ndms-правило без источника: %+v", res.Matches)
+	}
+	res = lookupRoute("example.net", in, noExpand(t))
+	if len(res.Matches) != 1 || res.Matches[0].Source != "" {
+		t.Fatalf("правило движка получило источник: %+v", res.Matches)
+	}
+}
+
+func TestWithFirmwareLists(t *testing.T) {
+	base := wire.RouteLookupResult{Domain: "example.com", Notes: []string{"ip_rules_unchecked"}}
+	// Групп больше, чем правил awg-manager с backend=ndms: есть чужие списки.
+	got := withFirmwareLists(base, 3, 2)
+	if got.FirmwareLists != 3 || !slices.Contains(got.Notes, lookupNoteFirmwareLists) || !slices.Contains(got.Notes, "ip_rules_unchecked") {
+		t.Fatalf("с признаком: %+v", got)
+	}
+	if again := withFirmwareLists(got, 3, 2); len(again.Notes) != len(got.Notes) {
+		t.Fatalf("пометка задвоилась: %+v", again.Notes)
+	}
+	none := withFirmwareLists(base, 0, 0)
+	if none.FirmwareLists != 0 || slices.Contains(none.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("без признака есть пометка: %+v", none)
+	}
+	// v0.56, ревью I2: N групп = N ndms-правил -- это группы самого
+	// awg-manager, а не чужие списки: пометки нет.
+	own := withFirmwareLists(base, 2, 2)
+	if own.FirmwareLists != 0 || slices.Contains(own.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("группы awg-manager приняты за чужие: %+v", own)
+	}
+	if fewer := withFirmwareLists(base, 1, 2); slices.Contains(fewer.Notes, lookupNoteFirmwareLists) {
+		t.Fatalf("групп меньше, чем ndms-правил, -- пометка: %+v", fewer)
+	}
+}
+
+func TestNDMSDNSRules_CountsOnlyNDMSBackend(t *testing.T) {
+	rules := []awgmgr.DNSRoute{
+		{ID: "a", Backend: "ndms", Enabled: true},
+		{ID: "b", Backend: "ndms", Enabled: false},
+		{ID: "c", Backend: "hydraroute", Enabled: true},
+		{ID: "d", Backend: "", Enabled: true},
+	}
+	if got := ndmsDNSRules(rules); got != 2 {
+		t.Fatalf("ndms-правил: %d, ждали 2", got)
 	}
 }

@@ -63,9 +63,27 @@ const NOTE_WORDS = {
   'geo_expand_failed:ANTHROPIC': 'Роутер не раскрыл список «ANTHROPIC»',
   policies_unknown: 'Роутер не отдал общие наборы правил',
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
+  firmware_lists: 'На роутере, похоже, есть списки сайтов прошивки, заведённые не через «awg-manager», — они в эту проверку не входят',
   'exit_unrecognized:Guest network':
     'Сайт уйдёт через подключение «Guest network» — роутер не сказал, VPN-туннель это или провайдер',
 }
+
+describe('lookupAnswer: списки прошивки', () => {
+  // Ревью v0.56, I2: пометка нейтральная -- это оговорка о полноте, а не
+  // тревога: списки, скорее всего, заведены человеком нарочно.
+  it('признак списков -- пометка, тон нейтральный; без признака -- без пометки', () => {
+    const a = lookupAnswer(answer({ notes: ['firmware_lists'], firmware_lists: 2 }))
+    expect(a.lines).toContain('На роутере, похоже, есть списки сайтов прошивки, заведённые не через «awg-manager», — они в эту проверку не входят')
+    expect(a.tone).toBe('ok')
+    const b = lookupAnswer(answer())
+    expect(b.lines.join(' ')).not.toContain('списки сайтов прошивки')
+    expect(b.tone).toBe('ok')
+  })
+  it('правило awg-manager с backend=ndms называет источник', () => {
+    const a = lookupAnswer(answer({ matches: [rule({ source: 'firmware_via_awgm' })] }))
+    expect(a.lines).toContain('правило «Все AI сервисы» — список прошивки через «awg-manager»')
+  })
+})
 
 describe('lookupAnswer', () => {
   it('туннель по правилу: куда и каким правилом', () => {

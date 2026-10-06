@@ -174,8 +174,19 @@ describe('«Проверки» — раздельный DNS', () => {
     unmount(root)
   })
 
+  it('агент с проверкой, но она ещё не пришла -- без «обновите агента» (B2)', async () => {
+    mocks.router = { router: { ...ROUTERS[1], agent_version: 'v0.54.1' } }
+    mocks.checks = { checks: [], tunnels: [] }
+    mocks.command = null
+    const root = await mount(<DiagTab routerID={2} />)
+
+    expect(section(root).textContent).toContain('Проверка ещё не пришла: она приходит с каждым отчётом роутера.')
+    expect(section(root).textContent).not.toContain('после обновления')
+    unmount(root)
+  })
+
   it('старый агент -- «появится после обновления»', async () => {
-    mocks.router = { router: ROUTERS[1] }
+    mocks.router = { router: { ...ROUTERS[1], agent_version: 'v0.30.2' } }
     mocks.checks = { checks: [], tunnels: [] }
     mocks.command = null
     const root = await mount(<DiagTab routerID={2} />)

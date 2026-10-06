@@ -494,3 +494,30 @@ repair:
 		t.Fatalf("старый ключ repair.auto_default ломает загрузку: %v", err)
 	}
 }
+
+// v0.56: тревога «трафик мимо VPN-туннеля» по умолчанию в тихом режиме.
+func TestLoadConfigBypassLeakAlertQuietByDefault(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "secret-bot-token-xyz")
+	base := `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: ` + tokPath + `
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+`
+	cfg, err := LoadConfig(writeFile(t, dir, "a.yaml", base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Alerts.BypassLeak.Enabled {
+		t.Fatal("alerts.bypass_leak.enabled по умолчанию должен быть false")
+	}
+	cfg, err = LoadConfig(writeFile(t, dir, "b.yaml", base+"alerts:\n  bypass_leak:\n    enabled: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Alerts.BypassLeak.Enabled {
+		t.Fatal("alerts.bypass_leak.enabled: true не прочитан")
+	}
+}

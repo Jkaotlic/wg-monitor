@@ -179,6 +179,16 @@ async function mount(settings, view = VIEW) {
 }
 
 describe('экран правки конфига агента', () => {
+  it('B2: версия агента пуста или нечитаема -- без «появится после обновления»', async () => {
+    for (const agent_version of ['', 'garbage']) {
+      const root = await mount({ role: 'admin', agent_version })
+      expect(root.querySelectorAll('input')).toHaveLength(0)
+      expect(root.textContent).toContain('ещё не прислал свежий отчёт')
+      expect(root.textContent).not.toContain('появится после обновления')
+      render(null, root)
+    }
+  })
+
   it('у старого агента полей нет вовсе, и сказано почему', async () => {
     const root = await mount({ role: 'admin', agent_version: 'v0.30.1' })
     expect(root.querySelectorAll('input')).toHaveLength(0)
@@ -231,5 +241,15 @@ describe('выключатель хука в форме', () => {
     const root = await mount({ role: 'admin', agent_version: 'v0.47.0' }, { ...VIEW, wake_hooks_off: false })
     expect(root.querySelector('#agent-cfg-wake_hooks_off')).not.toBeNull()
     render(null, root)
+  })
+})
+
+describe('B2: agentGateNote (экраны с порогом версии)', () => {
+  it('известная версия ниже порога -- просьба обновить с версией; пустая и нечитаемая -- нейтрально', async () => {
+    const { agentGateNote, AGENT_VERSION_UNKNOWN_NOTE } = await import('../src/agentConfig.js')
+    expect(agentGateNote('v0.30.1', 'Сброс DNS появится после обновления агента на роутере.')).toBe(
+      'Сброс DNS появится после обновления агента на роутере. Агент на роутере: v0.30.1.',
+    )
+    for (const v of ['', null, undefined, 'dev', 'x.y']) expect(agentGateNote(v, 'появится после обновления')).toBe(AGENT_VERSION_UNKNOWN_NOTE)
   })
 })

@@ -32,9 +32,13 @@ type miniappSelfHostedInstance struct {
 	SSHPort             int      `json:"ssh_port"`
 	SSHUser             string   `json:"ssh_user"`
 	PasswordSet         bool     `json:"password_set"`
-	// SSHHostKey -- запомненный отпечаток ключа хоста («SHA256:…»); пусто --
-	// ещё не входили или админ доверился новому ключу (v0.55, B2).
+	// SSHHostKey -- доверенный отпечаток ключа хоста («SHA256:…»); пусто --
+	// ещё не входили (v0.55, B2).
 	SSHHostKey string `json:"ssh_host_key"`
+	// SSHHostKeyPending -- отпечаток, который сервер предъявил вместо
+	// доверенного и получил отказ, и когда (v0.56, C1); пусто -- не было.
+	SSHHostKeyPending   string     `json:"ssh_host_key_pending"`
+	SSHHostKeyPendingAt *time.Time `json:"ssh_host_key_pending_at,omitempty"`
 }
 
 type miniappSelfHostedDefaults struct {
@@ -55,7 +59,7 @@ type miniappSelfHostedListResp struct {
 }
 
 func miniappSelfHostedView(inst selfhostedamnezia.Instance) miniappSelfHostedInstance {
-	return miniappSelfHostedInstance{
+	v := miniappSelfHostedInstance{
 		ID: inst.ID, Label: inst.Label, Enabled: inst.Enabled,
 		EndpointHost: inst.EndpointHost, EndpointPort: inst.EndpointPort,
 		Container: inst.Container, Interface: inst.Interface,
@@ -64,7 +68,13 @@ func miniappSelfHostedView(inst selfhostedamnezia.Instance) miniappSelfHostedIns
 		DNS:     append([]string{}, inst.DNS...),
 		SSHHost: inst.SSHHost, SSHPort: inst.SSHPort, SSHUser: inst.SSHUser,
 		PasswordSet: inst.SSHPassword != "", SSHHostKey: inst.SSHHostKey,
+		SSHHostKeyPending: inst.SSHHostKeyPending,
 	}
+	if inst.SSHHostKeyPending != "" && !inst.SSHHostKeyPendingAt.IsZero() {
+		at := inst.SSHHostKeyPendingAt.UTC()
+		v.SSHHostKeyPendingAt = &at
+	}
+	return v
 }
 
 // miniappSelfHostedReq -- форма своего сервера. Несёт пароль SSH: печать
@@ -360,11 +370,12 @@ func miniappSelfHostedConfirm(d Deps, w http.ResponseWriter, id, confirm, op str
 	return true
 }
 
-// miniappSelfHostedTrustHostKeyHandler -- «Доверять новому ключу» (v0.55,
-// B2): только админ, подтверждение набором имени сервера. Запомненный
-// отпечаток сбрасывается; новый запомнит следующий удачный вход -- обычно
-// «Проверить подключение» сразу после.
-func miniappSelfHostedTrustHostKeyHandler(d Deps) http.HandlerFunc {
+// miniappSelfHostedConfirmHostKeyHandler -- «Подтвердить ключ сервера
+// SHA256:…» (v0.56, C1): только админ, подтверждение набором имени сервера.
+// Присланный отпечаток -- тот, что админ видел в карточке; бэкенд сверяет
+// его с ожидающим. Сервер с тех пор предъявил другой -- 409, доверие прежнее;
+// ожидающего нет вовсе -- 409 с другими словами.
+func miniappSelfHostedConfirmHostKeyHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !miniappSelfHostedGate(d, w, r) {
 			return
@@ -374,19 +385,28 @@ func miniappSelfHostedTrustHostKeyHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Confirm string `json:"confirm"`
+			Confirm     string `json:"confirm"`
+			Fingerprint string `json:"fingerprint"`
 		}
 		if !decodeMiniappCabinetBody(w, r, &body) {
 			return
 		}
-		if !miniappSelfHostedConfirm(d, w, id, body.Confirm, "доверие новому ключу") {
+		if !miniappSelfHostedConfirm(d, w, id, body.Confirm, "подтверждение ключа сервера") {
 			return
 		}
-		if err := d.SelfHosted.TrustNewHostKey(id); err != nil {
-			writeMiniappSelfHostedError(d, w, "доверие новому ключу", err)
+		if err := d.SelfHosted.ConfirmHostKey(id, body.Fingerprint); err != nil {
+			if errors.Is(err, selfhostedamnezia.ErrHostKeyNotPending) {
+				writeMiniappCabinetError(w, http.StatusConflict, "host_key_not_pending")
+				return
+			}
+			if errors.Is(err, selfhostedamnezia.ErrHostKeyNothingPending) {
+				writeMiniappCabinetError(w, http.StatusConflict, "host_key_nothing_pending")
+				return
+			}
+			writeMiniappSelfHostedError(d, w, "подтверждение ключа сервера", err)
 			return
 		}
-		miniappCabinetLogger(d).Info("свой сервер: отпечаток ключа хоста сброшен", "instance", id)
+		miniappCabinetLogger(d).Info("свой сервер: новый ключ хоста подтверждён", "instance", id, "fingerprint", strings.TrimSpace(body.Fingerprint))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

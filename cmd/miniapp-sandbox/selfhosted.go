@@ -27,10 +27,15 @@ type sandboxSelfHosted struct {
 
 var _ backend.SelfHostedVPS = (*sandboxSelfHosted)(nil)
 
-// sandboxHostKey -- отпечаток ключа хоста «Домашнего VPS» песочницы. Адрес
-// SSH со словом «newkey» -- сервер с другим ключом: проверка отказывает
-// словами о смене ключа, пока отпечаток не сброшен «Доверять новому ключу».
-const sandboxHostKey = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
+// sandboxHostKey -- отпечаток ключа хоста «Домашнего VPS» песочницы.
+// sandboxNewHostKey -- ключ переустановленного сервера: его предъявляет
+// «Переустановленный» и любой адрес SSH со словом «newkey». Проверка
+// отказывает словами о смене ключа и запоминает его ожидающим, пока админ
+// не подтвердит именно его (v0.56, C1).
+const (
+	sandboxHostKey    = "SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA"
+	sandboxNewHostKey = "SHA256:Zm9yLXNhbmRib3gtb25seS1hbm90aGVyLWhvc3Qta2V5"
+)
 
 func newSandboxSelfHosted() *sandboxSelfHosted {
 	now := time.Now()
@@ -46,6 +51,9 @@ func newSandboxSelfHosted() *sandboxSelfHosted {
 			SSHHostKey: sandboxHostKey},
 		{ID: "reserve", Label: "Резервный", Enabled: false, EndpointHost: "vpn2.sandbox.example.com", EndpointPort: 51820,
 			DNS: []string{"1.1.1.1", "8.8.8.8"}},
+		{ID: "rebuilt", Label: "Переустановленный", Enabled: false, EndpointHost: "vpn3.sandbox.example.com", EndpointPort: 47567,
+			SSHHost: "203.0.113.20", SSHPort: 22, SSHUser: "root", SSHPassword: strings.Repeat("s", 8),
+			SSHHostKey: sandboxHostKey, SSHHostKeyPending: sandboxNewHostKey, SSHHostKeyPendingAt: now.Add(-2 * time.Hour)},
 	}}
 }
 
@@ -120,9 +128,10 @@ func (s *sandboxSelfHosted) Update(id string, inst selfhostedamnezia.Instance) e
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
 	inst.Enabled = s.instances[i].Enabled
-	inst.SSHHostKey = ""
+	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", "", time.Time{}
 	if cur := s.instances[i]; inst.SSHHost != "" && inst.SSHHost == cur.SSHHost && inst.SSHPort == cur.SSHPort {
 		inst.SSHHostKey = cur.SSHHostKey
+		inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = cur.SSHHostKeyPending, cur.SSHHostKeyPendingAt
 	}
 	if inst.SSHHost != "" && inst.SSHPassword == "" {
 		cur := s.instances[i]
@@ -176,30 +185,42 @@ func (s *sandboxSelfHosted) Check(_ context.Context, id string) (selfhostedamnez
 		return selfhostedamnezia.CheckResult{OK: false, Message: "SSH не принял пользователя или пароль"}, nil
 	}
 	presented := sandboxHostKey
-	if strings.Contains(inst.SSHHost, "newkey") {
-		presented = "SHA256:Zm9yLXNhbmRib3gtb25seS1hbm90aGVyLWhvc3Qta2V5"
+	if id == "rebuilt" || strings.Contains(inst.SSHHost, "newkey") {
+		presented = sandboxNewHostKey
 	}
 	if inst.SSHHostKey != "" && inst.SSHHostKey != presented {
-		return selfhostedamnezia.CheckResult{OK: false, Message: (&selfhostedamnezia.HostKeyChangedError{Label: inst.Label}).Error()}, nil
-	}
-	if inst.SSHHostKey == "" {
 		s.mu.Lock()
-		if j := s.index(id); j >= 0 {
-			s.instances[j].SSHHostKey = presented
+		if j := s.index(id); j >= 0 && s.instances[j].SSHHostKeyPending != presented {
+			s.instances[j].SSHHostKeyPending, s.instances[j].SSHHostKeyPendingAt = presented, time.Now()
 		}
 		s.mu.Unlock()
+		return selfhostedamnezia.CheckResult{OK: false, Message: (&selfhostedamnezia.HostKeyChangedError{Label: inst.Label}).Error()}, nil
 	}
+	// Первый вход запоминает ключ; вход с доверенным стирает устаревший ожидающий.
+	s.mu.Lock()
+	if j := s.index(id); j >= 0 {
+		s.instances[j].SSHHostKey = presented
+		s.instances[j].SSHHostKeyPending, s.instances[j].SSHHostKeyPendingAt = "", time.Time{}
+	}
+	s.mu.Unlock()
 	return selfhostedamnezia.CheckResult{OK: true, Message: "Подключение есть: контейнер «amnezia-awg2» отвечает"}, nil
 }
 
-func (s *sandboxSelfHosted) TrustNewHostKey(id string) error {
+func (s *sandboxSelfHosted) ConfirmHostKey(id, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := s.index(id)
 	if i < 0 {
 		return selfhostedamnezia.ErrInstanceNotFound
 	}
-	s.instances[i].SSHHostKey = ""
+	inst := &s.instances[i]
+	if inst.SSHHostKeyPending == "" {
+		return selfhostedamnezia.ErrHostKeyNothingPending
+	}
+	if inst.SSHHostKeyPending != strings.TrimSpace(fingerprint) {
+		return selfhostedamnezia.ErrHostKeyNotPending
+	}
+	inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = inst.SSHHostKeyPending, "", time.Time{}
 	return nil
 }
 

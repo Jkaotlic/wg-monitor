@@ -12,20 +12,62 @@
 // Ветка считается живой только по факту. «Не знаем» -- полноценный третий
 // ответ: у молчащего роутера все показания вчерашние, и рисовать по ним
 // зелёное значит выдавать прошлое за настоящее.
-// Какой VPN-туннель несёт обход. Роутер называет его сам (egress_tunnel_id):
-// с v0.41 агент сообщает несущее звено политики и при раздельной
-// маршрутизации. Без имени на sing-box единого выхода нет, маршрут выбирается
-// для каждого адреса -- берём первый работающий, лучше исправный: писать
-// «роутер не сказал» над поднятым VPN-туннелем значило бы соврать.
+// Несущий VPN-туннель обхода -- тот, кого назвал сервер (v0.56, спека B1):
+// traffic.carrier_tunnel_id, посчитанный одной функцией для «Роутера» и
+// «VPN-туннелей» (miniappCarrier). Бэкенд старше v0.56 поля carrier_basis не
+// шлёт -- тогда несущим остаётся его главный выход egress_tunnel_id.
 //
-// Раздельная маршрутизация без имени (агент старше v0.41) и среди туннелей
-// есть мёртвые -- не угадываем вовсе. 18.09 workrouter: схема взяла первый
-// running (мёртвое запасное звено) и покрасила ветку красным, хотя обход шёл
-// через живой соседний.
+// Угадывания «первый поднятый» больше нет: 18.09 workrouter схема взяла
+// первый running (мёртвое запасное звено) и покрасила обход красным, а в
+// песочнице sandbox-broken «Роутер» называл vpn-de, вкладка -- vpn-nl.
+// Несущий не назван -- не называем никого.
+export function carrierID(traffic) {
+  if (traffic?.carrier_basis) return traffic.carrier_tunnel_id ?? ''
+  return traffic?.egress_tunnel_id ?? ''
+}
+
+// Сервер сказал, что несущий не отвечает (поднят, а проверка провалена, или
+// не поднят вовсе): «работает» о нём говорить нельзя.
+export function carrierDeadByServer(traffic) {
+  return Boolean(traffic?.carrier_basis) && Boolean(traffic?.carrier_tunnel_id) && traffic.carrier_alive === false
+}
+
+// Несущий по снимку маршрутов роутера (route_status), когда сервер его не
+// знает (carrier_basis none). active_tunnel_id политики в снимке -- слово
+// самого роутера, а не догадка: «первым поднятым» оно не является (ревью
+// B1). Политик через VPN несколько -- та, что несёт больше правил, как у
+// сервера. sing-box и «напрямую» не трогаем: там несущего нет. Живость
+// сервер не сказал (carrier_alive не задан) -- её решают проверки туннеля.
+// Считаются только ИСПОЛНЯЕМЫЕ правила, как у сервера (miniappPolicyExecuted):
+// правила HydraRoute Neo -- лишь при запущенном HydraRoute Neo. Политика без
+// исполняемых правил ничего не несёт, и называть её звено несущим нельзя (M1).
+function executedRules(p, snapshot) {
+  const dns = p?.dns ?? 0
+  return snapshot?.hr_neo?.running === true ? dns : dns - (p?.hr_neo ?? 0)
+}
+
+export function withSnapshotCarrier(traffic, snapshot) {
+  if (!traffic || traffic.carrier_basis !== 'none' || traffic.mode === 'singbox' || traffic.mode === 'direct') return traffic
+  const ids = new Set((Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []).map((t) => t.id))
+  let best = null
+  let bestN = 0
+  for (const p of Array.isArray(snapshot?.policies) ? snapshot.policies : []) {
+    if (!p?.active_tunnel_id || p.via_vpn === false || !ids.has(p.active_tunnel_id)) continue
+    const n = executedRules(p, snapshot)
+    if (n > bestN) {
+      best = p
+      bestN = n
+    }
+  }
+  if (!best) return traffic
+  const { carrier_alive: _alive, ...rest } = traffic
+  return { ...rest, carrier_tunnel_id: best.active_tunnel_id, carrier_basis: 'snapshot' }
+}
+
 export function carrierLine({ traffic, tunnels }) {
-  const named = tunnels?.find((x) => x.tunnel_id === traffic?.egress_tunnel_id)
-  if (named) return named
-  return tunnels?.find((t) => isRunning(t) && t.status !== 'fail') ?? tunnels?.find(isRunning) ?? null
+  const id = carrierID(traffic)
+  if (!id) return null
+  return tunnels?.find((x) => x.tunnel_id === id) ?? null
 }
 
 // Жив ли VPN-туннель -- по слову САМОГО РОУТЕРА (run_state), а не по вердикту
@@ -44,7 +86,13 @@ export function isAlive(t, incidents = []) {
 
 // Несущий назван роутером, а не выбран нами.
 export function carrierKnown({ traffic, tunnels }) {
-  return Boolean(traffic?.egress_tunnel_id) && Boolean(tunnels?.some((x) => x.tunnel_id === traffic.egress_tunnel_id))
+  return carrierLine({ traffic, tunnels }) != null
+}
+
+// Несущий жив: и по своей проверке и тревогам (isAlive), и по слову сервера.
+export function carrierAlive({ traffic, tunnels, incidents = [] }) {
+  const line = carrierLine({ traffic, tunnels })
+  return line != null && isAlive(line, incidents) && !carrierDeadByServer(traffic)
 }
 
 // Мёртвый -- тот, кто должен работать, но не работает: тревога по нему или
@@ -55,19 +103,25 @@ export function isDead(t, incidents = []) {
   return isRunning(t) && t.status === 'fail'
 }
 
-// Несущий неизвестен, туннелей несколько и часть мертва: любой выбор -- угадывание.
-function blindSplit({ traffic, tunnels, incidents }) {
-  if (traffic?.mode !== 'split' || carrierKnown({ traffic, tunnels })) return false
-  return (tunnels?.length ?? 0) > 1 && tunnels.some((t) => isDead(t, incidents))
+// Ветка VPN без названного несущего (sing-box, старый агент): имени нет, но
+// состояние сказать можно, если все VPN-туннели говорят одно -- живые без
+// мёртвых или мёртвые без живых. Вперемешку -- любой ответ был бы
+// угадыванием, какой из них несёт.
+function unnamedBranch({ tunnels, incidents }) {
+  const alive = (tunnels ?? []).some((t) => isAlive(t, incidents))
+  const dead = (tunnels ?? []).some((t) => isDead(t, incidents))
+  if (alive && !dead) return 'up'
+  if (dead && !alive) return 'down'
+  return 'unknown'
 }
 
-function tunnelBranch({ line, incidents, stale }) {
+function tunnelBranch({ line, traffic, tunnels, incidents, stale }) {
   if (stale) return 'unknown'
-  if (!line) return 'unknown'
-  // То же правило живости, что у шапки (isAlive): проваленная проверка
+  if (!line) return unnamedBranch({ tunnels, incidents })
+  // То же правило живости, что у шапки (carrierAlive): проваленная проверка
   // несущего -- уже «молчит», даже пока тревога не набрала порог. Иначе
   // схема рисовала бы зелёное рядом с шапкой, где этот туннель мёртв.
-  return isAlive(line, incidents) ? 'up' : 'down'
+  return carrierAlive({ traffic, tunnels, incidents }) ? 'up' : 'down'
 }
 
 // Живые запасные звенья политики несущего по слову бэкенда, или null, если
@@ -91,7 +145,7 @@ export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' })
   const ids = reserveIDs({ traffic, tunnels })
   if (ids) return tunnels.find((t) => ids.includes(t.tunnel_id))
   const alive = tunnels.filter((t) => isAlive(t, incidents))
-  if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== traffic?.egress_tunnel_id)
+  if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== carrierID(traffic))
   return alive.length > 1 ? { tunnel_id: '' } : undefined
 }
 
@@ -100,8 +154,8 @@ export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' })
 // Несущий исключается по id и по имени, которое схема написала на ветке.
 // Выключенный руками мёртвым не считается: на него трафик и не рассчитан.
 export function deadReserveLine({ traffic, tunnels = [], incidents = [], via = '' }) {
-  const carrierID = traffic?.egress_tunnel_id
-  return tunnels.find((t) => t.tunnel_id !== carrierID && (t.name || t.tunnel_id) !== via && isDead(t, incidents))
+  const carrier = carrierID(traffic)
+  return tunnels.find((t) => t.tunnel_id !== carrier && (t.name || t.tunnel_id) !== via && isDead(t, incidents))
 }
 
 // Слова строки резерва под схемой. Несущий молчит, а запасной жив -- «готов,
@@ -146,21 +200,26 @@ export function backupCopy({ backupLine, carrierDown = false, deadReserve = null
   }
 }
 
+// Имя несущего на экране: своё имя VPN-туннеля, а без него -- имя, которое
+// сервер дал главному выходу, и только потом идентификатор.
+export function lineVia(t, traffic) {
+  if (!t) return ''
+  const egressName = t.tunnel_id === traffic?.egress_tunnel_id ? traffic?.egress_tunnel_name : ''
+  return t.name || egressName || t.tunnel_id
+}
+
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {
-  const blind = blindSplit({ traffic, tunnels, incidents })
-  const t = blind ? null : carrierLine({ traffic, tunnels })
-  const tunnel = tunnelBranch({ line: t, incidents, stale })
-  // При раздельной маршрутизации без названного выхода VPN-туннель выбирают
-  // правила для каждого адреса. Ветка живая, но подписать её первым попавшимся
-  // именем и его задержкой значило бы угадать.
-  const guess = blind || (traffic?.mode === 'split' && t?.tunnel_id !== traffic?.egress_tunnel_id)
+  const t = carrierLine({ traffic, tunnels })
+  const tunnel = tunnelBranch({ line: t, traffic, tunnels, incidents, stale })
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
     // упавшим VPN-туннелем значило бы говорить человеку «интернета нет», когда
     // банки и госуслуги у него работают.
     direct: stale ? 'unknown' : 'up',
-    via: guess ? '' : traffic?.egress_tunnel_name || t?.name || t?.tunnel_id || '',
-    latencyMs: !guess && typeof t?.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
+    // Подпись ветки -- только названный несущий: подписать её первым
+    // попавшимся именем и его задержкой значило бы угадать.
+    via: lineVia(t, traffic),
+    latencyMs: t && typeof t.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
   }
 }

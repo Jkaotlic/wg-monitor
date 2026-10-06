@@ -43,7 +43,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 	if !strings.Contains(card.Summary, "проблемы") {
 		t.Errorf("summary must mention проблемы, got %q", card.Summary)
 	}
-	if !strings.Contains(card.Details, "список VPN-туннелей не читается") || !strings.Contains(card.Details, "поиск сайтов по имени не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
+	if !strings.Contains(card.Details, "список VPN-туннелей не читается") || !strings.Contains(card.Details, "определение адресов сайтов не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
 		t.Errorf("details must list failing checks, got %q", card.Details)
 	}
 	if strings.Contains(card.Details, "external_reach") {
@@ -54,7 +54,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 func TestRenderWakeReport_StartupFailuresAreWarmup(t *testing.T) {
 	checks := []wire.Check{
 		{Name: "tunnels", Status: "fail"},
-		{Name: "hydraroute", Status: "fail"},
+		{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}},
 		{Name: "tunnel_awg13", Status: "fail"},
 		{Name: "agent_heartbeat", Status: "ok"},
 	}
@@ -118,9 +118,9 @@ func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
 		{"ждёт проверок", []wire.Check{{Name: "agent_heartbeat", Status: "ok"}}, nil},
 		{"поднимается", []wire.Check{
 			{Name: "tunnels", Status: "fail"},
-			{Name: "hydraroute", Status: "fail"},
+			{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}},
 			{Name: "tunnel_awg13", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт"}},
-		}, []string{"VPN-туннель «Франкфурт»", "движок умной раздельной маршрутизации"}},
+		}, []string{"VPN-туннель «Франкфурт»", "обход блокировок не работает"}},
 		{"есть проблемы", []wire.Check{
 			{Name: "dns_via_tunnel", Status: "fail"},
 			{Name: "awg_manager", Status: "fail"},
@@ -146,5 +146,43 @@ func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
 			}
 			assertSaysVPNTunnel(t, st.name, text)
 		})
+	}
+}
+
+// v0.56, B4: «ночной отчёт» не держит своего словаря -- существительное
+// берёт из общей таблицы подписей, а пояснение к нему -- только глагол.
+func TestWakeCheckLabelUsesCheckNamesTable(t *testing.T) {
+	for _, key := range []string{"tunnels", "dns", "hydraroute", "awg_manager", "external_reach", "dns_ru", "resolver_guard"} {
+		got := wakeCheckLabel(wire.Check{Name: key, Status: "fail"})
+		if !strings.HasPrefix(got, lowerFirst(CheckNames[key])) {
+			t.Errorf("%s: %q не начинается с подписи из таблицы %q", key, got, CheckNames[key])
+		}
+	}
+}
+
+// «Не работает» про обход -- только доказанное; непроверенное и ошибка чтения
+// статуса awg-manager говорят «не удалось проверить».
+func TestWakeCheckLabelHydraRouteProvenVsUnproven(t *testing.T) {
+	cases := []struct {
+		name string
+		c    wire.Check
+		want string
+	}{
+		{"не установлен, правила требуют", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": false, "running": false}}, "обход блокировок не работает"},
+		{"не запущен", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false}}, "обход блокировок не работает"},
+		{"не проверено", wire.Check{Name: "hydraroute", Status: "unknown", Details: map[string]any{"installed": false, "running": false, "unverified": true}}, "обход блокировок не удалось проверить"},
+		{"ошибка чтения статуса", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"error": "awg-manager: timeout"}}, "обход блокировок не удалось проверить"},
+		{"ошибка чтения, details пуст", wire.Check{Name: "hydraroute", Status: "fail"}, "обход блокировок не удалось проверить"},
+		// Ревью v0.56, M3: установлен, не запущен, а правила не прочитались --
+		// нужен ли он, неизвестно; «обход не работает» не доказано, доказано
+		// лишь, что не запущен.
+		{"не запущен, правила не прочитаны", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "mechanism_probe_error": "awg-manager: timeout"}}, "HydraRoute Neo не запущен"},
+		{"не запущен, DNS-правила его требуют, статические не прочитались", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "hrneo_required": true, "mechanism_probe_error": "static: timeout"}}, "обход блокировок не работает"},
+		{"не запущен, правила его требуют", wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{"installed": true, "running": false, "hrneo_required": true}}, "обход блокировок не работает"},
+	}
+	for _, c := range cases {
+		if got := wakeCheckLabel(c.c); got != c.want {
+			t.Errorf("%s: %q, ждали %q", c.name, got, c.want)
+		}
 	}
 }

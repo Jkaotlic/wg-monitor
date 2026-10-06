@@ -10,6 +10,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
 
 // Провайдеры источника автопочинки. amnezia и hidemyname -- кабинеты
@@ -67,7 +68,10 @@ func (s repairSource) Options(ctx context.Context, routerID int64, provider stri
 	}
 	acc, err := s.cab.Account(ctx, routerID, provider)
 	if err != nil {
-		return nil, &linkrepair.NeedHuman{Cause: err, Action: act}
+		return nil, &linkrepair.NeedHuman{Cause: err, Action: cabinetErrAction(err, act)}
+	}
+	if acc.KeyProblem != "" {
+		return nil, &linkrepair.NeedHuman{Cause: errors.New(acc.Note), Action: linkrepair.ActCabinetKeyLocked}
 	}
 	if !acc.Connected {
 		return nil, &linkrepair.NeedHuman{Cause: errors.New("кабинет не подключён: " + acc.Note), Action: act}
@@ -98,7 +102,10 @@ func (s repairSource) HasRoom(ctx context.Context, routerID int64, provider stri
 	}
 	acc, err := s.cab.Account(ctx, routerID, provider)
 	if err != nil {
-		return false, &linkrepair.NeedHuman{Cause: err, Action: act}
+		return false, &linkrepair.NeedHuman{Cause: err, Action: cabinetErrAction(err, act)}
+	}
+	if acc.KeyProblem != "" {
+		return false, &linkrepair.NeedHuman{Cause: errors.New(acc.Note), Action: linkrepair.ActCabinetKeyLocked}
 	}
 	if !acc.Connected {
 		return false, &linkrepair.NeedHuman{Cause: errors.New("кабинет не подключён: " + acc.Note), Action: act}
@@ -107,6 +114,16 @@ func (s repairSource) HasRoom(ctx context.Context, routerID int64, provider stri
 		return true, nil
 	}
 	return acc.DevicesUsed < acc.DevicesMax, nil
+}
+
+// cabinetErrAction -- что сказать владельцу про отказ кабинета: если файл
+// ключей зашифрован, а ключа шифрования нет или он не тот, ключ кабинета цел
+// и «обновите ключ» было бы неправдой -- чинить может только администратор.
+func cabinetErrAction(err error, act string) string {
+	if errors.Is(err, sealedfile.ErrKeyMissing) || errors.Is(err, sealedfile.ErrUnreadable) {
+		return linkrepair.ActCabinetKeyLocked
+	}
+	return act
 }
 
 // cabinetAction -- что сказать человеку, когда этот кабинет отказал.
@@ -134,7 +151,7 @@ func (s repairSource) cabinet(ctx context.Context, routerID int64, provider, opt
 	// человеку это сказано прямо.
 	out, err := s.cab.IssueConfig(ctx, routerID, provider, option)
 	if err != nil {
-		return replace.Issued{}, &linkrepair.NeedHuman{Cause: err, Action: act}
+		return replace.Issued{}, &linkrepair.NeedHuman{Cause: err, Action: cabinetErrAction(err, act)}
 	}
 	if len(out.Conf) == 0 {
 		return replace.Issued{}, errors.New("кабинет вернул пустой конфиг")

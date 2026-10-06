@@ -2,6 +2,7 @@ import { agentReplyText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { placeText } from '../places.js'
+import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
 // Помощник копирования части 2 (тот же, что у экрана токена).
 import { copyText } from '../clipboard.js'
@@ -116,7 +117,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         {settings && settings.role !== 'admin' && <p class="hint">{T.adminOnly}</p>}
         {settings && settings.role === 'admin' && !available && (
           <p class="hint">
-            {T.tooOld} Агент на роутере: {settings.agent_version || 'версию не сообщал'}.
+            {agentGateNote(settings.agent_version, T.tooOld)}
           </p>
         )}
 

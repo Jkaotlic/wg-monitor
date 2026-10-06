@@ -340,7 +340,7 @@ describe('dns_ru на вкладке «Проверки»', () => {
     const keys = rows.map((r) => r.key)
     expect(keys.indexOf('dns_ru')).toBe(keys.indexOf('dns') + 1)
     const row = rowsByKey(rows).dns_ru
-    expect(row.title).toBe('Русские сайты открываются по имени')
+    expect(row.title).toBe('Сервер имён для русских сайтов')
     expect(row.answer).toBe('нет')
     expect(row.tone).toBe('danger')
     expect(row.consequence).toBe('Русские сайты могут не открываться')

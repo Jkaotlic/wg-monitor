@@ -88,15 +88,18 @@ func isWarmupCheck(name string) bool {
 	}
 }
 
+// wakeName -- подпись проверки из общей таблицы (check_names.json) для
+// середины фразы: своих имён у «ночного отчёта» нет.
+func wakeName(key string) string { return lowerFirst(CheckNames[key]) }
+
 // wakeCheckLabel -- что не так, словами приложения: VPN-туннель с именем
-// владельца, «поиск сайтов по имени» вместо DNS, «панель роутера» вместо
-// awg-manager, HydraRoute с пояснением.
+// владельца, остальное -- имена из общей таблицы подписей.
 func wakeCheckLabel(c wire.Check) string {
 	switch c.Name {
 	case "tunnels":
-		return "список VPN-туннелей не читается"
+		return wakeName("tunnels") + " не читается"
 	case "dns_via_tunnel":
-		return "поиск сайтов по имени не отвечает"
+		return wakeName("dns") + " не отвечает"
 	}
 	switch checkCategory(c.Name) {
 	case "tunnel":
@@ -105,20 +108,38 @@ func wakeCheckLabel(c wire.Check) string {
 		}
 		return "VPN-туннель не на связи"
 	case "dns":
-		return "поиск сайтов по имени не отвечает"
+		return wakeName("dns") + " не отвечает"
 	case "hydraroute":
-		return "HydraRoute (движок умной раздельной маршрутизации) не работает"
+		// «Не работает» -- только доказанное: агент прочитал статус
+		// (installed/running в details) и вынес Fail. Пометка unverified или
+		// ошибка чтения статуса (details пуст) -- «не удалось проверить».
+		if unverified, _ := boolOrFalse(c.Details, "unverified"); unverified {
+			return wakeName("hydraroute") + " не удалось проверить"
+		}
+		installed, read := boolOrFalse(c.Details, "installed")
+		if !read {
+			return wakeName("hydraroute") + " не удалось проверить"
+		}
+		// Установлен, не запущен, а правила не прочитались (агент вынес Fail
+		// без hrneo_required): нужен ли он -- неизвестно, «обход не работает»
+		// не доказано. Доказано лишь, что не запущен (ревью v0.56, M3).
+		running, _ := boolOrFalse(c.Details, "running")
+		required, _ := boolOrFalse(c.Details, "hrneo_required")
+		if _, probeFailed := c.Details["mechanism_probe_error"]; installed && !running && probeFailed && !required {
+			return "HydraRoute Neo не запущен"
+		}
+		return wakeName("hydraroute") + " не работает"
 	case "awg_manager", "awgmgr_api":
-		return "панель роутера не отвечает"
+		return wakeName("awg_manager") + " не отвечает"
 	case "external_reach":
-		return "сервисы не открываются через обход"
+		return wakeName("external_reach") + " не работает"
 	case "dns_ru":
 		return dnsRuHumanName + " не отвечает"
 	case "resolver_guard":
 		if resolverGuardForeignLeftover(c.Details) {
 			return "запасные DNS-серверы не снялись" // отвечает ли свой -- не знаем
 		}
-		return "свой DNS-сервер не отвечает"
+		return wakeName("resolver_guard") + " не отвечает"
 	default:
 		return c.Name
 	}

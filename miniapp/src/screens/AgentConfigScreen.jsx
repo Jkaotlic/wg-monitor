@@ -10,6 +10,7 @@ import {
   AGENT_CONFIG_TEXTS,
   agentConfigArgs,
   agentConfigAvailable,
+  agentGateNote,
   agentConfigConfirmBody,
   agentConfigFields,
   agentConfigRows,
@@ -119,7 +120,7 @@ export function AgentConfigScreen({ routerID, routerName, asleep, openSheet, onC
         {/* Агент ниже пола версии: полей нет вовсе. */}
         {settings && settings.role === 'admin' && !available && (
           <p class="hint">
-            {AGENT_CONFIG_TEXTS.tooOld} Агент на роутере: {settings.agent_version || 'версию не сообщал'}.
+            {agentGateNote(settings.agent_version, AGENT_CONFIG_TEXTS.tooOld)}
           </p>
         )}
 

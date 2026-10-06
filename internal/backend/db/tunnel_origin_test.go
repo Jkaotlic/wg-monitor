@@ -71,3 +71,42 @@ func TestTunnelOrigin_ReissueOverwrites(t *testing.T) {
 		t.Fatalf("list = %+v err=%v", list, err)
 	}
 }
+
+// Удалённый VPN-туннель не оставляет следов: ни происхождения, ни отметки
+// «не подтверждена». Чужие строки и другие роутеры не трогаются.
+func TestTunnelOrigin_DeleteDropsOriginAndUnconfirmed(t *testing.T) {
+	d, userID := originDB(t)
+	other, err := d.Users().Insert("router2", "tok-1111111111111111111111111111111111111111111111111111111111", "2.2.2.2", "awg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for _, id := range []int64{userID, other} {
+		if err := d.TunnelOrigins().RecordUnconfirmed(id, "awg21", "amnezia_nl", "amnezia", "nl", when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.TunnelOrigins().Record(userID, "awg22", "amnezia_de", "amnezia", "de", when, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.TunnelOrigins().Delete(userID, "awg21"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := d.TunnelOrigins().Get(userID, "awg21"); ok {
+		t.Fatal("происхождение удалённого туннеля осталось")
+	}
+	var n int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM tunnel_origin_unconfirmed WHERE user_id = ? AND tunnel_id = 'awg21'`, userID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("отметка «не подтверждена» осталась: n=%d err=%v", n, err)
+	}
+	if _, ok, _ := d.TunnelOrigins().Get(userID, "awg22"); !ok {
+		t.Fatal("чужой туннель того же роутера потерян")
+	}
+	if _, ok, _ := d.TunnelOrigins().Get(other, "awg21"); !ok {
+		t.Fatal("тот же id у другого роутера потерян")
+	}
+	// повторное удаление безопасно
+	if err := d.TunnelOrigins().Delete(userID, "awg21"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -61,9 +61,15 @@ type Instance struct {
 	SSHUser       string   `json:"ssh_user,omitempty"`
 	SSHPassword   string   `json:"ssh_password,omitempty"`
 	// SSHHostKey -- отпечаток ключа хоста (ssh.FingerprintSHA256, «SHA256:…»),
-	// запомненный при первом удачном входе (v0.55, B2). Пусто -- ещё не входили
-	// или админ доверился новому ключу. Из формы не приходит.
+	// запомненный при первом удачном входе (v0.55, B2) или подтверждённый
+	// админом (v0.56, C1). Пусто -- ещё не входили. Из формы не приходит.
 	SSHHostKey string `json:"ssh_host_key,omitempty"`
+	// SSHHostKeyPending -- отпечаток, который сервер предъявил вместо
+	// доверенного и получил отказ (v0.56, C1), и когда это было. Доверенным он
+	// становится только подтверждением админа именно этого отпечатка. Из
+	// формы не приходит; смена адреса или порта SSH стирает его.
+	SSHHostKeyPending   string    `json:"ssh_host_key_pending,omitempty"`
+	SSHHostKeyPendingAt time.Time `json:"ssh_host_key_pending_at,omitzero"`
 }
 
 type Store struct {
@@ -387,6 +393,10 @@ func (s *Store) normalize() {
 		inst.SSHUser = strings.TrimSpace(inst.SSHUser)
 		inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
 		inst.SSHHostKey = strings.TrimSpace(inst.SSHHostKey)
+		inst.SSHHostKeyPending = strings.TrimSpace(inst.SSHHostKeyPending)
+		if inst.SSHHostKeyPending == "" {
+			inst.SSHHostKeyPendingAt = time.Time{}
+		}
 		if inst.SSHHost != "" {
 			if inst.SSHPort == 0 {
 				inst.SSHPort = 22
@@ -395,7 +405,7 @@ func (s *Store) normalize() {
 				inst.SSHUser = "root"
 			}
 		} else {
-			inst.SSHHostKey = ""
+			inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt = "", "", time.Time{}
 		}
 		if inst.ID == s.ActiveID && inst.Enabled {
 			activeSeen = true
@@ -465,6 +475,7 @@ func mergeInstance(old, next Instance) Instance {
 	// Отпечаток ключа -- только для того же адреса SSH.
 	if next.SSHHostKey == "" && next.SSHHost == old.SSHHost && next.SSHPort == old.SSHPort {
 		next.SSHHostKey = old.SSHHostKey
+		next.SSHHostKeyPending, next.SSHHostKeyPendingAt = old.SSHHostKeyPending, old.SSHHostKeyPendingAt
 	}
 	return next
 }
@@ -533,6 +544,11 @@ func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte
 		_ = rawConn.Close()
 		switch {
 		case hk.changed:
+			// Отказанный ключ -- в ожидающие, чтобы админ увидел и подтвердил
+			// именно его. Не записался -- отказ всё равно отказ.
+			if r.HostKey.Refused != nil {
+				_ = r.HostKey.Refused(hk.offered)
+			}
 			return nil, fmt.Errorf("ssh host key %s: %w", addr, ErrHostKeyChanged)
 		case hk.refused:
 			return nil, fmt.Errorf("ssh refused %s: %w", addr, errNoHostKeyPolicy)

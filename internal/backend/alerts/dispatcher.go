@@ -207,6 +207,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if checkName == "dns_ru" {
 			args.Neighbors = di.dnsRuNeighbors(userID)
 		}
+		if checkName == BypassLeakCheck {
+			args.Neighbors = di.collectNeighbors(userID, NeighborExclude(checkName, check.Details))
+		}
 		text := FormatHard(args)
 		// Под тревогой ровно две кнопки: открыть роутер в приложении (когда
 		// база настроена) и отложить эту проверку на час. Командные кнопки
@@ -304,6 +307,21 @@ func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []Neig
 		return nil
 	}
 	return BuildNeighborSummaries(rows, excludeCheck)
+}
+
+// BypassLeakCheck -- вердикт бэкенда «трафик мимо VPN-туннеля» (v0.56).
+const BypassLeakCheck = "bypass_leak"
+
+// NeighborExclude -- какую проверку tunnel_* не считать соседом тревоги: саму
+// упавшую, а у bypass_leak -- несущий VPN-туннель (он жив, но адрес не
+// меняет, и запасным его называть нельзя). Общая для тревоги и напоминания.
+func NeighborExclude(checkName string, d map[string]any) string {
+	if checkName == BypassLeakCheck {
+		if id := strOrEmpty(d, "tunnel_id"); id != "" {
+			return "tunnel_" + id
+		}
+	}
+	return checkName
 }
 
 // dnsRuNeighbors -- сосед для тревоги dns_ru: общая проверка dns, если у

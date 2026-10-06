@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   toggleReply: null,
   deleteReply: null,
   checkReply: null,
-  trustReply: null,
+  confirmKeyReply: null,
   clients: [],
   clientsFail: null,
   revokeReply: null,
@@ -72,13 +72,17 @@ vi.mock('../src/api.js', async (importOriginal) => {
       if (!mocks.revokeReply) mocks.clients = mocks.clients.filter((c) => c.id !== clientId)
       return reply(mocks.revokeReply, null)
     },
-    trustSelfhostedHostKey: (id, confirm) => {
-      log('trust', id, confirm)
-      if (!mocks.trustReply) {
+    confirmSelfhostedHostKey: (id, confirm, fingerprint) => {
+      log('confirmKey', id, confirm, fingerprint)
+      if (!mocks.confirmKeyReply) {
         const inst = mocks.instances.find((i) => i.id === id)
-        if (inst) inst.ssh_host_key = ''
+        if (inst) {
+          inst.ssh_host_key = fingerprint
+          inst.ssh_host_key_pending = ''
+          delete inst.ssh_host_key_pending_at
+        }
       }
-      return reply(mocks.trustReply, null)
+      return reply(mocks.confirmKeyReply, null)
     },
   }
 })
@@ -152,7 +156,7 @@ beforeEach(() => {
   mocks.toggleReply = null
   mocks.deleteReply = null
   mocks.checkReply = null
-  mocks.trustReply = null
+  mocks.confirmKeyReply = null
   mocks.clients = []
   mocks.clientsFail = null
   mocks.revokeReply = null
@@ -367,17 +371,35 @@ describe('экран сервера', () => {
     cleanup(root)
   })
 
-  // B2 (v0.55): отпечаток ключа хоста в карточке, «Доверять новому ключу» --
-  // набором названия сервера; после -- слова, что новый ключ запомнит вход.
-  it('ключ сервера: отпечаток моноширинно, «Доверять новому ключу» с набором названия', async () => {
+  // B2 (v0.55) + C1 (v0.56): доверенный отпечаток в карточке; кнопки сброса
+  // нет. Сервер предъявил другой ключ -- «было» и «сейчас», подтверждается
+  // именно этот отпечаток набором названия сервера.
+  it('ключ сервера: доверенный отпечаток моноширинно, без кнопки сброса', async () => {
     const FP = 'SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA'
     mocks.instances[0].ssh_host_key = FP
-    const { root, seen } = await mountInstance('ams')
+    const { root } = await mountInstance('ams')
     const key = root.querySelector('.selfhosted-hostkey')
     expect(key.querySelector('.selfhosted-hostkey-label').textContent).toBe('Ключ сервера')
     expect(key.querySelector('code').textContent).toBe(FP)
-    await click(button(root, 'Доверять новому ключу'))
-    expect(seen.sheets[0]).toMatchObject({ title: 'Доверять новому ключу сервера «Амстердам»?', danger: true, confirmPhrase: 'Амстердам', confirmStrict: true })
+    expect(key.querySelectorAll('button')).toHaveLength(0)
+    expect(root.textContent).not.toContain('Доверять новому ключу')
+    cleanup(root)
+  })
+
+  it('ключ сервера сменился: «было» и «сейчас», подтверждается именно новый отпечаток', async () => {
+    const OLD = 'SHA256:0+YzwylrV4vzNCZQZ4WDA6yEr1elQ6zIgwId6M/F9OA'
+    const NEW = 'SHA256:Zm9yLXRlc3Qtb25seS1hbm90aGVyLWhvc3Qta2V5LXg'
+    Object.assign(mocks.instances[0], { ssh_host_key: OLD, ssh_host_key_pending: NEW, ssh_host_key_pending_at: '2025-03-04T09:30:00Z' })
+    const { root, seen } = await mountInstance('ams')
+    const key = root.querySelector('.selfhosted-hostkey')
+    expect(key.textContent).toContain('Сервер предъявил другой ключ — входы на сервер остановлены, пока вы не подтвердите его.')
+    const rows = [...key.querySelectorAll('.selfhosted-hostkey-row')].map((r) => [r.querySelector('.selfhosted-hostkey-label').textContent, r.querySelector('code').textContent])
+    expect(rows).toEqual([['Было', OLD], ['Сервер сейчас предъявляет', NEW]])
+    expect(key.textContent).toContain('Замечен 4 мар 2025')
+    await click(button(root, `Подтвердить ключ сервера «${NEW}»`))
+    expect(seen.sheets[0]).toMatchObject({ title: 'Подтвердить новый ключ сервера «Амстердам»?', danger: true, confirmPhrase: 'Амстердам', confirmStrict: true })
+    expect(seen.sheets[0].body).toContain(`Было: «${OLD}»`)
+    expect(seen.sheets[0].body).toContain(`сейчас: «${NEW}»`)
     expect(seen.sheets[0].body).toContain('переустанавливали')
     const sheetRoot = await mountNode(<Sheet sheet={seen.sheets[0]} asleep={false} onClose={() => {}} />)
     const primary = () => [...sheetRoot.querySelectorAll('.sheet-actions button')].pop()
@@ -385,14 +407,56 @@ describe('экран сервера', () => {
     expect(primary().disabled).toBe(true)
     await fill(sheetRoot, 'sheet-confirm-input', 'Амстердам')
     await click(primary())
-    expect(calls('trust')).toEqual([['trust', 'ams', 'Амстердам']])
+    expect(calls('confirmKey')).toEqual([['confirmKey', 'ams', 'Амстердам', NEW]])
     await flush()
-    expect(root.querySelector('.selfhosted-hostkey code')).toBeFalsy()
-    expect(root.querySelector('.selfhosted-hostkey').textContent).toContain('Ещё не запомнен: запомнится при следующем входе')
-    expect(button(root, 'Доверять новому ключу')).toBeFalsy()
-    expect(root.querySelector('.connection-notice').textContent).toBe('Старый ключ забыт. Нажмите «Проверить подключение» — новый ключ запомнится.')
+    expect(root.querySelector('.selfhosted-hostkey code').textContent).toBe(NEW)
+    expect(root.querySelector('.selfhosted-hostkey').textContent).not.toContain('Было')
+    expect(button(root, `Подтвердить ключ сервера «${NEW}»`)).toBeFalsy()
+    expect(root.querySelector('.connection-notice').textContent).toBe('Новый ключ сервера подтверждён — входы на сервер снова идут.')
     cleanup(sheetRoot)
     cleanup(root)
+  })
+
+  // Проверка упёрлась в смену ключа -- сервер записал ожидающий; карточка
+  // подтягивает только отпечатки, набранное в форме не теряется.
+  it('проверка упёрлась в смену ключа -- «было/сейчас» появляются без потери правок формы', async () => {
+    const NEW = 'SHA256:Zm9yLXRlc3Qtb25seS1hbm90aGVyLWhvc3Qta2V5LXg'
+    mocks.instances[0].ssh_host_key = 'SHA256:old'
+    mocks.checkReply = { ok: false, message: 'Ключ сервера «Амстердам» изменился — если вы переустанавливали сервер, подтвердите новый ключ в карточке' }
+    const { root } = await mountInstance('ams')
+    await fill(root, 'sh-label', 'Амстердам-2')
+    mocks.instances[0].ssh_host_key_pending = NEW
+    await click(button(root, 'Проверить подключение'))
+    await flush()
+    expect(button(root, `Подтвердить ключ сервера «${NEW}»`)).toBeTruthy()
+    expect(root.querySelector('#sh-label').value).toBe('Амстердам-2')
+    cleanup(root)
+  })
+
+  it('ключ сервера: подтверждение опоздало -- слова сервера в листе', async () => {
+    const NEW = 'SHA256:Zm9yLXRlc3Qtb25seS1hbm90aGVyLWhvc3Qta2V5LXg'
+    Object.assign(mocks.instances[0], { ssh_host_key: 'SHA256:old', ssh_host_key_pending: NEW })
+    mocks.confirmKeyReply = new ApiError(409, 'host_key_not_pending', 'x', 'Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново')
+    const { root, seen } = await mountInstance('ams')
+    expect(root.querySelector('.selfhosted-hostkey').textContent).not.toContain('Замечен')
+    await click(button(root, `Подтвердить ключ сервера «${NEW}»`))
+    expect(seen.sheets[0].errorText(mocks.confirmKeyReply)).toBe('Сервер уже предъявляет другой ключ — обновите экран и сверьте отпечаток заново')
+    // После отказа листа карточка сама подтягивает отпечатки: сервер успел
+    // предъявить третий ключ -- кнопка уже про него.
+    const NEWER = 'SHA256:dGhpcmQtdGVzdC1vbmx5LWhvc3Qta2V5LXZhbHVlLXg'
+    mocks.instances[0].ssh_host_key_pending = NEWER
+    await act(async () => {
+      await seen.sheets[0].perform('Амстердам').catch(() => {})
+    })
+    await flush()
+    expect(calls('confirmKey')).toEqual([['confirmKey', 'ams', 'Амстердам', NEW]])
+    expect(button(root, `Подтвердить ключ сервера «${NEWER}»`)).toBeTruthy()
+    cleanup(root)
+  })
+
+  it('ключ сервера: подтверждать нечего -- свои слова', async () => {
+    const { selfhostedErrorText } = await import('../src/selfhostedForm.js')
+    expect(selfhostedErrorText(new ApiError(409, 'host_key_nothing_pending', 'x', ''))).toBe('Подтверждать нечего — ключ сервера уже доверенный или сменился адрес')
   })
 
   it('ключ сервера: без адреса SSH блока нет; не запомнен -- слова без кнопки', async () => {
@@ -401,7 +465,7 @@ describe('экран сервера', () => {
     cleanup(root)
     ;({ root } = await mountInstance('ams'))
     expect(root.querySelector('.selfhosted-hostkey').textContent).toContain('Ещё не запомнен: запомнится при следующем входе')
-    expect(button(root, 'Доверять новому ключу')).toBeFalsy()
+    expect(root.querySelector('.selfhosted-hostkey button')).toBeFalsy()
     cleanup(root)
   })
 

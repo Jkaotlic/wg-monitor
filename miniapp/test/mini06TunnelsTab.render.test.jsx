@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({ checks: null }))
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterChecks: () => mocks.checks(),
+  // Вкладки читают проверки вместе с тревогами (I1): тот же ответ, тревог нет.
+  fetchRouterChecksWithIncidents: (id) => Promise.resolve((() => mocks.checks())(id)).then((ev) => ({ incidents: [], ...ev })),
   fetchRouterSettings: () => Promise.resolve({ role: 'owner' }),
 }))
 // Один и тот же объект на каждый рендер: вкладка перечитывает снимок по

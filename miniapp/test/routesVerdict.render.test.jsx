@@ -27,6 +27,8 @@ vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterSettings: () => Promise.resolve({ role: 'owner' }),
   fetchRouterChecks: () => Promise.resolve(mocks.checks),
+  // Вкладки читают проверки вместе с тревогами (I1): тот же ответ, тревог нет.
+  fetchRouterChecksWithIncidents: (id) => Promise.resolve((() => Promise.resolve(mocks.checks))(id)).then((ev) => ({ incidents: [], ...ev })),
 }))
 
 const { RoutesTab } = await import('../src/screens/RoutesTab.jsx')

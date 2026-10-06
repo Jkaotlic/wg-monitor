@@ -106,8 +106,38 @@ func TestMiniappCabinet_SealedWithoutKeySpeaksAboutKey(t *testing.T) {
 		if !strings.Contains(acc.Note, "ключ шифрования не найден") {
 			t.Fatalf("%s: note = %q", provider, acc.Note)
 		}
+		if acc.KeyProblem != "cabinet_key_missing" {
+			t.Fatalf("%s: key_problem = %q", provider, acc.KeyProblem)
+		}
 		if _, err := r.IssueConfig(t.Context(), 7, provider, "de"); !errors.Is(err, sealedfile.ErrKeyMissing) {
 			t.Fatalf("%s: выпуск err = %v", provider, err)
+		}
+	}
+}
+
+// Ключ шифрования есть, но не тот, которым записан файл: код для фоновых
+// путей -- cabinet_key_wrong.
+func TestMiniappCabinet_SealedWrongKeyCode(t *testing.T) {
+	sealKeyForTest(t)
+	dir := t.TempDir()
+	r := &Router{cfg: Config{
+		AmneziaSecretsPath: filepath.Join(dir, "amnezia-premium.json"),
+		HideMySecretsPath:  filepath.Join(dir, "hidemyname.json"),
+	}}
+	if _, err := r.addAmneziaKeyLabeled(7, "vpn://sealed-account-key", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.addHideMyCodeLabeled(7, "12345678901234", ""); err != nil {
+		t.Fatal(err)
+	}
+	sealKeyForTest(t) // другой случайный ключ поверх прежнего
+	for _, provider := range []string{providerAmnezia, providerHideMy} {
+		acc, err := r.Account(t.Context(), 7, provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acc.KeyProblem != "cabinet_key_wrong" || !strings.Contains(acc.Note, "не тот") {
+			t.Fatalf("%s: key_problem=%q note=%q", provider, acc.KeyProblem, acc.Note)
 		}
 	}
 }

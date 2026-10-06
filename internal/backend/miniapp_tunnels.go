@@ -170,7 +170,30 @@ type miniappTraffic struct {
 	// политик агента; пусто -- резерва нет или агент о нём не сообщил
 	// (отличает их наличие EgressTunnelID при режиме split).
 	ReserveTunnelIDs []string `json:"reserve_tunnel_ids,omitempty"`
+	// CarrierTunnelID / CarrierBasis / CarrierAlive -- несущий VPN-туннель
+	// обхода по одному правилу для экранов «Роутер» и «VPN-туннели»
+	// (miniappCarrier, v0.56). Экраны называют несущим только его и не
+	// угадывают «первый поднятый». Пустой id при basis none -- не знаем
+	// (или sing-box: маршрут выбирается для каждого адреса).
+	CarrierTunnelID string `json:"carrier_tunnel_id,omitempty"`
+	CarrierBasis    string `json:"carrier_basis"`
+	// CarrierAlive: несущий поднят и его проверка tunnel_* не провалена.
+	// false при названном несущем -- «несёт, но не отвечает», а не «работает».
+	CarrierAlive bool `json:"carrier_alive"`
 }
+
+// Откуда известен несущий (miniappTraffic.CarrierBasis).
+const (
+	// miniappCarrierPolicy -- активное звено политики с исполняемыми
+	// правилами по сводке политик агента (policies[].active_tunnel_id).
+	miniappCarrierPolicy = "policy"
+	// miniappCarrierSingle -- сводки политик нет, но кандидат один: главный
+	// выход роутера (routeTag) или единственный работающий VPN-туннель со
+	// своими правилами.
+	miniappCarrierSingle = "single"
+	// miniappCarrierNone -- не знаем, или единого несущего нет (sing-box).
+	miniappCarrierNone = "none"
+)
 
 // miniappTrafficReasonRulesUnreadable: агент не смог прочитать правила
 // маршрутизации (mechanism_probe_error в проверке hydraroute), и «правил нет»
@@ -208,6 +231,81 @@ type miniappHydraDetails struct {
 // so that fallback is a coin flip, and the operator's own router is exactly that
 // case.
 func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRow) miniappTraffic {
+	out := miniappDeriveTrafficMode(tunnels, byCheck)
+	var hd miniappHydraDetails
+	if row, ok := byCheck["hydraroute"]; ok {
+		_ = json.Unmarshal([]byte(row.DetailsJSON), &hd)
+	}
+	var pol *wire.PolicyBrief
+	out.CarrierTunnelID, out.CarrierBasis, out.CarrierAlive, pol = miniappCarrier(tunnels, hd, out)
+	// Несущий политики не совпал с главным выходом (активное звено лежит,
+	// и выход назван по единственному живому): резерв -- живые запасные
+	// звенья политики несущего, а не пусто.
+	if pol != nil && out.CarrierTunnelID != out.EgressTunnelID && out.ReserveTunnelIDs == nil {
+		out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol)
+	}
+	return out
+}
+
+// miniappCarrier -- несущий VPN-туннель обхода, одно правило для обоих
+// экранов (спека v0.56 B1). Правду о нём знает только сводка политик агента
+// (policies[].active_tunnel_id): «первый поднятый» на workrouter 18.09
+// оказался мёртвым запасным, а в песочнице sandbox-broken «Роутер» называл
+// vpn-de, вкладка -- vpn-nl.
+//
+//   - sing-box: маршрут выбирается для каждого адреса, несущего нет (none);
+//   - сводка политик: активное звено политики с исполняемыми правилами,
+//     через VPN, среди туннелей экрана -- даже лежащее: политика ведёт
+//     трафик в него, пока роутер не сменит звено (policy);
+//   - без сводки: главный выход роутера или единственный работающий
+//     VPN-туннель с правилами, уже названный miniappDeriveTrafficMode (single);
+//   - иначе не знаем (none) -- и экраны не гадают.
+//
+// alive -- несущий поднят (или на разовом перезапуске) и его проверка не
+// провалена.
+//
+// pol -- политика несущего при basis policy, иначе nil.
+func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappTraffic) (id, basis string, alive bool, pol *wire.PolicyBrief) {
+	if tr.Mode == miniappTrafficSingbox {
+		return "", miniappCarrierNone, false, nil
+	}
+	var (
+		carrier *miniappTunnel
+		best    int
+	)
+	for i := range hd.Policies {
+		p := &hd.Policies[i]
+		executed := miniappPolicyExecuted(p, hd)
+		if executed <= 0 || !p.ViaVPN || p.ActiveTunnelID == "" {
+			continue
+		}
+		t := miniappTunnelByID(tunnels, p.ActiveTunnelID)
+		if t == nil {
+			continue
+		}
+		if carrier == nil || executed > best {
+			carrier, best, pol = t, executed, p
+		}
+	}
+	basis = miniappCarrierPolicy
+	if carrier == nil && tr.EgressTunnelID != "" {
+		// Главный выход -- слово роутера (routeTag). Единственный живой при
+		// раздельной маршрутизации -- несущий, только если в него ведут его
+		// собственные правила: правила HydraRoute без сводки политик могут
+		// вести и в лежащий VPN-туннель (ревью B1).
+		if t := miniappTunnelByID(tunnels, tr.EgressTunnelID); t != nil && (tr.Mode == miniappTrafficVPN || t.RoutesDNS+t.RoutesStatic > 0) {
+			carrier = t
+			basis = miniappCarrierSingle
+		}
+	}
+	if carrier == nil {
+		return "", miniappCarrierNone, false, nil
+	}
+	return carrier.TunnelID, basis, miniappTunnelCarriesRules(carrier) && carrier.Status != "fail", pol
+}
+
+// miniappDeriveTrafficMode -- режим и главный выход без несущего.
+func miniappDeriveTrafficMode(tunnels []miniappTunnel, byCheck map[string]db.EventRow) miniappTraffic {
 	out := miniappTraffic{Mode: miniappTrafficUnknown}
 
 	claimed := 0

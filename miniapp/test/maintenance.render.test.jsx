@@ -59,6 +59,15 @@ describe('обслуживание на экране настроек', () => {
     unmount()
   })
 
+  it('B2: версия агента неизвестна -- нейтральная фраза, а не «после обновления»', async () => {
+    for (const agent_version of ['', 'garbage']) {
+      const { root, unmount } = await mount({ settings: { role: 'owner', agent_version } })
+      expect(root.textContent).toContain('ещё не прислал свежий отчёт')
+      expect(root.textContent).not.toContain(MAINT_TEXTS.tooOld)
+      unmount()
+    }
+  })
+
   it('старый агент: вместо кнопок обновления -- объяснение, службы остаются', async () => {
     const { root, unmount } = await mount({ settings: { role: 'owner', agent_version: 'v0.31.1' } })
     expect(button(root, 'Обновить awg-manager')).toBeUndefined()

@@ -181,7 +181,7 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { pluralRu, incidentCopy, checkLabel, guardVerdict, workingTunnelCount, uncheckedTunnelCount } from './labels.js'
+import { pluralRu, incidentCopy, checkLabel, guardVerdict, tunnelCountSummary } from './labels.js'
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 import { agoText, whenText } from './when.js'
@@ -283,26 +283,16 @@ function tunnelsRow(check, tunnels, clock, incidents) {
   if (list.length === 0) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
-  const alive = workingTunnelCount(list, incidents)
+  const { working: alive, total, unchecked } = tunnelCountSummary(list, incidents)
   // «Не проверено» -- ни работающий, ни упавший (статус unknown, v0.46).
-  const unchecked = uncheckedTunnelCount(list)
-  const broken = list.length - alive - unchecked
-  const value = `${alive} из ${list.length} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
+  const broken = total - alive - unchecked
+  const value = `${alive} из ${total} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
   return {
     answer: broken > 0 ? 'нет' : unchecked > 0 ? UNCHECKED : 'да',
     value,
   }
 }
 
-const ROW_TITLES = {
-  dns: 'Сайты открываются по имени',
-  dns_ru: 'Русские сайты открываются по имени',
-  external_reach: 'Сайты снаружи отвечают',
-  hydraroute: 'Обход блокировок работает',
-  awg_manager: 'Панель роутера отвечает',
-  tunnels: 'VPN-туннели на связи',
-  agent_heartbeat: 'Роутер отчитался о себе',
-}
 
 export function checkRows({ checks = [], tunnels = [], incidents = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
   const clock = { clockOffsetMs, nowMs }
@@ -317,7 +307,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
       const age = router?.last_seen_age_sec
       rows.push({
         key,
-        title: ROW_TITLES[key],
+        title: checkLabel(key),
         code: 'agent_heartbeat',
         answer: silent ? 'нет' : 'да',
         tone: silent ? 'danger' : 'ok',
@@ -342,7 +332,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({
       key,
-      title: ROW_TITLES[key] ?? key,
+      title: checkLabel(key),
       code: key,
       answer,
       tone,

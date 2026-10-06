@@ -10,7 +10,7 @@
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy } from './labels.js'
 import { agoText } from './when.js'
-import { carrierKnown, isAlive, reserveIDs } from './trafficPath.js'
+import { carrierAlive, carrierLine, isAlive, lineVia, reserveIDs } from './trafficPath.js'
 import { isStale } from './staleness.js'
 
 // reserveOnlyAlert -- признак строки /v1/miniapp/routers (reserve_only_alert):
@@ -66,8 +66,28 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
     return plainHeadline(first, stale)
   }
 
-  if (traffic?.mode === 'vpn') {
-    const via = traffic.egress_tunnel_name || traffic.egress_tunnel_id
+  // Несущего называет сервер (traffic.carrier_tunnel_id, B1) -- тот же, что
+  // схема и вкладка «VPN-туннели». Несущий есть, но не отвечает (проверка
+  // провалена, тревога ещё не набрала порог) -- «всё работает» было бы
+  // неправдой: заблокированное роутер ведёт в него.
+  const carrier = carrierLine({ traffic, tunnels })
+  // Бэкенд старше v0.56 (без carrier_basis) и экран без списка туннелей --
+  // имя главного выхода, которое дал сервер.
+  const via = carrier ? lineVia(carrier, traffic) : traffic?.carrier_basis ? '' : traffic?.egress_tunnel_name || ''
+  // Режим тут не важен: и при «напрямую» по главному выходу, и при
+  // неизвестном главном выходе политика ведёт заблокированное в несущего
+  // (ревью B1). На sing-box несущего нет вовсе.
+  if (traffic?.mode !== 'singbox' && carrier && !carrierAlive({ traffic, tunnels, incidents })) {
+    return {
+      tone: 'warn',
+      cold: true,
+      stale,
+      tag: 'VPN-туннель обхода не отвечает',
+      verdict: `Заблокированное роутер ведёт через «${via}», но он не отвечает — такие сайты могут не открываться. Остальное идёт напрямую, как обычно.`,
+    }
+  }
+
+  if (traffic?.mode === 'vpn' && via) {
     return {
       tone: 'sig',
       cold: false,
@@ -82,11 +102,9 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   }
 
   // Главный выход напрямую, а заблокированное уводят правила -- обычная
-  // раздельная маршрутизация, а не поломка. Имя VPN-туннеля бэкенд даёт, только
-  // когда живой один: при нескольких выбирают правила, и назвать любой --
-  // угадать.
-  if (traffic?.mode === 'split') {
-    const via = traffic.egress_tunnel_name || traffic.egress_tunnel_id
+  // раздельная маршрутизация, а не поломка. Несущего называет сервер; не
+  // назвал -- выбирают правила, и назвать любой VPN-туннель -- угадать.
+  if (traffic?.mode === 'split' || traffic?.mode === 'vpn') {
     return {
       tone: 'sig',
       cold: false,
@@ -95,6 +113,19 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
       verdict: via
         ? `Заблокированное открывается через «${via}». Остальное идёт напрямую, как обычно.`
         : 'Заблокированное открывается через VPN-туннели обхода, какой взять — решают правила. Остальное идёт напрямую, как обычно.',
+    }
+  }
+
+  // Главный выход роутер не назвал, но несущего обхода знают (сводка
+  // политик или снимок маршрутов): «роутер не сообщил» было бы неправдой
+  // (ревью B1). Про остальной трафик молчим -- его маршрут и неизвестен.
+  if ((traffic?.mode === 'unknown' || !traffic?.mode) && carrier) {
+    return {
+      tone: 'sig',
+      cold: false,
+      stale,
+      tag: 'всё работает',
+      verdict: `Заблокированное открывается через «${via}».`,
     }
   }
 
@@ -160,10 +191,10 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
   // Несущего назвал сам роутер (агент v0.41+): схема и заголовок обязаны
   // говорить про ОДИН и тот же туннель. 18.09 workrouter: обход шёл через
   // живой hipvps, а заголовок писал «работает на запасном» -- угадывал.
-  if (carrierKnown({ traffic, tunnels })) {
-    const carrier = tunnels.find((t) => t.tunnel_id === traffic.egress_tunnel_id)
-    const via = traffic.egress_tunnel_name || lineName(carrier)
-    if (isAlive(carrier, incidents)) {
+  const carrier = carrierLine({ traffic, tunnels })
+  if (carrier) {
+    const via = lineVia(carrier, traffic)
+    if (carrierAlive({ traffic, tunnels, incidents })) {
       const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
       const deadName = lineName(dead) || name.slice('tunnel_'.length)
       if (!only) {
@@ -202,15 +233,26 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
     // идёт через него, и кричать «не открывается» значит гнать человека
     // чинить то, что у него работает. Тревога остаётся -- VPN-туннель поднимать
     // надо, — но заголовок обязан говорить правду о последствиях.
+    //
+    // Несущего сервер не назвал (sing-box выбирает маршрут для каждого
+    // адреса, старый агент молчит): назвать живой VPN-туннель -- угадать.
+    // В песочнице sandbox-broken так «Роутер» называл vpn-de, а вкладка --
+    // vpn-nl.
+    // Тег нейтральный: упасть мог и запасной, и несущий -- «работает на
+    // запасном» было бы догадкой (ревью B1). Что упал именно запасной,
+    // подтверждает только сервер (reserve_only_alert).
     const alive = tunnels.find((t) => isAlive(t, incidents) && `tunnel_${t.tunnel_id}` !== name)
     if (alive) {
-      // При раздельной маршрутизации несущего выбирают правила, и роутер
-      // старше v0.41 его не называет: назвать живой туннель -- угадать.
-      const verdict =
-        traffic?.mode === 'split'
+      const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
+      const deadName = lineName(dead) || name.slice('tunnel_'.length)
+      return {
+        ...base,
+        tone: 'warn',
+        tag: 'один VPN-туннель упал',
+        verdict: only
           ? 'Один VPN-туннель упал, обход идёт через оставшиеся. Починить упавший всё равно стоит: запаса стало меньше.'
-          : `Один VPN-туннель упал, обход идёт через «${lineName(alive)}». Починить упавший всё равно стоит: запасной остался один.`
-      return { ...base, tone: 'warn', tag: 'работает на запасном VPN-туннеле', verdict }
+          : `«${deadName}» не отвечает: то, что роутер ведёт через него, может не открываться.`,
+      }
     }
   }
   return {

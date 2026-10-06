@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -215,45 +217,216 @@ func TestHostKeyChangedRefusesWithoutLogin(t *testing.T) {
 	}
 }
 
-func TestTrustNewHostKeyResetsAndNextLoginRemembers(t *testing.T) {
-	srv := startTestSSHServer(t)
-	s, path := sshService(t, srv, "pw", "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	if err := s.TrustNewHostKey("home"); err != nil {
+func storedInstance(t *testing.T, path string) Instance {
+	t.Helper()
+	st, err := LoadStore(path, Config{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storedHostKey(t, path); got != "" {
-		t.Fatalf("доверие новому ключу не сбросило отпечаток: %q", got)
+	inst, ok := st.Get("home")
+	if !ok {
+		t.Fatal("инстанс home пропал")
 	}
-	res, err := s.Check(context.Background(), "home")
-	if err != nil || !res.OK {
-		t.Fatalf("вход после доверия: %+v %v", res, err)
+	return inst
+}
+
+// v0.56, C1: отказанный ключ запоминается как ожидающий с временем, повторный
+// отказ того же ключа файл не переписывает.
+func TestHostKeyMismatchStoresPendingOnce(t *testing.T) {
+	srv := startTestSSHServer(t)
+	const old = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	s, path := sshService(t, srv, "pw", old)
+	t0 := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return t0 }
+	if res, err := s.Check(context.Background(), "home"); err != nil || res.OK {
+		t.Fatalf("смена ключа: %+v %v", res, err)
 	}
-	if got := storedHostKey(t, path); got != srv.fp {
-		t.Fatalf("новый ключ не запомнен: %q", got)
+	inst := storedInstance(t, path)
+	if inst.SSHHostKey != old || inst.SSHHostKeyPending != srv.fp || !inst.SSHHostKeyPendingAt.Equal(t0) {
+		t.Fatalf("ожидающий ключ: доверенный=%q ожидающий=%q время=%v", inst.SSHHostKey, inst.SSHHostKeyPending, inst.SSHHostKeyPendingAt)
 	}
-	if err := s.TrustNewHostKey("nope"); !errors.Is(err, ErrInstanceNotFound) {
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return t0.Add(time.Hour) }
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.Issue(context.Background(), "home", "router"); !errors.Is(err, ErrHostKeyChanged) {
+			t.Fatalf("выпуск до подтверждения: %v", err)
+		}
+		if res, _ := s.Check(context.Background(), "home"); res.OK {
+			t.Fatal("проверка до подтверждения прошла")
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("тот же отказанный ключ переписал файл")
+	}
+	if srv.auths.Load() != 0 || srv.execs.Load() != 0 {
+		t.Fatal("до подтверждения пароль или команда ушли на сервер")
+	}
+	// Сервер предъявил третий ключ -- ожидающий меняется.
+	srv.useAlt.Store(true)
+	_, _ = s.Check(context.Background(), "home")
+	if got := storedInstance(t, path); got.SSHHostKeyPending != srv.altFP || !got.SSHHostKeyPendingAt.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("новый отказанный ключ: %q %v", got.SSHHostKeyPending, got.SSHHostKeyPendingAt)
+	}
+}
+
+func TestRememberPendingHostKeyOnlyForSameAddress(t *testing.T) {
+	srv := startTestSSHServer(t)
+	const old = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	s, path := sshService(t, srv, "pw", old)
+	inst, _ := s.find("home")
+	if err := s.rememberPendingHostKey("home", "203.0.113.99", inst.SSHPort, "SHA256:other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.rememberPendingHostKey("home", inst.SSHHost, inst.SSHPort+1, "SHA256:other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.rememberPendingHostKey("gone", inst.SSHHost, inst.SSHPort, "SHA256:other"); err != nil {
+		t.Fatal(err)
+	}
+	// Отказанный совпал с доверенным (подтвердили, пока шёл вход) -- не ожидающий.
+	if err := s.rememberPendingHostKey("home", inst.SSHHost, inst.SSHPort, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedInstance(t, path); got.SSHHostKeyPending != "" {
+		t.Fatalf("ожидающий записан не для того адреса: %q", got.SSHHostKeyPending)
+	}
+}
+
+// Подтверждение принимает ровно ожидающий отпечаток; после него вход идёт.
+func TestConfirmHostKeyAcceptsExactlyPending(t *testing.T) {
+	srv := startTestSSHServer(t)
+	const old = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	s, path := sshService(t, srv, "pw", old)
+	// Ожидающего нет -- подтверждать нечего.
+	if err := s.ConfirmHostKey("home", srv.fp); !errors.Is(err, ErrHostKeyNothingPending) {
+		t.Fatalf("подтверждение без ожидающего: %v", err)
+	}
+	_, _ = s.Check(context.Background(), "home")
+	if err := s.ConfirmHostKey("home", "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"); !errors.Is(err, ErrHostKeyNotPending) {
+		t.Fatalf("чужой отпечаток: %v", err)
+	}
+	if err := s.ConfirmHostKey("home", ""); !errors.Is(err, ErrHostKeyNotPending) {
+		t.Fatalf("пустой отпечаток: %v", err)
+	}
+	if got := storedInstance(t, path); got.SSHHostKey != old || got.SSHHostKeyPending != srv.fp {
+		t.Fatalf("отказанное подтверждение тронуло ключи: %+v", got)
+	}
+	if err := s.ConfirmHostKey("nope", srv.fp); !errors.Is(err, ErrInstanceNotFound) {
 		t.Fatalf("чужой инстанс: %v", err)
+	}
+	if err := s.ConfirmHostKey("home", " "+srv.fp+" "); err != nil {
+		t.Fatal(err)
+	}
+	got := storedInstance(t, path)
+	if got.SSHHostKey != srv.fp || got.SSHHostKeyPending != "" || !got.SSHHostKeyPendingAt.IsZero() {
+		t.Fatalf("после подтверждения: %+v", got)
+	}
+	if res, err := s.Check(context.Background(), "home"); err != nil || !res.OK {
+		t.Fatalf("вход после подтверждения: %+v %v", res, err)
+	}
+}
+
+// Fix round 1: сервер разово предъявил чужой ключ, потом снова доверенный --
+// устаревший ожидающий стирается удачным входом, иначе карточка врала бы
+// «входы остановлены», а подтверждение подменило бы доверенный ключ.
+func TestPendingClearedByLoginWithTrustedKey(t *testing.T) {
+	srv := startTestSSHServer(t)
+	s, path := sshService(t, srv, "pw", srv.fp)
+	srv.useAlt.Store(true)
+	_, _ = s.Check(context.Background(), "home")
+	if got := storedInstance(t, path); got.SSHHostKeyPending != srv.altFP {
+		t.Fatalf("ожидающий не записан: %q", got.SSHHostKeyPending)
+	}
+	srv.useAlt.Store(false)
+	if res, err := s.Check(context.Background(), "home"); err != nil || !res.OK {
+		t.Fatalf("вход с доверенным: %+v %v", res, err)
+	}
+	got := storedInstance(t, path)
+	if got.SSHHostKey != srv.fp || got.SSHHostKeyPending != "" || !got.SSHHostKeyPendingAt.IsZero() {
+		t.Fatalf("устаревший ожидающий остался: %+v", got)
+	}
+	before, _ := os.ReadFile(path)
+	if res, err := s.Check(context.Background(), "home"); err != nil || !res.OK {
+		t.Fatalf("второй вход: %+v %v", res, err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("удачный вход без ожидающего переписал файл")
+	}
+	if err := s.ConfirmHostKey("home", srv.altFP); !errors.Is(err, ErrHostKeyNothingPending) {
+		t.Fatalf("подтверждение стёртого ожидающего: %v", err)
+	}
+	// Стирание -- только для того же адреса и того же доверенного ключа.
+	_ = s.update(func(st *Store) error { st.Instances[0].SSHHostKeyPending = srv.altFP; return nil })
+	inst, _ := s.find("home")
+	for _, c := range []struct {
+		host string
+		port int
+		fp   string
+	}{{"203.0.113.99", inst.SSHPort, srv.fp}, {inst.SSHHost, inst.SSHPort + 1, srv.fp}, {inst.SSHHost, inst.SSHPort, "SHA256:other"}} {
+		if err := s.clearPendingHostKey("home", c.host, c.port, c.fp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := storedInstance(t, path); got.SSHHostKeyPending != srv.altFP {
+		t.Fatalf("ожидающий стёрт не тем входом: %q", got.SSHHostKeyPending)
+	}
+}
+
+// Fix round 1: сбой записи ожидающего не молчит -- в журнале есть строка.
+func TestPendingSaveFailureIsLogged(t *testing.T) {
+	srv := startTestSSHServer(t)
+	s, path := sshService(t, srv, "pw", "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	var buf strings.Builder
+	s.log = slog.New(slog.NewTextHandler(&buf, nil))
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if res, _ := s.Check(context.Background(), "home"); res.OK {
+		t.Fatal("вход на чужой ключ прошёл")
+	}
+	if !strings.Contains(buf.String(), "ожидающий ключ") || !strings.Contains(buf.String(), "home") {
+		t.Fatalf("сбой записи ожидающего не в журнале: %q", buf.String())
+	}
+}
+
+// «Сбросить» больше нет: сервис не умеет обнулять доверенный ключ.
+func TestNoTrustNewHostKeyReset(t *testing.T) {
+	if _, ok := any(&Service{}).(interface{ TrustNewHostKey(string) error }); ok {
+		t.Fatal("сброс доверенного ключа остался")
 	}
 }
 
 func TestUpdateKeepsHostKeyForSameAddressAndDropsForNew(t *testing.T) {
 	srv := startTestSSHServer(t)
 	s, path := sshService(t, srv, "pw", "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+	if err := s.rememberPendingHostKey("home", "127.0.0.1", srv.port(t), srv.fp); err != nil {
+		t.Fatal(err)
+	}
 	inst := homeInstance()
 	inst.Label = "Дом-2"
 	inst.SSHHost, inst.SSHPort, inst.SSHUser = "127.0.0.1", srv.port(t), "root"
 	if err := s.Update("home", inst); err != nil {
 		t.Fatal(err)
 	}
-	if got := storedHostKey(t, path); got != "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" {
-		t.Fatalf("правка подписи стёрла отпечаток: %q", got)
+	if got := storedInstance(t, path); got.SSHHostKey != "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" || got.SSHHostKeyPending != srv.fp {
+		t.Fatalf("правка подписи стёрла отпечатки: %+v", got)
 	}
 	inst.SSHHost, inst.SSHPassword = "203.0.113.5", "pw2"
 	if err := s.Update("home", inst); err != nil {
 		t.Fatal(err)
 	}
-	if got := storedHostKey(t, path); got != "" {
-		t.Fatalf("новый адрес SSH унаследовал отпечаток старого: %q", got)
+	if got := storedInstance(t, path); got.SSHHostKey != "" || got.SSHHostKeyPending != "" || !got.SSHHostKeyPendingAt.IsZero() {
+		t.Fatalf("новый адрес SSH унаследовал отпечатки старого: %+v", got)
 	}
 }
 
@@ -359,7 +532,7 @@ func TestRememberHostKeyBranches(t *testing.T) {
 		t.Fatalf("отпечаток тронут: %q", got)
 	}
 	// Без отпечатка при сменённом адресе -- тоже не пишется.
-	if err := s.TrustNewHostKey("home"); err != nil {
+	if err := s.update(func(st *Store) error { st.Instances[0].SSHHostKey = ""; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.rememberHostKey("home", "203.0.113.99", inst.SSHPort, "SHA256:other"); err != nil {

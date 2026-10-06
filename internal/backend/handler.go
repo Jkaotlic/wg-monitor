@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -441,6 +442,10 @@ type Deps struct {
 type AlertPolicy struct {
 	NoisyFailThreshold     int
 	NoisyRecoveryThreshold int
+	// BypassLeakEnabled -- alerts.bypass_leak.enabled: ведёт ли автомат тревог
+	// проверку bypass_leak и видят ли её экраны. Выключено (по умолчанию) --
+	// строки пишутся, но молча (тихий режим, спека A v0.56).
+	BypassLeakEnabled bool
 }
 
 func NewMux(d Deps) http.Handler {
@@ -803,6 +808,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
 
+		// v0.56: строку bypass_leak пишет только бэкенд (ниже); присланная
+		// агентом под этим именем отбрасывается.
+		rep.Checks = slices.DeleteFunc(rep.Checks, func(c wire.Check) bool { return c.Name == bypassLeakCheck })
+
 		if reportIsFresh && rep.Resumed && d.Resumer != nil {
 			d.Resumer.MarkResumed(uid)
 		}
@@ -820,6 +829,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				})
 			}
+		}
+
+		// v0.56: вердикт «трафик мимо VPN-туннеля» -- до транзакции, тем же
+		// путём в events, что и строки агента. Считается после карточки
+		// пробуждения: в ней только то, что прислал роутер. Хук-отчёт и
+		// несвежий не считаются: внеочередные отчёты ускорили бы порог «три
+		// подряд», а несвежий рассказывает про прошлое.
+		if reportIsFresh && rep.Trigger != wire.TriggerHook {
+			rep.Checks = append(rep.Checks, bypassLeakReportCheck(d, uid, &rep, ts))
 		}
 
 		// Ingest всех событий + UpdateLastSeen — одной транзакцией. Раньше
@@ -956,6 +974,12 @@ func reportHandler(d Deps) http.HandlerFunc {
 			if c.Name == "agent_heartbeat" {
 				continue
 			}
+			if c.Name == bypassLeakCheck && !d.AlertPolicy.BypassLeakEnabled {
+				// Тихий режим: строка пишется, тревоги нет. Открытая с тех
+				// пор, как флаг был включён, тревога закрывается молча.
+				bypassLeakCloseQuiet(d, uid)
+				continue
+			}
 			if !reportIsFresh {
 				d.Logger.Info("skip stale user report event",
 					"nickname", nick, "check", c.Name,
@@ -1025,6 +1049,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 			checkThresholds := thresholdsForCheck(thresholds, d.AlertPolicy, c.Name)
 			tr := state.Apply(prev, c.Status, time.Now(), checkThresholds)
+			if c.Name == bypassLeakCheck {
+				// Порог и снятие бэкенд отсчитал в самой строке.
+				tr = bypassLeakApply(prev, c.Status, time.Now())
+			}
 			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery
 			// stay at Info; SoftFlap is Debug to avoid noise on transient flaps.
 			switch tr.Kind {
@@ -1355,6 +1383,11 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				if tid := deletedTunnelID(cmd.Args); tid != "" {
 					if err := d.DB.TunnelRepairSettings().Delete(uid, tid); err != nil {
 						d.Logger.Warn("tunnel_delete: настройка автопочинки не удалилась", "nickname", nick, "tunnel_id", tid, "err", err)
+					}
+					// Происхождение конфига и отметка «не подтверждена» -- тоже
+					// про удалённый туннель: новый с тем же id их не наследует.
+					if err := d.DB.TunnelOrigins().Delete(uid, tid); err != nil {
+						d.Logger.Warn("tunnel_delete: происхождение конфига не удалилось", "nickname", nick, "tunnel_id", tid, "err", err)
 					}
 				}
 			}
