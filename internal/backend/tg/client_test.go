@@ -654,3 +654,40 @@ func TestIsUnreachableChat(t *testing.T) {
 		})
 	}
 }
+
+// Мягкое напоминание (v0.57) уходит без звука: disable_notification обязан
+// реально оказаться в запросе к Telegram, а обычная отправка с кнопками его
+// не несёт вовсе.
+func TestSendSilentMessageWithKeyboard(t *testing.T) {
+	var captured []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		_ = json.Unmarshal(body, &m)
+		captured = append(captured, m)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 778}})
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
+	kb := AlertKeyboard(1, "x", "")
+	mid, err := c.SendSilentMessageWithKeyboard(context.Background(), 100, nil, "тихо", "HTML", nil, &kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid != 778 {
+		t.Errorf("mid=%d, want 778", mid)
+	}
+	if _, err := c.SendMessageWithKeyboard(context.Background(), 100, nil, "громко", "", nil, &kb); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("запросов %d", len(captured))
+	}
+	if captured[0]["disable_notification"] != true || captured[0]["reply_markup"] == nil {
+		t.Errorf("тихая отправка: %+v", captured[0])
+	}
+	if _, has := captured[1]["disable_notification"]; has {
+		t.Errorf("обычная отправка понесла disable_notification: %+v", captured[1])
+	}
+}

@@ -204,6 +204,18 @@ var miniappCommandAllowlist = map[string]bool{
 	// (miniappOwnerOnlyActions). Аргументы собирает заново явная ветка
 	// санитайзера: sanitize и bucket до агента не доезжают никогда.
 	"awgm_logs": true,
+
+	// v0.57. Смена порта при блокировке (porthop_*) и отчёт о месте на /opt
+	// (space_report). Радиус router-global: сервис со своим init-скриптом, а
+	// установка с replace_legacy переносит ручную копию оператора. Круг --
+	// только админ (miniappAdminOnlyActions), пол агента v0.57.0. Аргументы
+	// есть только у установки -- список имён интерфейсов и replace_legacy,
+	// явная ветка санитайзера; остальным четырём клиентское не доезжает вовсе.
+	"porthop_status":  true,
+	"porthop_install": true,
+	"porthop_remove":  true,
+	"porthop_logs":    true,
+	"space_report":    true,
 }
 
 // miniappOwnerOnlyActions -- действия, которых оператору не положено.

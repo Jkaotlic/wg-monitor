@@ -19,6 +19,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/maintnotify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
@@ -432,6 +433,30 @@ func main() {
 		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
 	}
 
+	// Мягкое напоминание «есть что обновить или перезагрузить» (v0.57): раз
+	// в час, только днём, без звука, один раз на новость -- всем, кто
+	// отвечает за роутер. Новости -- тот же сборщик, что у экрана
+	// «Обновления»; выключатель notify.maintenance.enabled.
+	var maintPoller *maintnotify.Poller
+	if cfg.Notify.Maintenance.IsEnabled() {
+		mp, err := maintnotify.NewPoller(d, upCache,
+			notify.NewFanout(d, tgClient, logger.With("component", "maintnotify"), cfg.Telegram.AdminUserID),
+			maintnotify.Config{
+				Enabled:        true,
+				MiniAppBaseURL: cfg.PublicBaseURL,
+				Audit:          backend.VersionAuditFromSnapshot,
+				AgentNews:      backend.AgentUpdateNews,
+				RouterPause:    maintnotify.DefaultRouterPause,
+			}, logger.With("component", "maintnotify"))
+		if err != nil {
+			logger.Error("maintnotify: пуллер не собран", "err", err)
+		} else {
+			mp.Start(ctx)
+			maintPoller = mp
+			logger.Info("maintenance reminders enabled")
+		}
+	}
+
 	// Тревога админу в личку о бэкапе: давно не делался, прогон кончился
 	// ошибкой, проверка восстановления не прошла; не чаще раза в сутки на
 	// причину и одно «снова в порядке». Состояние -- в tg_state.
@@ -471,6 +496,11 @@ func main() {
 	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
+	// Мягкое напоминание пишет отметки в базу: ждём его до d.Close(), но
+	// ограниченно -- рассылку держит Telegram с его таймаутами.
+	if maintPoller != nil && !waitBounded(maintPoller.WaitForExit, 10*time.Second) {
+		logger.Warn("maintnotify: пуллер не завершился за 10 с, останавливаемся без него")
+	}
 	logger.Info("backend stopped")
 }
 

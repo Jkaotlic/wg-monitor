@@ -22,6 +22,9 @@ type Reminder struct {
 	ShownAt      *time.Time
 	SnoozedUntil *time.Time
 	DismissedAt  *time.Time
+	// NotifiedAt -- мягкое напоминание об этой новости уже разослано (v0.57).
+	// Экран на неё не смотрит: разосланное приложение показывает как прежде.
+	NotifiedAt *time.Time
 }
 
 // UpdateRemindersRepo -- состояние новостей об обновлениях на экранах.
@@ -29,7 +32,7 @@ type UpdateRemindersRepo struct{ d *DB }
 
 func (d *DB) UpdateReminders() *UpdateRemindersRepo { return &UpdateRemindersRepo{d: d} }
 
-const updateRemindersColumns = `component, version, first_seen_at, shown_at, snoozed_until, dismissed_at`
+const updateRemindersColumns = `component, version, first_seen_at, shown_at, snoozed_until, dismissed_at, notified_at`
 
 // Ensure заводит новость о выпуске, если её ещё нет.
 //
@@ -118,6 +121,48 @@ ORDER BY component, version`, userID, now.UTC())
 	return out, rows.Err()
 }
 
+// PendingNotify -- новости этого роутера, о которых ещё не разослано мягкое
+// напоминание: те же правила, что у экрана (скрытая -- никогда, отложенная --
+// после срока), плюс notified_at IS NULL. Что из них ещё актуально (версия не
+// поставлена), решает вызывающий -- он знает свежий снимок версий.
+func (r *UpdateRemindersRepo) PendingNotify(userID int64, now time.Time) ([]Reminder, error) {
+	rows, err := r.d.db.Query(`
+SELECT `+updateRemindersColumns+`
+FROM router_update_reminders
+WHERE user_id = ?
+  AND dismissed_at IS NULL
+  AND notified_at IS NULL
+  AND (snoozed_until IS NULL OR snoozed_until <= ?)
+ORDER BY component, version`, userID, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Reminder
+	for rows.Next() {
+		rem, err := scanReminder(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rem)
+	}
+	return out, rows.Err()
+}
+
+// MarkNotified -- мягкое напоминание о новости разослано. Ставится только
+// после доставки хотя бы одному; первая дата остаётся (COALESCE). Строки нет
+// -- заводится: отметка не должна теряться из-за гонки с чисткой.
+func (r *UpdateRemindersRepo) MarkNotified(userID int64, component, version string) error {
+	now := time.Now().UTC()
+	_, err := r.d.db.Exec(`
+INSERT INTO router_update_reminders (user_id, component, version, first_seen_at, notified_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(user_id, component, version) DO UPDATE SET
+  notified_at = COALESCE(router_update_reminders.notified_at, excluded.notified_at)`,
+		userID, component, version, now, now)
+	return err
+}
+
 // PruneDismissedBefore убирает давно скрытые новости.
 //
 // Трогает ТОЛЬКО скрытые: новость, которую никто не скрывал, живёт, пока не
@@ -139,12 +184,14 @@ func scanReminder(scan func(...any) error) (Reminder, error) {
 	var (
 		out                       Reminder
 		shown, snoozed, dismissed sql.NullTime
+		notified                  sql.NullTime
 	)
-	if err := scan(&out.Component, &out.Version, &out.FirstSeenAt, &shown, &snoozed, &dismissed); err != nil {
+	if err := scan(&out.Component, &out.Version, &out.FirstSeenAt, &shown, &snoozed, &dismissed, &notified); err != nil {
 		return Reminder{}, err
 	}
 	out.ShownAt = nullTime(shown)
 	out.SnoozedUntil = nullTime(snoozed)
 	out.DismissedAt = nullTime(dismissed)
+	out.NotifiedAt = nullTime(notified)
 	return out, nil
 }

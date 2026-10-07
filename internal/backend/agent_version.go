@@ -76,6 +76,13 @@ var miniappActionMinAgentVersion = map[string]string{
 	// v0.47: старый агент ответил бы «unknown action».
 	"exit_ip_probe": "v0.47.0",
 	"awgm_logs":     "v0.47.0",
+	// v0.57: смена порта при блокировке и отчёт о месте. Старый агент ответил
+	// бы «unknown action», а экран обещал бы сервис, которого нет.
+	"porthop_status":  "v0.57.0",
+	"porthop_install": "v0.57.0",
+	"porthop_remove":  "v0.57.0",
+	"porthop_logs":    "v0.57.0",
+	"space_report":    "v0.57.0",
 }
 
 // miniappAdminOnlyActions -- действия, чей радиус router-global: их видит и
@@ -100,4 +107,11 @@ var miniappAdminOnlyActions = map[string]bool{
 	"entware_clean_run":     true,
 	"entware_clean_logs":    true,
 	"entware_clean_remove":  true,
+	// v0.57: смена порта при блокировке -- сервис на роутере со своим
+	// init-скриптом и переносом ручной копии оператора, и отчёт о месте на /opt.
+	"porthop_status":  true,
+	"porthop_install": true,
+	"porthop_remove":  true,
+	"porthop_logs":    true,
+	"space_report":    true,
 }

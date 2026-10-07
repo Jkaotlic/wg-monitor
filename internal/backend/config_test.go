@@ -521,3 +521,30 @@ telegram:
 		t.Fatal("alerts.bypass_leak.enabled: true не прочитан")
 	}
 }
+
+// v0.57: мягкое напоминание «есть что обновить» включено по умолчанию,
+// выключается явным notify.maintenance.enabled: false.
+func TestLoadConfigMaintenanceNotifyOnByDefault(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "secret-bot-token-xyz")
+	base := `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: ` + tokPath + `
+  admin_user_id: 136513775
+`
+	cfg, err := LoadConfig(writeFile(t, dir, "a.yaml", base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Notify.Maintenance.IsEnabled() {
+		t.Fatal("notify.maintenance.enabled по умолчанию должен быть true")
+	}
+	cfg, err = LoadConfig(writeFile(t, dir, "b.yaml", base+"notify:\n  maintenance:\n    enabled: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Maintenance.IsEnabled() {
+		t.Fatal("notify.maintenance.enabled: false не прочитан")
+	}
+}

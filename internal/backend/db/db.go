@@ -105,6 +105,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate revive_intents.notified_auto_error: %w", err)
 	}
+	if err := migrateUpdateRemindersNotifiedAt(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate router_update_reminders.notified_at: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -275,6 +279,13 @@ func migrateTunnelsInventoryOKAt(d *sql.DB) error {
 func migrateReviveNotifiedAutoError(d *sql.DB) error {
 	return addColumnIfMissing(d, "revive_intents", "notified_auto_error",
 		`ALTER TABLE revive_intents ADD COLUMN notified_auto_error TEXT NOT NULL DEFAULT ''`)
+}
+
+// migrateUpdateRemindersNotifiedAt -- отметка «мягкое напоминание разослано»
+// (v0.57). NULL у всех прежних строк: каждая висящая новость уйдёт один раз.
+func migrateUpdateRemindersNotifiedAt(d *sql.DB) error {
+	return addColumnIfMissing(d, "router_update_reminders", "notified_at",
+		`ALTER TABLE router_update_reminders ADD COLUMN notified_at TIMESTAMP`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {
