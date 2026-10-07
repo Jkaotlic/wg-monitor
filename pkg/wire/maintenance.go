@@ -145,3 +145,79 @@ type HrneoUpdateResult struct {
 func RebootNeeded(installed, loaded string) bool {
 	return installed != "" && loaded != "" && installed != loaded
 }
+
+// PorthopStatus -- ответ porthop_status/install/remove/logs (v0.57): смена
+// исходящего порта VPN-туннеля, чей поток убила блокировка.
+//
+// Auto -- настройка «сторожить все VPN-туннели с маршрутом 0.0.0.0/0»; тогда
+// Ifaces пуст. Отдельным полем, а не строкой "auto" в списке: имя интерфейса
+// "auto" допустимо. Watched -- что скрипт сторожит СЕЙЧАС, вычислено тем же
+// правилом, что в скрипте; без установки -- что сторожил бы auto.
+//
+// Счёт за 24 часа -- по журналу скрипта: Hops24h = Recovered24h + Failed24h.
+type PorthopStatus struct {
+	Installed    bool          `json:"installed"`
+	Running      bool          `json:"running"`
+	Auto         bool          `json:"auto"`
+	Ifaces       []string      `json:"ifaces,omitempty"`
+	Watched      []string      `json:"watched"`
+	Legacy       PorthopLegacy `json:"legacy"`
+	Hops24h      int           `json:"hops_24h"`
+	Recovered24h int           `json:"recovered_24h"`
+	Failed24h    int           `json:"failed_24h"`
+	// LastEvent -- последняя строка журнала как есть («2026-10-07 12:00:00
+	// opkgtun10: порт 30000 -> 41234, поток ожил (хендшейк 3 с)»).
+	LastEvent  string `json:"last_event,omitempty"`
+	LogTail    string `json:"log_tail,omitempty"`
+	ScriptPath string `json:"script_path"`
+	ConfPath   string `json:"conf_path"`
+	LogPath    string `json:"log_path"`
+}
+
+// PorthopLegacy -- ручная копия оператора (/opt/etc/init.d/S99awg-porthop
+// или процесс awg-porthop.sh не из нашего пути). Две копии дрались бы за
+// один интерфейс.
+//
+// Found -- копия запустится при загрузке (init на месте) или работает.
+// MovedTo -- куда агент перенёс её init при замене (replace_legacy): вернуть
+// ручную копию -- перенести файл обратно в /opt/etc/init.d.
+type PorthopLegacy struct {
+	Found   bool   `json:"found"`
+	Path    string `json:"path,omitempty"`
+	Running bool   `json:"running"`
+	MovedTo string `json:"moved_to,omitempty"`
+}
+
+// SpaceReport -- ответ space_report (v0.57): место на /opt и крупнейшие
+// каталоги (du -x -k -d 2 /opt, первые 10, без самого /opt). Только чтение.
+type SpaceReport struct {
+	FreeKB  int64        `json:"free_kb"`
+	TotalKB int64        `json:"total_kb"`
+	Top     []SpaceEntry `json:"top"`
+}
+
+// SpaceEntry -- один каталог в SpaceReport.
+type SpaceEntry struct {
+	Path string `json:"path"`
+	KB   int64  `json:"kb"`
+}
+
+// DNSResetResult -- Payload ответа dns_reset (v0.57; Output остаётся
+// транскриптом). Probes -- проба каждого сервера эталона настоящим
+// DoT-запросом перед применением; агент старше v0.57 Payload не шлёт.
+type DNSResetResult struct {
+	Probes []DNSProbe `json:"probes,omitempty"`
+}
+
+// IsZero -- нечего прикладывать к ответу.
+func (r DNSResetResult) IsZero() bool { return len(r.Probes) == 0 }
+
+// DNSProbe -- проба одного сервера эталона. Server -- как в строке
+// dns-proxy (IP или имя), Purpose -- "ru" (Яндекс, русские зоны) или
+// "foreign". Error -- причина, когда OK=false.
+type DNSProbe struct {
+	Server  string `json:"server"`
+	Purpose string `json:"purpose,omitempty"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
