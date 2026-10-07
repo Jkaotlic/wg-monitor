@@ -566,3 +566,31 @@ func TestPorthopLogLinesCarryOffset(t *testing.T) {
 		}
 	}
 }
+
+// TERM посреди смены порта (init stop, пока идёт listen-port): смена
+// доводится до конца -- пира возвращают, -- временный конфиг убран, второй
+// смены нет, выход с 0.
+func TestPorthopTermDuringHopFinishesHop(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, false)
+	e.write("opkgtun10.portslow", "")
+	seedFails(t, e, "opkgtun10", "2")
+
+	if err := e.termDuring("inhop"); err != nil {
+		t.Fatalf("exit after TERM: %v", err)
+	}
+
+	calls := e.read("calls")
+	rm := strings.Index(calls, "set opkgtun10 peer PUBKEY remove")
+	lp := strings.Index(calls, "set opkgtun10 listen-port ")
+	add := strings.Index(calls, "addconf opkgtun10 ")
+	if rm < 0 || lp < rm || add < lp {
+		t.Fatalf("hop not finished after TERM, peer lost:\n%s", calls)
+	}
+	if n := strings.Count(calls, "listen-port "); n != 1 {
+		t.Fatalf("hops after TERM: %d\n%s", n, calls)
+	}
+	if left := e.tempConfs(); len(left) != 0 {
+		t.Fatalf("temp peer config left: %v", left)
+	}
+}
