@@ -77,6 +77,14 @@ func (p *netProber) ProbeCandidate(ctx context.Context, line, domain string) err
 	return err
 }
 
+// ProbeLine -- одна проба строки dns-proxy вне сторожа (v0.57: сброс DNS
+// проверяет эталон перед применением). Та же проба, что у сторожа: имя
+// сервера резолвится через PlainResolver, запрос -- по TLS с SNI. Каждый
+// вызов -- свой prober: запоминать адреса между сбросами незачем.
+func ProbeLine(ctx context.Context, line, domain string) error {
+	return newNetProber().ProbeCandidate(ctx, line, domain)
+}
+
 type candidate struct {
 	url             string // https upstream: the DoH URL
 	host, port, sni string // tls upstream

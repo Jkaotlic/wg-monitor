@@ -202,3 +202,81 @@ describe('три постусловия', () => {
     for (const w of ['DoH', 'DoT', 'апстрим', 'dry_run', 'resolver_guard', 'dns_split']) expect(text, w).not.toContain(w)
   })
 })
+
+describe('v0.57: проба эталона перед применением', () => {
+  const PROBES = [
+    { server: '9.9.9.9', purpose: 'foreign', ok: true },
+    { server: '1.1.1.1', purpose: 'foreign', ok: false, error: 'нет ответа за 5s' },
+    { server: 'common.dot.dns.yandex.net', purpose: 'ru', ok: true },
+  ]
+  it('пробы -- из payload; старый агент без payload -- null', async () => {
+    const { parseProbes } = await import('../src/dnsReset.js')
+    expect(parseProbes({ status: 'ok', output: 'x', payload: { probes: PROBES } })).toEqual([
+      { server: '9.9.9.9', purpose: 'foreign', ok: true, error: '' },
+      { server: '1.1.1.1', purpose: 'foreign', ok: false, error: 'нет ответа за 5s' },
+      { server: 'common.dot.dns.yandex.net', purpose: 'ru', ok: true, error: '' },
+    ])
+    expect(parseProbes({ status: 'ok', output: 'x', payload: JSON.stringify({ probes: PROBES }) })).toHaveLength(3)
+    expect(parseProbes({ status: 'ok', output: 'x' })).toBeNull()
+    expect(parseProbes({ status: 'ok', payload: { probes: [] } })).toBeNull()
+    expect(parseProbes({ status: 'ok', payload: { probes: [{ ok: true }] } })).toBeNull()
+    expect(parseProbes(null)).toBeNull()
+  })
+  it('строки проб: сервер, назначение, отвечает / не отвечает', async () => {
+    const { parseProbes, probeRows } = await import('../src/dnsReset.js')
+    const rows = probeRows(parseProbes({ payload: { probes: PROBES } }))
+    expect(rows).toEqual([
+      { key: '9.9.9.9', title: '9.9.9.9 · заграничный', value: 'отвечает', tone: 'ok' },
+      { key: '1.1.1.1', title: '1.1.1.1 · заграничный', value: 'не отвечает', tone: 'danger', detail: 'нет ответа за 5s' },
+      { key: 'common.dot.dns.yandex.net', title: 'common.dot.dns.yandex.net · Яндекс, русские зоны', value: 'отвечает', tone: 'ok' },
+    ])
+  })
+  it('пропущенные серверы -- словами; Яндекс не отвечает -- куда уйдут русские зоны', async () => {
+    const { skippedServersText } = await import('../src/dnsReset.js')
+    expect(skippedServersText(PROBES)).toBe('Не отвечает и в роутер не ставится: 1.1.1.1.')
+    expect(skippedServersText([{ server: 'common.dot.dns.yandex.net', purpose: 'ru', ok: false, error: 'x' }, { server: '9.9.9.9', purpose: 'foreign', ok: true }])).toBe(
+      'Не отвечает и в роутер не ставится: common.dot.dns.yandex.net. Русские зоны пойдут через заграничные серверы — это работает.',
+    )
+    expect(skippedServersText([{ server: 'a', purpose: 'foreign', ok: false }, { server: 'b', purpose: 'foreign', ok: false }])).toBe('Не отвечают и в роутер не ставятся: a, b.')
+    expect(skippedServersText(PROBES.filter((p) => p.ok))).toBe('')
+    expect(skippedServersText(null)).toBe('')
+  })
+  it('reference_unreachable -- человеческим текстом', async () => {
+    const { referenceUnreachable, dnsResetScreenTexts } = await import('../src/dnsReset.js')
+    const res = { status: 'err', output: 'reference_unreachable: не ответил ни один заграничный DNS-сервер эталона — сброс не применён' }
+    expect(referenceUnreachable(res)).toBe(true)
+    expect(referenceUnreachable({ status: 'err', output: 'read config: boom' })).toBe(false)
+    expect(referenceUnreachable({ status: 'ok', output: 'reference_unreachable' })).toBe(false)
+    const t = dnsResetScreenTexts()
+    expect(t.unreachable).toContain('Ни один заграничный DNS-сервер эталона не ответил')
+    expect(t.unreachable).toContain('ничего не изменено')
+    expect(t.unreachable).toContain('нет интернета')
+    expect(t.noProbes).toBe('Проверка доступности — с агента v0.57.')
+    expect(t.title).toBe('Эталонный DNS')
+  })
+  it('итог сброса при reference_unreachable -- не «не смог прочитать настройки»', async () => {
+    const { parseReset, doneText, dnsResetScreenTexts } = await import('../src/dnsReset.js')
+    const r = parseReset({ status: 'err', output: 'reference_unreachable: …' })
+    expect(r.unreachable).toBe(true)
+    expect(doneText(r)).toBe(dnsResetScreenTexts().unreachable)
+  })
+  it('предпросмотр нового агента с разделом проб разбирается как прежде', () => {
+    const out = [
+      'Предпросмотр сброса DNS — ничего не изменено',
+      '',
+      'проверка доступности эталона (3):',
+      '  ✓ 9.9.9.9 — отвечает',
+      '  ✗ 1.1.1.1 — не отвечает: нет ответа за 5s',
+      '  ✓ common.dot.dns.yandex.net — отвечает',
+      'сервер не отвечает, не ставим (1):',
+      '  · tls upstream 1.1.1.1 sni cloudflare-dns.com',
+      '',
+      'Уберём (1):',
+      '  − tls upstream 8.8.8.8 sni dns.google',
+      '',
+      'Заменим на эталонные (7):',
+      '  + tls upstream 9.9.9.9 sni dns.quad9.net',
+    ].join('\n')
+    expect(parsePreview(out)).toEqual({ remove: ['tls upstream 8.8.8.8 sni dns.google'], keep: [], addCount: 7, skippedCount: 0 })
+  })
+})

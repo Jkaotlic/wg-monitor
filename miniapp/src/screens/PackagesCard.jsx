@@ -17,8 +17,11 @@ import {
 
 // Одна карточка расписания: состояние, время, действия, итог, журнал.
 // Любой ответ агента несёт свежий статус -- карточка его и рисует.
-export function PackagesCard({ kind, routerID, asleep }) {
+// canRun -- рисовать ли «Запустить сейчас» (по умолчанию -- как у задания):
+// экран «Свободное место» держит свою кнопку очистки и прячет эту.
+export function PackagesCard({ kind, routerID, asleep, canRun }) {
   const job = PACKAGE_JOBS[kind]
+  const runnable = canRun ?? job.canRun
   const cmd = useCommand(routerID)
   const [status, setStatus] = useState(null)
   const [time, setTime] = useState(job.defaultTime)
@@ -89,7 +92,7 @@ export function PackagesCard({ kind, routerID, asleep }) {
             <button type="button" class={kind === 'opkg' ? 'btn btn-primary btn-row' : 'btn btn-ghost btn-row'} disabled={cmd.busy || !timeOK} onClick={() => run('install')}>
               {status?.installed ? 'Изменить время' : 'Включить'}
             </button>
-            {job.canRun && (
+            {runnable && (
               <button type="button" class="btn btn-ghost btn-row" disabled={cmd.busy} onClick={() => run('run')}>
                 Запустить сейчас
               </button>

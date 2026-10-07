@@ -35,8 +35,8 @@ func sandboxOpkgCron(action string, args map[string]any) wire.OpkgCronStatus {
 		Installed:  sandboxOpkg.installed,
 		ScriptPath: "/opt/etc/wg-monitor/opkg-auto-upgrade.sh",
 		LogPath:    "/opt/var/log/wg-monitor/opkg-auto-upgrade.log",
-		FreeKB:     812000,
-		TotalKB:    1900000,
+		FreeKB:     sandboxSpace().FreeKB,
+		TotalKB:    sandboxSpace().TotalKB,
 		MinFreeKB:  10 * 1024,
 	}
 	if sandboxOpkg.installed {
@@ -62,8 +62,8 @@ func sandboxEntwareClean(action string, args map[string]any) wire.EntwareCleanSt
 		Installed:         sandboxClean.installed,
 		ScriptPath:        "/opt/etc/wg-monitor/entware-cleanup.sh",
 		LogPath:           "/opt/var/log/wg-monitor/entware-cleanup.log",
-		FreeKB:            812000,
-		TotalKB:           1900000,
+		FreeKB:            sandboxSpace().FreeKB,
+		TotalKB:           sandboxSpace().TotalKB,
 		MinFreeKB:         2 * 1024,
 		MemAvailableKB:    96000,
 		MemTotalKB:        256000,

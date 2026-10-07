@@ -1,0 +1,59 @@
+#!/bin/sh
+# wg-monitor: смена порта VPN-туннеля при блокировке (awg-porthop.sh).
+# Ставит агент wg-monitor (porthop_install), снимает porthop_remove.
+# Что сторожить -- /opt/etc/wg-monitor/porthop.conf (IFACES=auto или список);
+# скрипт читает его сам, поэтому ARGS здесь нет.
+#
+# Процесс ищется по pid-файлу, а не по имени: ручная копия оператора
+# (/opt/bin/awg-porthop.sh) называется так же, и killall по имени гасил бы обе.
+# Переменные PORTHOP_* -- только для тестов на чужой машине.
+
+SCRIPT="${PORTHOP_SCRIPT:-/opt/etc/wg-monitor/awg-porthop.sh}"
+# pid -- на tmpfs: после перезагрузки его нет, а /opt -- флешка
+PIDFILE="${PORTHOP_PIDFILE:-/tmp/wg-monitor-porthop.pid}"
+PROC="${PORTHOP_PROC:-/proc}"
+
+# running -- pid из файла жив И это наш скрипт: после перезагрузки или смерти
+# процесса pid мог достаться чужому, и stop погасил бы его. Чужой pid --
+# файл убираем.
+running() {
+  pid=$(cat "$PIDFILE" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*) rm -f "$PIDFILE"; return 1 ;; esac
+  if kill -0 "$pid" 2>/dev/null && tr '\000' '\n' < "$PROC/$pid/cmdline" 2>/dev/null | grep -qxF "$SCRIPT"; then
+    return 0
+  fi
+  rm -f "$PIDFILE"
+  return 1
+}
+
+start() {
+  if running; then echo "awg-porthop: already running (pid $pid)"; return 0; fi
+  [ -f "$SCRIPT" ] || { echo "awg-porthop: $SCRIPT not found"; return 1; }
+  mkdir -p "$(dirname "$PIDFILE")"
+  # вывод -- в никуда: иначе фоновый процесс держал бы вывод init, и тот,
+  # кто его запустил (агент), ждал бы конца вечно
+  sh "$SCRIPT" </dev/null >/dev/null 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "awg-porthop: started (pid $!)"
+}
+
+stop() {
+  if ! running; then rm -f "$PIDFILE"; echo "awg-porthop: not running"; return 0; fi
+  kill "$pid" 2>/dev/null
+  # смена порта посреди сигнала доводится до конца (снять -> порт -> вернуть
+  # пира), это секунды; ждём с запасом
+  n=0
+  while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 30 ]; do sleep 1; n=$((n + 1)); done
+  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+  rm -f "$PIDFILE"
+  echo "awg-porthop: stopped"
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status)
+    if running; then echo "awg-porthop: running (pid $pid)"; else echo "awg-porthop: not running"; exit 1; fi ;;
+  *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

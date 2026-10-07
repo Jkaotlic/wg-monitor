@@ -9,9 +9,9 @@ import { AdminRepairSections, AdminSettingsSections, AdminAccessSection, AdminDa
 // разделы. Не-админу слоты не передаются вовсе (null), а не пустыми
 // компонентами: раздел по ним решает, есть ли что показывать, и пустой
 // заголовок не рисует. Парка здесь нет: он про весь флот.
-export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, focusNonce = 0, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages }) {
+export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGroup = null, focusNonce = 0, asleep, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages, onOpenPorthop, onOpenSpace }) {
   const { wide } = useContext(AppContext)
-  const serviceSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} /> : null
+  const serviceSlot = isAdmin ? <AdminRepairSections isAdmin onOpenDNSReset={onOpenDNSReset} onOpenPackages={onOpenPackages} onOpenPorthop={onOpenPorthop} onOpenSpace={onOpenSpace} /> : null
   const peopleSlot = isAdmin ? <AdminAccessSection routerID={routerID} openSheet={openSheet} /> : null
   const agentSlot = isAdmin ? (
     <AdminSettingsSections routerID={routerID} isAdmin openSheet={openSheet} onOpenAgentConfig={onOpenAgentConfig} onOpenAgentConnection={onOpenAgentConnection} />

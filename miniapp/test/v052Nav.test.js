@@ -51,7 +51,7 @@ describe('v0.52: «Проверки» с видом «Что было»', () => 
 
 describe('v0.52: разделы «Настроек»', () => {
   it('старые ссылки и слои раскрывают новые разделы', () => {
-    expect(MANAGE_FOCUS).toEqual({ settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', agentcfg: 'agent', agentconn: 'agent' })
+    expect(MANAGE_FOCUS).toEqual({ settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', porthop: 'service', space: 'service', agentcfg: 'agent', agentconn: 'agent' })
   })
   it('переход в раздел с «Роутера» (плашка обслуживания)', () => {
     const s = navReducer({ routerID: 7, tab: 'router', overlay: null, sheet: null }, { type: 'manage', section: 'service' })
@@ -78,6 +78,8 @@ const OLD_LINKS = [
   ['?router=7&open=agentconn', { overlay: 'agentconn' }],
   ['?router=7&open=dnsreset', { overlay: 'dnsreset' }],
   ['?router=7&open=packages', { overlay: 'packages' }],
+  ['?router=7&open=porthop', { overlay: 'porthop' }],
+  ['?router=7&open=space', { overlay: 'space' }],
 ]
 
 describe('v0.52: старые ссылки из тревог', () => {

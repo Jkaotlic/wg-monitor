@@ -9,6 +9,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // dnsReferenceUpstreams -- набор, который ставит DNSReset. Каждая строка
@@ -55,7 +56,15 @@ type DNSResetOpts struct {
 	// SnapshotDir -- куда лечь снимку «до». Транскрипт живёт час и архивом
 	// прежних настроек не годится; пусто -> снимок не пишется.
 	SnapshotDir string
+	// Probe -- проба одного сервера эталона настоящим запросом (v0.57,
+	// dnswatch.ProbeLine: та же проба, что у сторожа DNS). nil -- без проб,
+	// весь эталон, как до v0.57 (и тесты не ходят в сеть).
+	Probe DNSLineProbe
 }
+
+// DNSLineProbe спрашивает сервер строки dns-proxy (`tls upstream ...`) имя
+// domain; nil -- сервер ответил.
+type DNSLineProbe func(ctx context.Context, line, domain string) error
 
 // DNSReset = тот же проход «удалить/применить», что и ApplyDNSProxyUpstreams,
 // плюс сохранение. Сохраняет только ручной сброс; сторож -- никогда.
@@ -66,11 +75,21 @@ type DNSResetOpts struct {
 // например дописать порт :853, -- и это то же самое по смыслу. Форма в коде
 // была бы допущением о чужой прошивке, молча протухающим при её обновлении.
 func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
-	status, output = dnsReset(ctx, exec, opts)
+	status, output, _ = DNSResetProbed(ctx, exec, opts)
+	return status, output
+}
+
+// DNSResetProbed -- DNSReset плюс пробы эталона (v0.57) отдельным ответом:
+// диспетчер кладёт их в Payload, экран рисует их в предпросмотре и в итоге.
+func DNSResetProbed(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string, res wire.DNSResetResult) {
+	status, output, res = dnsReset(ctx, exec, opts)
 	// AGENT-05: вывод уходит на бэкенд -- секретные пути DoH (свой резолвер,
 	// приватные NextDNS/AdGuard) не покидают роутер. Маскируется весь
 	// транскрипт целиком: адрес повторяется и в командах, и в ответах ndmc.
-	return status, maskDoHSecretPaths(output)
+	for i := range res.Probes {
+		res.Probes[i].Error = maskDoHSecretPaths(res.Probes[i].Error)
+	}
+	return status, maskDoHSecretPaths(output), res
 }
 
 // dohURLPattern -- https-адрес с путём; хост оставляем, путь решаем отдельно.
@@ -89,14 +108,14 @@ func maskDoHSecretPaths(s string) string {
 	})
 }
 
-func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
+func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string, res wire.DNSResetResult) {
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
 		msg := fmt.Sprintf("read running-config failed: %v", err)
 		if ex := keenetic.ErrExcerpt(string(rc)); ex != "" {
 			msg += ": " + ex
 		}
-		return "err", msg
+		return "err", msg, res
 	}
 	existing := parseDNSProxyUpstreams(string(rc))
 	plain := parsePlainNameServers(string(rc))
@@ -110,11 +129,24 @@ func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 		remove = append(remove, line)
 	}
 
-	reference, skipped := dnsReferenceWithin(kept)
+	// v0.57: перед применением -- проба каждого сервера эталона. Мёртвые
+	// строки в роутер не пишутся; ни одного живого заграничного -- отказ.
+	full := dnsReferenceUpstreams
+	var dead []string
+	if opts.Probe != nil {
+		res.Probes = probeDNSReference(ctx, opts.Probe)
+		var foreignOK bool
+		full, dead, foreignOK = dnsReferenceAlive(res.Probes)
+		if !foreignOK {
+			return "err", dnsReferenceUnreachableText(res.Probes), res
+		}
+	}
+	reference, skipped := dnsReferenceWithin(full, kept)
 
 	var b strings.Builder
 	if opts.DryRun {
 		fmt.Fprintf(&b, "Предпросмотр сброса DNS — ничего не изменено\n\n")
+		writeDNSProbes(&b, res.Probes, dead)
 		fmt.Fprintf(&b, "Уберём (%d):\n", len(remove))
 		for _, l := range remove {
 			fmt.Fprintf(&b, "  − %s\n", l)
@@ -133,10 +165,11 @@ func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 			b.WriteString("\n")
 			writeDNSSkipped(&b, skipped)
 		}
-		return "ok", b.String()
+		return "ok", b.String(), res
 	}
 
 	fmt.Fprintf(&b, "DNS reset → reference DoT\n\n")
+	writeDNSProbes(&b, res.Probes, dead)
 	if opts.SnapshotDir != "" {
 		if name, err := writeDNSSnapshot(opts.SnapshotDir, string(rc)); err != nil {
 			fmt.Fprintf(&b, "снимок «до» не записан: %v\n\n", err)
@@ -181,17 +214,17 @@ func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, ou
 
 	if failures > 0 {
 		fmt.Fprintf(&b, "\n%d command(s) failed — review above before relying on DNS.\n", failures)
-		return "partial", b.String()
+		return "partial", b.String(), res
 	}
-	return "ok", b.String()
+	return "ok", b.String(), res
 }
 
-// dnsReferenceWithin -- эталон, урезанный под лимит KeenOS с учётом
+// dnsReferenceWithin -- эталон (за вычетом мёртвых серверов), урезанный под лимит KeenOS с учётом
 // оставленных строк: они занимают место в том же списке из восьми. Режется
 // хвост -- последними идут наименее нужные русские зоны. Одна функция на
 // предпросмотр и сброс: предпросмотр обязан обещать ровно то, что выполнится.
-func dnsReferenceWithin(kept []string) (reference, skipped []string) {
-	reference = dnsReferenceUpstreams
+func dnsReferenceWithin(full, kept []string) (reference, skipped []string) {
+	reference = full
 	room := dnsref.KeeneticDoTLimit - len(kept)
 	if room < 0 {
 		room = 0

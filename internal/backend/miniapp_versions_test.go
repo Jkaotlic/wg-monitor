@@ -546,3 +546,50 @@ func TestMiniappVersionsCarriesAgentUpdateForEveryone(t *testing.T) {
 		t.Fatalf("агент на версии бэкенда -- обновления нет: %+v", resp.Agent)
 	}
 }
+
+// v0.57: у агента теперь есть новость в таблице (component "agent", версия --
+// версия сервера): её ведёт мягкое напоминание. «Отложить» на неё работает, а
+// экран от этого не меняется -- блок агента на нём как был.
+func TestMiniappUpdateReminderAgentComponent(t *testing.T) {
+	old := serverVersion
+	SetVersion("v0.57.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedLiveSnapshot(t, d, ownedID)
+	h := versionsMux(d)
+
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.57.0"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := putReminder(t, h, ownedID, telegramUserID, "agent", `{"action":"snooze"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("агент не отстаёт -- прятать нечего: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.56.0"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := putReminder(t, h, ownedID, telegramUserID, "agent", `{"action":"snooze"}`); rec.Code != http.StatusOK {
+		t.Fatalf("отложить новость агента: %d %s", rec.Code, rec.Body.String())
+	}
+	list, err := d.UpdateReminders().ListFor(ownedID, time.Now().Add(8*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, rem := range list {
+		if rem.Component == "agent" && rem.Version == "v0.57.0" && rem.SnoozedUntil != nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("отсрочка новости агента не записана по версии сервера: %+v", list)
+	}
+	if _, resp := getVersions(t, h, ownedID, telegramUserID); resp.Agent == nil || resp.Agent.Available != "v0.57.0" {
+		t.Fatalf("экран потерял блок агента: %+v", resp.Agent)
+	}
+	if v, ok := AgentUpdateNews("v0.56.0"); !ok || v != "v0.57.0" {
+		t.Errorf("AgentUpdateNews(v0.56.0) = %q %v", v, ok)
+	}
+	if _, ok := AgentUpdateNews("мусор"); ok {
+		t.Error("нечитаемая версия агента -- не новость")
+	}
+}

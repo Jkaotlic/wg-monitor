@@ -347,3 +347,87 @@ func TestFanout_UnreachablePlusTransientFailureIsStillAnError(t *testing.T) {
 		t.Fatalf("ошибка=%v, внутри обязан лежать сбой, который стоит повторять (500)", err)
 	}
 }
+
+// silentSender умеет и обычную, и тихую отправку с кнопками и помнит, какая
+// куда ушла.
+type silentSender struct {
+	fakeSender
+	silent []int64
+	loud   []int64
+	kbRows map[int64]int
+}
+
+func (s *silentSender) SendMessageWithKeyboard(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64, _ *tg.InlineKeyboardMarkup) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loud = append(s.loud, chatID)
+	return 1, nil
+}
+
+func (s *silentSender) SendSilentMessageWithKeyboard(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.fail[chatID]; ok {
+		return 0, err
+	}
+	s.silent = append(s.silent, chatID)
+	if s.kbRows == nil {
+		s.kbRows = map[int64]int{}
+	}
+	if kb != nil {
+		s.kbRows[chatID] = len(kb.InlineKeyboard)
+	}
+	return 1, nil
+}
+
+// Тихая рассылка: всем получателям роутера, только тихим вызовом, админу --
+// с рядом выключения, как под любым сообщением о роутере.
+func TestFanout_SendSilentKeyboard(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &silentSender{}
+	kb := &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{tg.OpenInAppButton("https://example.com/miniapp/")}}}
+	n, err := NewFanout(d, s, quietLogger(), 9000).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 || len(s.silent) != 3 || len(s.loud) != 0 || len(s.sent) != 0 {
+		t.Fatalf("доставлено %d: тихо %v, громко %v, без кнопок %v", n, s.silent, s.loud, s.sent)
+	}
+	if s.kbRows[9000] != 2 || s.kbRows[1001] != 1 {
+		t.Errorf("рядов кнопок: админ %d (ждали 2), владелец %d (ждали 1)", s.kbRows[9000], s.kbRows[1001])
+	}
+}
+
+// Семантика ошибок та же, что у остальной рассылки: недоступные -- «слать
+// некому» (ноль без ошибки), временный сбой у всех -- ErrNoneDelivered.
+func TestFanout_SendSilentKeyboardErrors(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &silentSender{}
+	s.fail = map[int64]error{1001: errors.New("сеть упала")}
+	n, err := NewFanout(d, s, quietLogger(), 0).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", nil)
+	if n != 0 || !errors.Is(err, ErrNoneDelivered) {
+		t.Fatalf("временный сбой: n=%d err=%v, ждали ErrNoneDelivered", n, err)
+	}
+	s.fail = map[int64]error{1001: &tg.APIError{Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found"}}
+	n, err = NewFanout(d, s, quietLogger(), 0).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", nil)
+	if n != 0 || err != nil {
+		t.Fatalf("недоступный: n=%d err=%v, ждали «слать некому»", n, err)
+	}
+	if un, _ := d.Unreachable().List(); len(un) != 1 {
+		t.Errorf("недоступный не помечен: %v", un)
+	}
+	// Отправитель без тихой отправки -- не повод шуметь: ничего не уходит.
+	plain := &fakeSender{}
+	if _, err := NewFanout(d, plain, quietLogger(), 0).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", nil); err == nil || len(plain.sent) != 0 {
+		t.Fatalf("отправитель без тихой отправки: err=%v отправлено %v", err, plain.sent)
+	}
+}

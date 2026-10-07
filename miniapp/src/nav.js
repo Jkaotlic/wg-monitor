@@ -53,7 +53,7 @@ export const OVERLAY_TABS = { settings: 'manage', admin: 'manage', manage: 'mana
 
 // Раздел «Настроек», который раскрыть по старой ссылке или при возврате из
 // слоя (v0.52: Обслуживание · Люди и уведомления · Роутер и агент · Опасное).
-export const MANAGE_FOCUS = { settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', agentcfg: 'agent', agentconn: 'agent' }
+export const MANAGE_FOCUS = { settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', porthop: 'service', space: 'service', agentcfg: 'agent', agentconn: 'agent' }
 
 // Фокус -- как параметры слоя: ключ есть только когда он задан, чтобы
 // прежние снимки навигации не меняли форму.
@@ -79,7 +79,7 @@ export function normalizeReturn(returnTo) {
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']
+export const OPEN_OVERLAYS = ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet', 'porthop', 'space']
 
 // Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
 // ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес

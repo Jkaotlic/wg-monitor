@@ -108,6 +108,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           onOpenAgentConnection={() => dispatch({ type: 'overlay', overlay: 'agentconn' })}
           onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
           onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
+          onOpenPorthop={() => dispatch({ type: 'overlay', overlay: 'porthop' })}
+          onOpenSpace={() => dispatch({ type: 'overlay', overlay: 'space' })}
         />
       )
   }

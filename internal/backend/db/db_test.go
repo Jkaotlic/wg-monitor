@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOpenAppliesMigrations(t *testing.T) {
@@ -156,5 +157,58 @@ VALUES (1, 'waiting', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-10-0
 	}
 	if in.Generation != 0 {
 		t.Fatalf("у старой строки generation обязан стать 0 по умолчанию: %+v", in)
+	}
+}
+
+// v0.57: старая база без notified_at получает колонку, строки на месте, и
+// каждая уже висящая новость -- к рассылке (один раз).
+func TestMigrateUpdateRemindersNotifiedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nickname TEXT UNIQUE NOT NULL,
+    token_hash TEXT NOT NULL,
+    expected_exit_ip TEXT NOT NULL,
+    awg_iface TEXT NOT NULL,
+    telegram_thread_id INTEGER,
+    telegram_chat_id INTEGER,
+    telegram_user_id INTEGER,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP
+);
+CREATE TABLE router_update_reminders (
+    user_id       INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    component     TEXT      NOT NULL,
+    version       TEXT      NOT NULL,
+    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    shown_at      TIMESTAMP,
+    snoozed_until TIMESTAMP,
+    dismissed_at  TIMESTAMP,
+    PRIMARY KEY (user_id, component, version)
+);
+INSERT INTO users (id, nickname, token_hash, expected_exit_ip, awg_iface) VALUES (1, 'bronya', 'hash', '198.51.100.1', 'awg0');
+INSERT INTO router_update_reminders (user_id, component, version, first_seen_at) VALUES (1, 'awgmgr', '2.20.0', '2026-10-01T00:00:00Z');
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open старой базы: %v", err)
+	}
+	defer d.Close()
+	got, err := d.UpdateReminders().PendingNotify(1, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Version != "2.20.0" || got[0].NotifiedAt != nil {
+		t.Fatalf("после миграции к рассылке %+v", got)
 	}
 }

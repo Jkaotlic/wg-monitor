@@ -131,6 +131,49 @@ func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, par
 	return f.result(delivered, len(targets), lastErr)
 }
 
+// SilentKeyboardSender -- тихая отправка с кнопками (disable_notification).
+type SilentKeyboardSender interface {
+	Sender
+	SendSilentMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
+}
+
+// errNoSilentSender -- отправитель не умеет тихих сообщений. Мягкое
+// напоминание тогда не уходит вовсе: напоминание со звуком -- уже не мягкое,
+// а пропуск повторится в следующий обход.
+var errNoSilentSender = errors.New("отправитель не умеет тихих сообщений")
+
+// SendSilentKeyboard рассылает текст с кнопками БЕЗ звука, не запоминая
+// сообщений. Семантика итога та же, что у SendKeyboard: (0, nil) -- «слать
+// некому» (получателей нет или все недоступны), ErrNoneDelivered -- были, но
+// никому не дошло. Админу к кнопкам дописывается ряд выключения.
+func (f *Fanout) SendSilentKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
+	ss, ok := f.s.(SilentKeyboardSender)
+	if !ok {
+		return 0, errNoSilentSender
+	}
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
+	if err != nil {
+		return 0, err
+	}
+	delivered := 0
+	var lastErr error
+	for _, chatID := range targets {
+		markup := kb
+		if f.isAdmin(chatID) {
+			markup = withAdminMuteRow(kb, routerUserID)
+		}
+		if _, sendErr := ss.SendSilentMessageWithKeyboard(ctx, chatID, nil, text, parseMode, nil, markup); sendErr != nil {
+			if !f.noteFailure(chatID, routerUserID, sendErr) {
+				lastErr = sendErr
+			}
+			continue
+		}
+		delivered++
+		f.noteSuccess(chatID)
+	}
+	return f.result(delivered, len(targets), lastErr)
+}
+
 // noteFailure -- общая обработка неудачной доставки. Возвращает true, если
 // получатель недоступен до тех пор, пока сам не откроет дверь: такую ошибку
 // повторять бессмысленно, и в вердикт рассылки она не идёт.

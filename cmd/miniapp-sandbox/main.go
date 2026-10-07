@@ -508,10 +508,12 @@ func (f *fakeAgent) Enqueue(userID int64, cmd wire.Command) error {
 	defer f.mu.Unlock()
 	f.ensure()
 	f.cmds[key(userID, cmd.ID)] = cmd
+	status, output, payload := sandboxResult(userID, cmd.Action, cmd.Args)
 	f.results[key(userID, cmd.ID)] = wire.CommandResult{
 		ID:         cmd.ID,
-		Status:     "ok",
-		Output:     sandboxOutput(userID, cmd.Action, cmd.Args),
+		Status:     status,
+		Output:     output,
+		Payload:    payload,
 		DurationMs: 42,
 	}
 	slog.Info("песочница: команда принята", "action", cmd.Action, "args", argsLine(cmd.Args))

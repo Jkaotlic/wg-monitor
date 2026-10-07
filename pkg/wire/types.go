@@ -119,6 +119,13 @@ var validCommandActions = map[string]bool{
 	// Оба только читают роутер.
 	"exit_ip_probe": true,
 	"awgm_logs":     true,
+	// v0.57: смена порта при блокировке (porthop_*) и место на /opt
+	// (space_report, только чтение).
+	"porthop_status":  true,
+	"porthop_install": true,
+	"porthop_remove":  true,
+	"porthop_logs":    true,
+	"space_report":    true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

@@ -14,6 +14,11 @@
 //     opkg config + auto-retry SmartUpgrade)
 //   - opkg_cron_*     → install/status/log/remove managed scheduled opkg script
 //   - entware_clean_* → install/status/run/log/remove managed Entware cleanup
+//     (run without an installed script writes it, no cron, and runs it)
+//   - porthop_*       → status/install/remove/logs сторожа смены порта при
+//     блокировке (routerscripts/awg-porthop.sh под своим init; ручная копия
+//     оператора заменяется только с replace_legacy)
+//   - space_report    → df /opt + крупнейшие каталоги (du), только чтение
 //   - pingcheck_status → awgmgr.PingCheckStatus → JSON passthrough
 //   - pingcheck_toggle → awg-mgr POST /api/tunnels/pingcheck (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
@@ -120,7 +125,13 @@ type Runner struct {
 	// so a hung-subprocess test asserts within milliseconds instead of
 	// blocking for the real 45s.
 	ActionTimeout func(action string) time.Duration
-	routeMu       sync.Mutex // serialises concurrent route_rebind calls
+	// Porthop -- сторож смены порта (porthop_*); nil -- с путями по
+	// умолчанию и Exec раннера. Тесты подставляют пути во временном каталоге.
+	Porthop *PorthopManager
+	// DNSProbe -- проба сервера эталона перед сбросом DNS (v0.57; сборка
+	// агента ставит dnswatch.ProbeLine). nil -- сброс без проб, как раньше.
+	DNSProbe DNSLineProbe
+	routeMu  sync.Mutex // serialises concurrent route_rebind calls
 }
 
 // defaultActionTimeout bounds any dispatched action with no entry in
@@ -173,6 +184,13 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	// действие раньше, чем оно успеет сказать своё «не вернулся за 5 минут»
 	// или «ещё проверяет обновления» дословным текстом.
 	"awgm_update": 420 * time.Second,
+	// porthop_install: остановка ручной копии (её init ждёт до 30 с) и
+	// перезапуск своей (тоже до 30 с: смена порта посреди сигнала
+	// доводится до конца). porthop_remove -- одна остановка.
+	"porthop_install": 120 * time.Second,
+	"porthop_remove":  60 * time.Second,
+	// space_report: du по всему /opt на медленной флешке.
+	"space_report": 60 * time.Second,
 }
 
 // actionTimeoutFor returns the production execution budget for action.
@@ -349,7 +367,7 @@ func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResu
 		Output:     output,
 		DurationMs: r.now().Sub(start).Milliseconds(),
 	}
-	if !payload.IsZero() {
+	if payload != nil && !payload.IsZero() {
 		if b, err := json.Marshal(payload); err == nil {
 			res.Payload = b
 		}
@@ -357,7 +375,12 @@ func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResu
 	return res
 }
 
-func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (status, output string, payload wire.OpkgUpgradeResult) {
+// commandPayload -- структурный ответ действия в CommandResult.Payload
+// (wire.OpkgUpgradeResult у opkg, wire.DNSResetResult у dns_reset). nil или
+// IsZero -- Payload не прикладывается.
+type commandPayload interface{ IsZero() bool }
+
+func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (status, output string, payload commandPayload) {
 	switch cmd.Action {
 	case "restart_tunnel":
 		if r.AwgClient == nil {
@@ -479,6 +502,50 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		b, err := json.Marshal(status)
 		if err != nil {
 			return "err", "encode entware cleanup status: " + err.Error(), payload
+		}
+		return "ok", string(b), payload
+	case "porthop_status", "porthop_install", "porthop_remove", "porthop_logs":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		manager := r.Porthop
+		if manager == nil {
+			manager = &PorthopManager{Exec: r.Exec, Now: r.Now}
+		}
+		var (
+			status wire.PorthopStatus
+			err    error
+		)
+		switch cmd.Action {
+		case "porthop_status":
+			status, err = manager.Status(ctx, 0)
+		case "porthop_install":
+			replace, _ := cmd.Args["replace_legacy"].(bool)
+			status, err = manager.Install(ctx, stringSliceArg(cmd.Args["ifaces"]), replace)
+		case "porthop_remove":
+			status, err = manager.Remove(ctx)
+		case "porthop_logs":
+			status, err = manager.Logs(ctx, logLinesArg(cmd.Args))
+		}
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		b, err := json.Marshal(status)
+		if err != nil {
+			return "err", "encode porthop status: " + err.Error(), payload
+		}
+		return "ok", string(b), payload
+	case "space_report":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		rep, err := SpaceReport(ctx, r.Exec)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		b, err := json.Marshal(rep)
+		if err != nil {
+			return "err", "encode space report: " + err.Error(), payload
 		}
 		return "ok", string(b), payload
 	case "check_via_tunnel":
@@ -791,8 +858,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				return "err", "dns_reset: сторож DNS сейчас держит роутер на запасных DNS-серверах или не закончил уборку после них. Сбросить DNS можно, когда он вернётся на свой сервер, или после перезагрузки роутера", payload
 			}
 		}
-		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{
+		s, o, probed := DNSResetProbed(ctx, r.Exec, DNSResetOpts{
 			DryRun: dryRun,
+			// v0.57: каждый сервер эталона пробуется перед применением;
+			// мёртвые не пишутся, ни одного живого заграничного -- отказ.
+			Probe: r.DNSProbe,
 			// Свой резолвер оператора сбросом не сносим: иначе «починить DNS»
 			// кнопкой увело бы сторожа в idle ровно тем действием, которым
 			// человек чинит DNS.
@@ -806,7 +876,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if !dryRun && s != "err" && r.DNSChanged != nil {
 			r.DNSChanged()
 		}
-		return s, o, payload
+		return s, o, probed
 
 	case "dns_open":
 		// «Открывается ли сайт с этого роутера»: только чтение. Пустое имя

@@ -251,3 +251,50 @@ func TestEntwareCleanWorksWhenOptIsNearlyFull(t *testing.T) {
 		t.Fatalf("cleanup script still skips cleaning on low space:\n%s", script)
 	}
 }
+
+// v0.57: «Почистить сейчас» без включённого расписания падало («managed
+// cleanup script is not installed»), а чистка нужнее всего, когда места нет.
+// Теперь Run сам пишет скрипт -- без cron: расписание остаётся выключенным.
+func TestEntwareCleanRunWritesScriptWithoutCronWhenMissing(t *testing.T) {
+	m := newTestEntwareCleanManager(t)
+	var ran bool
+	m.Exec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		key := strings.Join(append([]string{name}, args...), " ")
+		switch key {
+		case m.ScriptPath:
+			ran = true
+			return []byte("ok\n"), nil
+		case "df -k /opt":
+			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 199000 900 99% /opt\n"), nil
+		case "cat /proc/meminfo":
+			return []byte("MemTotal:         250000 kB\nMemAvailable:      90000 kB\n"), nil
+		case "crontab -l":
+			return []byte("1 1 * * * /bin/true\n"), nil
+		default:
+			// Ни opkg install cron, ни crontab <файл>: расписание не трогаем.
+			return nil, errors.New("unexpected exec: " + key)
+		}
+	}
+
+	status, err := m.Run(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(m.ScriptPath)
+	if err != nil {
+		t.Fatalf("script not written: %v", err)
+	}
+	if !strings.Contains(string(script), "opt_free_before_kb") {
+		t.Fatalf("script is not the managed cleanup script:\n%s", script)
+	}
+	if st, _ := os.Stat(m.ScriptPath); st.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("script not executable: %v", st.Mode())
+	}
+	if !ran {
+		t.Fatal("script was not run")
+	}
+	if status.Installed {
+		t.Fatalf("schedule reported installed without a cron line: %+v", status)
+	}
+}

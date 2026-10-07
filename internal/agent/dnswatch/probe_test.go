@@ -265,3 +265,13 @@ func TestNetProber_FallsBackToSystemResolver(t *testing.T) {
 		t.Fatalf("system resolver asked although plain DNS answered: %q", sys.hosts)
 	}
 }
+
+// ProbeLine -- узкая дверь для сброса DNS (v0.57): та же проба, что у
+// сторожа. Строку не того вида не пробует в догаданной форме.
+func TestProbeLineRejectsNonUpstreamLine(t *testing.T) {
+	for _, line := range []string{"", "ip name-server 203.0.113.1", "tls 203.0.113.1"} {
+		if err := ProbeLine(context.Background(), line, "example.com"); err == nil {
+			t.Fatalf("%q accepted", line)
+		}
+	}
+}
