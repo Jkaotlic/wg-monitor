@@ -34,7 +34,11 @@ show)
 showconf)
   printf '[Interface]\nPrivateKey = x\nListenPort = %s\n\n[Peer]\nPublicKey = PUBKEY\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n' "$(cat "$FAKE/$i.port")" ;;
 set)
-  if [ "$3" = listen-port ]; then echo "$4" > "$FAKE/$i.port"; fi ;;
+  if [ "$3" = listen-port ]; then
+    [ -f "$FAKE/$i.portslow" ] && { touch "$FAKE/inhop"; /bin/sleep 1; }
+    [ -f "$FAKE/$i.portfail" ] && exit 1
+    echo "$4" > "$FAKE/$i.port"
+  fi ;;
 addconf)
   grep -q '^\[Peer\]' "$3" || exit 1
   if [ -f "$FAKE/$i.heal" ]; then touch "$FAKE/$i.pingok"; cat "$FAKE/now" > "$FAKE/$i.hs"; fi ;;
@@ -355,4 +359,43 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// Порт не сменился (listen-port упал) -- пира всё равно возвращаем: снятый
+// и не возвращённый пир -- туннель без пира до перезапуска.
+func TestPorthopReaddsPeerWhenListenPortFails(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, false)
+	e.write("opkgtun10.portfail", "")
+	seedFails(t, e, "opkgtun10", "2")
+
+	e.run("--once")
+
+	calls := e.read("calls")
+	rm := strings.Index(calls, "set opkgtun10 peer PUBKEY remove")
+	lp := strings.Index(calls, "set opkgtun10 listen-port ")
+	add := strings.Index(calls, "addconf opkgtun10 ")
+	if rm < 0 || lp < rm || add < lp {
+		t.Fatalf("peer not re-added after failed listen-port:\n%s", calls)
+	}
+	if strings.Count(calls, "addconf opkgtun10 ") != strings.Count(calls, "peer PUBKEY remove") {
+		t.Fatalf("every remove needs its addconf:\n%s", calls)
+	}
+	log := e.logText()
+	// Одна неудачная смена -- одна строка «ОШИБКА смены порта»: по ней агент
+	// считает неудачи за сутки.
+	if !strings.Contains(log, "listen-port ") || !strings.Contains(log, "пира возвращаю") ||
+		strings.Count(log, "ОШИБКА смены порта") != strings.Count(calls, "peer PUBKEY remove") {
+		t.Fatalf("listen-port failure not logged once per hop:\n%s", log)
+	}
+}
+
+func seedFails(t *testing.T, e *porthopEnv, iface, n string) {
+	t.Helper()
+	if err := os.MkdirAll(e.state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(e.state, iface+".fails"), []byte(n+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -119,8 +119,18 @@ hop() {  # $1 iface; 0 = поток ожил
     rm -f "$conf"; log "$i: нет пира, пропускаю"; return 1
   fi
   BUSY=1
-  awg set "$i" peer "$pub" remove && awg set "$i" listen-port "$new" && awg addconf "$i" "$conf"
-  rc=$?; rm -f "$conf"; BUSY=0
+  # пира, снятого успешно, возвращаем ВСЕГДА, даже если порт не сменился:
+  # снятый и не возвращённый пир -- туннель без пира до перезапуска
+  # (отступление от ручной копии, где `&&` на неудаче listen-port пира терял)
+  if awg set "$i" peer "$pub" remove; then
+    awg set "$i" listen-port "$new"; prc=$?
+    [ "$prc" = 0 ] || log "$i: listen-port $new не сработал (rc=$prc), пира возвращаю"
+    awg addconf "$i" "$conf"; arc=$?
+    if [ "$prc" != 0 ]; then rc=$prc; else rc=$arc; fi
+  else
+    rc=$?
+  fi
+  rm -f "$conf"; BUSY=0
   put "$i" hops "$(get "$i" hops "") $(date +%s)"
   if [ "$rc" != 0 ]; then log "$i: ОШИБКА смены порта $old -> $new (rc=$rc)"; return 1; fi
   ping_ok "$i" >/dev/null   # трафик запускает хендшейк: первым в новом потоке идёт I1
