@@ -523,3 +523,32 @@ func TestPorthopTermBeforeHopLeavesNoTempConf(t *testing.T) {
 		t.Fatalf("hop started after TERM:\n%s", calls)
 	}
 }
+
+// auto: интерфейс выпал из набора (VPN-туннель пересоздан, маршрут снят) --
+// его состояние сбрасывается: вернувшись, он не унаследует старую паузу
+// или счёт смен.
+func TestPorthopAutoDropsStateOfVanishedInterfaces(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, true)
+	e.iface("opkgtun12", "0.0.0.0/0", 30001, true)
+	e.run("--once")
+	for _, n := range []string{"opkgtun12.fails", "opkgtun12.cooldown", "opkgtun12.hops", "opkgtun99.fails"} {
+		if err := os.WriteFile(filepath.Join(e.state, n), []byte("1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// opkgtun12 потерял полный маршрут.
+	e.write("opkgtun12.allowed", "PUBKEY\t10.8.0.0/24")
+
+	e.run("--once")
+
+	left, _ := filepath.Glob(filepath.Join(e.state, "*"))
+	for _, f := range left {
+		if b := filepath.Base(f); strings.HasPrefix(b, "opkgtun12.") || strings.HasPrefix(b, "opkgtun99.") {
+			t.Fatalf("state of a dropped interface kept: %v", left)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(e.state, "opkgtun10.fails")); err != nil {
+		t.Fatalf("state of a watched interface removed: %v", left)
+	}
+}

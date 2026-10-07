@@ -80,6 +80,16 @@ watched() {
   done
 }
 
+# auto: состояние интерфейсов, выпавших из набора, сбрасывается -- вернувшись,
+# интерфейс не унаследует старую паузу и счёт смен. $1 -- текущий набор.
+drop_stale() {
+  for f in "$STATE"/*.*; do
+    [ -e "$f" ] || continue
+    w=${f##*/}; w=${w%.*}
+    case " $1 " in *" $w "*) ;; *) rm -f "$f" ;; esac
+  done
+}
+
 hs_age() {
   hs=$(awg show "$1" latest-handshakes 2>/dev/null | awk 'NR==1{print $2}')
   [ -n "$hs" ] && [ "$hs" != 0 ] || { echo 99999; return; }
@@ -182,6 +192,7 @@ while :; do
   list=$(echo $(watched))
   if [ "$IFACES" = auto ] && [ "$list" != "$seen" ]; then
     log "сторожу: ${list:-никого (нет VPN-туннеля с маршрутом 0.0.0.0/0)}"; seen=$list
+    drop_stale "$list"
   fi
   for i in $list; do
     check "$i"
