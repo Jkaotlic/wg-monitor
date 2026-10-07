@@ -215,3 +215,34 @@ func TestParsePosIntRejectsOverflow(t *testing.T) {
 		t.Fatalf("parsePosInt overflow returned n=%d nil error, want error", n)
 	}
 }
+
+// CollectNews -- один список новостей роутера для экрана «Обновления» и для
+// мягкого напоминания (v0.57): выпуски из ComputeUpdates в их порядке, затем
+// повод перезагрузиться (kmod_reboot, ключ -- установленная версия модуля).
+func TestCollectNews(t *testing.T) {
+	va := wire.VersionAudit{
+		FirmwareCurrent: "4.2.1", FirmwareAvail: "4.3.0",
+		KmodVersion: "3.1.20261001", KmodLoadedVersion: "3.1.20260906",
+	}
+	news, unknown := CollectNews(context.Background(), nil, va)
+	if len(news) != 2 {
+		t.Fatalf("новостей %d: %+v", len(news), news)
+	}
+	if news[0].Component != "firmware" || news[0].Version != "4.3.0" || news[0].Update == nil || news[0].Update.Installed != "4.2.1" {
+		t.Errorf("прошивка: %+v", news[0])
+	}
+	if news[1].Component != "kmod_reboot" || news[1].Version != "3.1.20261001" || news[1].Update != nil ||
+		news[1].RebootHint != RebootHint(va.KmodVersion, va.KmodLoadedVersion) || news[1].RebootHint == "" {
+		t.Errorf("перезагрузка: %+v", news[1])
+	}
+	_, wantUnknown := ComputeUpdates(context.Background(), nil, va)
+	if len(unknown) != len(wantUnknown) {
+		t.Errorf("неизвестных %v, у ComputeUpdates %v", unknown, wantUnknown)
+	}
+	// Модуль загружен тот же -- повода нет.
+	va.KmodLoadedVersion = va.KmodVersion
+	news, _ = CollectNews(context.Background(), nil, va)
+	if len(news) != 1 || news[0].Component != "firmware" {
+		t.Errorf("без расхождения модуля: %+v", news)
+	}
+}

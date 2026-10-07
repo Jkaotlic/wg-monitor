@@ -87,6 +87,10 @@ var miniappUpdateComponents = map[string]bool{
 	"hrneo":       true,
 	"firmware":    true,
 	"kmod_reboot": true,
+	// agent -- новость «агент wg-monitor отстаёт от сервера», версия -- версия
+	// сервера (v0.57). Её ведёт мягкое напоминание; экран блок агента рисует
+	// как прежде, но «отложить/скрыть» по ключу уже работает.
+	"agent": true,
 }
 
 // miniappSnoozeFor -- «Отложить на неделю».
@@ -170,18 +174,14 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // показанные помечаем показанными. Иначе «отложить» отменялось бы самим
 // открытием экрана.
 func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) (miniappVersionsResp, error) {
-	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
-	rebootHint := upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion)
+	// Тот же сборщик новостей, что у мягкого напоминания (maintnotify):
+	// выпуски пакетов и повод перезагрузиться одним списком.
+	news, unknown := upstream.CollectNews(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
 
 	reminders := d.DB.UpdateReminders()
-	for _, u := range updates {
-		if err := reminders.Ensure(routerID, u.Component, u.Available); err != nil && d.Logger != nil {
-			d.Logger.Warn("miniapp: update reminder ensure failed", "router_id", routerID, "err", err)
-		}
-	}
-	if rebootHint != "" {
-		if err := reminders.Ensure(routerID, "kmod_reboot", row.KmodVersion); err != nil && d.Logger != nil {
-			d.Logger.Warn("miniapp: reboot reminder ensure failed", "router_id", routerID, "err", err)
+	for _, n := range news {
+		if err := reminders.Ensure(routerID, n.Component, n.Version); err != nil && d.Logger != nil {
+			d.Logger.Warn("miniapp: update reminder ensure failed", "router_id", routerID, "component", n.Component, "err", err)
 		}
 	}
 
@@ -208,36 +208,34 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		Rows:    []miniappVersionRow{},
 		Unknown: []miniappUnknownRow{},
 	}
-	for _, u := range updates {
-		if !visible[newsKey(u.Component, u.Available)] {
+	for _, n := range news {
+		if !visible[newsKey(n.Component, n.Version)] {
 			continue
 		}
-		resp.Rows = append(resp.Rows, miniappVersionRow{
-			Component: u.Component,
-			Name:      u.Name,
-			Installed: u.Installed,
-			Available: u.Available,
-			Hint:      u.Hint,
-		})
-		if err := reminders.MarkShown(routerID, u.Component, u.Available); err != nil && d.Logger != nil {
-			d.Logger.Warn("miniapp: update reminder mark shown failed", "router_id", routerID, "err", err)
+		if n.Update != nil {
+			u := n.Update
+			resp.Rows = append(resp.Rows, miniappVersionRow{
+				Component: u.Component,
+				Name:      u.Name,
+				Installed: u.Installed,
+				Available: u.Available,
+				Hint:      u.Hint,
+			})
+		} else {
+			resp.RebootHint = n.RebootHint
+		}
+		if err := reminders.MarkShown(routerID, n.Component, n.Version); err != nil && d.Logger != nil {
+			d.Logger.Warn("miniapp: update reminder mark shown failed", "router_id", routerID, "component", n.Component, "err", err)
 		}
 	}
 	for _, u := range unknown {
 		resp.Unknown = append(resp.Unknown, miniappUnknownRow{Component: u.Component, Reason: u.Reason})
 	}
 
-	if rebootHint != "" && visible[newsKey("kmod_reboot", row.KmodVersion)] {
-		resp.RebootHint = rebootHint
-		if err := reminders.MarkShown(routerID, "kmod_reboot", row.KmodVersion); err != nil && d.Logger != nil {
-			d.Logger.Warn("miniapp: reboot reminder mark shown failed", "router_id", routerID, "err", err)
-		}
-	}
-
 	if u, err := d.DB.Users().GetByID(routerID); err == nil && u != nil {
 		installed := stringValue(u.LastDeployedVersion)
-		if agentUpdateVerdictFor(installed, serverVersion).Behind {
-			resp.Agent = &miniappAgentNews{Installed: installed, Available: serverVersion}
+		if available, ok := AgentUpdateNews(installed); ok {
+			resp.Agent = &miniappAgentNews{Installed: installed, Available: available}
 		}
 	}
 
@@ -299,7 +297,7 @@ func miniappUpdateReminderHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "versions lookup failed")
 			return
 		}
-		version := miniappNewsVersion(r, d, component, row)
+		version := miniappNewsVersion(r, d, routerID, component, row)
 		if version == "" {
 			// Новости про этот компонент сейчас нет -- прятать нечего.
 			writeJSONError(w, http.StatusNotFound, "not_found", "no news for this component")
@@ -329,12 +327,31 @@ func miniappUpdateReminderHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// AgentUpdateNews -- отстаёт ли агент с версией agentVersion от сервера, и
+// если да -- на какую версию обновляться (версия сервера). Тот же приговор
+// agentUpdateVerdictFor, что у парка и экрана «Обновления»; мягкое
+// напоминание (maintnotify) получает его функцией, не импортируя backend.
+func AgentUpdateNews(agentVersion string) (string, bool) {
+	if !agentUpdateVerdictFor(agentVersion, serverVersion).Behind {
+		return "", false
+	}
+	return serverVersion, true
+}
+
 // miniappNewsVersion -- о какой версии сейчас новость по этому компоненту.
 //
 // Версию считает сервер, а не присылает клиент: иначе «отложить» могло бы
 // попасть в выпуск, которого человек не видел, и новость о настоящем
 // обновлении молча исчезла бы.
-func miniappNewsVersion(r *http.Request, d Deps, component string, row db.RouterVersionRow) string {
+func miniappNewsVersion(r *http.Request, d Deps, routerID int64, component string, row db.RouterVersionRow) string {
+	if component == "agent" {
+		u, err := d.DB.Users().GetByID(routerID)
+		if err != nil || u == nil {
+			return ""
+		}
+		available, _ := AgentUpdateNews(stringValue(u.LastDeployedVersion))
+		return available
+	}
 	if component == "kmod_reboot" {
 		if upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion) == "" {
 			return ""

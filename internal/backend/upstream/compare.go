@@ -255,3 +255,31 @@ type sentinelErr string
 
 func (e sentinelErr) Error() string { return string(e) }
 func newErr(s string) error         { return sentinelErr(s) }
+
+// News -- одна новость роутера, как её ведёт таблица router_update_reminders:
+// ключ (Component, Version). У выпуска пакета есть Update; у повода
+// перезагрузиться (Component "kmod_reboot", Version -- установленная версия
+// модуля) -- RebootHint.
+type News struct {
+	Component  string
+	Version    string
+	Update     *UpdateInfo
+	RebootHint string
+}
+
+// CollectNews -- все новости роутера по снимку версий: выпуски из
+// ComputeUpdates в их порядке и затем повод перезагрузиться. Один сборщик на
+// экран «Обновления» и на мягкое напоминание: второй рядом разъехался бы с
+// первым, и бот звал бы обновлять то, чего экран не показывает.
+func CollectNews(ctx context.Context, cache *Cache, va wire.VersionAudit) ([]News, []Unknown) {
+	updates, unknown := ComputeUpdates(ctx, cache, va)
+	news := make([]News, 0, len(updates)+1)
+	for i := range updates {
+		u := updates[i]
+		news = append(news, News{Component: u.Component, Version: u.Available, Update: &u})
+	}
+	if hint := RebootHint(va.KmodVersion, va.KmodLoadedVersion); hint != "" {
+		news = append(news, News{Component: "kmod_reboot", Version: va.KmodVersion, RebootHint: hint})
+	}
+	return news, unknown
+}
