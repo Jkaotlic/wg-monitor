@@ -26,7 +26,7 @@ const (
 	defaultPorthopConfPath       = "/opt/etc/wg-monitor/porthop.conf"
 	defaultPorthopInitPath       = "/opt/etc/init.d/S99wg-monitor-porthop"
 	defaultPorthopLogPath        = "/opt/var/log/wg-monitor/porthop.log"
-	defaultPorthopPidPath        = "/opt/var/run/wg-monitor-porthop.pid"
+	defaultPorthopPidPath        = "/tmp/wg-monitor-porthop.pid" // tmpfs: /opt -- флешка
 	defaultPorthopLegacyInitPath = "/opt/etc/init.d/S99awg-porthop"
 	defaultPorthopLegacyMoveDir  = "/opt/etc/wg-monitor/legacy"
 

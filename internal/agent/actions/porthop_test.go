@@ -440,3 +440,22 @@ func writeTestFile(t *testing.T, path, body string, perm os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+// Пути агента и init/скрипта одни и те же: иначе агент искал бы pid и
+// скрипт не там, где их кладёт init.
+func TestPorthopDefaultPathsMatchScripts(t *testing.T) {
+	m := &PorthopManager{}
+	if m.pidPath() != "/tmp/wg-monitor-porthop.pid" {
+		t.Fatalf("pid path %s: want tmpfs", m.pidPath())
+	}
+	for _, p := range []string{m.pidPath(), m.scriptPath()} {
+		if !strings.Contains(routerscripts.PorthopInit, p) {
+			t.Errorf("init does not use %s", p)
+		}
+	}
+	for _, p := range []string{m.logPath(), m.confPath()} {
+		if !strings.Contains(routerscripts.Porthop, p) {
+			t.Errorf("script does not use %s", p)
+		}
+	}
+}

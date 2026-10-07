@@ -27,7 +27,9 @@ HOUR_MAX=6           # смен порта в час на интерфейс
 TARGETS="8.8.8.8 1.1.1.1"
 MAX_LOG_KB=64        # журнал держим не больше, хвост
 LOG="${PORTHOP_LOG:-/opt/var/log/wg-monitor/porthop.log}"
-STATE="${PORTHOP_STATE:-/opt/var/run/wg-monitor-porthop}"
+# состояние -- на tmpfs: /opt -- флешка, а счётчики пишутся каждый проход;
+# после перезагрузки счёт начинается заново, это не страшно
+STATE="${PORTHOP_STATE:-/tmp/wg-monitor-porthop}"
 CONF="${PORTHOP_CONF:-/opt/etc/wg-monitor/porthop.conf}"
 
 DRY=0; ONCE=0; IFACES=""
@@ -66,7 +68,7 @@ trim_log() {
 
 # состояние интерфейса в файлах: fails, cooldown_until, hops (отметки времени смен)
 get() { cat "$STATE/$1.$2" 2>/dev/null || echo "${3:-0}"; }
-put() { echo "$3" > "$STATE/$1.$2"; }
+put() { [ "$(cat "$STATE/$1.$2" 2>/dev/null)" = "$3" ] || echo "$3" > "$STATE/$1.$2"; }   # пишем только перемену
 
 # что сторожим на этом проходе
 watched() {

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Скрипт смены порта гоняется настоящим sh с поддельными awg, ping, logger,
@@ -397,5 +398,41 @@ func seedFails(t *testing.T, e *porthopEnv, iface, n string) {
 	}
 	if err := os.WriteFile(filepath.Join(e.state, iface+".fails"), []byte(n+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Файл состояния пишется только когда значение меняется: здоровый туннель
+// не трогает его каждые 20 с (раньше состояние лежало на флешке).
+func TestPorthopStateWrittenOnlyOnChange(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, true)
+	e.run("--once")
+	fails := filepath.Join(e.state, "opkgtun10.fails")
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(fails, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	e.run("--once")
+
+	fi, err := os.Stat(fails)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.ModTime().Equal(old) {
+		t.Fatalf("unchanged state rewritten: mtime %v", fi.ModTime())
+	}
+}
+
+// Пути спеки: состояние на tmpfs, журнал и настройка -- в /opt.
+func TestPorthopScriptPaths(t *testing.T) {
+	for _, want := range []string{
+		`STATE="${PORTHOP_STATE:-/tmp/wg-monitor-porthop}"`,
+		`LOG="${PORTHOP_LOG:-/opt/var/log/wg-monitor/porthop.log}"`,
+		`CONF="${PORTHOP_CONF:-/opt/etc/wg-monitor/porthop.conf}"`,
+	} {
+		if !strings.Contains(Porthop, want) {
+			t.Errorf("script lacks %s", want)
+		}
 	}
 }

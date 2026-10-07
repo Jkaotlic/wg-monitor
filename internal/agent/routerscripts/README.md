@@ -11,7 +11,8 @@
 прохода подряд — снять пира, сменить порт на случайный 20000–59999, вернуть пира (порядок важен: первым
 пакетом нового потока уходит хендшейк). Три неудачи подряд — пауза 10 минут; не больше 6 смен в час на
 туннель. Журнал — `/opt/var/log/wg-monitor/porthop.log` (не больше 64 КБ), состояние —
-`/opt/var/run/wg-monitor-porthop/`.
+`/tmp/wg-monitor-porthop/` (tmpfs: `/opt` — флешка, а счётчики меняются каждый проход; после перезагрузки
+счёт начинается заново).
 
 Что сторожить — `/opt/etc/wg-monitor/porthop.conf`:
 
@@ -52,8 +53,9 @@ mv /opt/etc/wg-monitor/legacy/S99awg-porthop /opt/etc/init.d/S99awg-porthop
 
 ## S99wg-monitor-porthop — init
 
-`start | stop | restart | status` по pid-файлу `/opt/var/run/wg-monitor-porthop.pid`, а не по имени
-процесса: ручная копия называется так же. Остановка посреди смены порта доводит смену до конца.
+`start | stop | restart | status` по pid-файлу `/tmp/wg-monitor-porthop.pid`, а не по имени
+процесса: ручная копия называется так же. Pid, доставшийся чужому процессу, своим не считается
+(сверка `/proc/<pid>/cmdline` с путём скрипта), файл убирается. Остановка посреди смены порта доводит смену до конца.
 
 ## entware-cleanup.sh — очистка места
 

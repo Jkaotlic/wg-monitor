@@ -9,12 +9,21 @@
 # Переменные PORTHOP_* -- только для тестов на чужой машине.
 
 SCRIPT="${PORTHOP_SCRIPT:-/opt/etc/wg-monitor/awg-porthop.sh}"
-PIDFILE="${PORTHOP_PIDFILE:-/opt/var/run/wg-monitor-porthop.pid}"
+# pid -- на tmpfs: после перезагрузки его нет, а /opt -- флешка
+PIDFILE="${PORTHOP_PIDFILE:-/tmp/wg-monitor-porthop.pid}"
+PROC="${PORTHOP_PROC:-/proc}"
 
+# running -- pid из файла жив И это наш скрипт: после перезагрузки или смерти
+# процесса pid мог достаться чужому, и stop погасил бы его. Чужой pid --
+# файл убираем.
 running() {
   pid=$(cat "$PIDFILE" 2>/dev/null)
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$pid" 2>/dev/null
+  case "$pid" in ''|*[!0-9]*) rm -f "$PIDFILE"; return 1 ;; esac
+  if kill -0 "$pid" 2>/dev/null && tr '\000' '\n' < "$PROC/$pid/cmdline" 2>/dev/null | grep -qxF "$SCRIPT"; then
+    return 0
+  fi
+  rm -f "$PIDFILE"
+  return 1
 }
 
 start() {
