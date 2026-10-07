@@ -3,7 +3,7 @@ import { fetchRouterSettings } from '../api.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
 import { commandErrorText } from '../maintenance.js'
-import { recentRouteSnapshot } from '../routes.js'
+import { parseRouteSnapshot, recentRouteSnapshot, rememberCommandSnapshot } from '../routes.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -17,6 +17,7 @@ import {
   porthopButtons,
   porthopDeadlineMs,
   porthopFailure,
+  porthopLegacyFoundText,
   porthopOutcomeText,
   porthopStatusRows,
 } from '../porthop.js'
@@ -26,8 +27,9 @@ import {
 // агенту старше v0.57 (agent_too_old). Экран и сам не рисует кнопок старому
 // агенту -- вторая преграда, независимая от бэкенда.
 //
-// Имена VPN-туннелей -- из недавнего снимка вкладки «VPN-туннели»; своего
-// route_status экран не шлёт (лишняя команда роутеру ради подписи).
+// Имена VPN-туннелей -- из недавнего снимка вкладки «VPN-туннели»; нет
+// снимка -- экран сам спрашивает route_status (только чтение) и до ответа
+// называет интерфейсы.
 export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
   const cmd = useCommand(routerID)
   const [settings, setSettings] = useState(null)
@@ -36,6 +38,8 @@ export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
   const [verb, setVerb] = useState('')
   const [log, setLog] = useState(null)
   const [failure, setFailure] = useState(null)
+  const routesCmd = useCommand(routerID)
+  const [snapshot, setSnapshot] = useState(() => recentRouteSnapshot(routerID))
 
   const available = porthopAvailable(settings)
 
@@ -64,7 +68,15 @@ export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
         setSettings(s)
         setLoadError(null)
         // Спящему роутеру на входе ничего не шлём: вопрос повис бы на минуты.
-        if (porthopAvailable(s) && !asleep) run('status')
+        if (porthopAvailable(s) && !asleep) {
+          run('status')
+          if (!recentRouteSnapshot(routerID)) {
+            routesCmd.run('route_status', {}, { deadlineMs: 90_000 }).then((res) => {
+              const snap = res?.status === 'ok' ? parseRouteSnapshot(res.output) : null
+              if (snap && rememberCommandSnapshot(routerID, res, snap) && alive) setSnapshot(snap)
+            })
+          }
+        }
       })
       .catch(() => alive && setLoadError('Не удалось прочитать настройки роутера.'))
     return () => {
@@ -76,7 +88,6 @@ export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
   const outcome = porthopOutcomeText(verb, cmd.result)
   const failed = cmd.result && cmd.result.status !== 'ok'
   const legacyFail = porthopFailure(cmd.result)?.kind === 'legacy'
-  const snapshot = recentRouteSnapshot(routerID)
 
   return (
     <Overlay title={T.title} backLabel="Настройки" onBack={onClose}>
@@ -97,6 +108,7 @@ export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
               ) : (
                 <p class="state">{cmd.busy ? porthopBusyText('status') : T.unknown}</p>
               )}
+              {status?.legacy.found && !legacyFail && <p class="hint porthop-legacy-note">{porthopLegacyFoundText(status.legacy)}</p>}
               <p class="hint">{T.limits}</p>
 
               <div class="packages-actions action-row">

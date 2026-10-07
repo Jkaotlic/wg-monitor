@@ -218,3 +218,12 @@ describe('lastEventText', () => {
     expect(rows.find((r) => r.key === 'last').value).toBe('2026-10-07 12:00:00 opkgtun10: поток ожил')
   })
 })
+
+describe('porthopLegacyFoundText', () => {
+  it('работающая и спящая ручная копия -- разными словами, с выходом', async () => {
+    const { porthopLegacyFoundText } = await import('../src/porthop.js')
+    expect(porthopLegacyFoundText({ path: '/opt/etc/init.d/S99awg-porthop', running: true })).toContain('уже работает ручная копия смены порта (/opt/etc/init.d/S99awg-porthop)')
+    expect(porthopLegacyFoundText({ path: '', running: false })).toContain('запустится при перезагрузке')
+    expect(porthopLegacyFoundText({ running: true })).toContain('«Заменить ручную копию»')
+  })
+})

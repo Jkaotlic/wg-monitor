@@ -110,7 +110,7 @@ describe('«Смена порта при блокировке»', () => {
 
   it('на входе спрашивает состояние; спящему роутеру -- нет', async () => {
     let root = await mount()
-    expect(mocks.calls.map((c) => [c.action, c.args])).toEqual([['porthop_status', {}]])
+    expect(mocks.calls.filter((c) => c.action.startsWith('porthop_')).map((c) => [c.action, c.args])).toEqual([['porthop_status', {}]])
     cleanup(root)
     mocks.calls = []
     root = await mount({ asleep: true })
@@ -143,6 +143,7 @@ describe('«Смена порта при блокировке»', () => {
     mocks.answers.porthop_status = ok({ ...BASE, legacy: LEGACY })
     const root = await mount()
     expect(root.textContent).toContain('Ручная копия')
+    expect(root.querySelector('.porthop-legacy-note').textContent).toContain('уже работает ручная копия смены порта')
     expect(button(root, 'Включить')).toBeUndefined()
     await click(root, 'Заменить ручную копию')
     expect(mocks.calls.at(-1)).toMatchObject({ action: 'porthop_install', args: { replace_legacy: true } })
@@ -165,6 +166,14 @@ describe('«Смена порта при блокировке»', () => {
     await click(root, 'Заменить ручную копию')
     expect(mocks.calls.at(-1).args).toEqual({ replace_legacy: true })
     expect(root.textContent).toContain('Смена порта включена.')
+    cleanup(root)
+  })
+
+  it('нет снимка VPN-туннелей -- экран сам спрашивает route_status и называет VPN-туннели именами', async () => {
+    mocks.answers.route_status = { status: 'ok', output: JSON.stringify({ tunnels: [{ id: 'awg12', name: 'Финляндия', iface: 'opkgtun12' }] }) }
+    const root = await mount({ routerID: 5 })
+    expect(mocks.calls.map((c) => c.action).sort()).toEqual(['porthop_status', 'route_status'])
+    expect(root.textContent).toContain('opkgtun10, Финляндия')
     cleanup(root)
   })
 
