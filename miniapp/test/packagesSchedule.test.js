@@ -112,7 +112,7 @@ describe('разбор ответа агента', () => {
       { key: 'last', title: 'Последний запуск', value: 'ещё не запускалось' },
       { key: 'space', title: 'Свободно на накопителе', value: '50 МБ · нужно от 100 МБ', tone: 'warn' },
       { key: 'mem', title: 'Свободная память', value: '59 МБ' },
-      { key: 'freed', title: 'Освобождено в прошлый раз', value: '2 МБ' },
+      { key: 'freed', title: 'Освобождено памяти в прошлый раз', value: '2 МБ' },
     ])
   })
 
@@ -128,7 +128,7 @@ describe('итог действия словами', () => {
   it('успехи', () => {
     expect(packagesOutcomeText('opkg', 'install', ok({ ...OPKG, schedule: '15 3 * * *' }))).toBe('Расписание сохранено: каждый день в 03:15.')
     expect(packagesOutcomeText('opkg', 'remove', ok({ ...OPKG, installed: false, schedule: '' }))).toBe('Расписание снято.')
-    expect(packagesOutcomeText('clean', 'run', ok(CLEAN))).toBe('Очистка выполнена, освобождено 2 МБ.')
+    expect(packagesOutcomeText('clean', 'run', ok(CLEAN))).toBe('Очистка выполнена, освобождено памяти: 2 МБ.')
     expect(packagesOutcomeText('clean', 'run', ok({ ...CLEAN, last_freed_kb: 0 }))).toBe('Очистка выполнена.')
     expect(packagesOutcomeText('opkg', 'status', ok(OPKG))).toBe('')
     expect(packagesOutcomeText('opkg', 'logs', ok(OPKG))).toBe('')

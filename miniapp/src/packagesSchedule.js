@@ -133,7 +133,7 @@ export function packagesStatusRows(status, kind, opts = {}) {
     rows.push({ key: 'mem', title: 'Свободная память', value: formatKB(status.memAvailableKB) })
   }
   if (kind === 'clean' && status.lastFreedKB > 0) {
-    rows.push({ key: 'freed', title: 'Освобождено в прошлый раз', value: formatKB(status.lastFreedKB) })
+    rows.push({ key: 'freed', title: 'Освобождено памяти в прошлый раз', value: formatKB(status.lastFreedKB) })
   }
   return rows
 }
@@ -152,7 +152,7 @@ export function packagesOutcomeText(kind, verb, result) {
     case 'remove':
       return 'Расписание снято.'
     case 'run':
-      return status.lastFreedKB > 0 ? `Очистка выполнена, освобождено ${formatKB(status.lastFreedKB)}.` : 'Очистка выполнена.'
+      return status.lastFreedKB > 0 ? `Очистка выполнена, освобождено памяти: ${formatKB(status.lastFreedKB)}.` : 'Очистка выполнена.'
     default:
       return ''
   }

@@ -134,7 +134,7 @@ describe('«Пакеты по расписанию»', () => {
     await act(async () => button(card(root, 'clean'), 'Запустить сейчас').click())
     await flush()
     expect(mocks.calls.find((c) => c.action === 'entware_clean_run').args).toEqual({})
-    expect(card(root, 'clean').textContent).toContain('Очистка выполнена, освобождено 2 МБ.')
+    expect(card(root, 'clean').textContent).toContain('Очистка выполнена, освобождено памяти: 2 МБ.')
     cleanup(root)
   })
 
