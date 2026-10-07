@@ -49,11 +49,31 @@ func TestV057ActionsInEveryAllowlist(t *testing.T) {
 // возвращает аргументы как есть, и без явной ветки клиентский ввод ушёл бы
 // агенту без проверки.
 func TestV057SanitizerDropsForeignArgs(t *testing.T) {
-	for _, a := range []string{"porthop_status", "porthop_remove", "porthop_logs", "space_report"} {
+	for _, a := range []string{"porthop_status", "porthop_remove", "space_report"} {
 		rec := httptest.NewRecorder()
 		got, ok := sanitizeWizardCommandArgs(rec, a, map[string]any{"ifaces": []any{"x"}, "cmd": "rm -rf /"})
 		if !ok || len(got) != 0 {
 			t.Errorf("%s: ok=%v args=%v, ожидались пустые аргументы", a, ok, got)
+		}
+	}
+}
+
+// Журнал смены порта -- та же ветка, что у журналов пакетов и очистки:
+// lines 1..300, по умолчанию 80, прочее отброшено.
+func TestV057SanitizerPorthopLogsLines(t *testing.T) {
+	for _, tc := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{}, "map[lines:80]"},
+		{map[string]any{"lines": float64(120), "cmd": "x"}, "map[lines:120]"},
+		{map[string]any{"lines": float64(0)}, "map[lines:1]"},
+		{map[string]any{"lines": float64(5000)}, "map[lines:300]"},
+	} {
+		rec := httptest.NewRecorder()
+		got, ok := sanitizeWizardCommandArgs(rec, "porthop_logs", tc.args)
+		if !ok || fmt.Sprint(got) != tc.want {
+			t.Errorf("porthop_logs %v: ok=%v args=%v, want %s", tc.args, ok, got, tc.want)
 		}
 	}
 }

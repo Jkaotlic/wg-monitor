@@ -993,7 +993,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"schedule": schedule}, true
-	case "opkg_cron_status", "opkg_cron_logs", "entware_clean_status", "entware_clean_logs":
+	case "opkg_cron_status", "opkg_cron_logs", "entware_clean_status", "entware_clean_logs", "porthop_logs":
 		lines := 80
 		switch v := args["lines"].(type) {
 		case float64:
@@ -1010,7 +1010,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
-	case "porthop_status", "porthop_remove", "porthop_logs", "space_report":
+	case "porthop_status", "porthop_remove", "space_report":
 		// Только чтение или снятие своего сервиса: аргументов нет, всё
 		// клиентское -- лишнее.
 		return map[string]any{}, true
