@@ -153,11 +153,11 @@ describe('подписи вкладок', () => {
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
   it('открывает любой оверлей роутера, но только вместе с роутером', () => {
-    for (const o of ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']) {
+    for (const o of ['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet', 'porthop', 'space']) {
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
     }
-    expect(OPEN_OVERLAYS).toEqual(['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet'])
+    expect(OPEN_OVERLAYS).toEqual(['routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet', 'porthop', 'space'])
     // Настройки и «Обслуживание» стали вкладкой: слоем их по адресу не открыть.
     expect(deepLinkOverlay('?router=7&open=settings', { routerID: 7 })).toBe(null)
   })

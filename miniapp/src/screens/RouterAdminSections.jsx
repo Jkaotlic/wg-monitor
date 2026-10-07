@@ -16,7 +16,8 @@ import {
 
 // Админские куски вкладки «Настройки» (v0.52): вкладка вставляет их слотами в
 // родственные разделы (SettingsSections):
-//   AdminRepairSections   -- «Обслуживание»: пакеты по расписанию, сброс DNS;
+//   AdminRepairSections   -- «Обслуживание»: смена порта при блокировке,
+//                            свободное место, пакеты по расписанию, эталонный DNS;
 //   AdminSettingsSections -- «Роутер и агент»: настройки и подключение агента;
 //   AdminAccessSection    -- «Люди и уведомления»: доступ;
 //   AdminDangerZone       -- «Опасное»: перенаправление агента.
@@ -30,30 +31,52 @@ import {
 // «Опасное» -- свёрнутый раздел вкладки: перенаправление уводит роутер с
 // этого сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт
 // на «Ход работы» через openLayer (возврат -- сюда же).
-export function AdminRepairSections({ isAdmin = false, onOpenDNSReset, onOpenPackages }) {
+export function AdminRepairSections({ isAdmin = false, onOpenDNSReset, onOpenPackages, onOpenPorthop, onOpenSpace }) {
   return (
     <>
+      {/* v0.57: смена порта и место -- только админ (сервер ответит
+          остальным 404); версию агента экраны проверяют сами. */}
+      {isAdmin && onOpenPorthop && (
+        <Section title="Смена порта при блокировке">
+          <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenPorthop}>
+            Открыть смену порта
+          </button>
+          <p class="hint">
+            Если фильтр провайдера обрывает VPN-туннель, роутер сам сменит исходящий порт, и VPN-туннель
+            снова поднимется.
+          </p>
+        </Section>
+      )}
+
+      {isAdmin && onOpenSpace && (
+        <Section title="Свободное место">
+          <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenSpace}>
+            Открыть свободное место
+          </button>
+          <p class="hint">Сколько места на накопителе Entware и чем оно занято, очистка сейчас и по расписанию.</p>
+        </Section>
+      )}
+
       {isAdmin && onOpenPackages && (
         <Section title="Пакеты по расписанию">
           <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenPackages}>
             Открыть пакеты по расписанию
           </button>
-          <p class="hint">
-            Обновление пакетов Entware и очистка Entware по расписанию на самом роутере.
-          </p>
+          <p class="hint">Обновление пакетов Entware по расписанию на самом роутере.</p>
         </Section>
       )}
 
-      {/* Сброс DNS -- вход только у админа (радиус router-global, сервер
-          ответит остальным 404). Экран сам проверяет версию агента и
-          начинает с предпросмотра. */}
+      {/* Эталонный DNS (бывш. «Сброс DNS») -- вход только у админа (радиус
+          router-global, сервер ответит остальным 404). Экран сам проверяет
+          версию агента и начинает с предпросмотра. */}
       {isAdmin && onOpenDNSReset && (
-        <Section title="Сброс DNS">
+        <Section title="Эталонный DNS">
           <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenDNSReset}>
-            Открыть сброс DNS
+            Открыть эталонный DNS
           </button>
           <p class="hint">
-            Заменить DNS-серверы роутера эталонными. Сначала экран покажет, что изменится.
+            Заменить DNS-серверы роутера эталонными — сначала роутер проверит, что они отвечают, а экран
+            покажет, что изменится.
           </p>
         </Section>
       )}

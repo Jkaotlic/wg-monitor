@@ -4,7 +4,7 @@ import { navFromURL } from '../src/navUrl.js'
 
 describe('старые ссылки и возврат раскрывают нужную группу (Review Focus 5)', () => {
   it('словарь', () => {
-    expect(MANAGE_FOCUS).toEqual({ settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', agentcfg: 'agent', agentconn: 'agent' })
+    expect(MANAGE_FOCUS).toEqual({ settings: 'agent', admin: 'service', packages: 'service', dnsreset: 'service', porthop: 'service', space: 'service', agentcfg: 'agent', agentconn: 'agent' })
   })
   it('?open=admin / ?open=settings', () => {
     expect(navFromURL('?router=7&open=admin', [7])).toMatchObject({ routerID: 7, tab: 'manage', manageFocus: 'service' })

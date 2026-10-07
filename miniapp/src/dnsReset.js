@@ -34,6 +34,11 @@ export function dnsReferenceCommands() {
 }
 
 const TEXTS = {
+  title: 'Эталонный DNS',
+  unreachable:
+    'Ни один заграничный DNS-сервер эталона не ответил, поэтому ничего не изменено. Так бывает, когда у роутера нет интернета: проверьте связь и попробуйте ещё раз.',
+  noProbes: 'Проверка доступности — с агента v0.57.',
+  probesTitle: 'Доступность серверов эталона',
   intro:
     'Сброс заменит DNS-серверы роутера эталонными: русские зоны — Яндексу по защищённому соединению, остальное — заграничным серверам. Свой DNS-сервер останется.',
   previewButton: 'Посмотреть, что изменится',
@@ -125,10 +130,59 @@ export function parseReset(result) {
     status: result?.status ?? '',
     snapshot: m ? m[1] : '',
     snapshotFailed: SNAPSHOT_FAILED.test(output),
+    unreachable: referenceUnreachable(result),
+    probes: parseProbes(result),
   }
 }
 
+// v0.57: агент пробует каждый сервер эталона настоящим DoT-запросом перед
+// применением (и в предпросмотре). Пробы -- в Payload ответа
+// (wire.DNSResetResult); агент старше v0.57 Payload не шлёт -- тогда null, и
+// экран говорит «проверка доступности — с агента v0.57».
+export function parseProbes(result) {
+  let payload = result?.payload
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload)
+    } catch {
+      return null
+    }
+  }
+  const raw = Array.isArray(payload?.probes) ? payload.probes : []
+  const probes = raw
+    .filter((p) => p && typeof p.server === 'string' && p.server !== '')
+    .map((p) => ({ server: p.server, purpose: p.purpose === 'ru' ? 'ru' : 'foreign', ok: p.ok === true, error: typeof p.error === 'string' ? p.error : '' }))
+  return probes.length > 0 ? probes : null
+}
+
+const PURPOSE = { ru: 'Яндекс, русские зоны', foreign: 'заграничный' }
+
+export function probeRows(probes) {
+  return (probes ?? []).map((p) => {
+    const row = { key: p.server, title: `${p.server} · ${PURPOSE[p.purpose] ?? PURPOSE.foreign}`, value: p.ok ? 'отвечает' : 'не отвечает', tone: p.ok ? 'ok' : 'danger' }
+    if (!p.ok && p.error) row.detail = p.error
+    return row
+  })
+}
+
+// Мёртвые серверы агент в роутер не пишет (у Яндекса -- все его строки).
+export function skippedServersText(probes) {
+  const dead = (probes ?? []).filter((p) => !p.ok)
+  if (dead.length === 0) return ''
+  const many = dead.length > 1
+  let text = `${many ? 'Не отвечают и в роутер не ставятся' : 'Не отвечает и в роутер не ставится'}: ${dead.map((p) => p.server).join(', ')}.`
+  if (dead.some((p) => p.purpose === 'ru')) text += ' Русские зоны пойдут через заграничные серверы — это работает.'
+  return text
+}
+
+// Отказ «не ответил ни один заграничный» (actions.DNSReferenceUnreachableCode):
+// ничего не изменено.
+export function referenceUnreachable(result) {
+  return result?.status === 'err' && String(result.output ?? '').startsWith('reference_unreachable')
+}
+
 export function doneText(r) {
+  if (r.unreachable) return TEXTS.unreachable
   if (r.status === 'err') return 'Роутер не сбросил DNS: не смог прочитать свои настройки. Ничего не изменилось.'
   const saved = r.snapshot
     ? `Прежние настройки DNS сохранены на роутере в файле ${r.snapshot} — по нему их можно вернуть руками.`

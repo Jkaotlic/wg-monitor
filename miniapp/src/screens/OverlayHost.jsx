@@ -7,6 +7,8 @@ import { JobProgress } from './JobProgress.jsx'
 import { BackendDeployWait } from './BackendDeployWait.jsx'
 import { AgentConnectionScreen } from './AgentConnectionScreen.jsx'
 import { PackagesScreen } from './PackagesScreen.jsx'
+import { PorthopScreen } from './PorthopScreen.jsx'
+import { SpaceScreen } from './SpaceScreen.jsx'
 import { CabinetScreen } from './CabinetScreen.jsx'
 import { RepairScreen } from './RepairScreen.jsx'
 import { SelfhostedScreen } from './SelfhostedScreen.jsx'
@@ -258,6 +260,21 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
         )
       }
       return <PackagesScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} onClose={toManage} />
+    // v0.57: смена порта при блокировке и свободное место -- как пакеты:
+    // админские экраны «Обслуживания», адрес может открыть и не-админ.
+    case 'porthop':
+    case 'space': {
+      const title = nav.overlay === 'porthop' ? 'Смена порта при блокировке' : 'Свободное место'
+      if (!isAdmin) {
+        return (
+          <Overlay title={title} backLabel="Назад" onBack={close}>
+            <p class="state">Этот экран доступен только администратору.</p>
+          </Overlay>
+        )
+      }
+      const Screen = nav.overlay === 'porthop' ? PorthopScreen : SpaceScreen
+      return <Screen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} onClose={toManage} />
+    }
     default:
       return null
   }

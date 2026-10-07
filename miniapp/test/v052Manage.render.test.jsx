@@ -25,7 +25,7 @@ async function manage(isAdmin, focusGroup = null, routerName = 'home') {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'miniapp', wide: false }}>
-        <ManageTab routerID={2} routerName={routerName} isAdmin={isAdmin} focusGroup={focusGroup} openSheet={noop} openLayer={noop} onOpenAgentConfig={noop} onOpenAgentConnection={noop} onOpenDNSReset={noop} onOpenPackages={noop} />
+        <ManageTab routerID={2} routerName={routerName} isAdmin={isAdmin} focusGroup={focusGroup} openSheet={noop} openLayer={noop} onOpenAgentConfig={noop} onOpenAgentConnection={noop} onOpenDNSReset={noop} onOpenPackages={noop} onOpenPorthop={noop} onOpenSpace={noop} />
       </AppContext.Provider>,
       root,
     ),
@@ -61,7 +61,7 @@ describe('v0.52: «Настройки» -- четыре раздела', () => {
   it('дом каждого пункта', async () => {
     const root = await manage(true, 'service')
     const service = root.querySelector('#mg-service')
-    for (const t of ['Сверить версии', 'Проверить прошивку', 'Перезагрузить роутер', 'Перезапустить awg-manager', 'Обновить пакеты Entware', 'Открыть пакеты по расписанию', 'Открыть сброс DNS']) {
+    for (const t of ['Сверить версии', 'Проверить прошивку', 'Перезагрузить роутер', 'Перезапустить awg-manager', 'Обновить пакеты Entware', 'Открыть смену порта', 'Открыть свободное место', 'Открыть пакеты по расписанию', 'Открыть эталонный DNS']) {
       expect(button(service, t), t).toBeTruthy()
     }
     expect(button(service, 'Перезапустить HydraRoute')).toBeUndefined()
@@ -153,10 +153,12 @@ describe('v0.52: «Настройки» -- четыре раздела', () => {
     expect([...service.querySelectorAll('button')].filter((b) => b.textContent.trim() === 'Сверить версии')).toHaveLength(1)
     cleanup(root)
   })
-  it('владелец: без «Сброс DNS» и доступа, «Панель роутера» в «Роутер и агент»', async () => {
+  it('владелец: без «Эталонного DNS», смены порта, места и доступа, «Панель роутера» в «Роутер и агент»', async () => {
     mocks.settings = { role: 'owner', agent_version: 'v0.47.0', panel_known: true, panel_scope: 'public', panel_url: 'https://awg.example.com' }
     const root = await manage(false, 'agent')
-    expect(root.textContent).not.toContain('Сброс DNS')
+    expect(root.textContent).not.toContain('Эталонный DNS')
+    expect(root.textContent).not.toContain('Смена порта при блокировке')
+    expect(root.textContent).not.toContain('Свободное место')
     expect(root.querySelector('#mg-access')).toBe(null)
     expect(root.querySelector('#mg-danger')).toBe(null)
     expect(root.querySelector('#mg-agent').textContent).toContain('Панель роутера')

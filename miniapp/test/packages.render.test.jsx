@@ -68,12 +68,10 @@ beforeEach(() => {
 })
 
 describe('«Пакеты по расписанию»', () => {
-  it('на входе спрашивает оба состояния и рисует их словами', async () => {
+  it('на входе спрашивает состояние обновления пакетов и рисует его словами; очистки здесь нет (v0.57: она на «Свободном месте»)', async () => {
     const root = await mount()
-    expect(mocks.calls.map((c) => [c.action, c.args])).toEqual([
-      ['opkg_cron_status', { lines: 40 }],
-      ['entware_clean_status', { lines: 40 }],
-    ])
+    expect(mocks.calls.map((c) => [c.action, c.args])).toEqual([['opkg_cron_status', { lines: 40 }]])
+    expect(card(root, 'clean')).toBeNull()
     const opkg = card(root, 'opkg')
     expect(opkg.textContent).toContain('Обновление пакетов по расписанию')
     expect(opkg.textContent).toContain('каждый день в 04:30')
@@ -82,13 +80,6 @@ describe('«Пакеты по расписанию»', () => {
     expect(button(opkg, 'Изменить время')).toBeTruthy()
     expect(button(opkg, 'Выключить')).toBeTruthy()
     expect(button(opkg, 'Запустить сейчас')).toBeUndefined()
-    const clean = card(root, 'clean')
-    expect(clean.textContent).toContain('Очистка Entware')
-    expect(clean.textContent).toContain('выключено')
-    expect(clean.querySelector('input[id^="packages-time-"]').value).toBe('05:15')
-    expect(button(clean, 'Включить')).toBeTruthy()
-    expect(button(clean, 'Выключить')).toBeUndefined()
-    expect(button(clean, 'Запустить сейчас')).toBeTruthy()
     cleanup(root)
   })
 
@@ -125,16 +116,12 @@ describe('«Пакеты по расписанию»', () => {
     cleanup(root)
   })
 
-  it('выключить и запустить очистку сейчас', async () => {
+  it('выключить', async () => {
     const root = await mount()
     await act(async () => button(card(root, 'opkg'), 'Выключить').click())
     await flush()
     expect(card(root, 'opkg').textContent).toContain('Расписание снято.')
     expect(button(card(root, 'opkg'), 'Выключить')).toBeUndefined()
-    await act(async () => button(card(root, 'clean'), 'Запустить сейчас').click())
-    await flush()
-    expect(mocks.calls.find((c) => c.action === 'entware_clean_run').args).toEqual({})
-    expect(card(root, 'clean').textContent).toContain('Очистка выполнена, освобождено 2 МБ.')
     cleanup(root)
   })
 
@@ -148,12 +135,8 @@ describe('«Пакеты по расписанию»', () => {
 
   it('старый агент -- своей фразой; ошибка -- подробности под раскрытием', async () => {
     mocks.answers.opkg_cron_status = { status: 'err', output: 'unknown action: opkg_cron_status' }
-    mocks.answers.entware_clean_status = { status: 'err', output: 'exec not configured' }
     const root = await mount()
     expect(card(root, 'opkg').textContent).toContain(AGENT_OLDER_THAN_APP)
-    const clean = card(root, 'clean')
-    expect(clean.textContent).toContain('Роутер ответил ошибкой — подробности ниже.')
-    expect(clean.querySelector('details.packages-details pre').textContent).toBe('exec not configured')
     cleanup(root)
   })
 })
