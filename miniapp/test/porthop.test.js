@@ -200,3 +200,21 @@ describe('porthopOutcomeText', () => {
     expect(t).toContain('«Заменить ручную копию»')
   })
 })
+
+describe('lastEventText', () => {
+  it('метка со сдвигом пояса и без него -- одинаково, без «+0300»', async () => {
+    const { lastEventText } = await import('../src/porthop.js')
+    expect(lastEventText('2026-10-07 12:00:00 +0300 opkgtun10: порт 30000 -> 41234, поток ожил (хендшейк 3 с)')).toBe(
+      '2026-10-07 12:00:00 opkgtun10: порт 30000 -> 41234, поток ожил (хендшейк 3 с)',
+    )
+    expect(lastEventText('2026-10-07 12:00:00 opkgtun10: порт 30000 -> 41234, поток не ожил')).toBe('2026-10-07 12:00:00 opkgtun10: порт 30000 -> 41234, поток не ожил')
+    expect(lastEventText('2026-10-07 12:00:00 -0130 opkgtun10: listen-port 41234 не сработал (rc=1), пира возвращаю')).toBe(
+      '2026-10-07 12:00:00 opkgtun10: listen-port 41234 не сработал (rc=1), пира возвращаю',
+    )
+    expect(lastEventText('')).toBe('')
+  })
+  it('строка «Последнее событие» -- без сдвига пояса', () => {
+    const rows = porthopStatusRows(parsePorthopStatus(ok({ ...BASE, last_event: '2026-10-07 12:00:00 +0300 opkgtun10: поток ожил' })))
+    expect(rows.find((r) => r.key === 'last').value).toBe('2026-10-07 12:00:00 opkgtun10: поток ожил')
+  })
+})

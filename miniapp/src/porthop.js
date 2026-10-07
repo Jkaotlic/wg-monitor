@@ -101,6 +101,13 @@ export function watchedNames(ifaces, snapshot) {
   return (ifaces ?? []).map((i) => byIface.get(String(i).toLowerCase()) ?? i)
 }
 
+// Строка журнала сторожа: «2026-10-07 12:00:00 +0300 opkgtun10: …» (с
+// v0.57 -- со сдвигом пояса роутера; старые строки -- без него). Сдвиг
+// человеку не нужен: время -- роутерное, как в журнале.
+export function lastEventText(line) {
+  return String(line ?? '').replace(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) [+-]\d{4} /, '$1 ')
+}
+
 function plural(n, one, few, many) {
   const m10 = n % 10
   const m100 = n % 100
@@ -134,7 +141,7 @@ export function porthopStatusRows(status, snapshot = null) {
         ? 'смен порта не было'
         : `${status.hops} ${plural(status.hops, 'смена', 'смены', 'смен')} порта: ожили ${status.recovered}, не ожили ${status.failed}`
     rows.push(withTone({ key: 'day', title: 'За сутки', value: day }, status.failed > 0 && status.recovered === 0 ? 'warn' : ''))
-    if (status.lastEvent) rows.push({ key: 'last', title: 'Последнее событие', value: status.lastEvent })
+    if (status.lastEvent) rows.push({ key: 'last', title: 'Последнее событие', value: lastEventText(status.lastEvent) })
   }
 
   if (status.legacy.found) {
