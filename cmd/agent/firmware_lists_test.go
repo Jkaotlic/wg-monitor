@@ -53,3 +53,14 @@ func TestReadDNSEndpoints_ErrorResetsFirmwareSiteGroups(t *testing.T) {
 		t.Fatalf("после ошибки чтения признак держит устаревшее: %d", got)
 	}
 }
+
+// v0.57: сброс DNS пробует эталон перед применением. Без этой проводки
+// DNSProbe остался бы nil, и сброс молча писал бы мёртвые серверы.
+func TestBuildRunner_WiresDNSProbe(t *testing.T) {
+	cfg := &agent.Config{}
+	awg := awgmgr.New("http://127.0.0.1:1")
+	r := buildRunner(cfg, "/opt/etc/wg-monitor/config.yaml", awg, nil, nil, buildSingleChecks(cfg, awg, nil), nil)
+	if r.DNSProbe == nil {
+		t.Fatal("DNSProbe не подключён")
+	}
+}

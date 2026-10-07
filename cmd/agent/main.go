@@ -270,6 +270,8 @@ func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client,
 		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
 		DNSChanged:           dnsChangedHook(singleChecks, multiChecks),
 		FirmwareSiteGroups:   func() int { return int(firmwareSiteGroups.Load()) },
+		// v0.57: сброс DNS пробует эталон той же пробой, что сторож DNS.
+		DNSProbe: dnswatch.ProbeLine,
 	}
 }
 
