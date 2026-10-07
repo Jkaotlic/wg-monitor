@@ -186,9 +186,10 @@ export function porthopArgs(verb) {
   return {}
 }
 
-// Установка и снятие на агенте -- до 60 с; спящему роутеру -- ещё пять минут.
+// Установка на агенте -- до 120 с, снятие -- до 60 с; спящему роутеру -- ещё пять минут.
 export function porthopDeadlineMs(verb, asleep) {
-  const base = verb === 'install' || verb === 'replace' || verb === 'remove' ? 2 * 60_000 : 90_000
+  // Запас сверх 120 с агента: замена ручной копии ждёт её остановки и перезапуск своей.
+  const base = verb === 'install' || verb === 'replace' || verb === 'remove' ? 150_000 : 90_000
   return asleep ? base + 5 * 60_000 : base
 }
 
