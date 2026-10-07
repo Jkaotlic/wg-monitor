@@ -66,6 +66,13 @@ type Poller struct {
 	logger *slog.Logger
 	now    func() time.Time
 	wg     sync.WaitGroup
+
+	// delivered -- доставленные в этом процессе новости (роутер + компонент
+	// + версия). Страховка на случай, когда MarkNotified упрямо не пишется:
+	// без неё то же сообщение уходило бы каждый час. Живёт до рестарта --
+	// дальше правду держит notified_at.
+	mu        sync.Mutex
+	delivered map[string]bool
 }
 
 // NewPoller проверяет швы: без Audit и AgentNews пуллер собирал бы не тот
@@ -89,7 +96,7 @@ func NewPoller(d *db.DB, up *upstream.Cache, s Sender, cfg Config, logger *slog.
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Poller{d: d, up: up, s: s, cfg: cfg, logger: logger, now: time.Now}, nil
+	return &Poller{d: d, up: up, s: s, cfg: cfg, logger: logger, now: time.Now, delivered: map[string]bool{}}, nil
 }
 
 // SetNow подменяет часы для тестов. Звать до Run.
@@ -170,6 +177,24 @@ type Item struct {
 
 func newsKey(component, version string) string { return component + "\x00" + version }
 
+func deliveredKey(routerID int64, it Item) string {
+	return fmt.Sprintf("%d\x00%s", routerID, newsKey(it.Component, it.Version))
+}
+
+func (p *Poller) wasDelivered(routerID int64, it Item) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.delivered[deliveredKey(routerID, it)]
+}
+
+func (p *Poller) noteDelivered(routerID int64, items []Item) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, it := range items {
+		p.delivered[deliveredKey(routerID, it)] = true
+	}
+}
+
 // routerPass -- новости одного роутера: завести (Ensure), отобрать
 // неразосланные и не спрятанные (PendingNotify) среди актуальных сейчас,
 // разослать одним тихим сообщением и пометить -- только при доставке.
@@ -218,7 +243,7 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 	}
 	var items []Item
 	for _, it := range current {
-		if want[newsKey(it.Component, it.Version)] {
+		if want[newsKey(it.Component, it.Version)] && !p.wasDelivered(u.ID, it) {
 			items = append(items, it)
 		}
 	}
@@ -239,6 +264,7 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 		// Слать некому -- не «разослано»: появится получатель, получит.
 		return
 	}
+	p.noteDelivered(u.ID, items)
 	for _, it := range items {
 		if err := reminders.MarkNotified(u.ID, it.Component, it.Version); err != nil {
 			p.logger.Warn("maintnotify: отметка не записана", "router_id", u.ID, "component", it.Component, "err", err)

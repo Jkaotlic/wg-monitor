@@ -360,3 +360,22 @@ func TestRenderSpeaksOwnerRussian(t *testing.T) {
 		t.Errorf("заголовок для одной перезагрузки:\n%s", only)
 	}
 }
+
+// Отметка «разослано» не пишется (база упрямо отказывает) -- это не повод
+// слать то же самое каждый час: процесс помнит доставленное сам.
+func TestPollerDoesNotResendWhenMarkFails(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.d.SQL().Exec(`CREATE TRIGGER no_mark BEFORE UPDATE OF notified_at ON router_update_reminders
+BEGIN SELECT RAISE(ABORT, 'отметка запрещена'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.p.Tick(context.Background())
+	if pending, _ := f.d.UpdateReminders().PendingNotify(f.router, f.now); len(pending) != 2 {
+		t.Fatalf("триггер не сработал, к рассылке %+v", pending)
+	}
+	f.now = f.now.Add(time.Hour)
+	f.p.Tick(context.Background())
+	if n := len(f.tg.sent()); n != 1 {
+		t.Fatalf("при сломанной отметке сообщений %d, ждали одно", n)
+	}
+}
