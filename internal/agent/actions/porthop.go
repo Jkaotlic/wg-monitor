@@ -114,9 +114,11 @@ func (m *PorthopManager) Logs(ctx context.Context, tailLines int) (wire.PorthopS
 //
 // Ручная копия оператора (её init в init.d или её процесс) без
 // replaceLegacy -- отказ PorthopLegacyRunningCode, ничего не меняется: две
-// копии дрались бы за один интерфейс. С replaceLegacy -- остановить её же
-// init, перенести init в LegacyMoveDir (имя на S в init.d запустилось бы при
-// загрузке снова), добить оставшиеся процессы и только потом ставить свою.
+// копии дрались бы за один интерфейс. С replaceLegacy -- сначала записать
+// свои файлы (не записались -- ручная копия не тронута), затем остановить
+// её её же init, перенести init в LegacyMoveDir (имя на S в init.d
+// запустилось бы при загрузке снова), добить оставшиеся процессы и только
+// потом запустить свою.
 // Сам /opt/bin/awg-porthop.sh не трогаем.
 func (m *PorthopManager) Install(ctx context.Context, ifaces []string, replaceLegacy bool) (wire.PorthopStatus, error) {
 	conf, err := porthopConfText(ifaces)
@@ -126,11 +128,6 @@ func (m *PorthopManager) Install(ctx context.Context, ifaces []string, replaceLe
 	legacy := m.legacy()
 	if legacy.Found && !replaceLegacy {
 		return wire.PorthopStatus{}, fmt.Errorf("%s: на роутере есть ручная копия смены порта (%s) — две копии дрались бы за один VPN-туннель. Ничего не изменено; чтобы заменить её, повторите установку с заменой ручной копии", PorthopLegacyRunningCode, legacy.Path)
-	}
-	if legacy.Found {
-		if err := m.replaceLegacy(ctx); err != nil {
-			return wire.PorthopStatus{}, err
-		}
 	}
 	changed := false
 	for _, f := range []struct {
@@ -150,6 +147,13 @@ func (m *PorthopManager) Install(ctx context.Context, ifaces []string, replaceLe
 	}
 	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o755); err != nil {
 		return wire.PorthopStatus{}, fmt.Errorf("create log dir: %w", err)
+	}
+	// Ручная копия -- только когда свои файлы уже на месте: не записалось --
+	// ручная продолжает работать, роутер не остаётся без сторожа.
+	if legacy.Found {
+		if err := m.replaceLegacy(ctx); err != nil {
+			return wire.PorthopStatus{}, err
+		}
 	}
 	if changed || !m.running() {
 		out, err := m.exec(ctx, m.initPath(), "restart")

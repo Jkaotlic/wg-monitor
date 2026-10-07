@@ -26,6 +26,9 @@ type porthopRouter struct {
 	allowed map[string]string
 	// legacyStopKills -- какой pid гасит `S99awg-porthop stop`.
 	legacyStopKills string
+	// oursWrittenAtLegacyStop -- наш скрипт уже лежал на месте, когда
+	// останавливали ручную копию.
+	oursWrittenAtLegacyStop bool
 }
 
 func newPorthopRouter(t *testing.T) *porthopRouter {
@@ -92,6 +95,9 @@ func (r *porthopRouter) exec(ctx context.Context, name string, args ...string) (
 		_ = os.Remove(r.m.PidPath)
 		return []byte("stopped\n"), nil
 	case key == r.m.LegacyInitPath+" stop":
+		if _, err := os.Stat(r.m.ScriptPath); err == nil {
+			r.oursWrittenAtLegacyStop = true
+		}
 		if r.legacyStopKills != "" {
 			r.kill(r.legacyStopKills)
 		}
@@ -279,6 +285,11 @@ func TestPorthopInstallReplacesLegacy(t *testing.T) {
 	if stop < 0 || restart < 0 || stop > restart {
 		t.Fatalf("order: %v", r.calls)
 	}
+	// Сначала свои файлы, потом остановка ручной: не записалось -- ручная
+	// копия продолжает работать.
+	if !r.oursWrittenAtLegacyStop {
+		t.Fatal("legacy copy stopped before our files were written")
+	}
 	if st.Legacy.Found || st.Legacy.Running || st.Legacy.MovedTo != moved || !st.Running {
 		t.Fatalf("status=%+v", st)
 	}
@@ -457,5 +468,25 @@ func TestPorthopDefaultPathsMatchScripts(t *testing.T) {
 		if !strings.Contains(routerscripts.Porthop, p) {
 			t.Errorf("script does not use %s", p)
 		}
+	}
+}
+
+// Свои файлы не записались -- ручная копия остаётся как была: работает,
+// init на месте, ни stop, ни kill.
+func TestPorthopReplaceLegacyKeepsItWhenWriteFails(t *testing.T) {
+	r := newPorthopRouter(t)
+	writeTestFile(t, r.m.LegacyInitPath, "#!/bin/sh\n", 0o755)
+	r.proc("777", "/bin/sh", "/opt/bin/awg-porthop.sh")
+	// Каталог скрипта занят файлом -- записать скрипт нельзя.
+	writeTestFile(t, filepath.Dir(r.m.ScriptPath), "not a dir", 0o644)
+
+	if _, err := r.m.Install(context.Background(), nil, true); err == nil {
+		t.Fatal("install succeeded without its files")
+	}
+	if _, err := os.Stat(r.m.LegacyInitPath); err != nil {
+		t.Fatal("legacy init moved although our files were not written")
+	}
+	if r.count(r.m.LegacyInitPath) != 0 || r.count("kill") != 0 {
+		t.Fatalf("legacy touched: %v", r.calls)
 	}
 }
