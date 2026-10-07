@@ -379,3 +379,70 @@ BEGIN SELECT RAISE(ABORT, 'отметка запрещена'); END`); err != ni
 		t.Fatalf("при сломанной отметке сообщений %d, ждали одно", n)
 	}
 }
+
+// cancelSender -- доставляет «одному» и посреди рассылки отменяет контекст:
+// так выглядит остановка бэкенда во время веера.
+type cancelSender struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (c *cancelSender) SendSilentKeyboard(context.Context, int64, string, string, *tg.InlineKeyboardMarkup) (int, error) {
+	c.calls++
+	c.cancel()
+	return 1, nil
+}
+
+// Остановка посреди рассылки: часть получателей могла не получить, поэтому
+// не помечаем -- лучше возможный повтор после рестарта, чем потерянные люди.
+func TestPollerCancelledMidSendDoesNotMark(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelSender{cancel: cancel}
+	f.p.s = cs
+	f.p.Tick(ctx)
+	if cs.calls != 1 {
+		t.Fatalf("отправок %d", cs.calls)
+	}
+	if pending, _ := f.d.UpdateReminders().PendingNotify(f.router, f.now); len(pending) != 2 {
+		t.Fatalf("прерванная рассылка помечена: к рассылке %+v", pending)
+	}
+	// И процесс её не запомнил: следующий живой обход отправит.
+	f.p.s = cs
+	f.p.Tick(context.Background())
+	if cs.calls != 2 {
+		t.Fatalf("после прерванной рассылки повтора не было: отправок %d", cs.calls)
+	}
+}
+
+// Отменённый контекст -- ни одной отправки.
+func TestPollerCancelledBeforeSendSendsNothing(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cs := &cancelSender{cancel: func() {}}
+	f.p.s = cs
+	if u, err := f.d.Users().GetByID(f.router); err == nil {
+		row, _ := f.d.RouterVersions().Get(f.router)
+		f.p.routerPass(ctx, u, row, f.now)
+	}
+	if cs.calls != 0 {
+		t.Fatalf("при отменённом контексте отправок %d", cs.calls)
+	}
+}
+
+// Start заводит WaitGroup до запуска горутины: WaitForExit сразу после Start
+// не проскакивает мимо работающего пуллера.
+func TestPollerStartAndWait(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.p.Start(ctx)
+	cancel()
+	done := make(chan struct{})
+	go func() { f.p.WaitForExit(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("пуллер не вышел после отмены")
+	}
+}

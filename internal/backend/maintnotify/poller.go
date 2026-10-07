@@ -107,10 +107,15 @@ func (p *Poller) SetNow(fn func() time.Time) {
 	p.now = fn
 }
 
-// Run -- обход сразу и затем раз в Interval, до отмены ctx. Повтор после
-// рестарта безвреден: разосланное помечено в базе.
-func (p *Poller) Run(ctx context.Context) {
+// Start запускает обход сразу и затем раз в Interval, до отмены ctx.
+// WaitGroup заводится ДО горутины: WaitForExit сразу после Start обязан ждать,
+// а не проскочить. Повтор после рестарта безвреден: разосланное помечено в базе.
+func (p *Poller) Start(ctx context.Context) {
 	p.wg.Add(1)
+	go p.run(ctx)
+}
+
+func (p *Poller) run(ctx context.Context) {
 	defer p.wg.Done()
 	p.Tick(ctx)
 	t := time.NewTicker(p.cfg.Interval)
@@ -125,7 +130,7 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-// WaitForExit ждёт выхода Run.
+// WaitForExit ждёт выхода горутины Start.
 func (p *Poller) WaitForExit() { p.wg.Wait() }
 
 // inWindow -- дневное окно по часам Location.
@@ -251,6 +256,10 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 		return
 	}
 
+	// Остановка уже идёт -- не начинаем рассылку, которую не успеем довести.
+	if ctx.Err() != nil {
+		return
+	}
 	var kb *tg.InlineKeyboardMarkup
 	if appURL := tg.MiniAppRouterTabURL(p.cfg.MiniAppBaseURL, u.ID, "manage", ""); appURL != "" {
 		kb = &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{tg.OpenInAppButton(appURL)}}}
@@ -262,6 +271,12 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 	}
 	if delivered == 0 {
 		// Слать некому -- не «разослано»: появится получатель, получит.
+		return
+	}
+	if ctx.Err() != nil {
+		// Остановка посреди веера: кому-то могло не дойти. Не помечаем --
+		// возможный повтор после рестарта лучше потерянного получателя.
+		p.logger.Warn("maintnotify: рассылка прервана остановкой, отметка не ставится", "router_id", u.ID)
 		return
 	}
 	p.noteDelivered(u.ID, items)

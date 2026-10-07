@@ -437,6 +437,7 @@ func main() {
 	// в час, только днём, без звука, один раз на новость -- всем, кто
 	// отвечает за роутер. Новости -- тот же сборщик, что у экрана
 	// «Обновления»; выключатель notify.maintenance.enabled.
+	var maintPoller *maintnotify.Poller
 	if cfg.Notify.Maintenance.IsEnabled() {
 		mp, err := maintnotify.NewPoller(d, upCache,
 			notify.NewFanout(d, tgClient, logger.With("component", "maintnotify"), cfg.Telegram.AdminUserID),
@@ -449,7 +450,8 @@ func main() {
 		if err != nil {
 			logger.Error("maintnotify: пуллер не собран", "err", err)
 		} else {
-			go mp.Run(ctx)
+			mp.Start(ctx)
+			maintPoller = mp
 			logger.Info("maintenance reminders enabled")
 		}
 	}
@@ -493,6 +495,11 @@ func main() {
 	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
+	// Мягкое напоминание пишет отметки в базу: ждём его до d.Close(), но
+	// ограниченно -- рассылку держит Telegram с его таймаутами.
+	if maintPoller != nil && !waitBounded(maintPoller.WaitForExit, 10*time.Second) {
+		logger.Warn("maintnotify: пуллер не завершился за 10 с, останавливаемся без него")
+	}
 	logger.Info("backend stopped")
 }
 
