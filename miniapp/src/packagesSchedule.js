@@ -22,7 +22,7 @@ export const PACKAGE_JOBS = {
   },
   clean: {
     prefix: 'entware_clean',
-    title: 'Очистка Entware',
+    title: 'Очистка по расписанию',
     about: 'Роутер по расписанию чистит временные файлы и кэш Entware и следит за свободным местом и памятью.',
     defaultTime: '05:15',
     canRun: true,
