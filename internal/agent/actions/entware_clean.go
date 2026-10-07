@@ -2,7 +2,9 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,18 +57,8 @@ func (m *EntwareCleanManager) Install(ctx context.Context, schedule string) (wir
 	if _, err := ensureCronInstalled(ctx, m.exec); err != nil {
 		return wire.EntwareCleanStatus{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.scriptPath()), 0o755); err != nil {
-		return wire.EntwareCleanStatus{}, fmt.Errorf("create script dir: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o755); err != nil {
-		return wire.EntwareCleanStatus{}, fmt.Errorf("create log dir: %w", err)
-	}
-	text, err := m.scriptText()
-	if err != nil {
+	if err := m.writeScript(); err != nil {
 		return wire.EntwareCleanStatus{}, err
-	}
-	if err := os.WriteFile(m.scriptPath(), []byte(text), 0o755); err != nil {
-		return wire.EntwareCleanStatus{}, fmt.Errorf("write script: %w", err)
 	}
 	current, err := m.readCrontab(ctx)
 	if err != nil {
@@ -115,8 +107,14 @@ func (m *EntwareCleanManager) Status(ctx context.Context, tailLines int) (wire.E
 }
 
 func (m *EntwareCleanManager) Run(ctx context.Context) (wire.EntwareCleanStatus, error) {
-	if _, err := os.Stat(m.scriptPath()); err != nil {
-		return wire.EntwareCleanStatus{}, fmt.Errorf("managed cleanup script is not installed: %w", err)
+	// v0.57: без включённого расписания скрипта нет -- пишем его сами, без
+	// cron. Раньше здесь был отказ, а чистка нужнее всего, когда места нет.
+	if _, err := os.Stat(m.scriptPath()); errors.Is(err, fs.ErrNotExist) {
+		if err := m.writeScript(); err != nil {
+			return wire.EntwareCleanStatus{}, err
+		}
+	} else if err != nil {
+		return wire.EntwareCleanStatus{}, fmt.Errorf("stat cleanup script: %w", err)
 	}
 	if out, err := m.exec(ctx, m.scriptPath()); err != nil {
 		return wire.EntwareCleanStatus{}, fmt.Errorf("run cleanup script: %w\n%s", err, string(out))
@@ -335,6 +333,25 @@ func (m *EntwareCleanManager) memInfo(ctx context.Context) (available, total int
 		}
 	}
 	return available, total
+}
+
+// writeScript кладёт скрипт очистки на место: временный файл рядом и
+// переименование, чтобы cron не застал недописанный скрипт.
+func (m *EntwareCleanManager) writeScript() error {
+	if err := os.MkdirAll(filepath.Dir(m.scriptPath()), 0o755); err != nil {
+		return fmt.Errorf("create script dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.logPath()), 0o755); err != nil {
+		return fmt.Errorf("create log dir: %w", err)
+	}
+	text, err := m.scriptText()
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(m.scriptPath(), []byte(text), 0o755); err != nil {
+		return fmt.Errorf("write script: %w", err)
+	}
+	return nil
 }
 
 // scriptText -- скрипт очистки из routerscripts с подставленными значениями.
