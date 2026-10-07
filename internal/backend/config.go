@@ -39,6 +39,7 @@ type Config struct {
 	Digest            DigestConfig             `yaml:"digest"`
 	Revive            ReviveConfig             `yaml:"revive"`
 	Alerts            AlertsConfig             `yaml:"alerts"`
+	Notify            NotifyConfig             `yaml:"notify"`
 
 	// storeDefaulted -- какие пути хранилищ выведены из db_path, а не заданы.
 	storeDefaulted storeDefaulted
@@ -62,6 +63,21 @@ type AlertsConfig struct {
 type BypassLeakAlertConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
+
+// NotifyConfig -- уведомления, которые не тревоги.
+type NotifyConfig struct {
+	Maintenance MaintenanceNotifyConfig `yaml:"maintenance"`
+}
+
+// MaintenanceNotifyConfig -- мягкое напоминание «есть что обновить или
+// перезагрузить» (v0.57, спека C). Включено по умолчанию: указатель, чтобы
+// отличить «не задано» от явного false.
+type MaintenanceNotifyConfig struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+// IsEnabled -- включено ли напоминание; не задано -- включено.
+func (c MaintenanceNotifyConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
 
 // ReviveConfig -- оживление агента на выключенном роутере.
 //
