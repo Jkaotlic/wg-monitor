@@ -166,9 +166,9 @@ describe('porthopArgs / сроки', () => {
     expect(porthopArgs('remove')).toEqual({})
   })
   it('установка дольше, спящему -- ещё пять минут', () => {
-    expect(porthopDeadlineMs('install', false)).toBe(2 * 60_000)
+    expect(porthopDeadlineMs('install', false)).toBe(150_000)
     expect(porthopDeadlineMs('status', false)).toBe(90_000)
-    expect(porthopDeadlineMs('remove', true)).toBe(7 * 60_000)
+    expect(porthopDeadlineMs('remove', true)).toBe(150_000 + 5 * 60_000)
   })
 })
 
