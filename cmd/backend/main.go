@@ -446,6 +446,7 @@ func main() {
 				MiniAppBaseURL: cfg.PublicBaseURL,
 				Audit:          backend.VersionAuditFromSnapshot,
 				AgentNews:      backend.AgentUpdateNews,
+				RouterPause:    maintnotify.DefaultRouterPause,
 			}, logger.With("component", "maintnotify"))
 		if err != nil {
 			logger.Error("maintnotify: пуллер не собран", "err", err)

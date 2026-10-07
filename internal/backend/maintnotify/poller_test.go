@@ -279,6 +279,7 @@ func TestPollerAgentNews(t *testing.T) {
 		}
 		return "", false
 	}
+	ageAgentNews(t, f, 73*time.Hour)
 	f.p.Tick(context.Background())
 	reqs := f.tg.sent()
 	if len(reqs) != 1 {
@@ -444,5 +445,113 @@ func TestPollerStartAndWait(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("пуллер не вышел после отмены")
+	}
+}
+
+// ageAgentNews заводит новость агента (v0.57.0) так, будто сервер узнал о ней
+// age назад.
+func ageAgentNews(t *testing.T, f *fixture, age time.Duration) {
+	t.Helper()
+	if err := f.d.UpdateReminders().Ensure(f.router, "agent", "v0.57.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.SQL().Exec(`UPDATE router_update_reminders SET first_seen_at = ? WHERE user_id = ? AND component = 'agent'`,
+		f.now.Add(-age).UTC(), f.router); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func agentBehind(f *fixture) {
+	f.p.cfg.AgentNews = func(v string) (string, bool) {
+		if v == "v0.56.0" {
+			return "v0.57.0", true
+		}
+		return "", false
+	}
+}
+
+// Решение ведущего цикла: агента обновляет авто-раскатка, и звать человека
+// стоит, только если она не справилась -- новость агента старше 72 часов и
+// назначенного обновления нет. Остальные новости уходят как обычно.
+func TestPollerAgentNewsWaits72Hours(t *testing.T) {
+	f := newFixture(t)
+	if err := f.d.Users().UpdateLastSeenAgentVersion(f.router, "v0.56.0"); err != nil {
+		t.Fatal(err)
+	}
+	agentBehind(f)
+	ageAgentNews(t, f, 71*time.Hour)
+	f.p.Tick(context.Background())
+	reqs := f.tg.sent()
+	if len(reqs) != 1 {
+		t.Fatalf("сообщений %d", len(reqs))
+	}
+	if text, _ := reqs[0]["text"].(string); strings.Contains(text, "wg-monitor") {
+		t.Fatalf("свежая новость агента разослана:\n%s", text)
+	}
+	if pending, _ := f.d.UpdateReminders().PendingNotify(f.router, f.now); len(pending) != 1 || pending[0].Component != "agent" {
+		t.Fatalf("новость агента должна ждать неразосланной: %+v", pending)
+	}
+	// Прошло 72 часа -- отдельное сообщение только об агенте.
+	f.now = f.now.Add(2 * time.Hour)
+	f.p.Tick(context.Background())
+	reqs = f.tg.sent()
+	if len(reqs) != 2 {
+		t.Fatalf("после 72 часов сообщений %d", len(reqs))
+	}
+	if text, _ := reqs[1]["text"].(string); !strings.Contains(text, "v0.56.0 → v0.57.0") || strings.Contains(text, "5.02") {
+		t.Fatalf("второе сообщение не только об агенте:\n%s", text)
+	}
+}
+
+func TestPollerAgentNewsSkippedWhileUpdateScheduled(t *testing.T) {
+	f := newFixture(t)
+	if err := f.d.Users().UpdateLastSeenAgentVersion(f.router, "v0.56.0"); err != nil {
+		t.Fatal(err)
+	}
+	agentBehind(f)
+	ageAgentNews(t, f, 100*time.Hour)
+	if err := f.d.Users().MarkPendingDeploy(f.router, "v0.57.0", f.now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	f.p.Tick(context.Background())
+	reqs := f.tg.sent()
+	if len(reqs) != 1 {
+		t.Fatalf("сообщений %d", len(reqs))
+	}
+	if text, _ := reqs[0]["text"].(string); strings.Contains(text, "wg-monitor") {
+		t.Fatalf("при назначенном обновлении агента новость разослана:\n%s", text)
+	}
+}
+
+// Пауза между роутерами внутри обхода: на первом запуске админ получает по
+// сообщению на каждый роутер, и без паузы Telegram ответил бы 429.
+func TestPollerPausesBetweenRouters(t *testing.T) {
+	f := newFixture(t)
+	for _, nick := range []string{"router-b", "router-c"} {
+		id, err := f.d.Users().Insert(nick, "tok-"+nick, "203.0.113.10", "awg11")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Users().SetTelegramUserID(id, 1001); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.RouterVersions().Upsert(id, db.RouterVersionSnapshot{
+			FirmwareCurrent: "5.02.A.8.0-3", FirmwareAvail: "5.02.A.9.0-0", Source: "report",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pauses []time.Duration
+	f.p.cfg.RouterPause = 1500 * time.Millisecond
+	f.p.sleep = func(_ context.Context, d time.Duration) bool {
+		pauses = append(pauses, d)
+		return true
+	}
+	f.p.Tick(context.Background())
+	if n := len(f.tg.sent()); n != 3 {
+		t.Fatalf("сообщений %d, ждали три", n)
+	}
+	if len(pauses) != 2 || pauses[0] != 1500*time.Millisecond {
+		t.Fatalf("паузы %v, ждали две по 1,5 с -- между тремя отправками", pauses)
 	}
 }

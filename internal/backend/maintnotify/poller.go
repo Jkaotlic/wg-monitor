@@ -48,7 +48,19 @@ type Config struct {
 	// AgentNews -- отстаёт ли агент этой версии и на что обновляться
 	// (backend.AgentUpdateNews).
 	AgentNews func(agentVersion string) (available string, ok bool)
+	// RouterPause -- пауза между отправками разным роутерам в одном обходе
+	// (DefaultRouterPause в бою, 0 в тестах). На первом запуске админ получает
+	// по сообщению на роутер, и подряд это упёрлось бы в 429 Telegram.
+	RouterPause time.Duration
 }
+
+// DefaultRouterPause -- пауза между роутерами в бою.
+const DefaultRouterPause = 1500 * time.Millisecond
+
+// agentNewsGrace -- сколько новость об агенте ждёт, прежде чем звать
+// человека: агента обновляет авто-раскатка, и напоминание нужно, только если
+// она не справилась (решение ведущего цикла v0.57).
+const agentNewsGrace = 72 * time.Hour
 
 const (
 	defaultInterval = time.Hour
@@ -66,6 +78,11 @@ type Poller struct {
 	logger *slog.Logger
 	now    func() time.Time
 	wg     sync.WaitGroup
+	// sleep -- пауза с учётом отмены; false -- контекст отменён. Шов для тестов.
+	sleep func(ctx context.Context, d time.Duration) bool
+	// sentInTick -- в этом обходе уже была отправка (паузу ставим перед
+	// каждой следующей). Обход идёт в одной горутине.
+	sentInTick bool
 
 	// delivered -- доставленные в этом процессе новости (роутер + компонент
 	// + версия). Страховка на случай, когда MarkNotified упрямо не пишется:
@@ -96,7 +113,18 @@ func NewPoller(d *db.DB, up *upstream.Cache, s Sender, cfg Config, logger *slog.
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Poller{d: d, up: up, s: s, cfg: cfg, logger: logger, now: time.Now, delivered: map[string]bool{}}, nil
+	return &Poller{d: d, up: up, s: s, cfg: cfg, logger: logger, now: time.Now, sleep: sleepCtx, delivered: map[string]bool{}}, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // SetNow подменяет часы для тестов. Звать до Run.
@@ -149,6 +177,7 @@ func (p *Poller) Tick(ctx context.Context) {
 	if !p.inWindow(now) {
 		return
 	}
+	p.sentInTick = false
 	snapshots, err := p.d.RouterVersions().All()
 	if err != nil {
 		p.logger.Warn("maintnotify: снимки версий не прочитаны", "err", err)
@@ -242,15 +271,23 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 		p.logger.Warn("maintnotify: новости не прочитаны", "router_id", u.ID, "err", err)
 		return
 	}
-	want := make(map[string]bool, len(pending))
+	want := make(map[string]db.Reminder, len(pending))
 	for _, rem := range pending {
-		want[newsKey(rem.Component, rem.Version)] = true
+		want[newsKey(rem.Component, rem.Version)] = rem
 	}
+	scheduled := u.PendingVersion != nil && strings.TrimSpace(*u.PendingVersion) != ""
 	var items []Item
 	for _, it := range current {
-		if want[newsKey(it.Component, it.Version)] && !p.wasDelivered(u.ID, it) {
-			items = append(items, it)
+		rem, ok := want[newsKey(it.Component, it.Version)]
+		if !ok || p.wasDelivered(u.ID, it) {
+			continue
 		}
+		// Агент: только если авто-раскатка не справилась -- новость старше 72
+		// часов и обновление не назначено. Иначе ждёт неразосланной.
+		if it.Component == "agent" && (scheduled || now.Sub(rem.FirstSeenAt) < agentNewsGrace) {
+			continue
+		}
+		items = append(items, it)
 	}
 	if len(items) == 0 {
 		return
@@ -260,6 +297,10 @@ func (p *Poller) routerPass(ctx context.Context, u *db.User, row db.RouterVersio
 	if ctx.Err() != nil {
 		return
 	}
+	if p.sentInTick && p.cfg.RouterPause > 0 && !p.sleep(ctx, p.cfg.RouterPause) {
+		return
+	}
+	p.sentInTick = true
 	var kb *tg.InlineKeyboardMarkup
 	if appURL := tg.MiniAppRouterTabURL(p.cfg.MiniAppBaseURL, u.ID, "manage", ""); appURL != "" {
 		kb = &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{tg.OpenInAppButton(appURL)}}}
