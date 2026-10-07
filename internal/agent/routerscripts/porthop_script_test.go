@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -342,8 +343,16 @@ func TestPorthopTrimsLog(t *testing.T) {
 	e.run("--once")
 
 	log := e.logText()
-	if len(log) > 64*1024 {
-		t.Fatalf("log not trimmed: %d bytes", len(log))
+	// Обрезка -- до половины потолка: иначе каждый следующий проход снова
+	// упирался бы в потолок и переписывал журнал на флешке целиком.
+	if len(log) > 32*1024 {
+		t.Fatalf("log not trimmed to half the limit: %d bytes", len(log))
+	}
+	ino := inode(t, e.log)
+	e.run("--once")
+	e.run("--once")
+	if inode(t, e.log) != ino {
+		t.Fatal("log rewritten again on passes under the limit")
 	}
 	if !strings.HasPrefix(log, "2026-10-01 12:00:00 ") {
 		t.Fatalf("trimmed log starts mid-line: %q", log[:60])
@@ -435,4 +444,13 @@ func TestPorthopScriptPaths(t *testing.T) {
 			t.Errorf("script lacks %s", want)
 		}
 	}
+}
+
+func inode(t *testing.T, p string) uint64 {
+	t.Helper()
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return uint64(fi.Sys().(*syscall.Stat_t).Ino)
 }
