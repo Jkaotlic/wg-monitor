@@ -527,6 +527,19 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "encode porthop status: " + err.Error(), payload
 		}
 		return "ok", string(b), payload
+	case "space_report":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		rep, err := SpaceReport(ctx, r.Exec)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		b, err := json.Marshal(rep)
+		if err != nil {
+			return "err", "encode space report: " + err.Error(), payload
+		}
+		return "ok", string(b), payload
 	case "check_via_tunnel":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
