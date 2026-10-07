@@ -114,14 +114,18 @@ hops_last_hour() {
 hop() {  # $1 iface; 0 = поток ожил
   i=$1; old=$(awg show "$i" listen-port); new=$(rand_port "$old")
   if [ "$DRY" = 1 ]; then log "$i: [dry-run] сменил бы порт $old -> $new"; return 1; fi
-  conf=$(mktemp "${TMPDIR:-/tmp}/porthop.XXXXXX") || return 1
+  # от mktemp до rm сигнал только запоминается: временный конфиг несёт
+  # ключи пира и не должен остаться в /tmp
+  BUSY=1
+  conf=$(mktemp "${TMPDIR:-/tmp}/porthop.XXXXXX") || { BUSY=0; return 1; }
   chmod 600 "$conf"
   awg showconf "$i" | awk '/^\[Peer\]/{p=1} p' > "$conf"
   pub=$(awg show "$i" peers | head -1)
   if [ -z "$pub" ] || ! grep -q '^\[Peer\]' "$conf"; then
-    rm -f "$conf"; log "$i: нет пира, пропускаю"; return 1
+    rm -f "$conf"; BUSY=0; log "$i: нет пира, пропускаю"; return 1
   fi
-  BUSY=1
+  # остановка пришла, пока читали конфиг, -- пира не трогаем вовсе
+  if [ "$STOP" = 1 ]; then rm -f "$conf"; BUSY=0; return 1; fi
   # пира, снятого успешно, возвращаем ВСЕГДА, даже если порт не сменился:
   # снятый и не возвращённый пир -- туннель без пира до перезапуска
   # (отступление от ручной копии, где `&&` на неудаче listen-port пира терял)

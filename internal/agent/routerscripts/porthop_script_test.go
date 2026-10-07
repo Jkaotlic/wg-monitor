@@ -34,6 +34,7 @@ show)
   peers) echo PUBKEY ;;
   esac ;;
 showconf)
+  [ -f "$FAKE/$i.showconfslow" ] && { touch "$FAKE/inshowconf"; /bin/sleep 1; }
   printf '[Interface]\nPrivateKey = x\nListenPort = %s\n\n[Peer]\nPublicKey = PUBKEY\nEndpoint = 203.0.113.5:51820\nAllowedIPs = 0.0.0.0/0\n' "$(cat "$FAKE/$i.port")" ;;
 set)
   if [ "$3" = listen-port ]; then
@@ -453,4 +454,72 @@ func inode(t *testing.T, p string) uint64 {
 		t.Fatal(err)
 	}
 	return uint64(fi.Sys().(*syscall.Stat_t).Ino)
+}
+
+// termDuring запускает один проход и шлёт TERM, как только подделка awg
+// создаст marker (значит, скрипт внутри этой команды). Возвращает код выхода.
+func (e *porthopEnv) termDuring(marker string) error {
+	e.t.Helper()
+	cmd := exec.Command("sh", e.script, "--once")
+	root := filepath.Dir(e.script)
+	cmd.Env = append(os.Environ(),
+		"FAKE="+e.fake,
+		"PORTHOP_PATH="+filepath.Join(root, "bin")+":/usr/bin:/bin",
+		"PORTHOP_LOG="+e.log,
+		"PORTHOP_STATE="+e.state,
+		"PORTHOP_CONF="+e.conf,
+		"TMPDIR="+filepath.Join(root, "tmp"),
+	)
+	if err := cmd.Start(); err != nil {
+		e.t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(e.fake, marker)); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			e.t.Fatalf("script never reached %s; calls:\n%s", marker, e.read("calls"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		e.t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(15 * time.Second):
+		_ = cmd.Process.Kill()
+		e.t.Fatal("script did not exit after TERM")
+		return nil
+	}
+}
+
+func (e *porthopEnv) tempConfs() []string {
+	left, _ := filepath.Glob(filepath.Join(filepath.Dir(e.script), "tmp", "porthop.*"))
+	return left
+}
+
+// TERM между mktemp и сменой порта (скрипт читает конфиг пира) -- временный
+// конфиг с ключами пира не остаётся в /tmp.
+func TestPorthopTermBeforeHopLeavesNoTempConf(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, false)
+	e.write("opkgtun10.showconfslow", "")
+	seedFails(t, e, "opkgtun10", "2")
+
+	if err := e.termDuring("inshowconf"); err != nil {
+		t.Fatalf("exit: %v", err)
+	}
+	if left := e.tempConfs(); len(left) != 0 {
+		t.Fatalf("temp peer config left after TERM: %v", left)
+	}
+	// Остановка пришла до смены -- пира не трогаем вовсе.
+	if calls := e.read("calls"); strings.Contains(calls, "peer PUBKEY remove") || strings.Contains(calls, "listen-port ") {
+		t.Fatalf("hop started after TERM:\n%s", calls)
+	}
 }
