@@ -336,7 +336,7 @@ type porthopProc struct {
 	path string // путь скрипта из командной строки
 }
 
-// procs -- процессы, в командной строке которых есть awg-porthop.sh.
+// procs -- процессы-шеллы, исполняющие awg-porthop.sh (porthopScriptOf).
 func (m *PorthopManager) procs() []porthopProc {
 	entries, err := os.ReadDir(m.procDir())
 	if err != nil {
@@ -352,14 +352,40 @@ func (m *PorthopManager) procs() []porthopProc {
 		if err != nil {
 			continue
 		}
-		for _, arg := range bytes.Split(b, []byte{0}) {
-			if filepath.Base(string(arg)) == porthopScriptName {
-				res = append(res, porthopProc{pid: pid, path: string(arg)})
-				break
-			}
+		if path, ok := porthopScriptOf(bytes.Split(bytes.TrimRight(b, "\x00"), []byte{0})); ok {
+			res = append(res, porthopProc{pid: pid, path: path})
 		}
 	}
 	return res
+}
+
+// porthopScriptOf -- путь awg-porthop.sh, если процесс -- шелл, который его
+// исполняет: argv[0] -- sh/ash (или busybox с sh/ash следом), argv[1] --
+// скрипт. Редактор, tail или grep с тем же именем в аргументах -- не он.
+// Так запускают и init (`sh <скрипт>`), и шебанг (`/bin/sh <скрипт> ...`).
+func porthopScriptOf(argv [][]byte) (string, bool) {
+	if len(argv) < 2 {
+		return "", false
+	}
+	i := 0
+	switch filepath.Base(string(argv[0])) {
+	case "sh", "ash":
+	case "busybox":
+		if b := filepath.Base(string(argv[1])); b != "sh" && b != "ash" {
+			return "", false
+		}
+		i = 1
+	default:
+		return "", false
+	}
+	if i+1 >= len(argv) {
+		return "", false
+	}
+	path := string(argv[i+1])
+	if filepath.Base(path) != porthopScriptName {
+		return "", false
+	}
+	return path, true
 }
 
 func (m *PorthopManager) legacyProcs() []porthopProc {

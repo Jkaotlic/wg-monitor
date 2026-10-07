@@ -494,3 +494,34 @@ func TestPorthopReplaceLegacyKeepsItWhenWriteFails(t *testing.T) {
 		t.Fatalf("legacy touched: %v", r.calls)
 	}
 }
+
+// Ручная копия -- только шелл, исполняющий awg-porthop.sh: редактор или
+// tail с тем же файлом в аргументах ручной копией не считаются.
+func TestPorthopLegacyDetectionNeedsShell(t *testing.T) {
+	for _, tc := range []struct {
+		args   []string
+		legacy bool
+	}{
+		{[]string{"/bin/sh", "/opt/bin/awg-porthop.sh", "opkgtun10"}, true},
+		{[]string{"ash", "/opt/bin/awg-porthop.sh"}, true},
+		{[]string{"busybox", "sh", "/opt/bin/awg-porthop.sh"}, true},
+		{[]string{"/opt/bin/busybox", "ash", "/opt/bin/awg-porthop.sh"}, true},
+		{[]string{"vi", "/opt/bin/awg-porthop.sh"}, false},
+		{[]string{"tail", "-f", "/opt/bin/awg-porthop.sh"}, false},
+		{[]string{"grep", "awg-porthop.sh"}, false},
+		{[]string{"sh", "-c", "/opt/bin/awg-porthop.sh"}, false},
+	} {
+		r := newPorthopRouter(t)
+		r.proc("777", tc.args...)
+		if got := r.m.legacy().Running; got != tc.legacy {
+			t.Errorf("%v: legacy=%v, want %v", tc.args, got, tc.legacy)
+		}
+	}
+	// Наш процесс -- тоже только шелл с нашим путём.
+	r := newPorthopRouter(t)
+	writeTestFile(t, r.m.PidPath, "4242\n", 0o644)
+	r.proc("4242", "vi", r.m.ScriptPath)
+	if r.m.running() {
+		t.Error("editor with our script counted as running porthop")
+	}
+}
