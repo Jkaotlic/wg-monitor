@@ -19,6 +19,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/maintnotify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
@@ -430,6 +431,27 @@ func main() {
 		})
 		go dp.Run(ctx)
 		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
+	}
+
+	// Мягкое напоминание «есть что обновить или перезагрузить» (v0.57): раз
+	// в час, только днём, без звука, один раз на новость -- всем, кто
+	// отвечает за роутер. Новости -- тот же сборщик, что у экрана
+	// «Обновления»; выключатель notify.maintenance.enabled.
+	if cfg.Notify.Maintenance.IsEnabled() {
+		mp, err := maintnotify.NewPoller(d, upCache,
+			notify.NewFanout(d, tgClient, logger.With("component", "maintnotify"), cfg.Telegram.AdminUserID),
+			maintnotify.Config{
+				Enabled:        true,
+				MiniAppBaseURL: cfg.PublicBaseURL,
+				Audit:          backend.VersionAuditFromSnapshot,
+				AgentNews:      backend.AgentUpdateNews,
+			}, logger.With("component", "maintnotify"))
+		if err != nil {
+			logger.Error("maintnotify: пуллер не собран", "err", err)
+		} else {
+			go mp.Run(ctx)
+			logger.Info("maintenance reminders enabled")
+		}
 	}
 
 	// Тревога админу в личку о бэкапе: давно не делался, прогон кончился
