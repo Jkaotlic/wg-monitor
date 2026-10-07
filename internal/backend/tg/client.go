@@ -177,6 +177,9 @@ type sendMessageWithKBReq struct {
 	ParseMode        string                `json:"parse_mode,omitempty"`
 	ReplyToMessageID *int64                `json:"reply_to_message_id,omitempty"`
 	ReplyMarkup      *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	// DisableNotification -- сообщение без звука (мягкое напоминание v0.57).
+	// omitempty: обычная отправка поля не несёт вовсе, запрос прежний.
+	DisableNotification bool `json:"disable_notification,omitempty"`
 }
 
 // SendMessageWithKeyboard sends a message with an attached inline keyboard.
@@ -189,6 +192,26 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 		ParseMode:        parseMode,
 		ReplyToMessageID: replyTo,
 		ReplyMarkup:      markup,
+	})
+	var out sendMessageResult
+	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+		return 0, err
+	}
+	return out.MessageID, nil
+}
+
+// SendSilentMessageWithKeyboard -- то же, что SendMessageWithKeyboard, но без
+// звука (disable_notification): сообщение приходит в личку, а телефон не
+// пищит. Для мягких напоминаний «есть что обновить», которые не тревога.
+func (c *Client) SendSilentMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *InlineKeyboardMarkup) (int64, error) {
+	body, _ := json.Marshal(sendMessageWithKBReq{
+		ChatID:              chatID,
+		MessageThreadID:     threadID,
+		Text:                text,
+		ParseMode:           parseMode,
+		ReplyToMessageID:    replyTo,
+		ReplyMarkup:         markup,
+		DisableNotification: true,
 	})
 	var out sendMessageResult
 	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
