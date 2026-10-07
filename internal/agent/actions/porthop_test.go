@@ -349,6 +349,10 @@ func TestPorthopStatusCounts24hFromLog(t *testing.T) {
 		"2026-10-07 09:00:10 opkgtun10: ОШИБКА смены порта 43000 -> 44000 (rc=1)",
 		"2026-10-07 09:00:20 opkgtun10: [dry-run] сменил бы порт 43000 -> 45000",
 		"2026-10-07 10:00:00 opkgtun12: порт 50000 -> 51000, поток ожил (хендшейк 2 с)",
+		// v0.57: строки со смещением пояса; 14:59:59 +0300 = 11:59:59 UTC -- старше суток.
+		"2026-10-06 14:59:59 +0300 opkgtun10: порт 1 -> 2, поток ожил (хендшейк 3 с)",
+		"2026-10-06 15:00:01 +0300 opkgtun10: порт 2 -> 3, поток ожил (хендшейк 3 с)",
+		"2026-10-07 13:30:00 +0300 opkgtun10: порт 3 -> 4, не ожил (хендшейк 99999 с)",
 		"2026-10-07 11:00:00 opkgtun12: снова жив (хендшейк 5 с)",
 		"",
 	}, "\n")
@@ -358,7 +362,7 @@ func TestPorthopStatusCounts24hFromLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Recovered24h != 2 || st.Failed24h != 2 || st.Hops24h != 4 {
+	if st.Recovered24h != 3 || st.Failed24h != 3 || st.Hops24h != 6 {
 		t.Fatalf("counts: hops=%d rec=%d fail=%d", st.Hops24h, st.Recovered24h, st.Failed24h)
 	}
 	if st.LastEvent != "2026-10-07 11:00:00 opkgtun12: снова жив (хендшейк 5 с)" {

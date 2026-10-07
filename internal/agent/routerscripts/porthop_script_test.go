@@ -552,3 +552,17 @@ func TestPorthopAutoDropsStateOfVanishedInterfaces(t *testing.T) {
 		t.Fatalf("state of a watched interface removed: %v", left)
 	}
 }
+
+// Даты журнала -- со смещением пояса: агент считает сутки по ним и не
+// зависит от того, совпадает ли его часовой пояс с поясом busybox.
+func TestPorthopLogLinesCarryOffset(t *testing.T) {
+	e := newPorthopEnv(t)
+	e.iface("opkgtun10", "0.0.0.0/0", 30000, true)
+	e.run("--once")
+	re := regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} `)
+	for _, l := range strings.Split(strings.TrimSpace(e.logText()), "\n") {
+		if !re.MatchString(l) {
+			t.Fatalf("line without offset: %q", l)
+		}
+	}
+}

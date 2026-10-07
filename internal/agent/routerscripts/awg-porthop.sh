@@ -52,7 +52,7 @@ BUSY=0; STOP=0
 trap 'if [ "$BUSY" = 1 ]; then STOP=1; else exit 0; fi' TERM INT
 
 log() {
-  msg="$(date '+%F %T') $*"
+  msg="$(date '+%F %T %z') $*"   # со смещением: агент считает сутки по этим датам
   echo "$msg" >> "$LOG"
   [ "$ONCE" = 1 ] && echo "$msg"
   logger -t awg-porthop "$*" 2>/dev/null

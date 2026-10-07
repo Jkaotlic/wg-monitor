@@ -50,7 +50,7 @@ var porthopIfaceRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,15}$`)
 type PorthopManager struct {
 	Exec           ExecFunc
 	Now            func() time.Time
-	Loc            *time.Location // часовой пояс дат журнала (date '+%F %T'); nil -- time.Local
+	Loc            *time.Location // пояс строк журнала без смещения (до v0.57); nil -- time.Local
 	Sleep          func(ctx context.Context, d time.Duration) error
 	ScriptPath     string
 	ConfPath       string
@@ -281,7 +281,10 @@ func porthopFullRoute(out string) bool {
 	return false
 }
 
-var porthopLogLineRe = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \S+: (.*)$`)
+// porthopLogLineRe -- «дата время [смещение] iface: текст». Смещение пишет
+// скрипт с v0.57 (date '+%F %T %z'); строки без него -- из журнала прежней
+// версии, их время считается местным (Loc).
+var porthopLogLineRe = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?: ([+-]\d{4}))? \S+: (.*)$`)
 
 // porthopLogStats -- счёт смен порта за сутки по журналу скрипта и его
 // последняя строка. Строки скрипта: «порт A -> B, поток ожил», «порт A -> B,
@@ -297,11 +300,17 @@ func porthopLogStats(log string, now time.Time, loc *time.Location) (recovered, 
 		if mm == nil {
 			continue
 		}
-		ts, err := time.ParseInLocation("2006-01-02 15:04:05", mm[1], loc)
+		var ts time.Time
+		var err error
+		if mm[2] != "" {
+			ts, err = time.Parse("2006-01-02 15:04:05 -0700", mm[1]+" "+mm[2])
+		} else {
+			ts, err = time.ParseInLocation("2006-01-02 15:04:05", mm[1], loc)
+		}
 		if err != nil || !ts.After(since) {
 			continue
 		}
-		msg := mm[2]
+		msg := mm[3]
 		switch {
 		case strings.HasPrefix(msg, "порт ") && strings.Contains(msg, "поток ожил"):
 			recovered++

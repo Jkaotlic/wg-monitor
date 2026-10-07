@@ -166,7 +166,8 @@ type PorthopStatus struct {
 	Recovered24h int           `json:"recovered_24h"`
 	Failed24h    int           `json:"failed_24h"`
 	// LastEvent -- последняя строка журнала как есть («2026-10-07 12:00:00
-	// opkgtun10: порт 30000 -> 41234, поток ожил (хендшейк 3 с)»).
+	// +0300 opkgtun10: порт 30000 -> 41234, поток ожил (хендшейк 3 с)»;
+	// строки прежней версии -- без смещения).
 	LastEvent  string `json:"last_event,omitempty"`
 	LogTail    string `json:"log_tail,omitempty"`
 	ScriptPath string `json:"script_path"`
