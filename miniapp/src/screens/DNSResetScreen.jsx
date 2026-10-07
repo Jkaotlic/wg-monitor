@@ -36,7 +36,7 @@ function ProbeList({ probes }) {
   const skipped = skippedServersText(probes)
   return (
     <div class="dns-probes">
-      <p class="traffic-title">{T.probesTitle}</p>
+      <p class="access-subtitle v057-subtitle">{T.probesTitle}</p>
       <div class="card card-rows">
         {probeRows(probes).map((r) => (
           <DataRow key={r.key} dot={r.tone} title={r.title} value={r.value} valueSub={r.detail} valueTone={r.tone === 'ok' ? undefined : r.tone} />

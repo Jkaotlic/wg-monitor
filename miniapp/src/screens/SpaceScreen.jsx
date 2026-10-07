@@ -105,7 +105,7 @@ export function SpaceScreen({ routerID, routerName, asleep, onClose }) {
               )}
               {report && (
                 <>
-                  <p class="traffic-title">{T.topTitle}</p>
+                  <p class="access-subtitle v057-subtitle">{T.topTitle}</p>
                   {top.length > 0 ? (
                     top.map((r) => <DataRow key={r.key} title={r.title} value={r.value} />)
                   ) : (
