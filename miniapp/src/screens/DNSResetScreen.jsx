@@ -17,7 +17,11 @@ import {
   dnsReferenceCommands,
   doneText,
   parsePreview,
+  parseProbes,
   parseReset,
+  probeRows,
+  referenceUnreachable,
+  skippedServersText,
   postconditionRows,
   previewText,
   resetEnabled,
@@ -25,7 +29,25 @@ import {
 
 const T = dnsResetScreenTexts()
 
-// «Сброс DNS» -- экран, перенесённый из операторского дашборда (решение
+// Пробы эталона (агент v0.57+): кто отвечает, кого агент не ставит. Ответ
+// старого агента проб не несёт -- строка «с агента v0.57».
+function ProbeList({ probes }) {
+  if (!probes) return <p class="hint dns-probes-none">{T.noProbes}</p>
+  const skipped = skippedServersText(probes)
+  return (
+    <div class="dns-probes">
+      <p class="traffic-title">{T.probesTitle}</p>
+      <div class="card card-rows">
+        {probeRows(probes).map((r) => (
+          <DataRow key={r.key} dot={r.tone} title={r.title} value={r.value} valueSub={r.detail} valueTone={r.tone === 'ok' ? undefined : r.tone} />
+        ))}
+      </div>
+      {skipped && <p class="hint dns-probes-skipped">{skipped}</p>}
+    </div>
+  )
+}
+
+// «Эталонный DNS» (до v0.57 -- «Сброс DNS») -- экран, перенесённый из операторского дашборда (решение
 // оператора № 5). Порядок экрана и есть его защита:
 //
 //   1. Роутеру с агентом ниже пола версии экран не рисует ни одной кнопки --
@@ -65,6 +87,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const available = dnsResetAvailable(settings)
   const parsed = preview.result?.status === 'ok' ? parsePreview(preview.result.output) : null
   const notAPreview = preview.result?.status === 'ok' && !parsed
+  const previewUnreachable = referenceUnreachable(preview.result)
 
   function askPreview() {
     setPreviewFresh(false)
@@ -109,9 +132,9 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   return (
-    <Overlay title="Сброс DNS" backLabel="Настройки" onBack={onClose}>
-      <div class="screen">
-        <h1 class="screen-title">Сброс DNS</h1>
+    <Overlay title={T.title} backLabel="Настройки" onBack={onClose}>
+      <div class="screen dns-reset-screen">
+        <h1 class="screen-title">{T.title}</h1>
         {routerName && <p class="router-lastseen">{routerName}</p>}
         {loadError && <p class="state state-error">{loadError}</p>}
         {settings && settings.role !== 'admin' && <p class="hint">{T.adminOnly}</p>}
@@ -129,7 +152,13 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                 {preview.busy ? 'Спрашиваем роутер…' : T.previewButton}
               </button>
               {preview.error && <p class="state state-error">{preview.error}</p>}
-              {preview.result && preview.result.status !== 'ok' && (
+              {previewUnreachable && (
+                <>
+                  <p class="state state-error dns-unreachable">{T.unreachable}</p>
+                  <ProbeList probes={parseProbes(preview.result)} />
+                </>
+              )}
+              {preview.result && preview.result.status !== 'ok' && !previewUnreachable && (
                 <p class="state state-error">{agentReplyText(preview.result, 'Роутер не показал предпросмотр — попробуйте ещё раз через минуту.')}</p>
               )}
               {notAPreview && (
@@ -144,6 +173,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                   {parsed.keep.length > 0 && <pre class="raw-dump">{parsed.keep.map((l) => `= ${l}`).join('\n')}</pre>}
                 </div>
               )}
+              {parsed && <ProbeList probes={parseProbes(preview.result)} />}
             </Section>
 
             <Section title="Сброс">
@@ -161,6 +191,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
             {reset && (
               <Section title="После сброса">
                 <p class={`state${reset.status === 'ok' && reset.snapshot ? '' : ' state-error'}`}>{doneText(reset)}</p>
+                {(reset.status !== 'err' || reset.unreachable) && <ProbeList probes={reset.probes} />}
                 {reset.status !== 'err' && (
                   <div class="card card-rows">
                     {postconditionRows({ before, after: after ?? before }).map((r) => (
