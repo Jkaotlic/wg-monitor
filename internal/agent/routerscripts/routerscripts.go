@@ -28,6 +28,12 @@ var EntwareCleanup string
 //go:embed awg-porthop.sh
 var Porthop string
 
+// PorthopInit -- init-скрипт Entware для Porthop (start/stop/restart/status
+// по pid-файлу).
+//
+//go:embed S99wg-monitor-porthop
+var PorthopInit string
+
 // Render заменяет в script строки `key=...` (с начала строки) на `key=value`.
 // Каждый ключ обязан встретиться ровно один раз: иначе подстановка молча
 // ничего бы не сделала, и на роутер уехало бы значение по умолчанию.
