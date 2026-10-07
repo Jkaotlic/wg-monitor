@@ -612,6 +612,12 @@ var wizardCommandAllowlist = map[string]bool{
 	"update_backend_url":    true,
 	"agent_config_get":      true,
 	"update_agent_config":   true,
+	// v0.57: смена порта при блокировке и отчёт о месте на /opt.
+	"porthop_status":  true,
+	"porthop_install": true,
+	"porthop_remove":  true,
+	"porthop_logs":    true,
+	"space_report":    true,
 }
 
 var dashboardCommandAllowlist = map[string]bool{
@@ -650,6 +656,13 @@ var dashboardCommandAllowlist = map[string]bool{
 	// «Открывается ли сайт»: только чтение, аргумент -- одно имя сайта.
 	// Нужно и аварийному входу без Telegram, иначе проверить сайт там нечем.
 	"dns_open": true,
+	// v0.57: смена порта при блокировке и отчёт о месте на /opt -- те же
+	// экраны «Обслуживания», что в мини-аппе.
+	"porthop_status":  true,
+	"porthop_install": true,
+	"porthop_remove":  true,
+	"porthop_logs":    true,
+	"space_report":    true,
 	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
 	// backend domain from a browser session is fleet-takeover blast radius, so it
 	// stays gated to the wizard token / deploy CLI (see
@@ -997,6 +1010,12 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "porthop_status", "porthop_remove", "porthop_logs", "space_report":
+		// Только чтение или снятие своего сервиса: аргументов нет, всё
+		// клиентское -- лишнее.
+		return map[string]any{}, true
+	case "porthop_install":
+		return sanitizePorthopInstallArgs(w, args)
 	case "awgm_update", "hrneo_update", "opkg_upgrade":
 		// Что ставить, решает сам роутер (awg-manager и opkg). Всё, что
 		// прислал клиент, -- лишнее.

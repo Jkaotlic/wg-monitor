@@ -91,6 +91,10 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// v0.47: адрес выхода одного VPN-туннеля (читающее, все роли, резолвер
 		// tunnel_id) и журнал awg-manager (читающее, владелец и админ).
 		"exit_ip_probe", "awgm_logs",
+		// v0.57: смена порта при блокировке и отчёт о месте на /opt. Только
+		// админ, пол агента v0.57.0, аргументы установки -- явная ветка
+		// санитайзера (porthop_gates_test.go).
+		"porthop_status", "porthop_install", "porthop_remove", "porthop_logs", "space_report",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
