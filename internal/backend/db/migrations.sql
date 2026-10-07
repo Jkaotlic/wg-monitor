@@ -263,12 +263,13 @@ CREATE INDEX IF NOT EXISTS idx_web_links_user ON web_links(telegram_user_id, exp
 -- про обновления говорят только экраны, личка остаётся каналом поломок.
 CREATE TABLE IF NOT EXISTS router_update_reminders (
     user_id       INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    component     TEXT      NOT NULL,   -- 'awgmgr' | 'hrneo' | 'firmware' | 'kmod_reboot'
+    component     TEXT      NOT NULL,   -- 'awgmgr' | 'hrneo' | 'firmware' | 'kmod_reboot' | 'agent'
     version       TEXT      NOT NULL,   -- версия, о которой речь; для 'kmod_reboot' -- версия модуля
     first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     shown_at      TIMESTAMP,            -- когда экран впервые показал
     snoozed_until TIMESTAMP,            -- «отложить»
     dismissed_at  TIMESTAMP,            -- «скрыть»
+    notified_at   TIMESTAMP,            -- v0.57: мягкое напоминание разослано
     PRIMARY KEY (user_id, component, version)
 );
 CREATE INDEX IF NOT EXISTS idx_update_reminders_user ON router_update_reminders(user_id);

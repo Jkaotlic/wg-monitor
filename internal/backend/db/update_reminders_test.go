@@ -152,3 +152,78 @@ func TestUpdateRemindersPruneTouchesOnlyDismissed(t *testing.T) {
 		t.Errorf("чистка задела не скрытую новость: %+v", list)
 	}
 }
+
+// Мягкое напоминание (v0.57): в рассылку идёт новость, которую не скрыли, не
+// отложили до будущего и ещё не разослали. Отметка «разослано» -- своя
+// колонка, и экран она не трогает: разосланное приложение показывает как
+// прежде.
+func TestUpdateRemindersPendingNotify(t *testing.T) {
+	d, uid := newTestDBForVersions(t)
+	r := d.UpdateReminders()
+	now := time.Now().UTC()
+	for _, c := range []string{"awgmgr", "hrneo", "firmware", "agent"} {
+		if err := r.Ensure(uid, c, "1.0.0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.Dismiss(uid, "hrneo", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Snooze(uid, "firmware", "1.0.0", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkShown(uid, "agent", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.PendingNotify(uid, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Component != "agent" || got[1].Component != "awgmgr" {
+		t.Fatalf("к рассылке %+v, ждали agent и awgmgr (скрытое и отложенное -- нет)", got)
+	}
+
+	if err := r.MarkNotified(uid, "awgmgr", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = r.PendingNotify(uid, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Component != "agent" {
+		t.Fatalf("после отметки к рассылке %+v, ждали только agent", got)
+	}
+	// Срок «отложить» вышел -- новость снова к рассылке.
+	got, err = r.PendingNotify(uid, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1].Component != "firmware" {
+		t.Fatalf("после срока отсрочки %+v, ждали agent и firmware", got)
+	}
+	// Экран разосланное показывает: рассылка не прячет новость.
+	list, err := r.ListFor(uid, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var awgm *Reminder
+	for i := range list {
+		if list[i].Component == "awgmgr" {
+			awgm = &list[i]
+		}
+	}
+	if awgm == nil || awgm.NotifiedAt == nil {
+		t.Fatalf("экран потерял разосланную новость или её отметку: %+v", list)
+	}
+	// Повторная отметка не сдвигает первую.
+	first := *awgm.NotifiedAt
+	if err := r.MarkNotified(uid, "awgmgr", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = r.ListFor(uid, now)
+	for _, rem := range list {
+		if rem.Component == "awgmgr" && !rem.NotifiedAt.Equal(first) {
+			t.Errorf("повторная отметка сдвинула дату: %v -> %v", first, rem.NotifiedAt)
+		}
+	}
+}
