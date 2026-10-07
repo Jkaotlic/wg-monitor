@@ -128,7 +128,10 @@ type Runner struct {
 	// Porthop -- сторож смены порта (porthop_*); nil -- с путями по
 	// умолчанию и Exec раннера. Тесты подставляют пути во временном каталоге.
 	Porthop *PorthopManager
-	routeMu sync.Mutex // serialises concurrent route_rebind calls
+	// DNSProbe -- проба сервера эталона перед сбросом DNS (v0.57; сборка
+	// агента ставит dnswatch.ProbeLine). nil -- сброс без проб, как раньше.
+	DNSProbe DNSLineProbe
+	routeMu  sync.Mutex // serialises concurrent route_rebind calls
 }
 
 // defaultActionTimeout bounds any dispatched action with no entry in
@@ -364,7 +367,7 @@ func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResu
 		Output:     output,
 		DurationMs: r.now().Sub(start).Milliseconds(),
 	}
-	if !payload.IsZero() {
+	if payload != nil && !payload.IsZero() {
 		if b, err := json.Marshal(payload); err == nil {
 			res.Payload = b
 		}
@@ -372,7 +375,12 @@ func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResu
 	return res
 }
 
-func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (status, output string, payload wire.OpkgUpgradeResult) {
+// commandPayload -- структурный ответ действия в CommandResult.Payload
+// (wire.OpkgUpgradeResult у opkg, wire.DNSResetResult у dns_reset). nil или
+// IsZero -- Payload не прикладывается.
+type commandPayload interface{ IsZero() bool }
+
+func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (status, output string, payload commandPayload) {
 	switch cmd.Action {
 	case "restart_tunnel":
 		if r.AwgClient == nil {
@@ -850,8 +858,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				return "err", "dns_reset: сторож DNS сейчас держит роутер на запасных DNS-серверах или не закончил уборку после них. Сбросить DNS можно, когда он вернётся на свой сервер, или после перезагрузки роутера", payload
 			}
 		}
-		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{
+		s, o, probed := DNSResetProbed(ctx, r.Exec, DNSResetOpts{
 			DryRun: dryRun,
+			// v0.57: каждый сервер эталона пробуется перед применением;
+			// мёртвые не пишутся, ни одного живого заграничного -- отказ.
+			Probe: r.DNSProbe,
 			// Свой резолвер оператора сбросом не сносим: иначе «починить DNS»
 			// кнопкой увело бы сторожа в idle ровно тем действием, которым
 			// человек чинит DNS.
@@ -865,7 +876,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if !dryRun && s != "err" && r.DNSChanged != nil {
 			r.DNSChanged()
 		}
-		return s, o, payload
+		return s, o, probed
 
 	case "dns_open":
 		// «Открывается ли сайт с этого роутера»: только чтение. Пустое имя
