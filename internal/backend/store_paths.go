@@ -11,6 +11,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
+	"github.com/Jkaotlic/wg-monitor/internal/fileown"
 )
 
 // LegacyStoreDir -- где JSON-хранилища лежали по умолчанию до v0.52.2. В
@@ -170,6 +171,9 @@ func WarnStoresOutsideDBDir(cfg *Config, logger *slog.Logger) {
 // rename, не затирает существующий файл (rename -- лишь там, где ссылок нет). moved=false без ошибки -- переносить
 // нечего или новый файл уже есть. moved=true с ошибкой -- файл на новом
 // месте, но старую копию убрать не удалось.
+// storeMatchOwner -- шов для тестов.
+var storeMatchOwner = fileown.MatchDir
+
 func moveStoreFile(src, dst string) (moved bool, err error) {
 	if _, err := os.Lstat(dst); err == nil {
 		return false, nil
@@ -200,6 +204,8 @@ func moveStoreFile(src, dst string) (moved bool, err error) {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath) // после успеха имя уже снято -- удаление ничего не делает
+	// Владелец -- как у каталога данных (контейнер работает от root, бэкап -- нет).
+	_ = storeMatchOwner(tmp, filepath.Dir(dst))
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return false, fmt.Errorf("chmod temp store: %w", err)

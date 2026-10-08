@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
+	"github.com/Jkaotlic/wg-monitor/internal/fileown"
 )
 
 // Домены -- постоянные имена хранилищ; под ними же файлы едут в архив.
@@ -254,6 +255,9 @@ func fileIsSealed(path string) (bool, error) {
 	return IsSealed(head[:n]), nil
 }
 
+// matchOwner -- шов для тестов (от root они не запускаются).
+var matchOwner = fileown.MatchDir
+
 func writeAtomic(path string, body []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -265,6 +269,10 @@ func writeAtomic(path string, body []byte) error {
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }() // после rename имени уже нет
+	// От root (контейнер на Pi) файл получает владельца каталога данных:
+	// иначе rename подменял бы хранилище файлом root, и бэкап с хоста его не
+	// прочитал бы. Не вышло -- запись важнее владельца, бэкап скажет сам.
+	_ = matchOwner(tmp, dir)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("права временного файла хранилища: %w", err)

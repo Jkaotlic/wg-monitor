@@ -388,3 +388,23 @@ func TestWarnStoresOutsideDBDir(t *testing.T) {
 		t.Fatalf("умолчания не должны предупреждать: %s", logs.String())
 	}
 }
+
+// Переезд хранилища от root тоже отдаёт файл владельцу каталога данных.
+func TestMoveStoreFileMatchesDirOwner(t *testing.T) {
+	var gotDir string
+	orig := storeMatchOwner
+	storeMatchOwner = func(_ *os.File, dir string) error { gotDir = dir; return nil }
+	t.Cleanup(func() { storeMatchOwner = orig })
+
+	src := filepath.Join(t.TempDir(), "awg3-panels.json")
+	if err := os.WriteFile(src, []byte(`{"panels":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dstDir := t.TempDir()
+	if _, err := moveStoreFile(src, filepath.Join(dstDir, "awg3-panels.json")); err != nil {
+		t.Fatal(err)
+	}
+	if gotDir != dstDir {
+		t.Fatalf("владелец сверялся с %q, ждали %q", gotDir, dstDir)
+	}
+}
