@@ -40,8 +40,9 @@ func peopleTS(t time.Time) string { return t.UTC().Format(FactTSLayout) }
 
 // Seen -- человек показался (вход в мини-апп, сообщение боту). Имя и ник
 // обновляются свежими сразу; last_seen_at -- не чаще PersonSeenThrottle.
-// Если имена те же и last_seen_at свежий, строка не трогается вовсе: условие
-// стоит в самом UPSERT, чтобы горячий путь не писал в базу на каждый запрос.
+// Если имена те же и last_seen_at свежий, строка не меняется: условие стоит в
+// самом UPSERT, и страницы базы на горячем пути не пишутся. Замок записи
+// SQLite такой запрос всё же берёт ненадолго -- это INSERT, а не SELECT.
 // Номер 0 и отрицательные -- не люди, молча пропускаются.
 func (r *PeopleRepo) Seen(telegramUserID int64, firstName, lastName, username, source string, now time.Time) error {
 	if telegramUserID <= 0 {
