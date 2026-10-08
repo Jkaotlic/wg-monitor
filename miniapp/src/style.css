@@ -1001,6 +1001,134 @@ body {
   flex: 1;
 }
 
+/* v0.58: выбор человека в доступ. Строка списка -- кнопка во всю ширину,
+   имя крупно, роль и давность мелко под ним; выбранная подсвечена, уже
+   имеющие роль приглушены. Имена людей -- данные: переносятся по словам,
+   длинный ник без пробелов не распирает экран. */
+.access-pick {
+  margin-top: var(--sp-3);
+}
+
+.access-pick > .btn {
+  margin-top: var(--sp-2);
+}
+
+.person-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.person-list {
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.person-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.person-list li:last-child .person-pick {
+  border-bottom: none;
+}
+
+.person-pick:hover:not(:disabled),
+.person-pick:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.person-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.person-pick.is-picked {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.person-pick:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.person-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.person-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.person-sub {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.person-taken {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.access-manual {
+  margin-top: var(--sp-2);
+}
+
+.access-manual > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 40px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  list-style: none;
+  cursor: pointer;
+}
+
+.access-manual > summary::-webkit-details-marker {
+  display: none;
+}
+
+.access-manual > summary::before {
+  content: '▸';
+  transition: transform var(--transition-fast);
+}
+
+.access-manual[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.access-manual > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.access-manual > .access-add-row {
+  margin-top: var(--sp-1);
+}
+
 .btn-icon {
   /* Квадратная цель касания: «✖» не уже своей высоты. */
   min-width: 44px;

@@ -628,3 +628,28 @@ func redactURLError(err error) error {
 type errSanitized string
 
 func (e errSanitized) Error() string { return string(e) }
+
+type getChatReq struct {
+	ChatID int64 `json:"chat_id"`
+}
+
+// ChatInfo -- то из ответа getChat, что нужно справочнику людей (v0.58).
+// Для лички id чата = номер человека.
+type ChatInfo struct {
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+}
+
+// GetChat -- имя и ник по номеру. Ответит, только если человек хоть раз
+// писал боту; иначе «chat not found», и это не поломка.
+func (c *Client) GetChat(ctx context.Context, chatID int64) (ChatInfo, error) {
+	body, _ := json.Marshal(getChatReq{ChatID: chatID})
+	var out ChatInfo
+	if err := c.call(ctx, "getChat", body, &out); err != nil {
+		return ChatInfo{}, err
+	}
+	return out, nil
+}

@@ -322,7 +322,7 @@ func main() {
 	fmt.Printf("  кабинеты: ключ с «bad» и код с «000» кабинет не принимает; слоты Amnezia 2/2 (fi -- «отзовите»); свои серверы home и reserve; личка: -dm=%s\n", *dm)
 	fmt.Printf("  VPN-туннели: пустой vpn-spare (awg14) удаляется, vpn-nl и vpn-de -- с правилами; .conf со строкой BADCONF роутер не примет, с WARNCONF -- с замечанием; главный выход: -egress=%s\n\n", *egress)
 
-	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
+	if err := http.ListenAndServe(*addr, withTelegramStub(withPeopleFixture(mux, d, *tgUser, sandboxAdminID(*tgUser, *asAdmin)), initData)); err != nil {
 		fatal(err)
 	}
 }

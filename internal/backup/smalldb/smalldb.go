@@ -41,6 +41,9 @@ var CopyTables = []string{
 	"revive_secrets",
 	"router_credentials",
 	"router_facts",
+	// Справочник людей (v0.58): единицы-десятки строк, имена для выбора
+	// человека при выдаче доступа.
+	"telegram_people",
 }
 
 type schemaObject struct{ kind, name, sql string }

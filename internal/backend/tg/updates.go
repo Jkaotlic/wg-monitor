@@ -39,8 +39,13 @@ type Document struct {
 	MimeType string `json:"mime_type,omitempty"`
 }
 
+// User -- отправитель. Имя и ник (v0.58) кладутся в справочник людей, чтобы
+// админ выдавал доступ выбором из списка; это данные, не разметка.
 type User struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty"`
+	Username  string `json:"username,omitempty"`
 }
 
 type Chat struct {

@@ -88,3 +88,24 @@ func (r *RouterOperatorsRepo) HasAccess(userID, telegramUserID int64) bool {
 	}
 	return one == 1
 }
+
+// ListAll -- операторы всех роутеров разом: справочник людей (v0.58)
+// раскладывает роли по всему парку одним запросом, а не по роутеру.
+func (r *RouterOperatorsRepo) ListAll() ([]Operator, error) {
+	rows, err := r.d.db.Query(
+		`SELECT user_id, telegram_user_id, granted_by, granted_at
+		 FROM router_operators ORDER BY user_id ASC, granted_at ASC, telegram_user_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("router_operators.ListAll: %w", err)
+	}
+	defer rows.Close()
+	var out []Operator
+	for rows.Next() {
+		var op Operator
+		if err := rows.Scan(&op.UserID, &op.TelegramUserID, &op.GrantedBy, &op.GrantedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}

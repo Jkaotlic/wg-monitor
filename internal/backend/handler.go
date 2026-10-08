@@ -357,6 +357,9 @@ type Deps struct {
 	Awg3Panels Awg3Panels
 	// MiniappDocs -- .conf документом в личку нажавшему (*tg.Client). nil -- 503.
 	MiniappDocs MiniappDocSender
+	// PeopleTG -- getChat для дотягивания имён в справочнике людей (v0.58,
+	// *tg.Client). nil -- список отдаётся без дотягивания.
+	PeopleTG MiniappPeopleTG
 	// TelegramBotToken and TelegramAdminUserID enable /v1/miniapp/* endpoints
 	// when TelegramBotToken is non-empty. Set from cfg.Telegram.BotToken and
 	// cfg.Telegram.AdminUserID by main. Empty BotToken → endpoints not
@@ -385,7 +388,10 @@ type Deps struct {
 	// общее состояние пакета.
 	testReportUserByID    func(uid int64) (*db.User, error)
 	testDashboardEditRead func()
-	PublicBaseURL         string
+	// testPeopleBackfill -- фоновое дотягивание имён справочника людей,
+	// которого тест дожидается (wait). nil -- своё на каждый мукс.
+	testPeopleBackfill *miniappPeopleBackfill
+	PublicBaseURL      string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the
