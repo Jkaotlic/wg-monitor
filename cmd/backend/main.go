@@ -319,7 +319,9 @@ func main() {
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		MiniappTG:                 tgClient,
 		// Файл .conf в личку нажавшему (кабинет роутера в мини-аппе).
-		MiniappDocs:       tgClient,
+		MiniappDocs: tgClient,
+		// getChat -- имена владельцев и операторов в справочнике людей (v0.58).
+		PeopleTG:          tgClient,
 		MuteCutoffHour:    muteCutoffHour,
 		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
 		ReleaseCacheDir:   backend.DefaultReleaseCacheDir(cfg),

@@ -135,6 +135,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/mute", reqID(auth(miniappMuteHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/incidents/{check}/history", reqID(auth(miniappHistoryHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/access", reqID(auth(miniappAccessHandler(d))))
+	// Справочник людей (v0.58) -- выбор человека при выдаче доступа. Только
+	// админ, отказ как у соседних маршрутов доступа.
+	mux.Handle("GET /v1/miniapp/people", reqID(auth(miniappPeopleHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/access/operators", reqID(auth(miniappAddOperatorHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/operators/{tgid}", reqID(auth(miniappRemoveOperatorHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/owner", reqID(auth(miniappUnbindOwnerHandler(d))))
@@ -173,6 +176,7 @@ func miniappSessionHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusUnauthorized, "invalid_init_data", "could not verify Telegram init data")
 			return
 		}
+		miniappRecordPerson(d, user)
 		http.SetCookie(w, miniappSessionCookie(r, d.TelegramBotToken, user.ID))
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(miniappSessionResp{
