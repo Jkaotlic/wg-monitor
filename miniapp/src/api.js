@@ -242,6 +242,23 @@ export function fetchRouterFacts(id) {
   return request(`/routers/${id}/facts`)
 }
 
+// Справочник людей (v0.58): кого видели в мини-аппе и у бота, с ролями по
+// парку -- для выбора в доступ по имени. Только админу. Старый бэкенд такого
+// адреса не знает (404), не админу бэкенд отвечает 403, без сессии -- 401:
+// во всех трёх случаях null, и экран доступа остаётся с ручным вводом
+// номера, как раньше.
+const PEOPLE_UNAVAILABLE = new Set([401, 403, 404])
+
+export async function fetchPeople() {
+  try {
+    const body = await request('/people')
+    return Array.isArray(body?.people) ? body.people : []
+  } catch (err) {
+    if (err instanceof ApiError && PEOPLE_UNAVAILABLE.has(err.status)) return null
+    throw err
+  }
+}
+
 export function fetchAccess(routerID) {
   return request(`/routers/${routerID}/access`)
 }
