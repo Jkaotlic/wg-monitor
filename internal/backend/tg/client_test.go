@@ -691,3 +691,53 @@ func TestSendSilentMessageWithKeyboard(t *testing.T) {
 		t.Errorf("обычная отправка понесла disable_notification: %+v", captured[1])
 	}
 }
+
+func TestGetChatReturnsNames(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getChat") {
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"result":{"id":4201,"type":"private","first_name":"Вымышленный","last_name":"Человек","username":"fictional_person"}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	info, err := c.GetChat(context.Background(), 4201)
+	if err != nil {
+		t.Fatalf("getChat: %v", err)
+	}
+	if got["chat_id"] != float64(4201) {
+		t.Fatalf("chat_id в запросе = %v", got["chat_id"])
+	}
+	if info.ID != 4201 || info.FirstName != "Вымышленный" || info.LastName != "Человек" || info.Username != "fictional_person" {
+		t.Fatalf("info = %+v", info)
+	}
+}
+
+func TestGetChatPropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	if _, err := c.GetChat(context.Background(), 4202); err == nil {
+		t.Fatal("ошибка Telegram проглочена")
+	}
+}
+
+func TestUserDecodesNames(t *testing.T) {
+	var u Update
+	raw := `{"update_id":1,"message":{"message_id":2,"chat":{"id":4203},"from":{"id":4203,"first_name":"Имя","last_name":"Фамилия","username":"nick_x"},"text":"/start"}}`
+	if err := json.Unmarshal([]byte(raw), &u); err != nil {
+		t.Fatal(err)
+	}
+	f := u.Message.From
+	if f.ID != 4203 || f.FirstName != "Имя" || f.LastName != "Фамилия" || f.Username != "nick_x" {
+		t.Fatalf("from = %+v", f)
+	}
+}
