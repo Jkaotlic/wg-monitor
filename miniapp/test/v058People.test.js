@@ -35,7 +35,10 @@ describe('people: подпись под именем', () => {
   it('без доступа -- ждёт доступа, писал боту', () => expect(personSub(olga, opts)).toBe('ждёт доступа · писал боту 5 мин назад · номер 1002'))
   it('не видели -- без времени', () => expect(personSub(nick, opts)).toBe('оператор офис · номер 1003'))
   it('номер уже в заголовке -- не повторяется', () => expect(personSub(bare, opts)).toBe('ждёт доступа'))
-  it('админ', () => expect(personSub({ ...bare, is_admin: true }, opts)).toBe('администратор'))
+  it('админ без роутеров -- не «ждёт доступа»', () => {
+    expect(personSub({ ...bare, is_admin: true }, opts)).toBe('администратор')
+    expect(personSub({ ...olga, is_admin: true }, opts)).toBe('администратор · был 5 мин назад · номер 1002')
+  })
   it('много роутеров -- два и «ещё N»', () => {
     const many = { ...bare, routers: [
       { id: 1, nickname: 'a', role: 'owner' },

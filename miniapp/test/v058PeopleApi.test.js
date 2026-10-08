@@ -23,8 +23,12 @@ describe('fetchPeople', () => {
     stubFetch({})
     expect(await fetchPeople()).toEqual([])
   })
-  it('404 (старый бэкенд) -- null', async () => {
-    stubFetch({ code: 'not_found' }, 404)
+  it.each([
+    [404, 'старый бэкенд'],
+    [403, 'не админ'],
+    [401, 'нет сессии'],
+  ])('%i (%s) -- null', async (status) => {
+    stubFetch({ code: 'x' }, status)
     expect(await fetchPeople()).toBe(null)
   })
   it('прочие ошибки -- наверх', async () => {
