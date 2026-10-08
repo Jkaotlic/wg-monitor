@@ -64,12 +64,15 @@ export function personSub(p, opts = {}) {
   return parts.join(' · ')
 }
 
+// Для поиска ё и е -- одна буква: «петр» находит «Пётр», и наоборот.
+const fold = (s) => clean(s).toLowerCase().replace(/ё/g, 'е')
+
 // Поиск по имени, @нику, номеру и имени роутера. Пустой запрос -- все.
 export function matchesQuery(p, query) {
-  const q = clean(query).toLowerCase().replace(/^@/, '')
+  const q = fold(query).replace(/^@/, '')
   if (!q) return true
-  const hay = [clean(p?.name), clean(p?.username), String(idOf(p)), ...(Array.isArray(p?.routers) ? p.routers.map((r) => clean(r?.nickname)) : [])]
-  return hay.some((s) => s.toLowerCase().includes(q))
+  const hay = [p?.name, p?.username, String(idOf(p)), ...(Array.isArray(p?.routers) ? p.routers.map((r) => r?.nickname) : [])]
+  return hay.some((s) => fold(s).includes(q))
 }
 
 // Кто уже имеет на ЭТОМ роутере ту роль, которую выдаёт форма: оператору

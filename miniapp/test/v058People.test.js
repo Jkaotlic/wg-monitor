@@ -64,6 +64,14 @@ describe('people: поиск', () => {
     expect(matchesQuery(ivan, '@ольга')).toBe(false)
   })
   it('«@» в одиночку -- все', () => expect(matchesQuery(bare, '@')).toBe(true))
+  it('ё и е -- одна буква: в запросе и в данных', () => {
+    const petr = { ...bare, name: 'Пётр Сидоров' }
+    expect(matchesQuery(petr, 'петр')).toBe(true)
+    expect(matchesQuery(petr, 'ПЁТР')).toBe(true)
+    expect(matchesQuery({ ...bare, name: 'Петр' }, 'пётр')).toBe(true)
+    const yolka = { ...bare, routers: [{ id: 3, nickname: 'Ёлки-дача', role: 'owner' }] }
+    expect(matchesQuery(yolka, 'елки')).toBe(true)
+  })
 })
 
 describe('people: список для выбора', () => {
