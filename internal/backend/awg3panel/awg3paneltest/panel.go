@@ -223,7 +223,11 @@ func (p *Panel) front(next http.Handler) http.Handler {
 			select {
 			case <-time.After(delay):
 			case <-r.Context().Done():
-				return
+				// Оборвать, а не вернуться: на возврат net/http дописал бы
+				// пустой 200 без Content-Type, и на нагруженной машине (CI,
+				// -race) клиент изредка успевал принять его за «не JSON»
+				// раньше собственного таймаута.
+				panic(http.ErrAbortHandler)
 			}
 		}
 		if override != nil && override(w, r) {
