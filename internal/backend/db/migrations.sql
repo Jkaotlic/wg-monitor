@@ -354,3 +354,21 @@ CREATE TABLE IF NOT EXISTS awgm_ping_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_awgm_ping_runs_user_to ON awgm_ping_runs(user_id, to_ts);
 CREATE INDEX IF NOT EXISTS idx_awgm_ping_runs_to ON awgm_ping_runs(to_ts);
+
+-- v0.58: справочник людей Telegram -- имя и @ник по номеру, чтобы админ
+-- выдавал доступ выбором из списка, а не вводом голого номера. Пополняется
+-- при входе в мини-апп (initData), из личных сообщений боту и дотягиванием
+-- getChat для владельцев и операторов без имени. Время -- текст
+-- фиксированной ширины (db.FactTSLayout): сравнение строк = сравнение
+-- времени. last_seen_at NULL -- человека не видели (имя дотянуто getChat).
+-- name_checked_at -- последняя попытка getChat: повтор не чаще раза в сутки.
+CREATE TABLE IF NOT EXISTS telegram_people (
+    telegram_user_id INTEGER PRIMARY KEY,
+    first_name       TEXT NOT NULL DEFAULT '',
+    last_name        TEXT NOT NULL DEFAULT '',
+    username         TEXT NOT NULL DEFAULT '',
+    first_seen_at    TEXT NOT NULL,
+    last_seen_at     TEXT,
+    source           TEXT NOT NULL DEFAULT '',
+    name_checked_at  TEXT
+);
