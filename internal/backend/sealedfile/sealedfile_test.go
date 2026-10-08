@@ -272,3 +272,42 @@ func TestWrongKeyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Контейнер бэкенда на Pi работает от root: каждая запись хранилища обязана
+// отдать временный файл владельцу каталога ДО rename, иначе ночной бэкап от
+// пользователя хоста падает «нет прав» (06.10.2026, awg3-panels.json).
+func TestWriteFileMatchesDirOwner(t *testing.T) {
+	withKey(t, nil)
+	var gotDir, gotFile string
+	orig := matchOwner
+	matchOwner = func(f *os.File, dir string) error {
+		gotFile, gotDir = f.Name(), dir
+		return nil
+	}
+	t.Cleanup(func() { matchOwner = orig })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "awg3-panels.json")
+	if err := WriteFile(path, DomainHideMy, []byte(`{"panels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if gotDir != dir {
+		t.Fatalf("владелец сверялся с каталогом %q, ждали %q", gotDir, dir)
+	}
+	if filepath.Dir(gotFile) != dir || gotFile == path {
+		t.Fatalf("владельца получил не временный файл рядом с хранилищем: %q", gotFile)
+	}
+}
+
+// Сбой смены владельца запись не роняет: файл важнее владельца.
+func TestWriteFileOwnerFailureStillWrites(t *testing.T) {
+	withKey(t, nil)
+	orig := matchOwner
+	matchOwner = func(*os.File, string) error { return errors.New("chown: operation not permitted") }
+	t.Cleanup(func() { matchOwner = orig })
+
+	path := filepath.Join(t.TempDir(), "awg3-panels.json")
+	if err := WriteFile(path, DomainHideMy, []byte(`{}`)); err != nil {
+		t.Fatalf("запись упала из-за владельца: %v", err)
+	}
+}
