@@ -93,9 +93,11 @@ function takenOn(access, role) {
 
 // Строки выбора: порядок сервера (новые, ждущие доступа, -- первыми), уже
 // имеющие роль на этом роутере -- в конце, отмеченные и невыбираемые.
-export function pickList(people, { access = null, role = 'operator', query = '', now, timeZone } = {}) {
+// taken -- своя карта «номер → пометка» для экранов, где роль не роутерная
+// (выпускающие конфиги с панели VPS); без неё -- из ответа /access роутера.
+export function pickList(people, { access = null, role = 'operator', taken: takenMap = null, query = '', now, timeZone } = {}) {
   if (!Array.isArray(people)) return []
-  const taken = takenOn(access, role)
+  const taken = takenMap ?? takenOn(access, role)
   const rows = people
     .filter((p) => idOf(p) && matchesQuery(p, query))
     .map((p) => ({ id: idOf(p), title: personTitle(p), sub: personSub(p, { now, timeZone }), taken: taken.get(idOf(p)) ?? null }))
@@ -122,4 +124,14 @@ export function peopleByID(people) {
   const m = new Map()
   for (const p of Array.isArray(people) ? people : []) if (idOf(p)) m.set(idOf(p), p)
   return m
+}
+
+// Кто уже выпускает конфиги с панели: отмечаются в выборе и не выбираются.
+export function issuersTaken(issuers) {
+  const taken = new Map()
+  for (const is of Array.isArray(issuers) ? issuers : []) {
+    const id = idOf(is)
+    if (id) taken.set(id, 'уже выпускает')
+  }
+  return taken
 }

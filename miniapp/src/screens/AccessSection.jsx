@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchAccess, fetchPeople, addOperator, removeOperator, unbindOwner, setOwner } from '../api.js'
-import { livePick, peopleByID, personTitle, pickView } from '../people.js'
+import { livePick, peopleByID, pickView } from '../people.js'
+import { ManualEntry, PeoplePicker, PersonName, nameOf } from './PeoplePicker.jsx'
 import { localSheet } from '../sheet.js'
 import { errorText } from '../errorText.js'
 import { placeText } from '../places.js'
@@ -332,79 +333,5 @@ export function AccessSection({ routerID, openSheet }) {
 
       {actionError && <p class="state state-error">{actionError}</p>}
     </section>
-  )
-}
-
-function nameOf(id, byID) {
-  const p = byID.get(id)
-  return p ? personTitle(p) : String(id)
-}
-
-// Человек в списке доступа: имя и @ник, номер подписью. Нет в справочнике --
-// голый номер, как до v0.58.
-function PersonName({ id, byID }) {
-  const p = byID.get(id)
-  const title = p ? personTitle(p) : ''
-  if (!p || title.startsWith('номер ')) return <span class="access-id">{id}</span>
-  return (
-    <span class="person-name">
-      <span class="person-title">{title}</span>
-      <span class="person-sub">номер {id}</span>
-    </span>
-  )
-}
-
-function ManualEntry({ kind, children }) {
-  return (
-    <details class={`access-manual access-manual-${kind}`}>
-      <summary>Ввести номер вручную</summary>
-      {children}
-    </details>
-  )
-}
-
-// Поиск + список людей. Уже имеющие роль на этом роутере видны, но не
-// выбираются: повторная выдача той же роли ничего бы не дала.
-function PeoplePicker({ id, label, empty, view, query, onQuery, busy, picked, onPick }) {
-  const { shown, rest } = view
-  return (
-    <div class="person-picker">
-      <div class="field">
-        <label for={id}>{label}</label>
-        <input
-          id={id}
-          type="search"
-          placeholder="Имя, @ник, номер или роутер"
-          autocomplete="off"
-          value={query}
-          disabled={busy}
-          onInput={(e) => onQuery(e.currentTarget.value)}
-        />
-      </div>
-      {empty ? (
-        <p class="muted">В списке пока никого.</p>
-      ) : shown.length === 0 ? (
-        <p class="muted">Никого не нашлось.</p>
-      ) : (
-        <ul class="card list-reset person-list">
-          {shown.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                class={`person-pick${picked === r.id ? ' is-picked' : ''}`}
-                aria-pressed={picked === r.id ? 'true' : 'false'}
-                disabled={busy || Boolean(r.taken)}
-                onClick={() => onPick(picked === r.id ? 0 : r.id)}
-              >
-                <span class="person-title">{r.title}</span>
-                <span class="person-sub">{r.sub}</span>
-                {r.taken && <span class="person-taken">{r.taken}</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {rest > 0 && <p class="field-hint">Ещё {rest} — уточните поиск.</p>}
-    </div>
   )
 }
