@@ -388,7 +388,10 @@ type Deps struct {
 	// общее состояние пакета.
 	testReportUserByID    func(uid int64) (*db.User, error)
 	testDashboardEditRead func()
-	PublicBaseURL         string
+	// testPeopleBackfill -- фоновое дотягивание имён справочника людей,
+	// которого тест дожидается (wait). nil -- своё на каждый мукс.
+	testPeopleBackfill *miniappPeopleBackfill
+	PublicBaseURL      string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the

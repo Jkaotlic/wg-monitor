@@ -137,7 +137,11 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}/access", reqID(auth(miniappAccessHandler(d))))
 	// Справочник людей (v0.58) -- выбор человека при выдаче доступа. Только
 	// админ, отказ как у соседних маршрутов доступа.
-	mux.Handle("GET /v1/miniapp/people", reqID(auth(miniappPeopleHandler(d))))
+	peopleBackfill := d.testPeopleBackfill
+	if peopleBackfill == nil {
+		peopleBackfill = newMiniappPeopleBackfill()
+	}
+	mux.Handle("GET /v1/miniapp/people", reqID(auth(miniappPeopleHandler(d, peopleBackfill))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/access/operators", reqID(auth(miniappAddOperatorHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/operators/{tgid}", reqID(auth(miniappRemoveOperatorHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/owner", reqID(auth(miniappUnbindOwnerHandler(d))))

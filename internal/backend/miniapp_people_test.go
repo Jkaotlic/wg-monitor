@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,21 +17,49 @@ import (
 )
 
 // fakePeopleTG -- Telegram для дотягивания имён: знает только тех, кто в
-// known; на остальных -- «chat not found».
+// known; ошибки по номеру -- из errs; на остальных -- 400 «chat not found».
+// block != nil -- каждый вызов ждёт close(block) или отмены контекста.
 type fakePeopleTG struct {
 	mu    sync.Mutex
 	known map[int64]tg.ChatInfo
+	errs  map[int64]error
 	calls []int64
+	block chan struct{}
 }
 
-func (f *fakePeopleTG) GetChat(_ context.Context, chatID int64) (tg.ChatInfo, error) {
+func (f *fakePeopleTG) GetChat(ctx context.Context, chatID int64) (tg.ChatInfo, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, chatID)
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return tg.ChatInfo{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, chatID)
+	if err, ok := f.errs[chatID]; ok {
+		return tg.ChatInfo{}, err
+	}
 	if info, ok := f.known[chatID]; ok {
 		return info, nil
 	}
-	return tg.ChatInfo{}, errors.New("Bad Request: chat not found")
+	return tg.ChatInfo{}, &tg.APIError{Method: "getChat", Code: 400, Description: "Bad Request: chat not found"}
+}
+
+func (f *fakePeopleTG) Calls() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.calls...)
+}
+
+func (f *fakePeopleTG) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = nil
 }
 
 func newPeopleDB(t *testing.T) *db.DB {
@@ -228,12 +255,10 @@ func TestMiniappPeopleOrdering(t *testing.T) {
 	}
 }
 
-// Дотягивание имён getChat: только известным номерам без имени, не больше
-// 10 за запрос, ошибка -- номер остаётся без имени, повтор не чаще раза в сутки.
-func TestMiniappPeopleBackfillsNames(t *testing.T) {
-	d := newPeopleDB(t)
-	// 12 роутеров с владельцами 1001..1012, без имён.
-	for i := int64(1); i <= 12; i++ {
+// seedOwnersWithoutNames -- n роутеров с владельцами 1001..1000+n без имён.
+func seedOwnersWithoutNames(t *testing.T, d *db.DB, n int64) {
+	t.Helper()
+	for i := int64(1); i <= n; i++ {
 		id, err := d.Users().Insert("router-"+strconv.FormatInt(i, 10), "tok-people-"+strconv.FormatInt(i, 10), "198.51.100.1", "awg11")
 		if err != nil {
 			t.Fatal(err)
@@ -242,6 +267,23 @@ func TestMiniappPeopleBackfillsNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func personInResp(resp miniappPeopleResp, id int64) *miniappPerson {
+	for i := range resp.People {
+		if resp.People[i].TelegramUserID == id {
+			return &resp.People[i]
+		}
+	}
+	return nil
+}
+
+// Дотягивание имён getChat: только известным номерам без имени, не больше
+// 10 за запрос, «чат не найден» -- номер остаётся без имени, повтор не чаще
+// раза в сутки. Дотягивание идёт в фоне: имена -- со следующего открытия.
+func TestMiniappPeopleBackfillsNames(t *testing.T) {
+	d := newPeopleDB(t)
+	seedOwnersWithoutNames(t, d, 12)
 	// Ждущий без доступа и без имени -- getChat ему не положен: номер не «известный».
 	if err := d.People().Seen(2001, "", "", "", db.PersonSourceBot, time.Now()); err != nil {
 		t.Fatal(err)
@@ -249,59 +291,113 @@ func TestMiniappPeopleBackfillsNames(t *testing.T) {
 	f := &fakePeopleTG{known: map[int64]tg.ChatInfo{
 		1001: {ID: 1001, Type: "private", FirstName: "Дотянут", LastName: "Первый", Username: "pulled_one"},
 	}}
-	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f})
+	bf := newMiniappPeopleBackfill()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f, testPeopleBackfill: bf})
 
 	rec, resp := getPeople(t, h, 999)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if len(f.calls) != 10 {
-		t.Fatalf("getChat вызван %d раз, want 10 (лимит): %v", len(f.calls), f.calls)
+	bf.wait()
+	calls := f.Calls()
+	if len(calls) != 10 {
+		t.Fatalf("getChat вызван %d раз, want 10 (лимит): %v", len(calls), calls)
 	}
-	for _, c := range f.calls {
+	for _, c := range calls {
 		if c == 2001 {
 			t.Fatal("getChat для номера без доступа")
 		}
 	}
-	var p1001 *miniappPerson
-	for i := range resp.People {
-		if resp.People[i].TelegramUserID == 1001 {
-			p1001 = &resp.People[i]
-		}
-	}
-	if p1001 == nil || p1001.Name != "Дотянут Первый" || p1001.Username != "pulled_one" || p1001.LastSeenAt != nil {
-		t.Fatalf("1001 в ответе = %+v", p1001)
+	if p := personInResp(resp, 1001); p == nil || p.Name != "" {
+		t.Fatalf("первый ответ ждал дотягивания: %+v", p)
 	}
 
-	// Второй запрос: первую десятку (999, 1001..1009) уже пробовали сегодня --
-	// остались три непробованных: 1010, 1011, 1012.
-	f.calls = nil
-	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+	// Второе открытие: имя 1001 уже в ответе; первую десятку (999,
+	// 1001..1009) пробовали сегодня -- остались 1010, 1011, 1012.
+	f.reset()
+	rec, resp = getPeople(t, h, 999)
+	if rec.Code != http.StatusOK {
 		t.Fatal(rec.Code)
 	}
-	if len(f.calls) != 3 {
-		t.Fatalf("второй запрос: getChat %d раз (%v), want 3 непробованных", len(f.calls), f.calls)
+	bf.wait()
+	if p := personInResp(resp, 1001); p == nil || p.Name != "Дотянут Первый" || p.Username != "pulled_one" || p.LastSeenAt != nil {
+		t.Fatalf("1001 во втором ответе = %+v", p)
+	}
+	if calls := f.Calls(); len(calls) != 3 {
+		t.Fatalf("второй запрос: getChat %v, want 3 непробованных", calls)
 	}
 	// Третий: все пробовали за сутки -- ни одного вызова.
-	f.calls = nil
+	f.reset()
 	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
 		t.Fatal(rec.Code)
 	}
-	if len(f.calls) != 0 {
-		t.Fatalf("повтор в те же сутки: %v", f.calls)
+	bf.wait()
+	if calls := f.Calls(); len(calls) != 0 {
+		t.Fatalf("повтор в те же сутки: %v", calls)
 	}
 
 	// Сутки спустя -- снова пробуем тех, кому не повезло.
-	old := time.Now().Add(-25 * time.Hour)
-	if err := d.People().MarkNameChecked(1002, old); err != nil {
+	if err := d.People().MarkNameChecked(1002, time.Now().Add(-25*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	f.calls = nil
+	f.reset()
 	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
 		t.Fatal(rec.Code)
 	}
-	if len(f.calls) != 1 || f.calls[0] != 1002 {
-		t.Fatalf("после суток: %v, want [1002]", f.calls)
+	bf.wait()
+	if calls := f.Calls(); len(calls) != 1 || calls[0] != 1002 {
+		t.Fatalf("после суток: %v, want [1002]", calls)
+	}
+}
+
+// Медленный Telegram не держит экран, а два открытия разом -- одно дотягивание.
+func TestMiniappPeopleBackfillDoesNotBlockAndRunsOnce(t *testing.T) {
+	d := newPeopleDB(t)
+	seedOwnersWithoutNames(t, d, 3)
+	f := &fakePeopleTG{block: make(chan struct{})}
+	bf := newMiniappPeopleBackfill()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f, testPeopleBackfill: bf})
+
+	get := func() int {
+		done := make(chan int, 1)
+		go func() {
+			rec, _ := getPeople(t, h, 999)
+			done <- rec.Code
+		}()
+		select {
+		case code := <-done:
+			return code
+		case <-time.After(2 * time.Second):
+			t.Fatal("GET /people ждёт Telegram")
+			return 0
+		}
+	}
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("первый: %d", code)
+	}
+	// Ждём, пока фоновое дотягивание упрётся в первый getChat.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(f.Calls()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("второй: %d", code)
+	}
+	if calls := f.Calls(); len(calls) != 1 {
+		t.Fatalf("пока первое висит: getChat %v, want ровно один", calls)
+	}
+	close(f.block)
+	bf.wait()
+	calls := f.Calls()
+	seen := map[int64]bool{}
+	for _, c := range calls {
+		if seen[c] {
+			t.Fatalf("номер %d спрошен дважды: %v", c, calls)
+		}
+		seen[c] = true
+	}
+	if len(calls) != 4 { // 999, 1001, 1002, 1003
+		t.Fatalf("getChat %v, want 4 номера одним проходом", calls)
 	}
 }
 

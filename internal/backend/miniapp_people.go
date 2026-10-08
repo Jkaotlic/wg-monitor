@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -30,8 +31,7 @@ const (
 	// miniappPeopleRecheckAfter -- повтор getChat для того же номера, если
 	// прошлая попытка имени не дала (бот не знает чат).
 	miniappPeopleRecheckAfter = 24 * time.Hour
-	// miniappPeopleBackfillBudget -- на все getChat запроса разом: медленный
-	// Telegram не держит экран.
+	// miniappPeopleBackfillBudget -- на все getChat одного фонового прохода.
 	miniappPeopleBackfillBudget = 5 * time.Second
 	// miniappPeopleWaitingWindow -- «ждёт доступа»: без доступа нигде и писал
 	// за это время. Такие идут первыми.
@@ -75,13 +75,15 @@ func personHasName(p db.Person) bool {
 
 // miniappPeopleHandler -- GET /v1/miniapp/people: все, кого бэкенд знает по
 // номеру (справочник ∪ владельцы ∪ операторы ∪ админ), с ролями по парку.
-// Только админ, отказ как у соседних маршрутов доступа.
-func miniappPeopleHandler(d Deps) http.HandlerFunc {
+// Только админ, отказ как у соседних маршрутов доступа. Список отдаётся
+// сразу; имена без подписи дотягиваются в фоне и видны со следующего открытия.
+func miniappPeopleHandler(d Deps, bf *miniappPeopleBackfill) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := miniappRequireAdmin(d, w, r); !ok {
 			return
 		}
-		resp, err := buildMiniappPeople(r.Context(), d, miniappNow())
+		now := miniappNow()
+		resp, due, err := buildMiniappPeople(d, now)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Warn("miniapp people: список не собран", "err", err)
@@ -89,23 +91,26 @@ func miniappPeopleHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "people lookup failed")
 			return
 		}
+		bf.start(d, due)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
-func buildMiniappPeople(ctx context.Context, d Deps, now time.Time) (miniappPeopleResp, error) {
+// buildMiniappPeople собирает список и заодно -- номера, которым пора
+// дотянуть имя (due).
+func buildMiniappPeople(d Deps, now time.Time) (miniappPeopleResp, []int64, error) {
 	routers, err := d.DB.Users().GetAll()
 	if err != nil {
-		return miniappPeopleResp{}, err
+		return miniappPeopleResp{}, nil, err
 	}
 	ops, err := d.DB.RouterOperators().ListAll()
 	if err != nil {
-		return miniappPeopleResp{}, err
+		return miniappPeopleResp{}, nil, err
 	}
 	stored, err := d.DB.People().List()
 	if err != nil {
-		return miniappPeopleResp{}, err
+		return miniappPeopleResp{}, nil, err
 	}
 
 	// Роли по парку. Владелец и оператор одного роутера разом -- «владелец».
@@ -149,7 +154,7 @@ func buildMiniappPeople(ctx context.Context, d Deps, now time.Time) (miniappPeop
 		}
 	}
 
-	miniappBackfillPeopleNames(ctx, d, known, people, now)
+	due := miniappPeopleDue(known, people, now)
 
 	out := make([]miniappPerson, 0, len(people))
 	for tgid, p := range people {
@@ -170,17 +175,12 @@ func buildMiniappPeople(ctx context.Context, d Deps, now time.Time) (miniappPeop
 		out = append(out, mp)
 	}
 	sortMiniappPeople(out, people, now)
-	return miniappPeopleResp{People: out}, nil
+	return miniappPeopleResp{People: out}, due, nil
 }
 
-// miniappBackfillPeopleNames -- getChat для известных номеров без имени: не
-// больше miniappPeopleBackfillLimit за запрос, для номера -- не чаще раза в
-// сутки. Ошибка Telegram -- не беда: номер остаётся без имени, попытка
-// отмечается. Отмена контекста попыткой не считается.
-func miniappBackfillPeopleNames(ctx context.Context, d Deps, known map[int64]bool, people map[int64]db.Person, now time.Time) {
-	if d.PeopleTG == nil {
-		return
-	}
+// miniappPeopleDue -- известные номера без имени, которым пора getChat: не
+// больше miniappPeopleBackfillLimit, для номера -- не чаще раза в сутки.
+func miniappPeopleDue(known map[int64]bool, people map[int64]db.Person, now time.Time) []int64 {
 	var due []int64
 	for tgid := range known {
 		p := people[tgid]
@@ -196,34 +196,67 @@ func miniappBackfillPeopleNames(ctx context.Context, d Deps, known map[int64]boo
 	if len(due) > miniappPeopleBackfillLimit {
 		due = due[:miniappPeopleBackfillLimit]
 	}
-	if len(due) == 0 {
+	return due
+}
+
+// miniappPeopleBackfill -- фоновое дотягивание имён getChat. Один на мукс,
+// как вопросы агенту у /tunnels: проход идёт не дольше budget, и пока он
+// идёт, новые открытия списка второй не запускают.
+type miniappPeopleBackfill struct {
+	running sync.Mutex // TryLock: занято -- проход уже идёт
+	wg      sync.WaitGroup
+	budget  time.Duration
+	now     func() time.Time
+}
+
+func newMiniappPeopleBackfill() *miniappPeopleBackfill {
+	return &miniappPeopleBackfill{budget: miniappPeopleBackfillBudget, now: miniappNow}
+}
+
+// start запускает проход в фоне и сразу возвращается. Без Telegram-клиента,
+// без номеров или при идущем проходе -- ничего.
+func (b *miniappPeopleBackfill) start(d Deps, due []int64) {
+	if b == nil || d.PeopleTG == nil || len(due) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, miniappPeopleBackfillBudget)
-	defer cancel()
+	if !b.running.TryLock() {
+		return
+	}
+	parent := d.ShutdownCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		defer b.running.Unlock()
+		ctx, cancel := context.WithTimeout(parent, b.budget)
+		defer cancel()
+		b.run(ctx, d, due)
+	}()
+}
+
+// wait -- дождаться идущего прохода (тесты).
+func (b *miniappPeopleBackfill) wait() { b.wg.Wait() }
+
+// run -- getChat по номерам. Ошибка Telegram -- не беда: номер остаётся без
+// имени, попытка отмечается. Отмена контекста попыткой не считается.
+func (b *miniappPeopleBackfill) run(ctx context.Context, d Deps, due []int64) {
 	for _, tgid := range due {
 		info, err := d.PeopleTG.GetChat(ctx, tgid)
 		if ctx.Err() != nil {
 			return
 		}
-		p := people[tgid]
-		checked := now
-		p.NameCheckedAt = &checked
+		now := b.now()
 		if err != nil || (info.FirstName == "" && info.LastName == "" && info.Username == "") {
 			if derr := d.DB.People().MarkNameChecked(tgid, now); derr != nil && d.Logger != nil {
 				d.Logger.Warn("miniapp people: попытка getChat не отмечена", "telegram_user_id", tgid, "err", derr)
 			}
-			people[tgid] = p
 			continue
 		}
 		if derr := d.DB.People().SetNameFromTelegram(tgid, info.FirstName, info.LastName, info.Username, now); derr != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp people: имя из getChat не записано", "telegram_user_id", tgid, "err", derr)
 		}
-		p.FirstName, p.LastName, p.Username = info.FirstName, info.LastName, info.Username
-		if p.Source == "" {
-			p.Source = db.PersonSourceTelegram
-		}
-		people[tgid] = p
 	}
 }
 
