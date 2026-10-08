@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { personTitle, personSub, seenText, matchesQuery, pickList, peopleByID } from '../src/people.js'
+import { personTitle, personSub, seenText, matchesQuery, pickList, peopleByID, pickView, livePick, PICK_LIMIT } from '../src/people.js'
 
 // Имена вымышленные.
 const NOW = Date.parse('2026-10-08T12:00:00Z')
@@ -112,4 +112,18 @@ describe('people: справочник по номеру', () => {
     expect(m.get(5)).toBe(undefined)
   })
   it('нет справочника -- пустой', () => expect(peopleByID(null).size).toBe(0))
+})
+
+describe('people: выбор в силе, пока виден', () => {
+  const rows = [{ id: 1, taken: null }, { id: 2, taken: 'уже оператор' }]
+  it('видимый и свободный -- в силе', () => expect(livePick(rows, 1)).toBe(1))
+  it('отмеченный -- нет', () => expect(livePick(rows, 2)).toBe(0))
+  it('скрытый -- нет', () => expect(livePick(rows, 3)).toBe(0))
+  it('ничего не выбрано -- 0', () => expect(livePick(rows, 0)).toBe(0))
+  it('показ ограничен, остальное -- счётом', () => {
+    const many = Array.from({ length: PICK_LIMIT + 3 }, (_, i) => ({ telegram_user_id: i + 1, name: `Человек ${i + 1}` }))
+    const v = pickView(many, { access: null, role: 'operator' })
+    expect(v.shown).toHaveLength(PICK_LIMIT)
+    expect(v.rest).toBe(3)
+  })
 })

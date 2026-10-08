@@ -128,6 +128,28 @@ describe('v0.58: «Кому ещё открыт доступ» -- выбор и�
     cleanup(root)
   })
 
+  it('выбранный, скрытый поиском, не отправляется: выбор сброшен', async () => {
+    const root = await mount()
+    const form = root.querySelector('form.access-pick-operator')
+    const add = form.querySelector('button[type="submit"]')
+    const search = root.querySelector('#access-find-operator')
+    await type(search, 'ольг')
+    await act(async () => rows(root, '.access-pick-operator')[0].click())
+    expect(add.disabled).toBe(false)
+    // Ещё видна -- выбор остаётся.
+    await type(search, 'ольга')
+    expect(add.disabled).toBe(false)
+    await type(search, '@rook')
+    expect(add.disabled).toBe(true)
+    await submit(form)
+    expect(mocks.added).toEqual([])
+    // Поиск очищен -- Ольга снова видна, но уже не выбрана.
+    await type(search, '')
+    expect(rows(root, '.access-pick-operator').filter((b) => b.getAttribute('aria-pressed') === 'true')).toHaveLength(0)
+    expect(add.disabled).toBe(true)
+    cleanup(root)
+  })
+
   it('ручной ввод номера -- свёрнутым запасным путём', async () => {
     const root = await mount()
     const manual = root.querySelector('details.access-manual-operator')

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchAccess, fetchPeople, addOperator, removeOperator, unbindOwner, setOwner } from '../api.js'
-import { peopleByID, personTitle, pickList } from '../people.js'
+import { livePick, peopleByID, personTitle, pickView } from '../people.js'
 import { localSheet } from '../sheet.js'
 import { errorText } from '../errorText.js'
 import { placeText } from '../places.js'
@@ -23,6 +23,8 @@ export function AccessSection({ routerID, openSheet }) {
   const [people, setPeople] = useState(undefined)
   const [opPick, setOpPick] = useState(0)
   const [ownerPick, setOwnerPick] = useState(0)
+  const [opQuery, setOpQuery] = useState('')
+  const [ownerQuery, setOwnerQuery] = useState('')
 
   const loadPeople = () =>
     fetchPeople()
@@ -97,7 +99,7 @@ export function AccessSection({ routerID, openSheet }) {
 
   function handleAddPicked(e) {
     e.preventDefault()
-    if (opPick) addByID(opPick)
+    if (opLive) addByID(opLive)
   }
 
   // Назначение владельца -- номером человека или «меня»: тогда номер берёт
@@ -137,7 +139,7 @@ export function AccessSection({ routerID, openSheet }) {
 
   function handleAssignPicked(e) {
     e.preventDefault()
-    if (ownerPick) assignOwner({ telegram_user_id: ownerPick })
+    if (ownerLive) assignOwner({ telegram_user_id: ownerLive })
   }
 
   if (loadError) return <p class="state state-error">{loadError}</p>
@@ -146,6 +148,18 @@ export function AccessSection({ routerID, openSheet }) {
   const operators = access.operators ?? []
   const byID = peopleByID(people)
   const picking = Array.isArray(people)
+  const opView = pickView(people, { access, role: 'operator', query: opQuery })
+  const ownerView = pickView(people, { access, role: 'owner', query: ownerQuery })
+  // Отправляется только выбор, который виден и не отмечен.
+  const opLive = livePick(opView.shown, opPick)
+  const ownerLive = livePick(ownerView.shown, ownerPick)
+
+  // Поиск сменился и выбранного не стало видно -- выбор сброшен, а не
+  // спрятан: иначе он всплыл бы снова при пустом поиске.
+  const searchFor = (role, setQuery, pick, setPick) => (q) => {
+    setQuery(q)
+    if (pick && !livePick(pickView(people, { access, role, query: q }).shown, pick)) setPick(0)
+  }
 
   const ownerManual = (
     <form class="access-add-row" onSubmit={handleAssignOwner}>
@@ -226,14 +240,15 @@ export function AccessSection({ routerID, openSheet }) {
                   <PeoplePicker
                     id="access-find-owner"
                     label="Кого назначить владельцем"
-                    people={people}
-                    access={access}
-                    role="owner"
+                    empty={people.length === 0}
+                    view={ownerView}
+                    query={ownerQuery}
+                    onQuery={searchFor('owner', setOwnerQuery, ownerPick, setOwnerPick)}
                     busy={busy}
-                    picked={ownerPick}
+                    picked={ownerLive}
                     onPick={setOwnerPick}
                   />
-                  <button class="btn btn-ghost" type="submit" disabled={busy || !ownerPick}>
+                  <button class="btn btn-ghost" type="submit" disabled={busy || !ownerLive}>
                     Назначить
                   </button>
                 </form>
@@ -279,14 +294,15 @@ export function AccessSection({ routerID, openSheet }) {
               <PeoplePicker
                 id="access-find-operator"
                 label="Кому открыть доступ"
-                people={people}
-                access={access}
-                role="operator"
+                empty={people.length === 0}
+                view={opView}
+                query={opQuery}
+                onQuery={searchFor('operator', setOpQuery, opPick, setOpPick)}
                 busy={busy}
-                picked={opPick}
+                picked={opLive}
                 onPick={setOpPick}
               />
-              <button class="btn btn-ghost" type="submit" disabled={busy || !opPick}>
+              <button class="btn btn-ghost" type="submit" disabled={busy || !opLive}>
                 Добавить
               </button>
             </form>
@@ -311,10 +327,6 @@ export function AccessSection({ routerID, openSheet }) {
     </section>
   )
 }
-
-// Сколько строк выбора показывать сразу: справочник растёт с каждым /start,
-// а на телефоне сотня кнопок -- не выбор. Остальное находит поиск.
-const PICK_LIMIT = 20
 
 function nameOf(id, byID) {
   const p = byID.get(id)
@@ -346,11 +358,8 @@ function ManualEntry({ kind, children }) {
 
 // Поиск + список людей. Уже имеющие роль на этом роутере видны, но не
 // выбираются: повторная выдача той же роли ничего бы не дала.
-function PeoplePicker({ id, label, people, access, role, busy, picked, onPick }) {
-  const [query, setQuery] = useState('')
-  const all = pickList(people, { access, role, query })
-  const shown = all.slice(0, PICK_LIMIT)
-  const rest = all.length - shown.length
+function PeoplePicker({ id, label, empty, view, query, onQuery, busy, picked, onPick }) {
+  const { shown, rest } = view
   return (
     <div class="person-picker">
       <div class="field">
@@ -362,10 +371,10 @@ function PeoplePicker({ id, label, people, access, role, busy, picked, onPick })
           autocomplete="off"
           value={query}
           disabled={busy}
-          onInput={(e) => setQuery(e.currentTarget.value)}
+          onInput={(e) => onQuery(e.currentTarget.value)}
         />
       </div>
-      {people.length === 0 ? (
+      {empty ? (
         <p class="muted">В списке пока никого.</p>
       ) : shown.length === 0 ? (
         <p class="muted">Никого не нашлось.</p>

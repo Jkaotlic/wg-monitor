@@ -102,6 +102,22 @@ export function pickList(people, { access = null, role = 'operator', query = '',
   return [...rows.filter((r) => !r.taken), ...rows.filter((r) => r.taken)]
 }
 
+// Сколько строк выбора показывать сразу: справочник растёт с каждым /start,
+// а на телефоне сотня кнопок -- не выбор. Остальное находит поиск.
+export const PICK_LIMIT = 20
+
+export function pickView(people, opts = {}) {
+  const all = pickList(people, opts)
+  const shown = all.slice(0, PICK_LIMIT)
+  return { shown, rest: all.length - shown.length }
+}
+
+// Выбор в силе, только пока человек виден в списке и не отмечен: скрытого
+// поиском или уже получившего роль отправить нельзя.
+export function livePick(rows, id) {
+  return id && rows.some((r) => r.id === id && !r.taken) ? id : 0
+}
+
 export function peopleByID(people) {
   const m = new Map()
   for (const p of Array.isArray(people) ? people : []) if (idOf(p)) m.set(idOf(p), p)
