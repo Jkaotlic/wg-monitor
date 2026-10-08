@@ -19,6 +19,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
       mocks.access.operators.push({ telegram_user_id: id })
       return Promise.resolve(structuredClone(mocks.access))
     },
+    removeOperator: (routerID, id) => {
+      mocks.access.operators = mocks.access.operators.filter((o) => o.telegram_user_id !== id)
+      return Promise.resolve(structuredClone(mocks.access))
+    },
+    unbindOwner: () => {
+      mocks.access.owner = null
+      return Promise.resolve(structuredClone(mocks.access))
+    },
     setOwner: (routerID, owner) => {
       mocks.owners.push([routerID, owner])
       mocks.access.owner = { telegram_user_id: owner.telegram_user_id ?? 1 }
@@ -236,4 +244,66 @@ describe('v0.58: старый бэкенд без /people', () => {
       cleanup(root)
     })
   }
+})
+
+describe('v0.58: после любого изменения оба выбора сброшены', () => {
+  beforeEach(() => {
+    mocks.access = { owner: null, operators: [{ telegram_user_id: 2003 }] }
+  })
+  const pick = async (root, scope, text) => {
+    const b = rows(root, scope).find((x) => x.textContent.includes(text))
+    await act(async () => b.click())
+  }
+  const pressed = (root, scope) => rows(root, scope).filter((b) => b.getAttribute('aria-pressed') === 'true')
+  const submitBtn = (root, scope) => root.querySelector(`form${scope} button[type="submit"]`)
+
+  it('X выбран оператором, затем X назначен владельцем -- «Добавить» не активна, X отмечен', async () => {
+    const root = await mount()
+    await pick(root, '.access-pick-operator', 'Ольга')
+    await pick(root, '.access-pick-owner', 'Ольга')
+    await submit(root.querySelector('form.access-pick-owner'))
+    expect(mocks.owners).toEqual([[7, { telegram_user_id: 2001 }]])
+    expect(submitBtn(root, '.access-pick-operator').disabled).toBe(true)
+    expect(pressed(root, '.access-pick-operator')).toHaveLength(0)
+    const olga = rows(root, '.access-pick-operator').find((b) => b.textContent.includes('Ольга'))
+    expect(olga.disabled).toBe(true)
+    expect(olga.textContent).toContain('уже владелец')
+    await submit(root.querySelector('form.access-pick-operator'))
+    expect(mocks.added).toEqual([])
+    cleanup(root)
+  })
+
+  it('X выбран владельцем, затем X добавлен оператором -- выбор владельца сброшен', async () => {
+    const root = await mount()
+    await pick(root, '.access-pick-owner', 'Ольга')
+    await pick(root, '.access-pick-operator', 'Ольга')
+    await submit(root.querySelector('form.access-pick-operator'))
+    expect(mocks.added).toEqual([[7, 2001]])
+    expect(pressed(root, '.access-pick-owner')).toHaveLength(0)
+    expect(submitBtn(root, '.access-pick-owner').disabled).toBe(true)
+    await submit(root.querySelector('form.access-pick-owner'))
+    expect(mocks.owners).toEqual([])
+    cleanup(root)
+  })
+
+  it('удаление оператора и отвязка владельца тоже сбрасывают выбор', async () => {
+    const root = await mount()
+    await pick(root, '.access-pick-operator', 'Ольга')
+    await act(async () => root.querySelector('.access-operators button').click())
+    await flush()
+    expect(mocks.access.operators).toEqual([])
+    expect(pressed(root, '.access-pick-operator')).toHaveLength(0)
+    expect(submitBtn(root, '.access-pick-operator').disabled).toBe(true)
+
+    mocks.access.owner = { telegram_user_id: 2002 }
+    cleanup(root)
+    const again = await mount()
+    await pick(again, '.access-pick-operator', 'Ольга')
+    await act(async () => button(again, 'Отвязать').click())
+    await flush()
+    expect(again.querySelector('form.access-pick-owner')).toBeTruthy()
+    expect(pressed(again, '.access-pick-operator')).toHaveLength(0)
+    expect(submitBtn(again, '.access-pick-operator').disabled).toBe(true)
+    cleanup(again)
+  })
 })

@@ -38,11 +38,21 @@ export function AccessSection({ routerID, openSheet }) {
     loadPeople()
   }, [routerID])
 
+  // Любое удачное изменение доступа сбрасывает ОБА выбора: человек мог
+  // получить роль в соседней форме, и прежний выбор в ней уже не в силе.
+  // Справочник перечитывается: роли в подписях поменялись.
+  function applyChange(data) {
+    setAccess(data)
+    setOpPick(0)
+    setOwnerPick(0)
+    if (people) loadPeople()
+  }
+
   function runMutation(call) {
     setBusy(true)
     setActionError(null)
     call()
-      .then(setAccess)
+      .then(applyChange)
       .catch((err) => setActionError(errorText(err)))
       .finally(() => setBusy(false))
   }
@@ -75,12 +85,8 @@ export function AccessSection({ routerID, openSheet }) {
     setActionError(null)
     addOperator(routerID, id)
       .then((data) => {
-        setAccess(data)
+        applyChange(data)
         setNewID('')
-        setOpPick(0)
-        // Роли в подписях справочника поменялись: «ждёт доступа» стал
-        // оператором.
-        if (people) loadPeople()
       })
       .catch((err) => setActionError(errorText(err)))
       .finally(() => setBusy(false))
@@ -111,10 +117,8 @@ export function AccessSection({ routerID, openSheet }) {
     setActionError(null)
     setOwner(routerID, owner)
       .then((data) => {
-        setAccess(data)
+        applyChange(data)
         setOwnerID('')
-        setOwnerPick(0)
-        if (people) loadPeople()
       })
       .catch((err) =>
         setActionError(
