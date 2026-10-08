@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -33,6 +34,9 @@ const (
 	miniappPeopleRecheckAfter = 24 * time.Hour
 	// miniappPeopleBackfillBudget -- на все getChat одного фонового прохода.
 	miniappPeopleBackfillBudget = 5 * time.Second
+	// miniappPeoplePauseMin -- на столько дотягивание замолкает после сбоя
+	// Telegram (429, транспорт, таймаут), если retry_after не просит дольше.
+	miniappPeoplePauseMin = 5 * time.Minute
 	// miniappPeopleWaitingWindow -- «ждёт доступа»: без доступа нигде и писал
 	// за это время. Такие идут первыми.
 	miniappPeopleWaitingWindow = 7 * 24 * time.Hour
@@ -207,6 +211,22 @@ type miniappPeopleBackfill struct {
 	wg      sync.WaitGroup
 	budget  time.Duration
 	now     func() time.Time
+
+	mu    sync.Mutex
+	pause time.Time // до этого момента проходы не запускаются
+}
+
+// pausedUntil -- до какого момента дотягивание молчит (ноль -- не молчит).
+func (b *miniappPeopleBackfill) pausedUntil() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pause
+}
+
+func (b *miniappPeopleBackfill) pauseFor(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pause = b.now().Add(d)
 }
 
 func newMiniappPeopleBackfill() *miniappPeopleBackfill {
@@ -217,6 +237,9 @@ func newMiniappPeopleBackfill() *miniappPeopleBackfill {
 // без номеров или при идущем проходе -- ничего.
 func (b *miniappPeopleBackfill) start(d Deps, due []int64) {
 	if b == nil || d.PeopleTG == nil || len(due) == 0 {
+		return
+	}
+	if b.now().Before(b.pausedUntil()) {
 		return
 	}
 	if !b.running.TryLock() {
@@ -239,12 +262,34 @@ func (b *miniappPeopleBackfill) start(d Deps, due []int64) {
 // wait -- дождаться идущего прохода (тесты).
 func (b *miniappPeopleBackfill) wait() { b.wg.Wait() }
 
-// run -- getChat по номерам. Ошибка Telegram -- не беда: номер остаётся без
-// имени, попытка отмечается. Отмена контекста попыткой не считается.
+// miniappPeopleDefinitive -- ответ Telegram говорит о самом человеке:
+// 400 (чат не найден) или 403 (бот заблокирован, не может начать разговор).
+// Такая попытка отмечается и повторяется через сутки. Всё прочее -- 429,
+// 5xx, транспорт, таймаут -- сбой Telegram, о человеке он ничего не говорит.
+func miniappPeopleDefinitive(err error) bool {
+	var ae *tg.APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	return ae.Code == http.StatusBadRequest || ae.Code == http.StatusForbidden
+}
+
+// run -- getChat по номерам. Окончательный ответ без имени -- номер остаётся
+// без имени, попытка отмечается. Сбой Telegram обрывает проход без отметки
+// и ставит паузу max(retry_after, 5 мин): зависший Telegram не дёргается на
+// каждом открытии списка.
 func (b *miniappPeopleBackfill) run(ctx context.Context, d Deps, due []int64) {
 	for _, tgid := range due {
 		info, err := d.PeopleTG.GetChat(ctx, tgid)
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || (err != nil && !miniappPeopleDefinitive(err)) {
+			pause := miniappPeoplePauseMin
+			if ra, ok := tg.RateLimitDelay(err); ok && ra > pause {
+				pause = ra
+			}
+			b.pauseFor(pause)
+			if d.Logger != nil {
+				d.Logger.Warn("miniapp people: getChat сбоит, дотягивание на паузе", "telegram_user_id", tgid, "pause", pause, "err", err)
+			}
 			return
 		}
 		now := b.now()

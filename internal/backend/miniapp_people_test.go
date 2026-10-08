@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -398,6 +399,144 @@ func TestMiniappPeopleBackfillDoesNotBlockAndRunsOnce(t *testing.T) {
 	}
 	if len(calls) != 4 { // 999, 1001, 1002, 1003
 		t.Fatalf("getChat %v, want 4 номера одним проходом", calls)
+	}
+}
+
+// checkedRows -- номера, у которых отмечена попытка getChat.
+func checkedRows(t *testing.T, d *db.DB) []int64 {
+	t.Helper()
+	list, err := d.People().List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []int64
+	for _, p := range list {
+		if p.NameCheckedAt != nil {
+			out = append(out, p.TelegramUserID)
+		}
+	}
+	return out
+}
+
+func assertPausedFor(t *testing.T, bf *miniappPeopleBackfill, from time.Time, want time.Duration) {
+	t.Helper()
+	got := bf.pausedUntil().Sub(from)
+	if got < want-2*time.Second || got > want+2*time.Second {
+		t.Fatalf("пауза %s, want ~%s", got, want)
+	}
+}
+
+// Сбой Telegram, который ничего не говорит о человеке (429, транспорт,
+// таймаут), -- проход обрывается без отметки попытки, и дотягивание
+// замолкает на max(RetryAfter, 5 мин): зависший Telegram не дёргается на
+// каждом открытии.
+func TestMiniappPeopleBackfillTransientErrorsPause(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		block  bool
+		budget time.Duration
+		pause  time.Duration
+	}{
+		{name: "429 с коротким retry_after", err: &tg.APIError{Method: "getChat", Code: 429, Description: "Too Many Requests: retry after 17", RetryAfter: 17 * time.Second}, pause: 5 * time.Minute},
+		{name: "429 с длинным retry_after", err: &tg.APIError{Method: "getChat", Code: 429, Description: "Too Many Requests: retry after 600", RetryAfter: 10 * time.Minute}, pause: 10 * time.Minute},
+		{name: "транспорт", err: errors.New("Post \"https://api.telegram.org/bot.../getChat\": dial tcp: i/o timeout"), pause: 5 * time.Minute},
+		{name: "5xx", err: &tg.APIError{Method: "getChat", Code: 502, Description: "Bad Gateway"}, pause: 5 * time.Minute},
+		{name: "таймаут прохода", block: true, budget: 50 * time.Millisecond, pause: 5 * time.Minute},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newPeopleDB(t)
+			seedOwnersWithoutNames(t, d, 2)
+			f := &fakePeopleTG{}
+			if tc.err != nil {
+				f.errs = map[int64]error{999: tc.err, 1001: tc.err, 1002: tc.err}
+			}
+			if tc.block {
+				f.block = make(chan struct{})
+				defer close(f.block)
+			}
+			bf := newMiniappPeopleBackfill()
+			if tc.budget > 0 {
+				bf.budget = tc.budget
+			}
+			h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f, testPeopleBackfill: bf})
+			before := time.Now()
+			if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+				t.Fatal(rec.Code)
+			}
+			bf.wait()
+			if calls := f.Calls(); len(calls) != 1 {
+				t.Fatalf("getChat %v, want обрыв после первого", calls)
+			}
+			if rows := checkedRows(t, d); len(rows) != 0 {
+				t.Fatalf("попытка отмечена на сбое: %v", rows)
+			}
+			assertPausedFor(t, bf, before, tc.pause)
+
+			// Пока пауза -- ни одного вызова.
+			f.reset()
+			if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+				t.Fatal(rec.Code)
+			}
+			bf.wait()
+			if calls := f.Calls(); len(calls) != 0 {
+				t.Fatalf("в паузе getChat %v", calls)
+			}
+		})
+	}
+}
+
+// Пауза кончилась -- дотягивание снова идёт.
+func TestMiniappPeopleBackfillResumesAfterPause(t *testing.T) {
+	d := newPeopleDB(t)
+	seedOwnersWithoutNames(t, d, 1)
+	f := &fakePeopleTG{errs: map[int64]error{999: errors.New("dial tcp: connection refused")}}
+	bf := newMiniappPeopleBackfill()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f, testPeopleBackfill: bf})
+	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	bf.wait()
+	f.reset()
+	f.mu.Lock()
+	f.errs = nil
+	f.mu.Unlock()
+	later := time.Now().Add(6 * time.Minute)
+	bf.now = func() time.Time { return later }
+	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	bf.wait()
+	if calls := f.Calls(); len(calls) != 2 {
+		t.Fatalf("после паузы getChat %v, want [999 1001]", calls)
+	}
+}
+
+// Окончательные ответы -- 400 «chat not found», 403 «заблокирован», пустой
+// результат -- отмечают попытку и проход не обрывают; паузы нет.
+func TestMiniappPeopleBackfillDefinitiveAnswersMarkChecked(t *testing.T) {
+	d := newPeopleDB(t)
+	seedOwnersWithoutNames(t, d, 2)
+	f := &fakePeopleTG{
+		errs:  map[int64]error{1001: &tg.APIError{Method: "getChat", Code: 403, Description: "Forbidden: bot was blocked by the user"}},
+		known: map[int64]tg.ChatInfo{1002: {ID: 1002, Type: "private"}}, // пустой результат
+	} // 999 -- 400 chat not found (по умолчанию)
+	bf := newMiniappPeopleBackfill()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, PeopleTG: f, testPeopleBackfill: bf})
+	if rec, _ := getPeople(t, h, 999); rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	bf.wait()
+	if calls := f.Calls(); len(calls) != 3 {
+		t.Fatalf("getChat %v, want все три", calls)
+	}
+	rows := checkedRows(t, d)
+	if len(rows) != 3 {
+		t.Fatalf("отмечены %v, want 999, 1001, 1002", rows)
+	}
+	if !bf.pausedUntil().IsZero() {
+		t.Fatalf("пауза на окончательных ответах: %v", bf.pausedUntil())
 	}
 }
 
