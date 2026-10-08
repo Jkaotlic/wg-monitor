@@ -12,6 +12,9 @@ vi.mock('../src/api.js', async (importOriginal) => {
     fetchAccess: () => Promise.resolve(structuredClone(mocks.access)),
     fetchPeople: () => {
       mocks.peopleCalls++
+      if (mocks.peopleCalls > 1 && mocks.refetch !== undefined) {
+        return mocks.refetch instanceof Error ? Promise.reject(mocks.refetch) : Promise.resolve(mocks.refetch)
+      }
       return mocks.people instanceof Error ? Promise.reject(mocks.people) : Promise.resolve(structuredClone(mocks.people))
     },
     addOperator: (routerID, id) => {
@@ -75,6 +78,7 @@ beforeEach(() => {
   mocks.access = { owner: { telegram_user_id: 2002 }, operators: [{ telegram_user_id: 2003 }] }
   mocks.people = structuredClone(PEOPLE)
   mocks.peopleCalls = 0
+  mocks.refetch = undefined
   mocks.added = []
   mocks.owners = []
 })
@@ -306,4 +310,25 @@ describe('v0.58: после любого изменения оба выбора 
     expect(submitBtn(again, '.access-pick-operator').disabled).toBe(true)
     cleanup(again)
   })
+})
+
+describe('v0.58: перечитать справочник не вышло -- прежний список остаётся', () => {
+  for (const [what, reply] of [
+    ['ошибка', new ApiError(500, 'unknown', '/people failed: 500')],
+    ['ответ «справочника нет»', null],
+  ]) {
+    it(what, async () => {
+      mocks.refetch = reply
+      const root = await mount()
+      await act(async () => rows(root, '.access-pick-operator')[0].click())
+      await submit(root.querySelector('form.access-pick-operator'))
+      expect(mocks.added).toEqual([[7, 2001]])
+      expect(mocks.peopleCalls).toBe(2)
+      // Выбор по-прежнему из списка, ручной ввод свёрнут, имена на месте.
+      expect(rows(root, '.access-pick-operator').length).toBeGreaterThan(0)
+      expect(root.querySelector('details.access-manual-operator')).toBeTruthy()
+      expect([...root.querySelectorAll('.access-operators .person-title')].map((x) => x.textContent)).toContain('Ольга Новикова (@olga_n)')
+      cleanup(root)
+    })
+  }
 })

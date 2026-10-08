@@ -26,16 +26,19 @@ export function AccessSection({ routerID, openSheet }) {
   const [opQuery, setOpQuery] = useState('')
   const [ownerQuery, setOwnerQuery] = useState('')
 
-  const loadPeople = () =>
+  // Ручной режим решает только первая загрузка. Перечитать после изменения
+  // не вышло -- остаётся прежний список: выбор только что работал, и
+  // проваленное обновление подписей не повод его отнимать.
+  const loadPeople = (first = false) =>
     fetchPeople()
-      .then((list) => setPeople(list))
-      .catch(() => setPeople(null))
+      .then((list) => (first || Array.isArray(list) ? setPeople(list) : null))
+      .catch(() => (first ? setPeople(null) : null))
 
   useEffect(() => {
     fetchAccess(routerID)
       .then(setAccess)
       .catch((err) => setLoadError(errorText(err)))
-    loadPeople()
+    loadPeople(true)
   }, [routerID])
 
   // Любое удачное изменение доступа сбрасывает ОБА выбора: человек мог
