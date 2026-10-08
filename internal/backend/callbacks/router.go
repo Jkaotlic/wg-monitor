@@ -110,6 +110,9 @@ func (r *Router) saveOffset(offset int64) error {
 // HandleCallback -- нажатие кнопки. Чат не проверяется: право решает человек
 // (админ или роль на роутере), а не место, где висит сообщение.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
+	if q.Message.Chat.ID == q.From.ID {
+		r.recordPerson(q.From)
+	}
 	// «🔕 Не писать мне про этот роутер» -- два поля, разбирается до Parse.
 	if isAdminMuteCallback(q.Data) {
 		r.handleAdminMuteCallback(ctx, q)
@@ -182,6 +185,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if m == nil || !isPrivateMessage(m) {
 		return
 	}
+	// Человек написал боту -- в справочник людей (v0.58), прежде всего тот,
+	// кто без доступа нажал /start: админ найдёт его по имени, а не по номеру.
+	r.recordPerson(m.From)
 	// Секрет кабинета удаляется до всего остального: «/start vpn://…» не
 	// должен оставить ключ в переписке.
 	if r.handleCabinetSecretMessage(ctx, m) {
@@ -198,4 +204,12 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 // isPrivateMessage -- личка с человеком: чат и отправитель совпадают.
 func isPrivateMessage(m *tg.Message) bool {
 	return m.From.ID != 0 && m.Chat.ID == m.From.ID
+}
+
+// recordPerson -- имя и ник отправителя в справочник людей. Ошибка базы не
+// мешает ответу: справочник -- подсказка админу, не путь доступа.
+func (r *Router) recordPerson(u tg.User) {
+	if err := r.d.People().Seen(u.ID, u.FirstName, u.LastName, u.Username, db.PersonSourceBot, time.Now()); err != nil {
+		slog.Warn("справочник людей: не записан", "from", u.ID, "err", err)
+	}
 }
