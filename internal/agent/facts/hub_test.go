@@ -97,3 +97,19 @@ func TestHubDoesNotMutateCachedWANOnClamp(t *testing.T) {
 		t.Fatalf("кеш коллектора испорчен обрезкой: len=%d", len(cached.Links))
 	}
 }
+
+func TestHub_UnstickSentOnChangeOnly(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	ev := []wire.UnstickEvent{{ID: "1-nwg0", TunnelID: "nwg0", From: "broken", Result: wire.UnstickFixed, At: now}}
+	h := &Hub{Now: func() time.Time { return now }, Unstick: func() *wire.UnstickFacts {
+		return &wire.UnstickFacts{Events: ev}
+	}}
+	f := h.Collect(context.Background())
+	if f == nil || f.Unstick == nil || len(f.Unstick.Events) != 1 {
+		t.Fatalf("first collect: %+v", f)
+	}
+	h.Committed(f)
+	if f2 := h.Collect(context.Background()); f2 != nil && f2.Unstick != nil {
+		t.Error("unchanged journal resent before refresh")
+	}
+}
