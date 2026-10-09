@@ -187,7 +187,31 @@ func TestTick_GaveUpReleasedWhenEnabledFlips(t *testing.T) {
 	}
 }
 
-func TestTick_ServiceSkippedWhenRouterCommandDuringWait(t *testing.T) {
+func assertAbortedSilently(t *testing.T, h *harness) {
+	t.Helper()
+	if h.services != 0 {
+		t.Fatalf("service restarted under a guard: %d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("false give-up under a guard: %+v", s.GaveUp)
+	}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("events under a guard: %+v", f.Events)
+	}
+	if !h.w.serviceAtZero() {
+		t.Error("service stamp written although the call was skipped")
+	}
+	// окно кончилось -- лесенка идёт заново
+	h.w.Deps().Sleep = h.clk.sleep
+	n := len(h.awg.callList())
+	h.clk.advance(15 * time.Minute)
+	h.w.Tick(ctx)
+	if len(h.awg.callList()) <= n {
+		t.Fatalf("ladder not retried after the guard window: %v", h.awg.callList())
+	}
+}
+
+func TestTick_ServiceAbortedWhenRouterCommandDuringWait(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
 	h.clk.advance(121 * time.Second)
@@ -197,18 +221,10 @@ func TestTick_ServiceSkippedWhenRouterCommandDuringWait(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	if h.services != 0 {
-		t.Fatalf("service restarted under a router-wide command: %d", h.services)
-	}
-	if ev := h.w.Facts().Events[0]; ev.Result != wire.UnstickGaveUp || !slices.Equal(ev.Steps, []string{"restart"}) {
-		t.Errorf("event: %+v", ev)
-	}
-	if !h.w.serviceAtZero() {
-		t.Error("service stamp written although the call was skipped")
-	}
+	assertAbortedSilently(t, h)
 }
 
-func TestTick_ServiceSkippedWhenOtherTunnelCommandDuringWait(t *testing.T) {
+func TestTick_ServiceAbortedWhenOtherTunnelCommandDuringWait(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true), tun("other", "running", true))
 	h.w.Tick(ctx)
 	h.clk.advance(121 * time.Second)
@@ -218,9 +234,7 @@ func TestTick_ServiceSkippedWhenOtherTunnelCommandDuringWait(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	if h.services != 0 {
-		t.Fatalf("service restart touches every tunnel; services=%d", h.services)
-	}
+	assertAbortedSilently(t, h)
 }
 
 func TestTick_EnabledFlippedMidLadderDropsSilently(t *testing.T) {

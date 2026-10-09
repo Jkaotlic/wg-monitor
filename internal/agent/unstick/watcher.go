@@ -281,7 +281,12 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	if len(list) == 0 {
 		return
 	}
-	if w.serviceAllowed() {
+	switch w.serviceDecision() {
+	case serviceAbort:
+		// команда бэкенда посреди лесенки: молча уходим, без «сдался» и события;
+		// since не тронут -- после окна ступень 1 пойдёт заново
+		return
+	case serviceRun:
 		for _, d := range list {
 			d.steps = append(d.steps, "service_restart")
 		}
@@ -377,25 +382,33 @@ func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*
 	return rest
 }
 
-func (w *Watcher) serviceAllowed() bool {
+type serviceVerdict int
+
+const (
+	serviceRun   serviceVerdict = iota // можно перезапускать службу
+	serviceSkip                        // не чаще раза в ServiceEvery -- ждущие сдаются
+	serviceAbort                       // свежая команда бэкенда -- лесенка прервана молча
+)
+
+func (w *Watcher) serviceDecision() serviceVerdict {
 	now := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде
 	if now.Sub(w.cmdRouter) < w.cfg.GuardWindow {
-		return false
+		return serviceAbort
 	}
 	for _, at := range w.cmdTunnel {
 		if now.Sub(at) < w.cfg.GuardWindow {
-			return false
+			return serviceAbort
 		}
 	}
 	if !w.serviceAt.IsZero() && now.Sub(w.serviceAt) < w.cfg.ServiceEvery {
-		return false
+		return serviceSkip
 	}
 	// время -- ДО вызова: сломанный init-скрипт не долбим каждый тик
 	w.serviceAt = now
-	return true
+	return serviceRun
 }
 
 func (w *Watcher) addEventLocked(start time.Time, d *due, result string, now time.Time) {
