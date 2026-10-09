@@ -97,17 +97,18 @@ type Watcher struct {
 	d   Deps
 	log *slog.Logger
 
-	mu        sync.Mutex
-	tracks    map[string]track
-	gaveUp    map[string]giveUp
-	serviceAt time.Time
-	events    []wire.UnstickEvent
-	cmdTunnel map[string]time.Time
-	cmdRouter time.Time
-	ready     bool
-	active    string
-	unknown   map[string]string // id -> незнакомый статус, уже записанный в журнал
-	lastSaved []byte
+	mu          sync.Mutex
+	tracks      map[string]track
+	gaveUp      map[string]giveUp
+	serviceAt   time.Time
+	events      []wire.UnstickEvent
+	cmdTunnel   map[string]time.Time
+	cmdRouter   time.Time
+	ready       bool
+	active      string
+	unknown     map[string]string // id -> незнакомый статус, уже записанный в журнал
+	lastSaved   []byte
+	pausedUntil time.Time // после прерванной лесенки до конца окна; не сохраняется
 }
 
 func New(cfg Config, d Deps) *Watcher {
@@ -228,6 +229,9 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		delete(w.unknown, t.ID)
 		kind, remedy := Classify(t.Status, t.Enabled)
 		if kind == KindNone || now.Sub(tr.since) < w.cfg.threshold(kind) {
+			continue
+		}
+		if now.Before(w.pausedUntil) {
 			continue
 		}
 		if t.Locked {
@@ -395,13 +399,20 @@ func (w *Watcher) serviceDecision() serviceVerdict {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде
+	var latest time.Time
 	if now.Sub(w.cmdRouter) < w.cfg.GuardWindow {
-		return serviceAbort
+		latest = w.cmdRouter
 	}
 	for _, at := range w.cmdTunnel {
-		if now.Sub(at) < w.cfg.GuardWindow {
-			return serviceAbort
+		if now.Sub(at) < w.cfg.GuardWindow && at.After(latest) {
+			latest = at
 		}
+	}
+	if !latest.IsZero() {
+		// до конца окна самой свежей команды лесенок не начинаем (иначе
+		// ступень 1 повторяется на каждом опросе)
+		w.pausedUntil = latest.Add(w.cfg.GuardWindow)
+		return serviceAbort
 	}
 	if !w.serviceAt.IsZero() && now.Sub(w.serviceAt) < w.cfg.ServiceEvery {
 		return serviceSkip

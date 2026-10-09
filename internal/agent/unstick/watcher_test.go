@@ -237,6 +237,37 @@ func TestTick_ServiceAbortedWhenOtherTunnelCommandDuringWait(t *testing.T) {
 	assertAbortedSilently(t, h)
 }
 
+func TestTick_AbortedLadderPausesUntilWindowEnds(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true), tun("other", "running", true))
+	h.w.Tick(ctx)
+	h.clk.advance(121 * time.Second)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		h.w.NoteCommand(wire.Command{Action: "tunnel_import", Args: map[string]any{"target_id": "other"}})
+		return nil
+	}
+	h.w.Tick(ctx)
+	h.w.Deps().Sleep = h.clk.sleep
+	for i := 0; i < 19; i++ { // 9,5 минут опросов по 30 с внутри окна
+		h.clk.advance(30 * time.Second)
+		h.w.Tick(ctx)
+	}
+	n := 0
+	for _, c := range h.awg.callList() {
+		if c == "restart:nwg0" {
+			n++
+		}
+	}
+	if n != 1 || h.services != 0 {
+		t.Fatalf("restarts inside the window = %d (want 1), services=%d", n, h.services)
+	}
+	h.clk.advance(2 * time.Minute)
+	h.w.Tick(ctx)
+	if got := h.awg.callList(); len(got) < 2 {
+		t.Fatalf("ladder not retried after the window: %v", got)
+	}
+}
+
 func TestTick_EnabledFlippedMidLadderDropsSilently(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
