@@ -710,17 +710,60 @@ func TestTick_FlappingGivesUpWithoutTouching(t *testing.T) {
 	}
 }
 
-func TestTick_FlappingWindowExpires(t *testing.T) {
+// spacedFixes: три вывода туннеля nwg0 с шагом spacing между началами, потом
+// четвёртое зависание; возвращает возраст самого старого вывода к его началу
+// лесенки (3*spacing - 1 минута).
+func spacedFixes(spacing time.Duration) *harness {
 	h := newHarness(tun("nwg0", "running", true))
 	h.awg.onAction = healOn("restart")
 	for i := 0; i < 3; i++ {
-		fixCycle(h)
-		h.clk.advance(40 * time.Minute)
+		fixCycle(h) // занимает 121 с
+		h.w.Tick(ctx) // опрос видит running, как в жизни
+		h.clk.advance(spacing - 121*time.Second)
 	}
-	// первое из трёх -- старше часа: в окне 2 вывода -- обычная лесенка
 	fixCycle(h)
+	return h
+}
+
+// Окно 60 минут с обеих сторон: самый старый вывод 59 мин -- сдался сразу.
+func TestTick_FlappingWindow_InsideGivesUp(t *testing.T) {
+	h := spacedFixes(20 * time.Minute) // старейший вывод ~59 мин к четвёртому зависанию
+	if n := countCalls(h, "restart:nwg0"); n != 3 {
+		t.Fatalf("restarts = %d; want 3 (4th must not be touched)", n)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 {
+		t.Fatalf("snapshot: %+v", s.GaveUp)
+	}
+}
+
+// Старейший вывод чуть старше 60 мин -- в окне 2 вывода, обычная лесенка.
+func TestTick_FlappingWindow_JustOutsideRunsLadder(t *testing.T) {
+	h := spacedFixes(20*time.Minute + 30*time.Second) // ~60,5 мин
 	if n := countCalls(h, "restart:nwg0"); n != 4 {
 		t.Fatalf("restarts = %d; want 4", n)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up: %+v", s.GaveUp)
+	}
+}
+
+// Счёт зависаний -- по туннелю: три вывода РАЗНЫХ туннелей не глушат четвёртый.
+func TestTick_FlappingCountIsPerTunnel(t *testing.T) {
+	h := newHarness(tun("a", "running", true), tun("b", "running", true), tun("c", "running", true), tun("d", "running", true))
+	h.awg.onAction = healOn("restart")
+	for _, id := range []string{"a", "b", "c"} {
+		h.awg.set(id, "broken")
+		h.w.Tick(ctx)
+		h.clk.advance(61 * time.Second)
+		h.w.Tick(ctx)
+		h.clk.advance(2 * time.Minute)
+	}
+	h.awg.set("d", "broken")
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:d"); n != 1 {
+		t.Fatalf("restart:d = %d; calls=%v", n, h.awg.callList())
 	}
 	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
 		t.Fatalf("gave up: %+v", s.GaveUp)
