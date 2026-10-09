@@ -87,3 +87,46 @@ func TestUpgradeInProgress(t *testing.T) {
 		t.Error("lock dir older than 2h is abandoned")
 	}
 }
+
+func TestRunUnstick_NilIsNoop(t *testing.T) {
+	start := time.Now()
+	runUnstick(context.Background(), nil, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))()
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("nil watcher wait took %v", d)
+	}
+}
+
+func TestRunLoopBounded_WaitsForFinish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	wait := runLoopBounded(ctx, func(c context.Context) {
+		<-c.Done()
+		time.Sleep(50 * time.Millisecond)
+		close(finished)
+	}, 5*time.Second, "unstick", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cancel()
+	wait()
+	select {
+	case <-finished:
+	default:
+		t.Fatal("wait returned before the loop finished its step")
+	}
+}
+
+func TestRunLoopBounded_WaitIsBounded(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	wait := runLoopBounded(ctx, func(context.Context) {
+		close(started)
+		<-block
+	}, 50*time.Millisecond, "unstick", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	<-started
+	cancel()
+	start := time.Now()
+	wait()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("wait not bounded: %v", d)
+	}
+}

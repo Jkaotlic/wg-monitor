@@ -165,9 +165,7 @@ func main() {
 	signals.start(ctx, rep.RequestWake)
 	// Сторож зависаний: своя петля -- лесенка с ожиданиями 60/90 с не
 	// влезает в бюджет проверки репортёра.
-	if unstickWatcher != nil {
-		go unstickWatcher.Run(ctx)
-	}
+	waitUnstick := runUnstick(ctx, unstickWatcher, unstickWaitLimit, logger)
 
 	// The watchdog's own probe, candidate probes and ndmc calls don't fit the
 	// reporter's 10 s per-check budget, so it is a loop of its own. On
@@ -178,6 +176,7 @@ func main() {
 
 	rep.Run(ctx)
 	waitDNSWatchdog()
+	waitUnstick()
 	logger.Info("stopped")
 }
 
@@ -250,6 +249,39 @@ func buildUnstick(cfg *agent.Config, awg unstick.AWG, exec actions.ExecFunc, log
 		Logger:            logger.With("component", "unstick"),
 	})
 	return w, unstick.Check{Source: w}
+}
+
+// unstickWaitLimit -- сколько выход агента ждёт сторожа: перезапуск службы
+// (unstickRestartTimeout) плюс запас.
+const unstickWaitLimit = unstickRestartTimeout + 10*time.Second
+
+// runUnstick запускает петлю сторожа (nil -- ничего) и возвращает функцию,
+// которая после отмены ctx ждёт её завершения не дольше limit: перезапуск
+// службы идёт на отсоединённом контексте, и выход посреди init-скрипта
+// оставил бы awg-manager лежать.
+func runUnstick(ctx context.Context, w *unstick.Watcher, limit time.Duration, logger *slog.Logger) (wait func()) {
+	if w == nil {
+		return func() {}
+	}
+	return runLoopBounded(ctx, w.Run, limit, "unstick", logger)
+}
+
+// runLoopBounded запускает run в горутине; wait ждёт её не дольше limit.
+func runLoopBounded(ctx context.Context, run func(context.Context), limit time.Duration, name string, logger *slog.Logger) (wait func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run(ctx)
+	}()
+	return func() {
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			logger.Warn(name+" did not finish its step before shutdown", "waited", limit)
+		}
+	}
 }
 
 // unstickRestartTimeout -- потолок перезапуска службы. Контекст отсоединён от
