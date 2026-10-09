@@ -28,8 +28,8 @@ describe('эталон ручного сброса совпадает с аге�
 
   it('команды: сначала заграничные, затем зона за зоной, в конце сохранение', () => {
     const lines = dnsReferenceCommands().split('\n')
-    expect(lines[0]).toBe('ndmc -c "dns-proxy tls upstream 9.9.9.9 sni dns.quad9.net"')
-    expect(lines[1]).toBe('ndmc -c "dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com"')
+    expect(lines[0]).toBe('ndmc -c "dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com"')
+    expect(lines[1]).toBe('ndmc -c "dns-proxy tls upstream 1.0.0.1 sni cloudflare-dns.com"')
     expect(lines[2]).toBe('ndmc -c "dns-proxy tls upstream common.dot.dns.yandex.net domain ru"')
     expect(lines).toHaveLength(DNS_REFERENCE_FOREIGN.length + DNS_REFERENCE_RU_ZONES.length + 1)
     expect(lines.at(-1)).toBe('ndmc -c "system configuration save"')

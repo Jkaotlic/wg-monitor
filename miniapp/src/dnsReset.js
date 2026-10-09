@@ -22,7 +22,7 @@ export const DNS_RESET_MIN_VERSION = 'v0.31.0'
 // (referenceForeignDoT, ruZones, yandexDoTHost). Своей таблицы у экрана быть
 // не должно: старый дашборд держал свою и разошёлся с агентом. Расхождение
 // ловит test/dnsReference.test.js, читая dnsref.go.
-export const DNS_REFERENCE_FOREIGN = ['tls upstream 9.9.9.9 sni dns.quad9.net', 'tls upstream 1.1.1.1 sni cloudflare-dns.com']
+export const DNS_REFERENCE_FOREIGN = ['tls upstream 1.1.1.1 sni cloudflare-dns.com', 'tls upstream 1.0.0.1 sni cloudflare-dns.com']
 export const DNS_REFERENCE_RU_ZONES = ['ru', 'su', 'xn--p1ai', 'xn--80adxhks', 'xn--d1acj3b', 'xn--p1acf']
 export const DNS_REFERENCE_YANDEX = 'common.dot.dns.yandex.net'
 
