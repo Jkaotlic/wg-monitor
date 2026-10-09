@@ -26,7 +26,7 @@ func TestState_SurvivesRestart(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w = newOnDisk(t, path, h)
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // сдался, ступень 2 записана
 	info, err := os.Stat(path)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestState_SurvivesRestart(t *testing.T) {
 	h.w.Tick(ctx)
 	h.awg.set("nwg0", "broken")
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if h.services != 1 {
 		t.Errorf("service-restart stamp lost across restart: services=%d", h.services)
@@ -109,7 +109,7 @@ func TestState_GaveUpForGoneTunnelIsCleared(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w = newOnDisk(t, path, h)
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // сдался
 	if len(h.w.Snapshot().GaveUp) != 1 {
 		t.Fatal("setup: no give-up")

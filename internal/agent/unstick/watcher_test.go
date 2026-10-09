@@ -31,7 +31,7 @@ func healOn(actions ...string) func(string, string, *awgmgr.Tunnel) {
 func TestTick_BelowThresholdDoesNothing(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(119 * time.Second)
+	h.clk.advance(59 * time.Second)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); len(c) != 0 {
 		t.Fatalf("calls before threshold: %v", c)
@@ -42,7 +42,7 @@ func TestTick_BrokenFixedByRestart(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.awg.onAction = healOn("restart")
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); !slices.Equal(c, []string{"restart:nwg0"}) {
 		t.Fatalf("calls: %v", c)
@@ -68,11 +68,11 @@ func TestTick_ThresholdsPerKind(t *testing.T) {
 	h := newHarness(tun("a", "starting", true), tun("b", "needs_start", true), tun("c", "needs_stop", false))
 	h.awg.onAction = healOn("restart", "start", "stop")
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	got := h.awg.callList()
 	if !slices.Equal(got, []string{"start:b", "stop:c"}) {
-		t.Fatalf("after 2m: %v (starting must wait 5m)", got)
+		t.Fatalf("after 61s: %v (starting must wait 5m)", got)
 	}
 	h.clk.advance(5 * time.Minute)
 	h.w.Tick(ctx)
@@ -87,7 +87,7 @@ func TestTick_StatusChangeResetsSince(t *testing.T) {
 	h.clk.advance(4 * time.Minute)
 	h.awg.set("nwg0", "broken")
 	h.w.Tick(ctx)
-	h.clk.advance(90 * time.Second)
+	h.clk.advance(59 * time.Second)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); len(c) != 0 {
 		t.Fatalf("since not reset on status change: %v", c)
@@ -102,7 +102,7 @@ func TestTick_EscalatesToServiceThenFixed(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if h.services != 1 {
 		t.Fatalf("services = %d", h.services)
@@ -118,7 +118,7 @@ func TestTick_GivesUpAndStaysQuiet(t *testing.T) {
 	br.StatusDetails = "endpoint 203.0.113.20 unreachable"
 	h := newHarness(br)
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	s := h.w.Snapshot()
 	if len(s.GaveUp) != 1 || s.GaveUp[0].Status != "broken" {
@@ -154,7 +154,7 @@ func TestTick_GivesUpAndStaysQuiet(t *testing.T) {
 func TestTick_NoHammeringBrokenStartingFlap(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // сдался
 	n := len(h.awg.callList())
 	svc := h.services
@@ -176,7 +176,7 @@ func TestTick_NoHammeringBrokenStartingFlap(t *testing.T) {
 func TestTick_GaveUpReleasedWhenEnabledFlips(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // сдался
 	h.awg.mu.Lock()
 	h.awg.tunnels[0].Enabled = false
@@ -214,7 +214,7 @@ func assertAbortedSilently(t *testing.T, h *harness) {
 func TestTick_ServiceAbortedWhenRouterCommandDuringWait(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
 		h.w.NoteCommand(wire.Command{Action: "awgm_update"})
@@ -227,7 +227,7 @@ func TestTick_ServiceAbortedWhenRouterCommandDuringWait(t *testing.T) {
 func TestTick_ServiceAbortedWhenOtherTunnelCommandDuringWait(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true), tun("other", "running", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
 		h.w.NoteCommand(wire.Command{Action: "tunnel_import", Args: map[string]any{"target_id": "other"}})
@@ -240,7 +240,7 @@ func TestTick_ServiceAbortedWhenOtherTunnelCommandDuringWait(t *testing.T) {
 func TestTick_AbortedLadderPausesUntilWindowEnds(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true), tun("other", "running", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
 		h.w.NoteCommand(wire.Command{Action: "tunnel_import", Args: map[string]any{"target_id": "other"}})
@@ -271,7 +271,7 @@ func TestTick_AbortedLadderPausesUntilWindowEnds(t *testing.T) {
 func TestTick_EnabledFlippedMidLadderDropsSilently(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
 		h.awg.mu.Lock()
@@ -292,7 +292,7 @@ func TestTick_EnabledFlippedMidLadderDropsSilently(t *testing.T) {
 func TestTick_EmptyRecheckListIsNotFixedNotGone(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
 		h.awg.mu.Lock()
@@ -336,7 +336,7 @@ func TestClipDetails_Limit(t *testing.T) {
 func TestTick_RetryAfterSixHours(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // сдался
 	n := len(h.awg.callList())
 	h.clk.advance(6 * time.Hour)
@@ -349,11 +349,11 @@ func TestTick_RetryAfterSixHours(t *testing.T) {
 func TestTick_ServiceAtMostHourly(t *testing.T) {
 	h := newHarness(tun("a", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // ступень 2 #1, сдался
 	h.awg.tunnels = append(h.awg.tunnels, tun("b", "broken", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx) // b: ступень 2 не положена (меньше часа)
 	if h.services != 1 {
 		t.Fatalf("services = %d; want 1", h.services)
@@ -378,7 +378,7 @@ func TestTick_TwoStuck_OneServiceRestart(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if h.services != 1 {
 		t.Fatalf("services = %d", h.services)
@@ -401,7 +401,7 @@ func TestTick_RecheckErrorIsNotFixed(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.readErr = errors.New("connection refused") }
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	for _, e := range h.w.Facts().Events {
 		if e.Result == wire.UnstickFixed {
@@ -416,7 +416,7 @@ func TestTick_RecheckErrorIsNotFixed(t *testing.T) {
 func TestTick_TunnelGoneMidLadder(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true), tun("keep", "running", true))
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	// туннель удаляют, пока сторож ждёт после ступени 1
 	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
 		h.clk.advance(d)
@@ -439,7 +439,7 @@ func TestTick_RestartMissingFallsBackToStopStart(t *testing.T) {
 	h.awg.restart404 = true
 	h.awg.onAction = healOn("start")
 	h.w.Tick(ctx)
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	c := h.awg.callList()
 	if !slices.Equal(c, []string{"restart404:nwg0", "stop:nwg0", "start:nwg0"}) {
@@ -456,7 +456,7 @@ func TestTick_Guards(t *testing.T) {
 	h := newHarness(locked, tun("t", "broken", true), tun("u", "broken", true))
 	h.w.Tick(ctx)
 	h.w.NoteCommand(wire.Command{Action: "tunnel_import", Args: map[string]any{"target_id": "t"}})
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); !slices.Equal(c, []string{"restart:u"}) {
 		t.Fatalf("guards: %v", c)
@@ -473,7 +473,7 @@ func TestTick_RouterWideCommandSilencesAll(t *testing.T) {
 	h := newHarness(tun("a", "broken", true))
 	h.w.Tick(ctx)
 	h.w.NoteCommand(wire.Command{Action: "awgm_update"})
-	h.clk.advance(121 * time.Second)
+	h.clk.advance(61 * time.Second)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); len(c) != 0 {
 		t.Fatalf("acted during router-wide command window: %v", c)
@@ -482,7 +482,7 @@ func TestTick_RouterWideCommandSilencesAll(t *testing.T) {
 		h2 := newHarness(tun("a", "broken", true))
 		h2.w.Tick(ctx)
 		h2.w.NoteCommand(wire.Command{Action: a})
-		h2.clk.advance(121 * time.Second)
+		h2.clk.advance(61 * time.Second)
 		h2.w.Tick(ctx)
 		if c := h2.awg.callList(); len(c) != 0 {
 			t.Errorf("%s did not silence the watcher: %v", a, c)
@@ -515,7 +515,7 @@ func TestEvents_Retention(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		h.awg.set("x", "broken")
 		h.w.Tick(ctx)
-		h.clk.advance(121 * time.Second)
+		h.clk.advance(61 * time.Second)
 		h.w.Tick(ctx)
 	}
 	if n := len(h.w.Facts().Events); n != 20 {

@@ -75,7 +75,7 @@ func TestResolved(t *testing.T) {
 
 func TestConfig_Defaults(t *testing.T) {
 	c := Config{}.withDefaults()
-	if c.threshold(KindBroken) != 2*time.Minute || c.threshold(KindNeeds) != 2*time.Minute ||
+	if c.threshold(KindBroken) != time.Minute || c.threshold(KindNeeds) != time.Minute ||
 		c.threshold(KindTransition) != 5*time.Minute {
 		t.Errorf("thresholds: %v %v %v", c.threshold(KindBroken), c.threshold(KindNeeds), c.threshold(KindTransition))
 	}

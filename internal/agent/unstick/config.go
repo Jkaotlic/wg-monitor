@@ -23,8 +23,8 @@ func (c Config) withDefaults() Config {
 			*v = d
 		}
 	}
-	def(&c.BrokenAfter, 2*time.Minute)
-	def(&c.NeedsAfter, 2*time.Minute)
+	def(&c.BrokenAfter, time.Minute)
+	def(&c.NeedsAfter, time.Minute)
 	def(&c.TransitionAfter, 5*time.Minute)
 	def(&c.Poll, 30*time.Second)
 	def(&c.Verify1, time.Minute)
