@@ -77,3 +77,34 @@ func saveReportFacts(d Deps, uid int64, nick string, f *wire.ReportFacts, now ti
 		put(db.FactPingLog, f.PingLog, f.PingLog.At)
 	}
 }
+
+// unstickNotifyMaxAge -- «починил» старше часа владельцу уже не новость
+// (агент долго не мог отчитаться); событие всё равно записывается.
+const unstickNotifyMaxAge = time.Hour
+
+// insertReportUnstickEvents пишет события сторожа зависаний в транзакции
+// приёма отчёта и возвращает те, о которых надо сообщить владельцу: новые
+// (вставка легла), fixed, не старше часа.
+func insertReportUnstickEvents(ctx context.Context, tx *sql.Tx, uid int64, f *wire.ReportFacts, now time.Time) ([]wire.UnstickEvent, error) {
+	if f == nil || f.Unstick == nil {
+		return nil, nil
+	}
+	evs := f.Unstick.Events
+	if len(evs) > wire.MaxUnstickEvents {
+		evs = evs[len(evs)-wire.MaxUnstickEvents:]
+	}
+	var notify []wire.UnstickEvent
+	for _, e := range evs {
+		if strings.TrimSpace(e.ID) == "" || strings.TrimSpace(e.TunnelID) == "" || e.At.IsZero() {
+			continue
+		}
+		res, err := tx.ExecContext(ctx, db.InsertUnstickEventSQL, db.UnstickEventArgs(uid, e)...)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 && e.Result == wire.UnstickFixed && now.Sub(e.At) <= unstickNotifyMaxAge {
+			notify = append(notify, e)
+		}
+	}
+	return notify, nil
+}

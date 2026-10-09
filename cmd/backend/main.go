@@ -290,12 +290,14 @@ func main() {
 		// Ключи и коды кабинетов для мини-аппа -- тот же callbacks.Router.
 		VPNCabinetKeys: cb,
 		// Свои VPN-серверы -- только админу в мини-аппе.
-		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
-		Awg3Panels:          awg3Panels,
-		Replace:             replaceEngine,
-		LinkRepair:          repairEngine,
-		StartLinkRepair:     repairEngine.Start,
-		WakeNotifier:        wakeNotifier,
+		SelfHosted:      newSelfHostedService(cfg.SelfHostedAmnezia, logger),
+		Awg3Panels:      awg3Panels,
+		Replace:         replaceEngine,
+		LinkRepair:      repairEngine,
+		StartLinkRepair: repairEngine.Start,
+		WakeNotifier:    wakeNotifier,
+		UnstickNotifier: alerts.NewUnstickNotifier(
+			notify.NewFanout(d, tgClient, logger.With("component", "unstick_notify"), cfg.Telegram.AdminUserID)),
 		DeployNotifier:      deployNotifier,
 		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold, BypassLeakEnabled: cfg.Alerts.BypassLeak.Enabled},

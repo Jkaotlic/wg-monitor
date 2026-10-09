@@ -121,6 +121,12 @@ func (p *Policy) prune(ctx context.Context) error {
 	} else if n > 0 {
 		p.Logger.Info("retention: awgm_ping_runs pruned", "deleted", n)
 	}
+	// v0.59: журнал сторожа зависаний живёт столько же, сколько события.
+	if n, err := p.DB.UnstickEvents().PruneBefore(cutoff); err != nil {
+		p.Logger.Warn("retention: awgm_unstick_events prune failed", "err", err)
+	} else if n > 0 {
+		p.Logger.Info("retention: awgm_unstick_events pruned", "deleted", n)
+	}
 	orphanCutoff := p.now().Add(-7 * 24 * time.Hour).UTC()
 	orphanDeleted := int64(0)
 	// BUG-02: сирота -- состояние удалённого роутера или проверки, которую
