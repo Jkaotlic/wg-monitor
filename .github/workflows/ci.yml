@@ -85,7 +85,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+      # gosec v2.29.0 со своим x/tools не читает формат экспорта Go 1.27.2:
+      # «package … has type errors» на каждом пакете. Собираем тот же gosec со
+      # свежим x/tools (как staticcheck ниже); вернуть `go install …@vX`,
+      # когда выйдет релиз gosec с поддержкой 1.27.2.
+      - name: gosec v2.29.0 с x/tools v0.51.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/gosec" && cd "$RUNNER_TEMP/gosec"
+          go mod init gsbuild
+          go get github.com/securego/gosec/v2/cmd/gosec@v2.29.0 golang.org/x/tools@v0.51.0
+          go build -o "$(go env GOPATH)/bin/gosec" github.com/securego/gosec/v2/cmd/gosec
       # Start with a blocking high-severity gate while the historical gosec
       # baseline is triaged. Excluded taint classes are noisy for controlled
       # command runners, release-proxy allowlists, and deliberate command
