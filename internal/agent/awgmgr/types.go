@@ -13,12 +13,19 @@ type Envelope[T any] struct {
 
 // Tunnel mirrors one entry of /api/tunnels/all .data.tunnels[].
 type Tunnel struct {
-	ID                   string         `json:"id"`
-	Name                 string         `json:"name"`
-	Type                 string         `json:"type"`
-	Status               string         `json:"status"`
-	State                string         `json:"state"`
-	Enabled              bool           `json:"enabled"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	// StatusDetails -- пояснение awg-manager к статусу; приходит только
+	// когда есть что сказать (у broken: «Не запустился — перезапустите
+	// туннель»). Пусто -- нормально.
+	StatusDetails string `json:"statusDetails"`
+	State         string `json:"state"`
+	Enabled       bool   `json:"enabled"`
+	// Locked -- туннель заперт владельцем в awg-manager; сторож зависаний
+	// (internal/agent/unstick) его не трогает. В ответе только у запертых.
+	Locked               bool           `json:"locked"`
 	DefaultRoute         bool           `json:"defaultRoute"`
 	ResolvedISPInterface string         `json:"resolvedIspInterface"`
 	Endpoint             string         `json:"endpoint"`

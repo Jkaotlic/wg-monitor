@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/unstick"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/wakehook"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -98,6 +100,11 @@ func main() {
 	if resolverGuard != nil {
 		singleChecks = append(singleChecks, resolverGuard)
 	}
+	unstickWatcher, unstickCheck := buildUnstick(cfg, awgClient, actions.DefaultExec, logger)
+	singleChecks = append(singleChecks, unstickCheck)
+	if unstickWatcher != nil {
+		signals.hub.Unstick = unstickWatcher.Facts
+	}
 	// MultiChecks emit per-tunnel results
 	multiChecks := []checks.MultiCheck{
 		checks.TunnelsCheck{
@@ -149,10 +156,18 @@ func main() {
 	}
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
 	runner.ExitProbeNow = signals.prober.ProbeNow
+	if unstickWatcher != nil {
+		runner.OnCommand = unstickWatcher.NoteCommand
+	}
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
 	signals.start(ctx, rep.RequestWake)
+	// Сторож зависаний: своя петля -- лесенка с ожиданиями 60/90 с не
+	// влезает в бюджет проверки репортёра.
+	if unstickWatcher != nil {
+		go unstickWatcher.Run(ctx)
+	}
 
 	// The watchdog's own probe, candidate probes and ndmc calls don't fit the
 	// reporter's 10 s per-check budget, so it is a loop of its own. On
@@ -210,6 +225,64 @@ func dnsWatchdogConfig(cfg *agent.Config) dnswatch.Config {
 		PinnedZones:       w.PinnedZones,
 		PinnedCandidate:   w.PinnedCandidate,
 		StatePath:         cfg.State.DNSWatchdogStatePath(),
+	}
+}
+
+// buildUnstick собирает сторож зависших состояний awg-manager (v0.59) и его
+// проверку. Выключен в конфиге -- сторожа нет, проверка отвечает disabled.
+func buildUnstick(cfg *agent.Config, awg unstick.AWG, exec actions.ExecFunc, logger *slog.Logger) (*unstick.Watcher, checks.Check) {
+	if !cfg.Unstick.IsEnabled() {
+		return nil, unstick.Check{Disabled: true}
+	}
+	if exec == nil {
+		exec = actions.DefaultExec
+	}
+	w := unstick.New(unstick.Config{
+		Enabled:         true,
+		BrokenAfter:     unstickThreshold(cfg.Unstick.BrokenAfterSec),
+		NeedsAfter:      unstickThreshold(cfg.Unstick.NeedsAfterSec),
+		TransitionAfter: unstickThreshold(cfg.Unstick.TransitionAfterSec),
+		StatePath:       cfg.State.UnstickStatePath(),
+	}, unstick.Deps{
+		AWG:            awg,
+		RestartService: awgmServiceRestart(exec),
+		Logger:         logger.With("component", "unstick"),
+	})
+	return w, unstick.Check{Source: w}
+}
+
+// unstickRestartTimeout -- потолок перезапуска службы. Контекст отсоединён от
+// остановки агента: иначе SIGTERM убьёт init-скрипт между stop и start, и
+// awg-manager останется лежать, а повтор разрешён лишь через час.
+const unstickRestartTimeout = 90 * time.Second
+
+// unstickMinThreshold -- нижняя граница порога из конфига: меньше -- лечить
+// то, что и так переходит из состояния в состояние.
+const unstickMinThreshold = 30 * time.Second
+
+// unstickThreshold переводит порог из конфига в секундах: <=0 -- 0 (умолчание
+// пакета), положительное меньше 30 с подтягивается до 30 с.
+func unstickThreshold(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	d := time.Duration(n) * time.Second
+	if d < unstickMinThreshold {
+		return unstickMinThreshold
+	}
+	return d
+}
+
+// awgmServiceRestart -- ступень 2 сторожа: перезапуск службы awg-manager.
+func awgmServiceRestart(exec actions.ExecFunc) func(context.Context) error {
+	return func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unstickRestartTimeout)
+		defer cancel()
+		out, err := exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart")
+		if err != nil {
+			return fmt.Errorf("S99awg-manager restart: %v: %s", err, out)
+		}
+		return nil
 	}
 }
 

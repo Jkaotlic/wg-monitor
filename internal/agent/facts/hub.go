@@ -31,6 +31,7 @@ type Hub struct {
 	WAN       func(ctx context.Context) *wire.WANFacts
 	NativeDNS func(ctx context.Context) *wire.NativeDNSFacts
 	Hooks     func() *wire.HookFacts
+	Unstick   func() *wire.UnstickFacts
 	Now       func() time.Time
 	Refresh   time.Duration
 
@@ -107,6 +108,11 @@ func (h *Hub) Collect(ctx context.Context) *wire.ReportFacts {
 	if h.Hooks != nil {
 		if b := h.Hooks(); b != nil && h.due("hooks", b, now) {
 			f.Hooks = b
+		}
+	}
+	if h.Unstick != nil {
+		if b := h.Unstick(); b != nil && h.due("unstick", b, now) {
+			f.Unstick = b
 		}
 	}
 	if h.Ping != nil {

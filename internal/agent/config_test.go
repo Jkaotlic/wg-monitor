@@ -477,3 +477,21 @@ func TestLoadConfig_DNSFailThresholdRespectsExplicitValue(t *testing.T) {
 		t.Errorf("явно заданный порог 1 перетёрт на %d", cfg.Checks.DNS.FailThreshold)
 	}
 }
+
+func TestUnstickConfig_DefaultOn(t *testing.T) {
+	var c UnstickConfig
+	if !c.IsEnabled() {
+		t.Error("unstick must be on by default")
+	}
+	off := false
+	if (UnstickConfig{Enabled: &off}).IsEnabled() {
+		t.Error("explicit false ignored")
+	}
+}
+
+func TestStateConfig_UnstickStatePath(t *testing.T) {
+	var s StateConfig
+	if got := s.UnstickStatePath(); got != "/opt/var/wg-monitor/unstick-state.json" {
+		t.Errorf("path %q", got)
+	}
+}

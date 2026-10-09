@@ -419,6 +419,8 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		return dnsRuHeadline
 	case "bypass_leak":
 		return fmt.Sprintf(bypassLeakHeadline, quotedTunnelName(d))
+	case "awgm_unstick":
+		return unstickHeadline(d)
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineHeadline
@@ -445,6 +447,8 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 		return "Бот снова видит список VPN-туннелей"
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
+	case "awgm_unstick":
+		return "Зависшие линии снова в порядке"
 	case "resolver_guard":
 		// При восстановлении у диспетчера есть только свежий ok-отчёт, причина
 		// поломки ему неизвестна. Роутер мог уходить на запасные (fallback),
@@ -506,6 +510,8 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns [
 		writeDNSRuWhatBroke(b, d)
 	case "bypass_leak":
 		b.WriteString(bypassLeakWhatBroke + "\n")
+	case "awgm_unstick":
+		writeUnstickWhatBroke(b, d)
 	default:
 		writeGenericWhatBroke(b, d)
 	}
@@ -1162,6 +1168,8 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		return adviseExternalReach(d, ns)
 	case "dns_ru":
 		return dnsRuAdvice
+	case "awgm_unstick":
+		return "Откройте линию в приложении: если конфиг выдан кабинетом — замените его, иначе пересоздайте линию."
 	case "bypass_leak":
 		// Про запасной -- только когда он и правда на связи.
 		if spare, ok := liveSpare(ns); ok {
@@ -1418,6 +1426,8 @@ func checkCategory(name string) string {
 		return "dns_ru"
 	case name == "bypass_leak":
 		return "bypass_leak"
+	case name == "awgm_unstick":
+		return "awgm_unstick"
 	}
 	return "generic"
 }
@@ -1665,3 +1675,58 @@ const (
 	bypassLeakSpare             = "Запасной VPN-туннель «%s» на связи — правила можно перевести на него."
 	bypassLeakRecoveredHeadline = "VPN-туннель %s снова меняет ваш адрес"
 )
+
+// Сторож зависаний awg-manager (проверка awgm_unstick, v0.59).
+
+type unstickTunnel struct {
+	name, details string
+	service       bool
+}
+
+func unstickTunnels(d map[string]any) []unstickTunnel {
+	raw, _ := d["tunnels"].([]any)
+	out := make([]unstickTunnel, 0, len(raw))
+	for _, r := range raw {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		u := unstickTunnel{name: strOrEmpty(m, "name"), details: strOrEmpty(m, "details")}
+		if u.name == "" {
+			u.name = strOrEmpty(m, "tunnel_id")
+		}
+		steps, _ := m["steps"].([]any)
+		for _, s := range steps {
+			if s == "service_restart" {
+				u.service = true
+			}
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+func unstickHeadline(d map[string]any) string {
+	ts := unstickTunnels(d)
+	switch len(ts) {
+	case 0:
+		return "Линия не поднимается"
+	case 1:
+		return fmt.Sprintf("Линия «%s» не поднимается", ts[0].name)
+	}
+	return "Несколько линий не поднимаются"
+}
+
+func writeUnstickWhatBroke(b *strings.Builder, d map[string]any) {
+	for _, u := range unstickTunnels(d) {
+		tried := "перезапуск линии не помог"
+		if u.service {
+			tried = "перезапуск линии и awg-manager не помогли"
+		}
+		fmt.Fprintf(b, "«%s»: %s.", u.name, tried)
+		if u.details != "" {
+			fmt.Fprintf(b, " awg-manager пишет: «%s».", u.details)
+		}
+		b.WriteString("\n")
+	}
+}

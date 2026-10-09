@@ -27,7 +27,19 @@ type Config struct {
 	Maintenance   MaintenanceConfig   `yaml:"maintenance"`
 	Logging       LoggingConfig       `yaml:"logging"`
 	DNSWatchdog   DNSWatchdogConfig   `yaml:"dns_watchdog"`
+	Unstick       UnstickConfig       `yaml:"unstick"`
 }
+
+// UnstickConfig: сторож зависших состояний awg-manager (internal/agent/unstick,
+// v0.59). Включён по умолчанию; нулевые пороги -- умолчания пакета.
+type UnstickConfig struct {
+	Enabled            *bool `yaml:"enabled"`
+	BrokenAfterSec     int   `yaml:"broken_after_sec"`
+	NeedsAfterSec      int   `yaml:"needs_after_sec"`
+	TransitionAfterSec int   `yaml:"transition_after_sec"`
+}
+
+func (u UnstickConfig) IsEnabled() bool { return u.Enabled == nil || *u.Enabled }
 
 // DNSWatchdogConfig: the agent-side DNS watchdog (internal/agent/dnswatch).
 // When the router's own DoH resolver (Endpoint) stops answering, the watchdog
@@ -272,6 +284,12 @@ func (s StateConfig) CommandResultPath() string {
 // the own-resolver lines it removed (next to the reporter state).
 func (s StateConfig) DNSWatchdogStatePath() string {
 	return filepath.Join(filepath.Dir(s.ResolvedPath()), "dns-watchdog-state.json")
+}
+
+// UnstickStatePath -- где сторож зависаний помнит «сдался», перезапуск
+// службы и журнал.
+func (s StateConfig) UnstickStatePath() string {
+	return filepath.Join(filepath.Dir(s.ResolvedPath()), "unstick-state.json")
 }
 
 // DNSRuStatePath -- где проверка dns_ru помнит, были ли в настройках роутера

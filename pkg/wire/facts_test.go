@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,33 @@ func TestClampExitTunnelsDoesNotMutateCallerMap(t *testing.T) {
 
 	if len(f.Exit.Tunnels) != MaxExitTunnels {
 		t.Fatalf("результат Clamp не обрезан: %d туннелей, хотим %d", len(f.Exit.Tunnels), MaxExitTunnels)
+	}
+}
+
+func TestReportFacts_UnstickEmptyAndClamp(t *testing.T) {
+	f := &ReportFacts{Unstick: &UnstickFacts{}}
+	if f.Empty() {
+		// пустой журнал -- блок есть; Empty смотрит на наличие блока, как у Hooks
+		t.Fatal("block present must not be Empty")
+	}
+	long := strings.Repeat("я", 1000)
+	evs := make([]UnstickEvent, 0, MaxUnstickEvents+5)
+	for i := 0; i < MaxUnstickEvents+5; i++ {
+		evs = append(evs, UnstickEvent{ID: fmt.Sprint(i), TunnelID: "nwg0", TunnelName: long, From: "broken", Result: UnstickFixed})
+	}
+	f = &ReportFacts{Unstick: &UnstickFacts{Events: evs}}
+	f.Clamp()
+	if len(f.Unstick.Events) != MaxUnstickEvents {
+		t.Fatalf("events after clamp: %d", len(f.Unstick.Events))
+	}
+	// режется голова, остаются самые новые (журнал по возрастанию времени)
+	if f.Unstick.Events[0].ID != "5" {
+		t.Errorf("first kept id = %s; want 5", f.Unstick.Events[0].ID)
+	}
+	if f.Unstick.Events[0].TunnelName == long {
+		t.Error("tunnel name not clipped")
+	}
+	if len(evs[0].TunnelName) != len(long) {
+		t.Error("Clamp mutated caller's slice")
 	}
 }

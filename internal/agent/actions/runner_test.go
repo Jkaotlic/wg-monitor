@@ -1602,3 +1602,12 @@ func TestRunner_TunnelRestartRejectsUnsafeTunnelID(t *testing.T) {
 		t.Errorf("status=%q out=%q", res.Status, res.Output)
 	}
 }
+
+func TestRunner_OnCommandSeesEveryCommand(t *testing.T) {
+	var seen []string
+	r := &Runner{OnCommand: func(c wire.Command) { seen = append(seen, c.Action) }}
+	r.Execute(context.Background(), wire.Command{ID: "1", Action: "no_such_action"})
+	if len(seen) != 2 || seen[0] != "no_such_action" {
+		t.Fatalf("OnCommand calls: %v (want before and after the action)", seen)
+	}
+}

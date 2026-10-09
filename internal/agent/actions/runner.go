@@ -71,6 +71,10 @@ type OpkgExecutor interface {
 
 // Runner is built once at agent startup and re-used per-command.
 type Runner struct {
+	// OnCommand -- наблюдатель команд (сторож зависаний, v0.59): зовётся
+	// до и после действия, чтобы окно тишины считалось от конца долгой
+	// команды. nil -- никто не слушает.
+	OnCommand    func(cmd wire.Command)
 	AwgClient    *awgmgr.Client
 	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
 	Opkg         OpkgExecutor
@@ -348,6 +352,10 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
 
 func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResult {
 	start := r.now()
+	if r.OnCommand != nil {
+		r.OnCommand(cmd)
+		defer r.OnCommand(cmd)
+	}
 	actionCtx, cancel := r.withActionTimeout(ctx, cmd.Action)
 	defer cancel()
 	status, output, payload := r.dispatchWithPayload(actionCtx, cmd)

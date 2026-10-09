@@ -266,6 +266,12 @@ type Resumer interface {
 	MarkResumed(userID int64)
 }
 
+// UnstickNotifier -- беззвучное «линия зависла — вывел» владельцу (v0.59).
+// nil-safe.
+type UnstickNotifier interface {
+	SendUnstick(ctx context.Context, userID int64, nickname string, events []wire.UnstickEvent) error
+}
+
 // WakeNotifier is fired from /v1/report when an agent's Report carries
 // Resumed=true AND the user is kind=mobile. It renders the adaptive 🚗
 // card and posts to the router's TG-topic. nil-safe (handler skips).
@@ -305,8 +311,9 @@ type Deps struct {
 	Dispatcher          Dispatcher
 	Resumer             Resumer
 	CommandSink         CommandSink
-	WakeNotifier        WakeNotifier   // nil-safe (handler skips if nil or user is static)
-	DeployNotifier      DeployNotifier // nil-safe (handler skips deferred update notices)
+	WakeNotifier        WakeNotifier    // nil-safe (handler skips if nil or user is static)
+	UnstickNotifier     UnstickNotifier // nil-safe (handler skips)
+	DeployNotifier      DeployNotifier  // nil-safe (handler skips deferred update notices)
 	Thresholds          state.Thresholds
 	AlertPolicy         AlertPolicy
 	MobileFailThreshold int
@@ -918,6 +925,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "ping runs")
 			return
 		}
+		// v0.59: журнал сторожа зависаний -- в той же транзакции; вставка,
+		// которая легла, -- новое событие.
+		unstickFresh, uerr := insertReportUnstickEvents(r.Context(), tx, uid, rep.Facts, time.Now().UTC())
+		if uerr != nil {
+			tx.Rollback()
+			d.Logger.Warn("unstick events insert (tx rollback)", "nickname", nick, "err", uerr)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "unstick events")
+			return
+		}
 		if dupes > 0 {
 			addReportDup(dupes)
 			d.Logger.Info("report idempotent retry",
@@ -962,6 +978,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// факты не перекрывают свежие.
 		if reportIsFresh && rep.Facts != nil {
 			saveReportFacts(d, uid, nick, rep.Facts, time.Now().UTC())
+		}
+		if len(unstickFresh) > 0 && d.UnstickNotifier != nil {
+			evs, nickname := unstickFresh, nick
+			spawnRelay(d, "unstick", func(bg context.Context) {
+				if err := d.UnstickNotifier.SendUnstick(bg, uid, nickname, evs); err != nil {
+					d.Logger.Warn("unstick notifier", "nickname", nickname, "err", err)
+				}
+			})
 		}
 		// v0.47: отчёт от хука KeenOS обновляет экран, но автомат тревог не
 		// двигает -- FSM твердеет по счёту отчётов (state.Thresholds.Fail), и

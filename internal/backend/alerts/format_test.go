@@ -720,6 +720,8 @@ func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
 		{"запасные DNS-серверы не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 		{"сервер имён для русских сайтов молчит", "dns_ru", dnsRuDownDetails()},
 		{"VPN-туннель не меняет адрес", "bypass_leak", bypassLeakDetails("ok")},
+		{"линия не поднимается", "awgm_unstick", map[string]any{"reason": "gave_up", "tunnels": []any{map[string]any{
+			"tunnel_id": "nwg0", "name": "Франкфурт", "status": "broken", "steps": []any{"restart", "service_restart"}}}}},
 		{"сервисы не открываются через VPN-туннель", "external_reach", map[string]any{
 			"targets_total": 2, "via_interface": "nwg0",
 			"targets_failed": []any{
@@ -794,6 +796,8 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 		{"свой DNS-сервер, запасные не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 		{"сервер имён для русских сайтов", "dns_ru", dnsRuDownDetails()},
 		{"VPN-туннель не меняет адрес", "bypass_leak", bypassLeakDetails("fail")},
+		{"линия не поднимается", "awgm_unstick", map[string]any{"reason": "gave_up", "tunnels": []any{map[string]any{
+			"tunnel_id": "nwg0", "name": "Франкфурт", "status": "broken", "steps": []any{"restart", "service_restart"}}}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1298,5 +1302,60 @@ func TestFormatHard_AutoRepairLine(t *testing.T) {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
 			t.Fatalf("латиница в строке автопочинки: %q", tail)
 		}
+	}
+}
+
+func TestFormatHard_AwgmUnstickGaveUp(t *testing.T) {
+	d := map[string]any{
+		"reason": "gave_up",
+		"tunnels": []any{map[string]any{
+			"tunnel_id": "nwg0", "name": "Франкфурт", "status": "broken",
+			"details": "Не запустился — перезапустите туннель", "steps": []any{"restart", "service_restart"},
+			"since": "2026-10-09T12:00:00Z",
+		}},
+	}
+	got := FormatHard(HardArgs{Nickname: "home", CheckName: "awgm_unstick", ConsecFails: 3,
+		HardSince: time.Date(2026, 10, 9, 12, 5, 0, 0, time.UTC), Check: wire.Check{Name: "awgm_unstick", Status: "fail", Details: d}})
+	for _, want := range []string{"Линия «Франкфурт» не поднимается", "перезапуск линии и awg-manager не помогли",
+		"awg-manager пишет: «Не запустился — перезапустите туннель»"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"broken", "gave_up", "awgm_unstick", "service_restart"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("служебное слово %q:\n%s", bad, got)
+		}
+	}
+	// без details -- без цитаты; два туннеля -- общий заголовок
+	d2 := map[string]any{"reason": "gave_up", "tunnels": []any{
+		map[string]any{"tunnel_id": "a", "name": "A", "status": "broken", "steps": []any{"restart"}},
+		map[string]any{"tunnel_id": "b", "name": "B", "status": "needs_start", "steps": []any{"start"}},
+	}}
+	got2 := FormatHard(HardArgs{Nickname: "home", CheckName: "awgm_unstick", Check: wire.Check{Name: "awgm_unstick", Status: "fail", Details: d2}})
+	if !strings.Contains(got2, "Несколько линий не поднимаются") || strings.Contains(got2, "пишет") ||
+		!strings.Contains(got2, "«A»") || !strings.Contains(got2, "«B»") {
+		t.Errorf("two tunnels:\n%s", got2)
+	}
+	// ступени 2 не было (лимит раз в час) -- не врём, что её делали
+	if !strings.Contains(got2, "перезапуск линии не помог") {
+		t.Errorf("steps without service:\n%s", got2)
+	}
+}
+
+func TestFormatRecovery_AwgmUnstick(t *testing.T) {
+	got := FormatRecovery(RecoveryArgs{Nickname: "home", CheckName: "awgm_unstick",
+		HardSince: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC), RecoveredAt: time.Date(2026, 10, 9, 13, 0, 0, 0, time.UTC),
+		Check: wire.Check{Name: "awgm_unstick", Status: "ok", Details: map[string]any{"active": ""}}})
+	if !strings.Contains(got, "Зависшие линии снова в порядке") {
+		t.Errorf("recovery:\n%s", got)
+	}
+}
+
+func TestFormatHard_AwgmUnstickNoTunnels(t *testing.T) {
+	got := FormatHard(HardArgs{Nickname: "home", CheckName: "awgm_unstick",
+		Check: wire.Check{Name: "awgm_unstick", Status: "fail", Details: map[string]any{"reason": "gave_up", "tunnels": []any{}}}})
+	if !strings.Contains(got, "Линия не поднимается") || strings.Contains(got, "Несколько") {
+		t.Errorf("no tunnels:\n%s", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -418,5 +419,30 @@ func TestMonitoringMatrix_ParsesLiveShape(t *testing.T) {
 	}
 	if got, ok := m.BestLatency("awg10"); !ok || got != 84 {
 		t.Fatalf("BestLatency = %d, %v", got, ok)
+	}
+}
+
+func TestClient_TunnelsAll_StuckFields(t *testing.T) {
+	body, err := os.ReadFile("testdata/tunnels-all-stuck.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	all, err := New(srv.URL).TunnelsAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Tunnels) != 2 {
+		t.Fatalf("tunnels: %d", len(all.Tunnels))
+	}
+	run, br := all.Tunnels[0], all.Tunnels[1]
+	if run.StatusDetails != "" || run.Locked {
+		t.Errorf("running tunnel: details=%q locked=%v", run.StatusDetails, run.Locked)
+	}
+	if br.Status != "broken" || br.StatusDetails != "Не запустился — перезапустите туннель" || !br.Locked {
+		t.Errorf("broken tunnel: %+v", br)
 	}
 }

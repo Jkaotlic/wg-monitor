@@ -372,3 +372,21 @@ CREATE TABLE IF NOT EXISTS telegram_people (
     source           TEXT NOT NULL DEFAULT '',
     name_checked_at  TEXT
 );
+
+-- v0.59: журнал сторожа зависаний awg-manager. Агент шлёт журнал целиком,
+-- пока он не изменится; первичный ключ -- дедупликация: вставка, которая
+-- легла (ON CONFLICT DO NOTHING вернул 1 строку), и есть «новое событие».
+-- Время -- текст фиксированной ширины (db.FactTSLayout).
+CREATE TABLE IF NOT EXISTS awgm_unstick_events (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_id    TEXT    NOT NULL,
+    tunnel_id   TEXT    NOT NULL,
+    tunnel_name TEXT    NOT NULL DEFAULT '',
+    from_status TEXT    NOT NULL,
+    steps       TEXT    NOT NULL DEFAULT '',
+    result      TEXT    NOT NULL,
+    to_status   TEXT    NOT NULL DEFAULT '',
+    at          TEXT    NOT NULL,
+    PRIMARY KEY (user_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_awgm_unstick_events_at ON awgm_unstick_events(at);

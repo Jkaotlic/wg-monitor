@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"time"
 	"unicode/utf8"
@@ -23,6 +24,7 @@ const (
 const (
 	MaxExitTunnels    = 16
 	MaxPingRuns       = 20
+	MaxUnstickEvents  = 20
 	MaxWANLinks       = 8
 	MaxNativeDNSLists = 40
 	MaxFactText       = 80
@@ -47,6 +49,7 @@ type ReportFacts struct {
 	WAN       *WANFacts       `json:"wan,omitempty"`
 	NativeDNS *NativeDNSFacts `json:"native_dns,omitempty"`
 	Hooks     *HookFacts      `json:"hooks,omitempty"`
+	Unstick   *UnstickFacts   `json:"unstick,omitempty"`
 }
 
 // ExitFacts -- адрес выхода по VPN-туннелям. Tunnels несёт только туннели
@@ -158,7 +161,7 @@ type AwgmLogEntry struct {
 // Empty -- в блоке нечего слать.
 func (f *ReportFacts) Empty() bool {
 	return f == nil || (f.Exit == nil && len(f.PingRuns) == 0 && f.PingLog == nil &&
-		f.WAN == nil && f.NativeDNS == nil && f.Hooks == nil)
+		f.WAN == nil && f.NativeDNS == nil && f.Hooks == nil && f.Unstick == nil)
 }
 
 // Clamp обрезает блок до потолков, а затем -- если сумма всё ещё не влезла
@@ -237,6 +240,21 @@ func (f *ReportFacts) Clamp() {
 	if f.Hooks != nil {
 		f.Hooks.Err = ClipText(f.Hooks.Err)
 	}
+	if f.Unstick != nil {
+		evs := f.Unstick.Events
+		if len(evs) > MaxUnstickEvents {
+			evs = evs[len(evs)-MaxUnstickEvents:]
+		}
+		clipped := make([]UnstickEvent, len(evs))
+		for i, e := range evs {
+			e.TunnelName = ClipText(e.TunnelName)
+			e.From = ClipText(e.From)
+			e.To = ClipText(e.To)
+			e.Steps = slices.Clone(e.Steps)
+			clipped[i] = e
+		}
+		f.Unstick = &UnstickFacts{Events: clipped}
+	}
 
 	// Потолки полей ограничивают число элементов, но не гарантируют бюджет
 	// байтов: на маршрутизаторе с длинными именами и отказавшими разом
@@ -272,4 +290,29 @@ func ClipText(s string) string {
 	}
 	r := []rune(s)
 	return string(r[:MaxFactText-1]) + "…"
+}
+
+// UnstickFacts -- журнал сторожа зависаний awg-manager (v0.59): последние
+// MaxUnstickEvents лесенок за сутки, по возрастанию времени. Бэкенд
+// дедуплицирует по ID -- журнал шлётся целиком, пока не изменится.
+type UnstickFacts struct {
+	Events []UnstickEvent `json:"events"`
+}
+
+const (
+	UnstickFixed  = "fixed"
+	UnstickGaveUp = "gave_up"
+)
+
+// UnstickEvent -- одна лесенка по одному туннелю. Steps -- "restart",
+// "start", "stop", "stop_start", "service_restart" по порядку.
+type UnstickEvent struct {
+	ID         string    `json:"id"`
+	TunnelID   string    `json:"tunnel_id"`
+	TunnelName string    `json:"tunnel_name,omitempty"`
+	From       string    `json:"from"`
+	Steps      []string  `json:"steps"`
+	Result     string    `json:"result"`
+	To         string    `json:"to,omitempty"`
+	At         time.Time `json:"at"`
 }
