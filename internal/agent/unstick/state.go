@@ -71,6 +71,8 @@ func (w *Watcher) save() {
 		return
 	}
 	tmp := path + ".tmp"
+	// остаток прошлой попытки сохранил бы свои права при OpenFile
+	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		w.log.Error("unstick: запись состояния", "path", tmp, "err", err)

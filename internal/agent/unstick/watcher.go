@@ -49,6 +49,7 @@ type GaveUpTunnel struct {
 // giveUp -- запись «сдался»; переживает рестарт агента (state.go).
 type giveUp struct {
 	Name    string    `json:"name,omitempty"`
+	Enabled bool      `json:"enabled"`
 	Status  string    `json:"status"`
 	Details string    `json:"details,omitempty"`
 	Steps   []string  `json:"steps"`
@@ -87,6 +88,7 @@ var (
 		"restart_tunnel": true, // RestartAll -- все туннели разом
 		"awgm_update":    true, "service_restart": true,
 		"firmware_install": true, "self_update": true,
+		"opkg_upgrade": true, // обновляет и перезапускает awg-manager
 	}
 )
 
@@ -124,9 +126,6 @@ func New(cfg Config, d Deps) *Watcher {
 	w.load()
 	return w
 }
-
-// Deps -- для тестов пакета: подменить побочные эффекты после New.
-func (w *Watcher) Deps() *Deps { return &w.d }
 
 func (w *Watcher) now() time.Time {
 	if w.d.Now != nil {
@@ -213,7 +212,10 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 			tr = track{status: t.Status, enabled: t.Enabled, since: now}
 			w.tracks[t.ID] = tr
 		}
-		if g, ok := w.gaveUp[t.ID]; ok && (g.Status != t.Status || now.Sub(g.At) >= w.cfg.RetryAfterGiveUp) {
+		// «сдался» держится, пока туннель не вышел из зависания, не сменился его
+		// enabled, не пропал или не прошло RetryAfterGiveUp; переход в другое
+		// зависшее состояние не освобождает (иначе broken<->starting крутит лесенку).
+		if g, ok := w.gaveUp[t.ID]; ok && (Resolved(t.Status, t.Enabled) || g.Enabled != t.Enabled || now.Sub(g.At) >= w.cfg.RetryAfterGiveUp) {
 			delete(w.gaveUp, t.ID)
 		}
 		if !KnownStatus(t.Status) {
@@ -242,8 +244,21 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 	for id := range w.tracks {
 		if !seen[id] {
 			delete(w.tracks, id)
+		}
+	}
+	for id := range w.gaveUp {
+		if !seen[id] {
 			delete(w.gaveUp, id)
+		}
+	}
+	for id := range w.unknown {
+		if !seen[id] {
 			delete(w.unknown, id)
+		}
+	}
+	for id := range w.cmdTunnel {
+		if !seen[id] {
+			delete(w.cmdTunnel, id)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].t.ID < out[j].t.ID })
@@ -285,7 +300,7 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	defer w.mu.Unlock()
 	for _, d := range list {
 		w.gaveUp[d.t.ID] = giveUp{
-			Name: d.t.Name, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
+			Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
 			Steps: d.steps, Since: d.since, At: now,
 		}
 		w.addEventLocked(start, d, wire.UnstickGaveUp, now)
@@ -330,6 +345,11 @@ func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*
 		w.log.Warn("unstick: перечитать не удалось", "err", err)
 		return list
 	}
+	if len(all.Tunnels) == 0 {
+		// пустой список при удачном чтении -- не доказательство ни «починил», ни «удалён»
+		w.log.Warn("unstick: перечитывание вернуло пустой список -- считаю сбоем чтения")
+		return list
+	}
 	byID := map[string]awgmgr.Tunnel{}
 	for _, t := range all.Tunnels {
 		byID[t.ID] = t
@@ -341,6 +361,10 @@ func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*
 	for _, d := range list {
 		t, ok := byID[d.t.ID]
 		if !ok {
+			continue
+		}
+		if t.Enabled != d.t.Enabled {
+			// владелец переключил туннель посреди лесенки -- не наше дело
 			continue
 		}
 		d.t = t
@@ -357,6 +381,15 @@ func (w *Watcher) serviceAllowed() bool {
 	now := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// перезапуск службы трогает все туннели: молчим при любой свежей команде
+	if now.Sub(w.cmdRouter) < w.cfg.GuardWindow {
+		return false
+	}
+	for _, at := range w.cmdTunnel {
+		if now.Sub(at) < w.cfg.GuardWindow {
+			return false
+		}
+	}
 	if !w.serviceAt.IsZero() && now.Sub(w.serviceAt) < w.cfg.ServiceEvery {
 		return false
 	}
