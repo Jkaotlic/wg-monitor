@@ -15,7 +15,7 @@ import (
 
 // Ключи проверок, которые агент присылает в отчёте (кроме tunnel_<id>),
 // находятся СКАНОМ исходников, чтобы новая проверка без подписи роняла тест:
-//   - checks/*.go и dnswatch/*.go: OK/Fail/Unverified("имя"...),
+//   - checks/*.go, dnswatch/*.go и unstick/*.go: OK/Fail/Unverified("имя"...),
 //     `Name() string { return "имя" }`, const ...Name = "имя";
 //   - agent/reporter.go: wire.Check{Name: "имя"} (пульс).
 //
@@ -28,7 +28,7 @@ func agentCheckKeys(t *testing.T) []string {
 	literal := regexp.MustCompile(`Name:\s+"([a-z_]+)"`)
 
 	var files []string
-	for _, pat := range []string{"../../agent/checks/*.go", "../../agent/dnswatch/*.go"} {
+	for _, pat := range []string{"../../agent/checks/*.go", "../../agent/dnswatch/*.go", "../../agent/unstick/*.go"} {
 		m, _ := filepath.Glob(pat)
 		files = append(files, m...)
 	}
