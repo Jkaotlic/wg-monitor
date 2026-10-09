@@ -48,7 +48,7 @@ func FormatUnstickFixed(nickname string, ev wire.UnstickEvent) string {
 	case "stopped", "disabled", "not_created":
 		what = "была выключена, но не останавливалась — остановил."
 	case "running":
-		if ev.From == "needs_start" && slices.Contains(ev.Steps, "start") {
+		if slices.Contains(ev.Steps, "start") {
 			what = "была включена, но не запустилась — запустил, работает."
 		} else {
 			what = "зависла в awg-manager — перезапустил, работает."
