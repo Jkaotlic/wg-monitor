@@ -311,6 +311,9 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		// since не тронут -- после окна ступень 1 пойдёт заново
 		return
 	case serviceRun:
+		// отметка часа -- на диск ДО вызова (замок здесь не держим): SIGKILL
+		// посреди перезапуска службы не должен терять лимит
+		w.save()
 		for _, d := range list {
 			if !d.retry {
 				d.steps = append(d.steps, "service_restart")

@@ -24,8 +24,8 @@ const (
 )
 
 // Classify относит статус awg-manager к виду зависания и лекарству.
-// Выключенный владельцем туннель (enabled=false) не поднимается НИКОГДА:
-// у него любое зависание лечится остановкой.
+// Выключенный владельцем туннель (enabled=false): только остановка или ничего,
+// никогда не запуск. Включённый в stopping: перезапуск (цель -- running).
 func Classify(status string, enabled bool) (Kind, Remedy) {
 	switch status {
 	case "broken":
@@ -47,6 +47,9 @@ func Classify(status string, enabled bool) (Kind, Remedy) {
 		}
 		return KindTransition, RemedyStop
 	case "stopping":
+		if enabled {
+			return KindTransition, RemedyRestart
+		}
 		return KindTransition, RemedyStop
 	}
 	return KindNone, ""

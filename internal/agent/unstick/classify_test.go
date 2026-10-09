@@ -18,7 +18,7 @@ func TestClassify_Table(t *testing.T) {
 		{"needs_stop", false, KindNeeds, RemedyStop},
 		{"needs_stop", true, KindNone, ""},
 		{"starting", true, KindTransition, RemedyRestart},
-		{"stopping", true, KindTransition, RemedyStop},
+		{"stopping", true, KindTransition, RemedyRestart},
 		{"stopping", false, KindTransition, RemedyStop},
 		{"running", true, KindNone, ""},
 		{"stopped", false, KindNone, ""},

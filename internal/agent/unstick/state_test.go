@@ -2,6 +2,7 @@ package unstick
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -148,5 +149,38 @@ func TestState_RetryingFlagSurvivesRestart(t *testing.T) {
 	}
 	if len(w2.Snapshot().GaveUp) != 1 {
 		t.Fatal("snapshot must keep reporting gave_up while retrying")
+	}
+}
+
+// SIGKILL посреди перезапуска службы не должен терять часовой лимит:
+// отметка уже на диске, пока RestartService работает.
+func TestState_ServiceAtOnDiskBeforeRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unstick-state.json")
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w = newOnDisk(t, path, h)
+	var seen bool
+	h.w.Deps().RestartService = func(context.Context) error {
+		h.services++
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("state file during restart: %v", err)
+			return nil
+		}
+		var p persisted
+		if err := json.Unmarshal(body, &p); err != nil {
+			t.Errorf("state json: %v", err)
+			return nil
+		}
+		seen = !p.ServiceAt.IsZero()
+		return nil
+	}
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if h.services != 1 {
+		t.Fatalf("services = %d", h.services)
+	}
+	if !seen {
+		t.Error("service_at not on disk during RestartService")
 	}
 }
