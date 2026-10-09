@@ -2,6 +2,7 @@ package unstick
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -717,7 +719,7 @@ func spacedFixes(spacing time.Duration) *harness {
 	h := newHarness(tun("nwg0", "running", true))
 	h.awg.onAction = healOn("restart")
 	for i := 0; i < 3; i++ {
-		fixCycle(h) // занимает 121 с
+		fixCycle(h)   // занимает 121 с
 		h.w.Tick(ctx) // опрос видит running, как в жизни
 		h.clk.advance(spacing - 121*time.Second)
 	}
@@ -802,6 +804,14 @@ func TestTick_UpgradeStartsDuringLadderAbortsBeforeService(t *testing.T) {
 	}
 	h.w.Tick(ctx)
 	upgrading = false
+	// обновление кончилось, но пауза GuardWindow держится: через минуту тихо
+	h.w.Deps().Sleep = h.clk.sleep
+	n := len(h.awg.callList())
+	h.clk.advance(time.Minute)
+	h.w.Tick(ctx)
+	if got := h.awg.callList(); len(got) != n {
+		t.Fatalf("ladder restarted inside the guard window after the upgrade abort: %v", got)
+	}
 	assertAbortedSilently(t, h)
 }
 
@@ -927,5 +937,49 @@ func TestTick_RetryRelease_TunnelGone(t *testing.T) {
 	h.w.Tick(ctx)
 	if len(h.w.Snapshot().GaveUp) != 0 {
 		t.Error("retrying entry kept after the tunnel vanished")
+	}
+}
+
+func TestSnapshot_FlappingStepsAreEmptyListNotNull(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.w.Tick(ctx)
+		h.clk.advance(5 * time.Minute)
+	}
+	fixCycle(h)
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || s.GaveUp[0].Steps == nil {
+		t.Fatalf("snapshot steps must be [] not nil: %+v", s.GaveUp)
+	}
+	c := Check{Source: h.w}.Run(ctx, checks.Deps{})
+	body, err := json.Marshal(c.Details)
+	if err != nil || !strings.Contains(string(body), `"steps":[]`) {
+		t.Fatalf("check details: %s err=%v", body, err)
+	}
+}
+
+func TestTick_NoServiceRestartStepWithoutRestartFunc(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = nil
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	g := h.w.Snapshot().GaveUp
+	if len(g) != 1 || !slices.Equal(g[0].Steps, []string{"restart"}) {
+		t.Fatalf("steps without a restart func: %+v", g)
+	}
+}
+
+func TestTick_FailedServiceRestartStillRecorded(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = func(context.Context) error { return errors.New("init script failed") }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	g := h.w.Snapshot().GaveUp
+	if len(g) != 1 || !slices.Equal(g[0].Steps, []string{"restart", "service_restart"}) {
+		t.Fatalf("a failed attempt still counts: %+v", g)
 	}
 }

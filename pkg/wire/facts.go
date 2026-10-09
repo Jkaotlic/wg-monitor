@@ -257,7 +257,7 @@ func (f *ReportFacts) Clamp() {
 			e.Result = ClipText(e.Result)
 			e.Steps = slices.Clone(e.Steps)
 			if len(e.Steps) > MaxUnstickSteps {
-				e.Steps = e.Steps[:MaxUnstickSteps]
+				e.Steps = e.Steps[len(e.Steps)-MaxUnstickSteps:] // как mergeSteps: последние
 			}
 			clipped[i] = e
 		}

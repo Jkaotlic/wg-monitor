@@ -224,6 +224,9 @@ func TestClampUnstickClipsAllTextAndCopiesSteps(t *testing.T) {
 	if evs[5].From != long || evs[5].To != long || evs[5].ID != long || evs[5].Result != long {
 		t.Error("Clamp mutated caller's element")
 	}
+	if !slices.Equal(got.Steps, steps[len(steps)-MaxUnstickSteps:]) {
+		t.Errorf("steps must keep the LAST %d: %v", MaxUnstickSteps, got.Steps)
+	}
 	if len(got.Steps) > 8 || len(evs[5].Steps) != len(steps) {
 		t.Errorf("steps: result %d, caller %d", len(got.Steps), len(evs[5].Steps))
 	}

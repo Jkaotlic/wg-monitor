@@ -344,10 +344,10 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		// отметка часа -- на диск ДО вызова (замок здесь не держим): SIGKILL
 		// посреди перезапуска службы не должен терять лимит
 		w.save()
-		for _, d := range list {
-			d.steps = append(d.steps, "service_restart")
-		}
 		if w.d.RestartService != nil {
+			for _, d := range list {
+				d.steps = append(d.steps, "service_restart")
+			}
 			if err := w.d.RestartService(ctx); err != nil {
 				w.log.Warn("unstick: перезапуск awg-manager не удался", "err", err)
 			}
@@ -575,7 +575,7 @@ func (w *Watcher) Snapshot() Snapshot {
 	for id, g := range w.gaveUp {
 		s.GaveUp = append(s.GaveUp, GaveUpTunnel{
 			TunnelID: id, Name: g.Name, Status: g.Status, Details: g.Details,
-			Steps: append([]string(nil), g.Steps...), Since: g.Since,
+			Steps: append([]string{}, g.Steps...), Since: g.Since,
 			Flapping: g.Flapping, Fixes: g.Fixes,
 		})
 	}
