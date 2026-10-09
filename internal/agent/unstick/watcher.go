@@ -87,6 +87,7 @@ const (
 	maxEvents   = wire.MaxUnstickEvents
 	eventsTTL   = 24 * time.Hour
 	detailsRune = 300
+	maxSteps    = 8
 	// flapFixes выводов за flapWindow -- туннель зависает снова и снова:
 	// лесенка не лечит причину, сторож сдаётся сразу.
 	flapFixes  = 3
@@ -344,9 +345,7 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		// посреди перезапуска службы не должен терять лимит
 		w.save()
 		for _, d := range list {
-			if !d.retry {
-				d.steps = append(d.steps, "service_restart")
-			}
+			d.steps = append(d.steps, "service_restart")
 		}
 		if w.d.RestartService != nil {
 			if err := w.d.RestartService(ctx); err != nil {
@@ -367,7 +366,7 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось
 			w.gaveUp[d.t.ID] = giveUp{
 				Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
-				Steps: d.steps, Since: d.since, At: now,
+				Steps: mergeSteps(w.gaveUp[d.t.ID].Steps, d.steps), Since: d.since, At: now,
 			}
 			w.log.Warn("unstick: повтор не помог", "tunnel", d.t.ID, "status", d.t.Status, "steps", d.steps)
 			continue
@@ -543,11 +542,28 @@ func (w *Watcher) setActive(id string) {
 	w.mu.Unlock()
 }
 
+// mergeSteps дописывает новые шаги к прежним без дублей подряд; хранится не
+// больше maxSteps последних.
+func mergeSteps(prev, add []string) []string {
+	out := append([]string(nil), prev...)
+	for _, s := range add {
+		if len(out) > 0 && out[len(out)-1] == s {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) > maxSteps {
+		out = out[len(out)-maxSteps:]
+	}
+	return out
+}
+
+// clipDetails: итог не длиннее detailsRune рун, считая «…».
 func clipDetails(s string) string {
 	s = redact.Text(s)
 	r := []rune(s)
 	if len(r) > detailsRune {
-		return string(r[:detailsRune]) + "…"
+		return string(r[:detailsRune-1]) + "…"
 	}
 	return s
 }

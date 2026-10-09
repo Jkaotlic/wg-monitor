@@ -253,19 +253,13 @@ func TestTick_AbortedLadderPausesUntilWindowEnds(t *testing.T) {
 		h.clk.advance(30 * time.Second)
 		h.w.Tick(ctx)
 	}
-	n := 0
-	for _, c := range h.awg.callList() {
-		if c == "restart:nwg0" {
-			n++
-		}
-	}
-	if n != 1 || h.services != 0 {
+	if n := countCalls(h, "restart:nwg0"); n != 1 || h.services != 0 {
 		t.Fatalf("restarts inside the window = %d (want 1), services=%d", n, h.services)
 	}
 	h.clk.advance(2 * time.Minute)
 	h.w.Tick(ctx)
-	if got := h.awg.callList(); len(got) < 2 {
-		t.Fatalf("ladder not retried after the window: %v", got)
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("ladder not retried after the window: restarts=%d calls=%v", n, h.awg.callList())
 	}
 }
 
@@ -329,8 +323,12 @@ func TestTick_TransitionThresholdBoundary(t *testing.T) {
 
 func TestClipDetails_Limit(t *testing.T) {
 	in := strings.Repeat("я", 400)
-	if n := len([]rune(clipDetails(in))); n > 301 {
-		t.Fatalf("runes = %d", n)
+	out := clipDetails(in)
+	if n := len([]rune(out)); n != 300 || !strings.HasSuffix(out, "…") {
+		t.Fatalf("runes = %d (want 300 including the ellipsis): %q", n, out)
+	}
+	if exact := strings.Repeat("я", 300); clipDetails(exact) != exact {
+		t.Error("a string of exactly 300 runes must stay intact")
 	}
 }
 
@@ -762,4 +760,129 @@ func TestTick_UpgradeStartsDuringLadderAbortsBeforeService(t *testing.T) {
 	h.w.Tick(ctx)
 	upgrading = false
 	assertAbortedSilently(t, h)
+}
+
+func TestTick_ServiceRestartRecordedForRetryTunnelToo(t *testing.T) {
+	h := newHarness(tun("a", "broken", true), tun("b", "broken", true))
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx) // оба сдались, служба перезапущена один раз
+	if len(h.w.Snapshot().GaveUp) != 2 || h.services != 1 {
+		t.Fatalf("setup: %+v services=%d", h.w.Snapshot(), h.services)
+	}
+	h.clk.advance(5*time.Hour + 50*time.Minute)
+	h.awg.set("a", "running")
+	h.w.Tick(ctx) // a освобождён
+	h.awg.set("a", "broken")
+	h.w.Tick(ctx) // a снова на учёте
+	h.clk.advance(10 * time.Minute)
+	// b -- повтор, a -- свежий: службу перезапускают для обоих, и b выходит
+	h.w.Deps().RestartService = func(context.Context) error {
+		h.services++
+		h.awg.set("b", "running")
+		return nil
+	}
+	h.w.Tick(ctx)
+	if h.services != 2 {
+		t.Fatalf("services = %d; want 2", h.services)
+	}
+	var got *wire.UnstickEvent
+	for _, e := range h.w.Facts().Events {
+		if e.TunnelID == "b" && e.Result == wire.UnstickFixed {
+			e := e
+			got = &e
+		}
+	}
+	if got == nil || !slices.Equal(got.Steps, []string{"restart", "service_restart"}) {
+		t.Fatalf("retry tunnel event: %+v", got)
+	}
+}
+
+func TestTick_FailedRetryAccumulatesSteps(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx) // повтор не помог
+	want := []string{"restart", "service_restart", "restart"}
+	if g := h.w.gaveUp["nwg0"]; !slices.Equal(g.Steps, want) {
+		t.Fatalf("steps after the 1st retry = %v; want %v", g.Steps, want)
+	}
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx) // и второй: подряд идущий restart не дублируется
+	if g := h.w.gaveUp["nwg0"]; !slices.Equal(g.Steps, want) {
+		t.Fatalf("steps after the 2nd retry = %v; want %v", g.Steps, want)
+	}
+	// не больше 8: остаются последние
+	g := h.w.gaveUp["nwg0"]
+	g.Steps = []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"}
+	h.w.gaveUp["nwg0"] = g
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	g = h.w.gaveUp["nwg0"]
+	if !slices.Equal(g.Steps, []string{"s2", "s3", "s4", "s5", "s6", "s7", "s8", "restart"}) {
+		t.Fatalf("capped steps = %v", g.Steps)
+	}
+}
+
+func TestTick_ContextCancelledMidLadderIsSilent(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Tick(ctx)
+	since := h.w.tracks["nwg0"].since
+	h.clk.advance(61 * time.Second)
+	h.w.Deps().Sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); !slices.Equal(c, []string{"restart:nwg0"}) {
+		t.Fatalf("calls: %v", c)
+	}
+	if h.services != 0 || !h.w.serviceAtZero() {
+		t.Errorf("service touched: services=%d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Errorf("gave up on shutdown: %+v", s.GaveUp)
+	}
+	if f := h.w.Facts(); f != nil {
+		t.Errorf("events on shutdown: %+v", f.Events)
+	}
+	if got := h.w.tracks["nwg0"].since; !got.Equal(since) {
+		t.Errorf("since reset: %v -> %v", since, got)
+	}
+}
+
+// retryingHarness -- «сдался» в режиме повтора (лесенка прервана командой).
+func retryingHarness(t *testing.T) *harness {
+	t.Helper()
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		h.w.NoteCommand(wire.Command{Action: "awgm_update"})
+		return nil
+	}
+	h.w.Tick(ctx)
+	if g, ok := h.w.gaveUp["nwg0"]; !ok || !g.Retrying {
+		t.Fatalf("setup: %+v ok=%v", g, ok)
+	}
+	h.w.Deps().Sleep = h.clk.sleep
+	return h
+}
+
+func TestTick_RetryRelease_EnabledFlip(t *testing.T) {
+	h := retryingHarness(t)
+	h.awg.mu.Lock()
+	h.awg.tunnels[0].Enabled = false
+	h.awg.mu.Unlock()
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 0 {
+		t.Error("retrying entry kept after enabled flipped")
+	}
+}
+
+func TestTick_RetryRelease_TunnelGone(t *testing.T) {
+	h := retryingHarness(t)
+	h.awg.mu.Lock()
+	h.awg.tunnels = []awgmgr.Tunnel{tun("other", "running", true)}
+	h.awg.mu.Unlock()
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 0 {
+		t.Error("retrying entry kept after the tunnel vanished")
+	}
 }
