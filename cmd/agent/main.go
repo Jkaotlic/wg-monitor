@@ -244,9 +244,10 @@ func buildUnstick(cfg *agent.Config, awg unstick.AWG, exec actions.ExecFunc, log
 		TransitionAfter: unstickThreshold(cfg.Unstick.TransitionAfterSec),
 		StatePath:       cfg.State.UnstickStatePath(),
 	}, unstick.Deps{
-		AWG:            awg,
-		RestartService: awgmServiceRestart(exec),
-		Logger:         logger.With("component", "unstick"),
+		AWG:               awg,
+		RestartService:    awgmServiceRestart(exec),
+		UpgradeInProgress: upgradeInProgress(actions.OpkgCronSharedLockDir, time.Now),
+		Logger:            logger.With("component", "unstick"),
 	})
 	return w, unstick.Check{Source: w}
 }
@@ -271,6 +272,23 @@ func unstickThreshold(n int) time.Duration {
 		return unstickMinThreshold
 	}
 	return d
+}
+
+// opkgLockAbandonedAfter -- замок cron-обновления старше этого брошен
+// (как opkgSharedLockStale в actions).
+const opkgLockAbandonedAfter = 2 * time.Hour
+
+// upgradeInProgress -- идёт ли автообновление пакетов по cron: каталог-замок
+// есть и моложе 2 ч. Само обновление перезапускает awg-manager -- сторожу
+// в это время лечить нечего.
+func upgradeInProgress(dir string, now func() time.Time) func() bool {
+	return func() bool {
+		fi, err := os.Stat(dir)
+		if err != nil {
+			return false
+		}
+		return now().Sub(fi.ModTime()) < opkgLockAbandonedAfter
+	}
 }
 
 // awgmServiceRestart -- ступень 2 сторожа: перезапуск службы awg-manager.

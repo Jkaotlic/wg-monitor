@@ -728,3 +728,38 @@ func TestTick_FlappingWindowExpires(t *testing.T) {
 		t.Fatalf("gave up: %+v", s.GaveUp)
 	}
 }
+
+func TestTick_UpgradeInProgressSilencesWatcher(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	upgrading := true
+	h.w.Deps().UpgradeInProgress = func() bool { return upgrading }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	h.clk.advance(10 * time.Minute)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) != 0 {
+		t.Fatalf("watcher acted during opkg upgrade: %v", c)
+	}
+	upgrading = false
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) == 0 {
+		t.Fatal("watcher stayed silent after the upgrade ended")
+	}
+}
+
+func TestTick_UpgradeStartsDuringLadderAbortsBeforeService(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	upgrading := false
+	h.w.Deps().UpgradeInProgress = func() bool { return upgrading }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		upgrading = true
+		return nil
+	}
+	h.w.Tick(ctx)
+	upgrading = false
+	assertAbortedSilently(t, h)
+}

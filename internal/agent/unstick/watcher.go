@@ -27,7 +27,10 @@ type Deps struct {
 	RestartService func(ctx context.Context) error // S99awg-manager restart
 	Now            func() time.Time
 	Sleep          func(ctx context.Context, d time.Duration) error
-	Logger         *slog.Logger
+	// UpgradeInProgress -- идёт автообновление пакетов по cron (оно само
+	// перезапускает awg-manager); nil -- не проверять.
+	UpgradeInProgress func() bool
+	Logger            *slog.Logger
 }
 
 // Snapshot -- что видит проверка awgm_unstick.
@@ -151,6 +154,11 @@ func (w *Watcher) now() time.Time {
 	return time.Now()
 }
 
+// upgrading -- идёт автообновление пакетов; вызывать без w.mu.
+func (w *Watcher) upgrading() bool {
+	return w.d.UpgradeInProgress != nil && w.d.UpgradeInProgress()
+}
+
 func (w *Watcher) sleep(ctx context.Context, d time.Duration) error {
 	if w.d.Sleep != nil {
 		return w.d.Sleep(ctx, d)
@@ -214,6 +222,7 @@ func (w *Watcher) Tick(ctx context.Context) {
 
 // observe обновляет учёт и возвращает туннели, которым пора лесенку.
 func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
+	upgrading := w.upgrading()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.ready = true
@@ -258,7 +267,7 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		if now.Before(w.pausedUntil) {
 			continue
 		}
-		if t.Locked {
+		if t.Locked || upgrading {
 			continue
 		}
 		g, gaveUp := w.gaveUp[t.ID]
@@ -454,8 +463,15 @@ const (
 // штампуем), но свежая команда бэкенда по-прежнему прерывает лесенку.
 func (w *Watcher) serviceDecision(allowRun bool) serviceVerdict {
 	now := w.now()
+	upgrading := w.upgrading()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if upgrading {
+		// cron-обновление пакетов само перезапускает awg-manager: молчим,
+		// как при команде бэкенда
+		w.pausedUntil = now.Add(w.cfg.GuardWindow)
+		return serviceAbort
+	}
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде
 	var latest time.Time
 	if now.Sub(w.cmdRouter) < w.cfg.GuardWindow {

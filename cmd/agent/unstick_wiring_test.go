@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -59,5 +61,29 @@ func TestUnstickThreshold(t *testing.T) {
 		if got := unstickThreshold(in); got != want {
 			t.Errorf("%d: %v want %v", in, got, want)
 		}
+	}
+}
+
+func TestUpgradeInProgress(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "opkg.lock")
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	f := upgradeInProgress(dir, func() time.Time { return now })
+	if f() {
+		t.Fatal("no lock dir -- no upgrade")
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dir, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if !f() {
+		t.Error("fresh lock dir (1h) must mean an upgrade is running")
+	}
+	if err := os.Chtimes(dir, now.Add(-3*time.Hour), now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if f() {
+		t.Error("lock dir older than 2h is abandoned")
 	}
 }
