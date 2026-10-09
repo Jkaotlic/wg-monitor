@@ -41,14 +41,20 @@ func FormatUnstickFixed(nickname string, ev wire.UnstickEvent) string {
 	if name == "" {
 		name = ev.TunnelID
 	}
+	// текст выбирается по ИТОГУ (To), а не по исходному статусу: выключенный
+	// туннель в broken лечится остановкой, включённый в stopping -- перезапуском
 	var what string
-	switch ev.From {
-	case "needs_start":
-		what = "была включена, но не запустилась — запустил, работает."
-	case "needs_stop", "stopping":
-		what = "была выключена, но продолжала работать — остановил."
-	default: // broken, starting
-		what = "зависла в awg-manager — перезапустил, работает."
+	switch ev.To {
+	case "stopped", "disabled", "not_created":
+		what = "была выключена, но не останавливалась — остановил."
+	case "running":
+		if ev.From == "needs_start" && slices.Contains(ev.Steps, "start") {
+			what = "была включена, но не запустилась — запустил, работает."
+		} else {
+			what = "зависла в awg-manager — перезапустил, работает."
+		}
+	default:
+		what = "зависла в awg-manager — вывел из зависания."
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔧 %s\nЛиния «%s» %s", nickname, name, what)

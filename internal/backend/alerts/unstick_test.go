@@ -12,19 +12,30 @@ import (
 )
 
 func TestFormatUnstickFixed(t *testing.T) {
+	const (
+		restarted = "зависла в awg-manager — перезапустил, работает"
+		started   = "была включена, но не запустилась — запустил, работает"
+		stopped   = "была выключена, но не останавливалась — остановил"
+	)
 	cases := []struct {
 		from  string
 		steps []string
+		to    string
 		want  string
 	}{
-		{"broken", []string{"restart"}, "зависла в awg-manager — перезапустил, работает"},
-		{"starting", []string{"restart"}, "зависла в awg-manager — перезапустил, работает"},
-		{"needs_start", []string{"start"}, "была включена, но не запустилась — запустил, работает"},
-		{"needs_stop", []string{"stop"}, "была выключена, но продолжала работать — остановил"},
-		{"stopping", []string{"stop"}, "была выключена, но продолжала работать — остановил"},
+		{"broken", []string{"restart"}, "running", restarted},
+		{"starting", []string{"restart"}, "running", restarted},
+		{"needs_start", []string{"start"}, "running", started},
+		{"needs_stop", []string{"stop"}, "stopped", stopped},
+		{"stopping", []string{"restart", "service_restart"}, "running", restarted},
+		{"broken", []string{"stop"}, "stopped", stopped},
+		{"starting", []string{"stop"}, "stopped", stopped},
+		{"broken", []string{"stop"}, "disabled", stopped},
+		{"broken", []string{"stop"}, "not_created", stopped},
+		{"broken", []string{"restart"}, "weird", "зависла в awg-manager — вывел из зависания"},
 	}
 	for _, c := range cases {
-		got := FormatUnstickFixed("home", wire.UnstickEvent{TunnelID: "nwg0", TunnelName: "Франкфурт", From: c.from, Steps: c.steps, Result: wire.UnstickFixed})
+		got := FormatUnstickFixed("home", wire.UnstickEvent{TunnelID: "nwg0", TunnelName: "Франкфурт", From: c.from, Steps: c.steps, To: c.to, Result: wire.UnstickFixed})
 		if !strings.Contains(got, "«Франкфурт»") || !strings.Contains(got, c.want) || !strings.Contains(got, "home") {
 			t.Errorf("%s: %q", c.from, got)
 		}
@@ -34,7 +45,7 @@ func TestFormatUnstickFixed(t *testing.T) {
 			}
 		}
 	}
-	svc := FormatUnstickFixed("home", wire.UnstickEvent{TunnelID: "nwg0", From: "broken", Steps: []string{"restart", "service_restart"}, Result: wire.UnstickFixed})
+	svc := FormatUnstickFixed("home", wire.UnstickEvent{TunnelID: "nwg0", From: "broken", Steps: []string{"restart", "service_restart"}, To: "running", Result: wire.UnstickFixed})
 	if !strings.Contains(svc, "Пришлось перезапустить awg-manager целиком") || !strings.Contains(svc, "«nwg0»") || strings.Contains(svc, "service_restart") {
 		t.Errorf("service/no name: %q", svc)
 	}
