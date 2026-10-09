@@ -2,13 +2,16 @@ package unstick
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -252,19 +255,13 @@ func TestTick_AbortedLadderPausesUntilWindowEnds(t *testing.T) {
 		h.clk.advance(30 * time.Second)
 		h.w.Tick(ctx)
 	}
-	n := 0
-	for _, c := range h.awg.callList() {
-		if c == "restart:nwg0" {
-			n++
-		}
-	}
-	if n != 1 || h.services != 0 {
+	if n := countCalls(h, "restart:nwg0"); n != 1 || h.services != 0 {
 		t.Fatalf("restarts inside the window = %d (want 1), services=%d", n, h.services)
 	}
 	h.clk.advance(2 * time.Minute)
 	h.w.Tick(ctx)
-	if got := h.awg.callList(); len(got) < 2 {
-		t.Fatalf("ladder not retried after the window: %v", got)
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("ladder not retried after the window: restarts=%d calls=%v", n, h.awg.callList())
 	}
 }
 
@@ -328,8 +325,12 @@ func TestTick_TransitionThresholdBoundary(t *testing.T) {
 
 func TestClipDetails_Limit(t *testing.T) {
 	in := strings.Repeat("я", 400)
-	if n := len([]rune(clipDetails(in))); n > 301 {
-		t.Fatalf("runes = %d", n)
+	out := clipDetails(in)
+	if n := len([]rune(out)); n != 300 || !strings.HasSuffix(out, "…") {
+		t.Fatalf("runes = %d (want 300 including the ellipsis): %q", n, out)
+	}
+	if exact := strings.Repeat("я", 300); clipDetails(exact) != exact {
+		t.Error("a string of exactly 300 runes must stay intact")
 	}
 }
 
@@ -609,10 +610,16 @@ func TestTick_ReadErrorIsSkip(t *testing.T) {
 }
 
 func TestEvents_Retention(t *testing.T) {
-	h := newHarness(tun("x", "broken", true))
+	h := newHarness()
 	h.awg.onAction = func(_, _ string, tt *awgmgr.Tunnel) { tt.Status = "running" }
 	for i := 0; i < 25; i++ {
-		h.awg.set("x", "broken")
+		// у каждого вывода свой туннель: один и тот же, зависший 3 раза за час,
+		// сторож уже не лечит (flapFixes)
+		id := fmt.Sprintf("x%d", i)
+		h.awg.mu.Lock()
+		h.awg.tunnels = append(h.awg.tunnels, tun(id, "running", true))
+		h.awg.mu.Unlock()
+		h.awg.set(id, "broken")
 		h.w.Tick(ctx)
 		h.clk.advance(61 * time.Second)
 		h.w.Tick(ctx)
@@ -665,5 +672,314 @@ func TestTick_NeedsStopEnabledIsStarted(t *testing.T) {
 	ev := h.w.Facts().Events[0]
 	if ev.Result != wire.UnstickFixed || ev.From != "needs_stop" || ev.To != "running" || !slices.Equal(ev.Steps, []string{"start"}) {
 		t.Errorf("event: %+v", ev)
+	}
+}
+
+// fixCycle: туннель nwg0 ломается, сторож выводит его перезапуском.
+func fixCycle(h *harness) {
+	h.awg.set("nwg0", "broken")
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+}
+
+func TestTick_FlappingGivesUpWithoutTouching(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.clk.advance(5 * time.Minute)
+	}
+	before := h.awg.callList()
+	if len(before) != 3 {
+		t.Fatalf("setup calls: %v", before)
+	}
+	fixCycle(h)
+	if got := h.awg.callList(); !slices.Equal(got, before) {
+		t.Fatalf("watcher touched a flapping tunnel: %v", got)
+	}
+	if h.services != 0 {
+		t.Errorf("services = %d", h.services)
+	}
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 || len(s.GaveUp[0].Steps) != 0 {
+		t.Fatalf("snapshot: %+v", s.GaveUp)
+	}
+	evs := h.w.Facts().Events
+	last := evs[len(evs)-1]
+	if last.Result != wire.UnstickGaveUp || !slices.Equal(last.Steps, []string{"flapping"}) || last.TunnelID != "nwg0" {
+		t.Errorf("last event: %+v", last)
+	}
+}
+
+// spacedFixes: три вывода туннеля nwg0 с шагом spacing между началами, потом
+// четвёртое зависание; возвращает возраст самого старого вывода к его началу
+// лесенки (3*spacing - 1 минута).
+func spacedFixes(spacing time.Duration) *harness {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)   // занимает 121 с
+		h.w.Tick(ctx) // опрос видит running, как в жизни
+		h.clk.advance(spacing - 121*time.Second)
+	}
+	fixCycle(h)
+	return h
+}
+
+// Окно 60 минут с обеих сторон: самый старый вывод 59 мин -- сдался сразу.
+func TestTick_FlappingWindow_InsideGivesUp(t *testing.T) {
+	h := spacedFixes(20 * time.Minute) // старейший вывод ~59 мин к четвёртому зависанию
+	if n := countCalls(h, "restart:nwg0"); n != 3 {
+		t.Fatalf("restarts = %d; want 3 (4th must not be touched)", n)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 {
+		t.Fatalf("snapshot: %+v", s.GaveUp)
+	}
+}
+
+// Старейший вывод чуть старше 60 мин -- в окне 2 вывода, обычная лесенка.
+func TestTick_FlappingWindow_JustOutsideRunsLadder(t *testing.T) {
+	h := spacedFixes(20*time.Minute + 30*time.Second) // ~60,5 мин
+	if n := countCalls(h, "restart:nwg0"); n != 4 {
+		t.Fatalf("restarts = %d; want 4", n)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up: %+v", s.GaveUp)
+	}
+}
+
+// Счёт зависаний -- по туннелю: три вывода РАЗНЫХ туннелей не глушат четвёртый.
+func TestTick_FlappingCountIsPerTunnel(t *testing.T) {
+	h := newHarness(tun("a", "running", true), tun("b", "running", true), tun("c", "running", true), tun("d", "running", true))
+	h.awg.onAction = healOn("restart")
+	for _, id := range []string{"a", "b", "c"} {
+		h.awg.set(id, "broken")
+		h.w.Tick(ctx)
+		h.clk.advance(61 * time.Second)
+		h.w.Tick(ctx)
+		h.clk.advance(2 * time.Minute)
+	}
+	h.awg.set("d", "broken")
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:d"); n != 1 {
+		t.Fatalf("restart:d = %d; calls=%v", n, h.awg.callList())
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up: %+v", s.GaveUp)
+	}
+}
+
+func TestTick_UpgradeInProgressSilencesWatcher(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	upgrading := true
+	h.w.Deps().UpgradeInProgress = func() bool { return upgrading }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	h.clk.advance(10 * time.Minute)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) != 0 {
+		t.Fatalf("watcher acted during opkg upgrade: %v", c)
+	}
+	upgrading = false
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) == 0 {
+		t.Fatal("watcher stayed silent after the upgrade ended")
+	}
+}
+
+func TestTick_UpgradeStartsDuringLadderAbortsBeforeService(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	upgrading := false
+	h.w.Deps().UpgradeInProgress = func() bool { return upgrading }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		upgrading = true
+		return nil
+	}
+	h.w.Tick(ctx)
+	upgrading = false
+	// обновление кончилось, но пауза GuardWindow держится: через минуту тихо
+	h.w.Deps().Sleep = h.clk.sleep
+	n := len(h.awg.callList())
+	h.clk.advance(time.Minute)
+	h.w.Tick(ctx)
+	if got := h.awg.callList(); len(got) != n {
+		t.Fatalf("ladder restarted inside the guard window after the upgrade abort: %v", got)
+	}
+	assertAbortedSilently(t, h)
+}
+
+func TestTick_ServiceRestartRecordedForRetryTunnelToo(t *testing.T) {
+	h := newHarness(tun("a", "broken", true), tun("b", "broken", true))
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx) // оба сдались, служба перезапущена один раз
+	if len(h.w.Snapshot().GaveUp) != 2 || h.services != 1 {
+		t.Fatalf("setup: %+v services=%d", h.w.Snapshot(), h.services)
+	}
+	h.clk.advance(5*time.Hour + 50*time.Minute)
+	h.awg.set("a", "running")
+	h.w.Tick(ctx) // a освобождён
+	h.awg.set("a", "broken")
+	h.w.Tick(ctx) // a снова на учёте
+	h.clk.advance(10 * time.Minute)
+	// b -- повтор, a -- свежий: службу перезапускают для обоих, и b выходит
+	h.w.Deps().RestartService = func(context.Context) error {
+		h.services++
+		h.awg.set("b", "running")
+		return nil
+	}
+	h.w.Tick(ctx)
+	if h.services != 2 {
+		t.Fatalf("services = %d; want 2", h.services)
+	}
+	var got *wire.UnstickEvent
+	for _, e := range h.w.Facts().Events {
+		if e.TunnelID == "b" && e.Result == wire.UnstickFixed {
+			e := e
+			got = &e
+		}
+	}
+	if got == nil || !slices.Equal(got.Steps, []string{"restart", "service_restart"}) {
+		t.Fatalf("retry tunnel event: %+v", got)
+	}
+}
+
+func TestTick_FailedRetryAccumulatesSteps(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx) // повтор не помог
+	want := []string{"restart", "service_restart", "restart"}
+	if g := h.w.gaveUp["nwg0"]; !slices.Equal(g.Steps, want) {
+		t.Fatalf("steps after the 1st retry = %v; want %v", g.Steps, want)
+	}
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx) // и второй: подряд идущий restart не дублируется
+	if g := h.w.gaveUp["nwg0"]; !slices.Equal(g.Steps, want) {
+		t.Fatalf("steps after the 2nd retry = %v; want %v", g.Steps, want)
+	}
+	// не больше 8: остаются последние
+	g := h.w.gaveUp["nwg0"]
+	g.Steps = []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"}
+	h.w.gaveUp["nwg0"] = g
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	g = h.w.gaveUp["nwg0"]
+	if !slices.Equal(g.Steps, []string{"s2", "s3", "s4", "s5", "s6", "s7", "s8", "restart"}) {
+		t.Fatalf("capped steps = %v", g.Steps)
+	}
+}
+
+func TestTick_ContextCancelledMidLadderIsSilent(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Tick(ctx)
+	since := h.w.tracks["nwg0"].since
+	h.clk.advance(61 * time.Second)
+	h.w.Deps().Sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); !slices.Equal(c, []string{"restart:nwg0"}) {
+		t.Fatalf("calls: %v", c)
+	}
+	if h.services != 0 || !h.w.serviceAtZero() {
+		t.Errorf("service touched: services=%d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Errorf("gave up on shutdown: %+v", s.GaveUp)
+	}
+	if f := h.w.Facts(); f != nil {
+		t.Errorf("events on shutdown: %+v", f.Events)
+	}
+	if got := h.w.tracks["nwg0"].since; !got.Equal(since) {
+		t.Errorf("since reset: %v -> %v", since, got)
+	}
+}
+
+// retryingHarness -- «сдался» в режиме повтора (лесенка прервана командой).
+func retryingHarness(t *testing.T) *harness {
+	t.Helper()
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		h.w.NoteCommand(wire.Command{Action: "awgm_update"})
+		return nil
+	}
+	h.w.Tick(ctx)
+	if g, ok := h.w.gaveUp["nwg0"]; !ok || !g.Retrying {
+		t.Fatalf("setup: %+v ok=%v", g, ok)
+	}
+	h.w.Deps().Sleep = h.clk.sleep
+	return h
+}
+
+func TestTick_RetryRelease_EnabledFlip(t *testing.T) {
+	h := retryingHarness(t)
+	h.awg.mu.Lock()
+	h.awg.tunnels[0].Enabled = false
+	h.awg.mu.Unlock()
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 0 {
+		t.Error("retrying entry kept after enabled flipped")
+	}
+}
+
+func TestTick_RetryRelease_TunnelGone(t *testing.T) {
+	h := retryingHarness(t)
+	h.awg.mu.Lock()
+	h.awg.tunnels = []awgmgr.Tunnel{tun("other", "running", true)}
+	h.awg.mu.Unlock()
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 0 {
+		t.Error("retrying entry kept after the tunnel vanished")
+	}
+}
+
+func TestSnapshot_FlappingStepsAreEmptyListNotNull(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.w.Tick(ctx)
+		h.clk.advance(5 * time.Minute)
+	}
+	fixCycle(h)
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || s.GaveUp[0].Steps == nil {
+		t.Fatalf("snapshot steps must be [] not nil: %+v", s.GaveUp)
+	}
+	c := Check{Source: h.w}.Run(ctx, checks.Deps{})
+	body, err := json.Marshal(c.Details)
+	if err != nil || !strings.Contains(string(body), `"steps":[]`) {
+		t.Fatalf("check details: %s err=%v", body, err)
+	}
+}
+
+func TestTick_NoServiceRestartStepWithoutRestartFunc(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = nil
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	g := h.w.Snapshot().GaveUp
+	if len(g) != 1 || !slices.Equal(g[0].Steps, []string{"restart"}) {
+		t.Fatalf("steps without a restart func: %+v", g)
+	}
+}
+
+func TestTick_FailedServiceRestartStillRecorded(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = func(context.Context) error { return errors.New("init script failed") }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	g := h.w.Snapshot().GaveUp
+	if len(g) != 1 || !slices.Equal(g[0].Steps, []string{"restart", "service_restart"}) {
+		t.Fatalf("a failed attempt still counts: %+v", g)
 	}
 }

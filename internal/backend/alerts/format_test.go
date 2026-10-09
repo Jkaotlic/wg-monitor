@@ -1359,3 +1359,33 @@ func TestFormatHard_AwgmUnstickNoTunnels(t *testing.T) {
 		t.Errorf("no tunnels:\n%s", got)
 	}
 }
+
+func TestFormatHard_AwgmUnstickFlapping(t *testing.T) {
+	d := map[string]any{"reason": "gave_up", "tunnels": []any{map[string]any{
+		"tunnel_id": "nwg0", "name": "Франкфурт", "status": "broken",
+		"steps": []any{}, "flapping": true, "fixes": float64(3),
+	}}}
+	got := FormatHard(HardArgs{Nickname: "home", CheckName: "awgm_unstick", Check: wire.Check{Name: "awgm_unstick", Status: "fail", Details: d}})
+	for _, want := range []string{"Линия «Франкфурт» не поднимается",
+		"«Франкфурт»: зависает снова и снова — за час выводил её 3 раза, больше не трогаю. Похоже на сервер или конфиг."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "перезапуск") {
+		t.Errorf("flapping text must not claim a restart did not help:\n%s", got)
+	}
+	for _, bad := range []string{"broken", "gave_up", "awgm_unstick", "service_restart", "flapping", "needs_start", "needs_stop", "starting", "stopping"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("служебное слово %q:\n%s", bad, got)
+		}
+	}
+}
+
+func TestPluralTimes(t *testing.T) {
+	for n, want := range map[int]string{3: "раза", 4: "раза", 5: "раз", 11: "раз", 12: "раз", 22: "раза", 25: "раз"} {
+		if got := pluralTimes(n); got != want {
+			t.Errorf("%d: %q", n, got)
+		}
+	}
+}

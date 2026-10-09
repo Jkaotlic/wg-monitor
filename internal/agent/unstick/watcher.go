@@ -27,7 +27,10 @@ type Deps struct {
 	RestartService func(ctx context.Context) error // S99awg-manager restart
 	Now            func() time.Time
 	Sleep          func(ctx context.Context, d time.Duration) error
-	Logger         *slog.Logger
+	// UpgradeInProgress -- идёт автообновление пакетов по cron (оно само
+	// перезапускает awg-manager); nil -- не проверять.
+	UpgradeInProgress func() bool
+	Logger            *slog.Logger
 }
 
 // Snapshot -- что видит проверка awgm_unstick.
@@ -44,6 +47,8 @@ type GaveUpTunnel struct {
 	Details  string // statusDetails, уже redact + 300 рун
 	Steps    []string
 	Since    time.Time
+	Flapping bool // зависает снова и снова: сторож не трогал
+	Fixes    int  // сколько раз вывел за flapWindow
 }
 
 // giveUp -- запись «сдался»; переживает рестарт агента (state.go).
@@ -58,6 +63,9 @@ type giveUp struct {
 	// Retrying -- прошло RetryAfterGiveUp, идёт повторная лесенка (без ступени 2);
 	// запись остаётся и для проверки это по-прежнему «сдался».
 	Retrying bool `json:"retrying,omitempty"`
+	// Flapping -- сдался сразу, без лесенки: за flapWindow уже Fixes выводов.
+	Flapping bool `json:"flapping,omitempty"`
+	Fixes    int  `json:"fixes,omitempty"`
 }
 
 type track struct {
@@ -79,6 +87,11 @@ const (
 	maxEvents   = wire.MaxUnstickEvents
 	eventsTTL   = 24 * time.Hour
 	detailsRune = 300
+	maxSteps    = 8
+	// flapFixes выводов за flapWindow -- туннель зависает снова и снова:
+	// лесенка не лечит причину, сторож сдаётся сразу.
+	flapFixes  = 3
+	flapWindow = time.Hour
 )
 
 // Команды бэкенда, после которых сторож молчит GuardWindow: по одному
@@ -140,6 +153,11 @@ func (w *Watcher) now() time.Time {
 		return w.d.Now()
 	}
 	return time.Now()
+}
+
+// upgrading -- идёт автообновление пакетов; вызывать без w.mu.
+func (w *Watcher) upgrading() bool {
+	return w.d.UpgradeInProgress != nil && w.d.UpgradeInProgress()
 }
 
 func (w *Watcher) sleep(ctx context.Context, d time.Duration) error {
@@ -205,6 +223,7 @@ func (w *Watcher) Tick(ctx context.Context) {
 
 // observe обновляет учёт и возвращает туннели, которым пора лесенку.
 func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
+	upgrading := w.upgrading()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.ready = true
@@ -249,7 +268,7 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		if now.Before(w.pausedUntil) {
 			continue
 		}
-		if t.Locked {
+		if t.Locked || upgrading {
 			continue
 		}
 		g, gaveUp := w.gaveUp[t.ID]
@@ -258,6 +277,17 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		}
 		if now.Sub(w.cmdRouter) < w.cfg.GuardWindow || now.Sub(w.cmdTunnel[t.ID]) < w.cfg.GuardWindow {
 			continue
+		}
+		if !gaveUp {
+			if n := w.fixedInWindowLocked(t.ID, now); n >= flapFixes {
+				w.gaveUp[t.ID] = giveUp{
+					Name: t.Name, Enabled: t.Enabled, Status: t.Status, Details: clipDetails(t.StatusDetails),
+					Steps: []string{}, Since: tr.since, At: now, Flapping: true, Fixes: n,
+				}
+				w.addEventLocked(now, &due{t: t, from: t.Status, steps: []string{"flapping"}}, wire.UnstickGaveUp, now)
+				w.log.Warn("unstick: туннель зависает снова и снова -- не трогаю", "tunnel", t.ID, "status", t.Status, "fixes", n)
+				continue
+			}
 		}
 		out = append(out, &due{t: t, from: t.Status, remedy: remedy, since: tr.since, retry: gaveUp})
 	}
@@ -314,12 +344,10 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		// отметка часа -- на диск ДО вызова (замок здесь не держим): SIGKILL
 		// посреди перезапуска службы не должен терять лимит
 		w.save()
-		for _, d := range list {
-			if !d.retry {
+		if w.d.RestartService != nil {
+			for _, d := range list {
 				d.steps = append(d.steps, "service_restart")
 			}
-		}
-		if w.d.RestartService != nil {
 			if err := w.d.RestartService(ctx); err != nil {
 				w.log.Warn("unstick: перезапуск awg-manager не удался", "err", err)
 			}
@@ -338,7 +366,7 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось
 			w.gaveUp[d.t.ID] = giveUp{
 				Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
-				Steps: d.steps, Since: d.since, At: now,
+				Steps: mergeSteps(w.gaveUp[d.t.ID].Steps, d.steps), Since: d.since, At: now,
 			}
 			w.log.Warn("unstick: повтор не помог", "tunnel", d.t.ID, "status", d.t.Status, "steps", d.steps)
 			continue
@@ -434,8 +462,15 @@ const (
 // штампуем), но свежая команда бэкенда по-прежнему прерывает лесенку.
 func (w *Watcher) serviceDecision(allowRun bool) serviceVerdict {
 	now := w.now()
+	upgrading := w.upgrading()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if upgrading {
+		// cron-обновление пакетов само перезапускает awg-manager: молчим,
+		// как при команде бэкенда
+		w.pausedUntil = now.Add(w.cfg.GuardWindow)
+		return serviceAbort
+	}
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде
 	var latest time.Time
 	if now.Sub(w.cmdRouter) < w.cfg.GuardWindow {
@@ -477,6 +512,17 @@ func (w *Watcher) addEventLocked(start time.Time, d *due, result string, now tim
 	w.pruneEventsLocked(now)
 }
 
+// fixedInWindowLocked -- сколько раз сторож вывел туннель за flapWindow.
+func (w *Watcher) fixedInWindowLocked(id string, now time.Time) int {
+	n := 0
+	for _, e := range w.events {
+		if e.TunnelID == id && e.Result == wire.UnstickFixed && now.Sub(e.At) < flapWindow {
+			n++
+		}
+	}
+	return n
+}
+
 func (w *Watcher) pruneEventsLocked(now time.Time) {
 	kept := w.events[:0]
 	for _, e := range w.events {
@@ -496,11 +542,28 @@ func (w *Watcher) setActive(id string) {
 	w.mu.Unlock()
 }
 
+// mergeSteps дописывает новые шаги к прежним без дублей подряд; хранится не
+// больше maxSteps последних.
+func mergeSteps(prev, add []string) []string {
+	out := append([]string(nil), prev...)
+	for _, s := range add {
+		if len(out) > 0 && out[len(out)-1] == s {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) > maxSteps {
+		out = out[len(out)-maxSteps:]
+	}
+	return out
+}
+
+// clipDetails: итог не длиннее detailsRune рун, считая «…».
 func clipDetails(s string) string {
 	s = redact.Text(s)
 	r := []rune(s)
 	if len(r) > detailsRune {
-		return string(r[:detailsRune]) + "…"
+		return string(r[:detailsRune-1]) + "…"
 	}
 	return s
 }
@@ -512,7 +575,8 @@ func (w *Watcher) Snapshot() Snapshot {
 	for id, g := range w.gaveUp {
 		s.GaveUp = append(s.GaveUp, GaveUpTunnel{
 			TunnelID: id, Name: g.Name, Status: g.Status, Details: g.Details,
-			Steps: append([]string(nil), g.Steps...), Since: g.Since,
+			Steps: append([]string{}, g.Steps...), Since: g.Since,
+			Flapping: g.Flapping, Fixes: g.Fixes,
 		})
 	}
 	sort.Slice(s.GaveUp, func(i, j int) bool { return s.GaveUp[i].TunnelID < s.GaveUp[j].TunnelID })

@@ -34,3 +34,20 @@ func TestCheck_States(t *testing.T) {
 		t.Errorf("tunnels: %#v", c.Details["tunnels"])
 	}
 }
+
+func TestCheck_FlappingKeysOnlyWhenFlapping(t *testing.T) {
+	c := (Check{Source: snap{Ready: true, GaveUp: []GaveUpTunnel{
+		{TunnelID: "a", Steps: []string{}, Flapping: true, Fixes: 3},
+		{TunnelID: "b", Steps: []string{"restart"}},
+	}}}).Run(ctx, checks.Deps{})
+	tl := c.Details["tunnels"].([]map[string]any)
+	if tl[0]["flapping"] != true || tl[0]["fixes"] != 3 {
+		t.Errorf("flapping item: %#v", tl[0])
+	}
+	if _, ok := tl[1]["flapping"]; ok {
+		t.Errorf("flapping key on a normal item: %#v", tl[1])
+	}
+	if _, ok := tl[1]["fixes"]; ok {
+		t.Errorf("fixes key on a normal item: %#v", tl[1])
+	}
+}
