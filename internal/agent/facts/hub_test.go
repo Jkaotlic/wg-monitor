@@ -113,3 +113,21 @@ func TestHub_UnstickSentOnChangeOnly(t *testing.T) {
 		t.Error("unchanged journal resent before refresh")
 	}
 }
+
+func TestHub_UnchangedUnstickResentAfterRefresh(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	ev := []wire.UnstickEvent{{ID: "1-nwg0", TunnelID: "nwg0", From: "broken", Result: wire.UnstickFixed, At: now}}
+	h := &Hub{Now: func() time.Time { return now }, Unstick: func() *wire.UnstickFacts {
+		return &wire.UnstickFacts{Events: ev}
+	}}
+	f := h.Collect(context.Background())
+	if f == nil || f.Unstick == nil {
+		t.Fatalf("first collect: %+v", f)
+	}
+	h.Committed(f)
+	now = now.Add(11 * time.Minute) // дольше Refresh (10 минут)
+	f2 := h.Collect(context.Background())
+	if f2 == nil || f2.Unstick == nil || len(f2.Unstick.Events) != 1 {
+		t.Fatalf("unchanged journal not resent after Refresh: %+v", f2)
+	}
+}

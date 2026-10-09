@@ -25,6 +25,7 @@ const (
 	MaxExitTunnels    = 16
 	MaxPingRuns       = 20
 	MaxUnstickEvents  = 20
+	MaxUnstickSteps   = 8
 	MaxWANLinks       = 8
 	MaxNativeDNSLists = 40
 	MaxFactText       = 80
@@ -170,7 +171,8 @@ func (f *ReportFacts) Empty() bool {
 // прыгал от отчёта к отчёту.
 //
 // Байтовый бюджет режет с хвоста: сперва NativeDNS.Lists (менее срочно для
-// тревог, чем состояние туннелей), затем PingRuns. Оба реза -- обычный
+// тревог, чем состояние туннелей), затем журнал сторожа (со старых событий),
+// затем PingRuns. Все резы -- обычный
 // reslice (f.X = f.X[:n]), а не запись поверх элементов: backing-array не
 // трогается, значит отдельный слайс ожидающих серий, который может держать
 // вызывающий агент (Task 5 -- pending PingRuns), не портится, даже если
@@ -247,10 +249,16 @@ func (f *ReportFacts) Clamp() {
 		}
 		clipped := make([]UnstickEvent, len(evs))
 		for i, e := range evs {
+			e.ID = ClipText(e.ID)
+			e.TunnelID = ClipText(e.TunnelID)
 			e.TunnelName = ClipText(e.TunnelName)
 			e.From = ClipText(e.From)
 			e.To = ClipText(e.To)
+			e.Result = ClipText(e.Result)
 			e.Steps = slices.Clone(e.Steps)
+			if len(e.Steps) > MaxUnstickSteps {
+				e.Steps = e.Steps[:MaxUnstickSteps]
+			}
 			clipped[i] = e
 		}
 		f.Unstick = &UnstickFacts{Events: clipped}
@@ -263,6 +271,12 @@ func (f *ReportFacts) Clamp() {
 	for f.jsonLen() > MaxFactsBytes {
 		if f.NativeDNS != nil && len(f.NativeDNS.Lists) > 0 {
 			f.NativeDNS.Lists = f.NativeDNS.Lists[:len(f.NativeDNS.Lists)-1]
+			continue
+		}
+		// журнал сторожа режется со старых (голова среза): clipped выше --
+		// собственная копия, память вызывающего не задеть
+		if f.Unstick != nil && len(f.Unstick.Events) > 0 {
+			f.Unstick.Events = f.Unstick.Events[1:]
 			continue
 		}
 		if len(f.PingRuns) > 0 {

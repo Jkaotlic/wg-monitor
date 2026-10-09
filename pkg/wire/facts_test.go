@@ -3,9 +3,11 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // Отчёт без новых полей обязан выглядеть на проводе ровно как отчёт v0.46:
@@ -194,7 +196,69 @@ func TestReportFacts_UnstickEmptyAndClamp(t *testing.T) {
 	if f.Unstick.Events[0].TunnelName == long {
 		t.Error("tunnel name not clipped")
 	}
-	if len(evs[0].TunnelName) != len(long) {
-		t.Error("Clamp mutated caller's slice")
+	// Clamp не трогает память вызывающего: сохранённый элемент (evs[5] --
+	// первый уцелевший после обрезки 25 -> 20) остаётся как был
+	if evs[5].TunnelName != long || evs[5].From != "broken" {
+		t.Error("Clamp mutated caller's element")
+	}
+	if f.Unstick.Events[0].TunnelName == evs[5].TunnelName {
+		t.Error("result element not clipped")
+	}
+}
+
+func TestClampUnstickClipsAllTextAndCopiesSteps(t *testing.T) {
+	long := strings.Repeat("я", 500)
+	steps := []string{"restart", "start", "stop", "stop_start", "service_restart", "a", "b", "c", "d", "e"}
+	evs := make([]UnstickEvent, 25)
+	for i := range evs {
+		evs[i] = UnstickEvent{ID: long, TunnelID: long, TunnelName: long, From: long, To: long, Result: long, Steps: slices.Clone(steps)}
+	}
+	f := &ReportFacts{Unstick: &UnstickFacts{Events: evs}}
+	f.Clamp()
+	got := f.Unstick.Events[0]
+	for name, v := range map[string]string{"ID": got.ID, "TunnelID": got.TunnelID, "TunnelName": got.TunnelName, "From": got.From, "To": got.To, "Result": got.Result} {
+		if n := utf8.RuneCountInString(v); n > MaxFactText {
+			t.Errorf("%s not clipped: %d runes", name, n)
+		}
+	}
+	if evs[5].From != long || evs[5].To != long || evs[5].ID != long || evs[5].Result != long {
+		t.Error("Clamp mutated caller's element")
+	}
+	if len(got.Steps) > 8 || len(evs[5].Steps) != len(steps) {
+		t.Errorf("steps: result %d, caller %d", len(got.Steps), len(evs[5].Steps))
+	}
+	got.Steps[0] = "changed"
+	if evs[5].Steps[0] != "restart" {
+		t.Error("result Steps share memory with the caller")
+	}
+}
+
+func TestClampUnstickCutOnByteBudgetOldestFirst(t *testing.T) {
+	long := strings.Repeat("я", 500)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	evs := make([]UnstickEvent, MaxUnstickEvents)
+	for i := range evs {
+		evs[i] = UnstickEvent{ID: fmt.Sprintf("%02d-%s", i, long), TunnelID: long, TunnelName: long, From: long, To: long,
+			Steps: []string{"restart", "start", "stop", "stop_start", "service_restart", "a", "b", "c"}, Result: UnstickFixed, At: now}
+	}
+	runs := []PingRun{{TunnelID: "awg11", TunnelName: "x", From: now, To: now, Fails: 2}}
+	f := &ReportFacts{Unstick: &UnstickFacts{Events: evs}, PingRuns: runs}
+	f.Clamp()
+	if n := f.jsonLen(); n > MaxFactsBytes {
+		t.Fatalf("block %d bytes > %d", n, MaxFactsBytes)
+	}
+	if len(f.Unstick.Events) == 0 || len(f.Unstick.Events) >= MaxUnstickEvents {
+		t.Fatalf("events kept = %d; want some cut", len(f.Unstick.Events))
+	}
+	// режутся самые старые: последний уцелел, первый нет
+	last := f.Unstick.Events[len(f.Unstick.Events)-1]
+	if !strings.HasPrefix(last.ID, "19-") {
+		t.Errorf("newest event lost: %s", last.ID)
+	}
+	if strings.HasPrefix(f.Unstick.Events[0].ID, "00-") {
+		t.Error("oldest event kept")
+	}
+	if len(f.PingRuns) != 1 {
+		t.Error("PingRuns must be cut after the journal, not before")
 	}
 }
