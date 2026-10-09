@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
@@ -28,5 +30,34 @@ func TestBuildUnstick(t *testing.T) {
 	}
 	if ch, ok := c.(unstick.Check); !ok || !ch.Disabled {
 		t.Errorf("disabled check: %#v", c)
+	}
+}
+
+func TestAwgmServiceRestart_DetachedWithDeadline(t *testing.T) {
+	var got context.Context
+	var errInside error
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		got, errInside = ctx, ctx.Err()
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := awgmServiceRestart(exec)(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || errInside != nil {
+		t.Fatalf("exec ctx must be detached from cancellation: %v", got)
+	}
+	dl, ok := got.Deadline()
+	if !ok || time.Until(dl) < 80*time.Second || time.Until(dl) > 91*time.Second {
+		t.Errorf("deadline %v ok=%v", dl, ok)
+	}
+}
+
+func TestUnstickThreshold(t *testing.T) {
+	for in, want := range map[int]time.Duration{-5: 0, 0: 0, 1: 30 * time.Second, 29: 30 * time.Second, 30: 30 * time.Second, 200: 200 * time.Second} {
+		if got := unstickThreshold(in); got != want {
+			t.Errorf("%d: %v want %v", in, got, want)
+		}
 	}
 }

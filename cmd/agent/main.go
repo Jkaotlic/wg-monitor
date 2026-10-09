@@ -237,25 +237,53 @@ func buildUnstick(cfg *agent.Config, awg unstick.AWG, exec actions.ExecFunc, log
 	if exec == nil {
 		exec = actions.DefaultExec
 	}
-	sec := func(n int) time.Duration { return time.Duration(n) * time.Second }
 	w := unstick.New(unstick.Config{
 		Enabled:         true,
-		BrokenAfter:     sec(cfg.Unstick.BrokenAfterSec),
-		NeedsAfter:      sec(cfg.Unstick.NeedsAfterSec),
-		TransitionAfter: sec(cfg.Unstick.TransitionAfterSec),
+		BrokenAfter:     unstickThreshold(cfg.Unstick.BrokenAfterSec),
+		NeedsAfter:      unstickThreshold(cfg.Unstick.NeedsAfterSec),
+		TransitionAfter: unstickThreshold(cfg.Unstick.TransitionAfterSec),
 		StatePath:       cfg.State.UnstickStatePath(),
 	}, unstick.Deps{
-		AWG: awg,
-		RestartService: func(ctx context.Context) error {
-			out, err := exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart")
-			if err != nil {
-				return fmt.Errorf("S99awg-manager restart: %v: %s", err, out)
-			}
-			return nil
-		},
-		Logger: logger.With("component", "unstick"),
+		AWG:            awg,
+		RestartService: awgmServiceRestart(exec),
+		Logger:         logger.With("component", "unstick"),
 	})
 	return w, unstick.Check{Source: w}
+}
+
+// unstickRestartTimeout -- потолок перезапуска службы. Контекст отсоединён от
+// остановки агента: иначе SIGTERM убьёт init-скрипт между stop и start, и
+// awg-manager останется лежать, а повтор разрешён лишь через час.
+const unstickRestartTimeout = 90 * time.Second
+
+// unstickMinThreshold -- нижняя граница порога из конфига: меньше -- лечить
+// то, что и так переходит из состояния в состояние.
+const unstickMinThreshold = 30 * time.Second
+
+// unstickThreshold переводит порог из конфига в секундах: <=0 -- 0 (умолчание
+// пакета), положительное меньше 30 с подтягивается до 30 с.
+func unstickThreshold(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	d := time.Duration(n) * time.Second
+	if d < unstickMinThreshold {
+		return unstickMinThreshold
+	}
+	return d
+}
+
+// awgmServiceRestart -- ступень 2 сторожа: перезапуск службы awg-manager.
+func awgmServiceRestart(exec actions.ExecFunc) func(context.Context) error {
+	return func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unstickRestartTimeout)
+		defer cancel()
+		out, err := exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart")
+		if err != nil {
+			return fmt.Errorf("S99awg-manager restart: %v: %s", err, out)
+		}
+		return nil
+	}
 }
 
 // buildDNSWatchdog returns the DNS watchdog loop and its resolver_guard check
