@@ -44,6 +44,8 @@ type GaveUpTunnel struct {
 	Details  string // statusDetails, уже redact + 300 рун
 	Steps    []string
 	Since    time.Time
+	Flapping bool // зависает снова и снова: сторож не трогал
+	Fixes    int  // сколько раз вывел за flapWindow
 }
 
 // giveUp -- запись «сдался»; переживает рестарт агента (state.go).
@@ -58,6 +60,9 @@ type giveUp struct {
 	// Retrying -- прошло RetryAfterGiveUp, идёт повторная лесенка (без ступени 2);
 	// запись остаётся и для проверки это по-прежнему «сдался».
 	Retrying bool `json:"retrying,omitempty"`
+	// Flapping -- сдался сразу, без лесенки: за flapWindow уже Fixes выводов.
+	Flapping bool `json:"flapping,omitempty"`
+	Fixes    int  `json:"fixes,omitempty"`
 }
 
 type track struct {
@@ -79,6 +84,10 @@ const (
 	maxEvents   = wire.MaxUnstickEvents
 	eventsTTL   = 24 * time.Hour
 	detailsRune = 300
+	// flapFixes выводов за flapWindow -- туннель зависает снова и снова:
+	// лесенка не лечит причину, сторож сдаётся сразу.
+	flapFixes  = 3
+	flapWindow = time.Hour
 )
 
 // Команды бэкенда, после которых сторож молчит GuardWindow: по одному
@@ -258,6 +267,17 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		}
 		if now.Sub(w.cmdRouter) < w.cfg.GuardWindow || now.Sub(w.cmdTunnel[t.ID]) < w.cfg.GuardWindow {
 			continue
+		}
+		if !gaveUp {
+			if n := w.fixedInWindowLocked(t.ID, now); n >= flapFixes {
+				w.gaveUp[t.ID] = giveUp{
+					Name: t.Name, Enabled: t.Enabled, Status: t.Status, Details: clipDetails(t.StatusDetails),
+					Steps: []string{}, Since: tr.since, At: now, Flapping: true, Fixes: n,
+				}
+				w.addEventLocked(now, &due{t: t, from: t.Status, steps: []string{"flapping"}}, wire.UnstickGaveUp, now)
+				w.log.Warn("unstick: туннель зависает снова и снова -- не трогаю", "tunnel", t.ID, "status", t.Status, "fixes", n)
+				continue
+			}
 		}
 		out = append(out, &due{t: t, from: t.Status, remedy: remedy, since: tr.since, retry: gaveUp})
 	}
@@ -477,6 +497,17 @@ func (w *Watcher) addEventLocked(start time.Time, d *due, result string, now tim
 	w.pruneEventsLocked(now)
 }
 
+// fixedInWindowLocked -- сколько раз сторож вывел туннель за flapWindow.
+func (w *Watcher) fixedInWindowLocked(id string, now time.Time) int {
+	n := 0
+	for _, e := range w.events {
+		if e.TunnelID == id && e.Result == wire.UnstickFixed && now.Sub(e.At) < flapWindow {
+			n++
+		}
+	}
+	return n
+}
+
 func (w *Watcher) pruneEventsLocked(now time.Time) {
 	kept := w.events[:0]
 	for _, e := range w.events {
@@ -513,6 +544,7 @@ func (w *Watcher) Snapshot() Snapshot {
 		s.GaveUp = append(s.GaveUp, GaveUpTunnel{
 			TunnelID: id, Name: g.Name, Status: g.Status, Details: g.Details,
 			Steps: append([]string(nil), g.Steps...), Since: g.Since,
+			Flapping: g.Flapping, Fixes: g.Fixes,
 		})
 	}
 	sort.Slice(s.GaveUp, func(i, j int) bool { return s.GaveUp[i].TunnelID < s.GaveUp[j].TunnelID })

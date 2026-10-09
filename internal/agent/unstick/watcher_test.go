@@ -3,6 +3,7 @@ package unstick
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -609,10 +610,16 @@ func TestTick_ReadErrorIsSkip(t *testing.T) {
 }
 
 func TestEvents_Retention(t *testing.T) {
-	h := newHarness(tun("x", "broken", true))
+	h := newHarness()
 	h.awg.onAction = func(_, _ string, tt *awgmgr.Tunnel) { tt.Status = "running" }
 	for i := 0; i < 25; i++ {
-		h.awg.set("x", "broken")
+		// у каждого вывода свой туннель: один и тот же, зависший 3 раза за час,
+		// сторож уже не лечит (flapFixes)
+		id := fmt.Sprintf("x%d", i)
+		h.awg.mu.Lock()
+		h.awg.tunnels = append(h.awg.tunnels, tun(id, "running", true))
+		h.awg.mu.Unlock()
+		h.awg.set(id, "broken")
 		h.w.Tick(ctx)
 		h.clk.advance(61 * time.Second)
 		h.w.Tick(ctx)
@@ -665,5 +672,59 @@ func TestTick_NeedsStopEnabledIsStarted(t *testing.T) {
 	ev := h.w.Facts().Events[0]
 	if ev.Result != wire.UnstickFixed || ev.From != "needs_stop" || ev.To != "running" || !slices.Equal(ev.Steps, []string{"start"}) {
 		t.Errorf("event: %+v", ev)
+	}
+}
+
+// fixCycle: туннель nwg0 ломается, сторож выводит его перезапуском.
+func fixCycle(h *harness) {
+	h.awg.set("nwg0", "broken")
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+}
+
+func TestTick_FlappingGivesUpWithoutTouching(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.clk.advance(5 * time.Minute)
+	}
+	before := h.awg.callList()
+	if len(before) != 3 {
+		t.Fatalf("setup calls: %v", before)
+	}
+	fixCycle(h)
+	if got := h.awg.callList(); !slices.Equal(got, before) {
+		t.Fatalf("watcher touched a flapping tunnel: %v", got)
+	}
+	if h.services != 0 {
+		t.Errorf("services = %d", h.services)
+	}
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 || len(s.GaveUp[0].Steps) != 0 {
+		t.Fatalf("snapshot: %+v", s.GaveUp)
+	}
+	evs := h.w.Facts().Events
+	last := evs[len(evs)-1]
+	if last.Result != wire.UnstickGaveUp || !slices.Equal(last.Steps, []string{"flapping"}) || last.TunnelID != "nwg0" {
+		t.Errorf("last event: %+v", last)
+	}
+}
+
+func TestTick_FlappingWindowExpires(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.clk.advance(40 * time.Minute)
+	}
+	// первое из трёх -- старше часа: в окне 2 вывода -- обычная лесенка
+	fixCycle(h)
+	if n := countCalls(h, "restart:nwg0"); n != 4 {
+		t.Fatalf("restarts = %d; want 4", n)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up: %+v", s.GaveUp)
 	}
 }

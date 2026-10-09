@@ -1681,6 +1681,8 @@ const (
 type unstickTunnel struct {
 	name, details string
 	service       bool
+	flapping      bool
+	fixes         int
 }
 
 func unstickTunnels(d map[string]any) []unstickTunnel {
@@ -1694,6 +1696,10 @@ func unstickTunnels(d map[string]any) []unstickTunnel {
 		u := unstickTunnel{name: strOrEmpty(m, "name"), details: strOrEmpty(m, "details")}
 		if u.name == "" {
 			u.name = strOrEmpty(m, "tunnel_id")
+		}
+		if f, _ := m["flapping"].(bool); f {
+			u.flapping = true
+			u.fixes, _ = intOrZero(m, "fixes")
 		}
 		steps, _ := m["steps"].([]any)
 		for _, s := range steps {
@@ -1719,6 +1725,11 @@ func unstickHeadline(d map[string]any) string {
 
 func writeUnstickWhatBroke(b *strings.Builder, d map[string]any) {
 	for _, u := range unstickTunnels(d) {
+		if u.flapping {
+			fmt.Fprintf(b, "«%s»: зависает снова и снова — за час выводил её %d %s, больше не трогаю. Похоже на сервер или конфиг.\n",
+				u.name, u.fixes, pluralTimes(u.fixes))
+			continue
+		}
 		tried := "перезапуск линии не помог"
 		if u.service {
 			tried = "перезапуск линии и awg-manager не помогли"
@@ -1729,4 +1740,14 @@ func writeUnstickWhatBroke(b *strings.Builder, d map[string]any) {
 		}
 		b.WriteString("\n")
 	}
+}
+
+// pluralTimes -- «раз»/«раза» после числа.
+func pluralTimes(n int) string {
+	if m := n % 100; m < 12 || m > 14 {
+		if r := n % 10; r >= 2 && r <= 4 {
+			return "раза"
+		}
+	}
+	return "раз"
 }

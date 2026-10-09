@@ -22,7 +22,7 @@ type SnapshotSource interface {
 // Check -- тонкая проверка: только читает снимок сторожа.
 //
 //	ok:   {active:"<id>"|""} | {ready:false} | {disabled:true}
-//	fail: {reason:"gave_up", tunnels:[{tunnel_id,name,status,details,steps,since}]}
+//	fail: {reason:"gave_up", tunnels:[{tunnel_id,name,status,details,steps,since[,flapping,fixes]}]}
 type Check struct {
 	Source   SnapshotSource
 	Disabled bool
@@ -44,14 +44,19 @@ func (c Check) Run(_ context.Context, _ checks.Deps) wire.Check {
 	}
 	tl := make([]map[string]any, 0, len(s.GaveUp))
 	for _, g := range s.GaveUp {
-		tl = append(tl, map[string]any{
+		item := map[string]any{
 			"tunnel_id": g.TunnelID,
 			"name":      g.Name,
 			"status":    g.Status,
 			"details":   g.Details,
 			"steps":     g.Steps,
 			"since":     g.Since.UTC().Format(time.RFC3339),
-		})
+		}
+		if g.Flapping {
+			item["flapping"] = true
+			item["fixes"] = g.Fixes
+		}
+		tl = append(tl, item)
 	}
 	return checks.Fail(CheckName, start, "awg-manager tunnel stays stuck after restart and awg-manager restart",
 		map[string]any{"reason": DetailReasonGaveUp, "tunnels": tl})
