@@ -62,7 +62,7 @@ func TestDNSResetProbesEachReferenceServerOnce(t *testing.T) {
 	if status != "ok" {
 		t.Fatalf("status=%q\n%s", status, out)
 	}
-	want := map[string]string{yandexHost: "ya.ru", "9.9.9.9": "example.com", "1.1.1.1": "example.com"}
+	want := map[string]string{yandexHost: "ya.ru", "1.1.1.1": "example.com", "1.0.0.1": "example.com"}
 	if len(p.asked) != len(want) {
 		t.Fatalf("asked=%v", p.asked)
 	}
@@ -119,7 +119,7 @@ func TestDNSResetSkipsDeadYandexLines(t *testing.T) {
 
 // Один заграничный мёртв -- ставится второй.
 func TestDNSResetSkipsOneDeadForeign(t *testing.T) {
-	p := &fakeDNSProbe{dead: map[string]bool{"9.9.9.9": true}}
+	p := &fakeDNSProbe{dead: map[string]bool{"1.1.1.1": true}}
 	f := &replayDNSExec{configs: []string{sampleRunningConfig, configAfterApplyWithPorts()}}
 
 	status, out, _ := DNSResetProbed(context.Background(), f.exec, DNSResetOpts{Probe: p.probe})
@@ -127,7 +127,7 @@ func TestDNSResetSkipsOneDeadForeign(t *testing.T) {
 	if status != "ok" {
 		t.Fatalf("status=%q\n%s", status, out)
 	}
-	if slices.Contains(f.calls, "dns-proxy tls upstream 9.9.9.9 sni dns.quad9.net") || !slices.Contains(f.calls, "dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com") {
+	if slices.Contains(f.calls, "dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com") || !slices.Contains(f.calls, "dns-proxy tls upstream 1.0.0.1 sni cloudflare-dns.com") {
 		t.Fatalf("calls=%v", f.calls)
 	}
 }
@@ -136,7 +136,7 @@ func TestDNSResetSkipsOneDeadForeign(t *testing.T) {
 // команды; и в предпросмотре тоже.
 func TestDNSResetRefusesWhenNoForeignAnswers(t *testing.T) {
 	for _, dry := range []bool{false, true} {
-		p := &fakeDNSProbe{dead: map[string]bool{"9.9.9.9": true, "1.1.1.1": true}}
+		p := &fakeDNSProbe{dead: map[string]bool{"1.1.1.1": true, "1.0.0.1": true}}
 		f := &replayDNSExec{configs: []string{sampleRunningConfig, configAfterApplyWithPorts()}}
 
 		status, out, res := DNSResetProbed(context.Background(), f.exec, DNSResetOpts{Probe: p.probe, DryRun: dry, SnapshotDir: t.TempDir()})

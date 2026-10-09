@@ -7,13 +7,12 @@ import (
 )
 
 const (
-	yandexDoT     = "tls upstream common.dot.dns.yandex.net"
-	yandexDoH     = "https upstream https://common.dot.dns.yandex.net/dns-query"
-	quad9DoH      = "https upstream https://dns.quad9.net/dns-query"
-	controlDDoH   = "https upstream https://freedns.controld.com/p0"
-	cloudflareDoH = "https upstream https://cloudflare-dns.com/dns-query"
-	cloudflareDoT = "tls upstream 1.1.1.1 sni cloudflare-dns.com"
-	quad9DoT      = "tls upstream 9.9.9.9 sni dns.quad9.net"
+	yandexDoT      = "tls upstream common.dot.dns.yandex.net"
+	yandexDoH      = "https upstream https://common.dot.dns.yandex.net/dns-query"
+	controlDDoH    = "https upstream https://freedns.controld.com/p0"
+	cloudflareDoH  = "https upstream https://cloudflare-dns.com/dns-query"
+	cloudflareDoT  = "tls upstream 1.1.1.1 sni cloudflare-dns.com"
+	cloudflareDoT2 = "tls upstream 1.0.0.1 sni cloudflare-dns.com"
 )
 
 var ruZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf"}
@@ -46,7 +45,7 @@ func TestDefaults_Verbatim(t *testing.T) {
 	if !reflect.DeepEqual(DefaultRUCandidates, []string{yandexDoT, yandexDoH}) {
 		t.Errorf("DefaultRUCandidates = %v", DefaultRUCandidates)
 	}
-	if !reflect.DeepEqual(DefaultForeignCandidates, []string{quad9DoH, controlDDoH, cloudflareDoH, cloudflareDoT, quad9DoT}) {
+	if !reflect.DeepEqual(DefaultForeignCandidates, []string{controlDDoH, cloudflareDoH, cloudflareDoT, cloudflareDoT2}) {
 		t.Errorf("DefaultForeignCandidates = %v", DefaultForeignCandidates)
 	}
 	if !reflect.DeepEqual(DefaultPinnedZones, pinnedZones) {
@@ -65,7 +64,7 @@ func TestBuildFallbackSet_SplitLikeAGH(t *testing.T) {
 	if !ok || ruDegraded {
 		t.Fatalf("ok=%v ruDegraded=%v, want true/false", ok, ruDegraded)
 	}
-	want := []string{quad9DoH, controlDDoH, cloudflareDoH}
+	want := []string{controlDDoH, cloudflareDoH, cloudflareDoT}
 	want = append(want, domainLines(yandexDoT, ruZones)...)
 	want = append(want, domainLines(cloudflareDoH, pinnedZones)...)
 	if !reflect.DeepEqual(lines, want) {
@@ -96,7 +95,7 @@ func TestBuildFallbackSet_YandexDeadIsRUDegraded(t *testing.T) {
 	if !ok || !ruDegraded {
 		t.Fatalf("ok=%v ruDegraded=%v, want true/true", ok, ruDegraded)
 	}
-	want := []string{quad9DoH, controlDDoH, cloudflareDoH}
+	want := []string{controlDDoH, cloudflareDoH, cloudflareDoT}
 	want = append(want, domainLines(cloudflareDoH, pinnedZones)...)
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("lines:\n got %q\nwant %q", lines, want)
@@ -115,7 +114,7 @@ func TestBuildFallbackSet_SecondRUCandidateWhenDoTDead(t *testing.T) {
 	if !ok || ruDegraded {
 		t.Fatalf("ok=%v ruDegraded=%v, want true/false", ok, ruDegraded)
 	}
-	want := []string{quad9DoH, controlDDoH, cloudflareDoH}
+	want := []string{controlDDoH, cloudflareDoH, cloudflareDoT}
 	want = append(want, domainLines(yandexDoH, ruZones)...)
 	want = append(want, domainLines(cloudflareDoH, pinnedZones)...)
 	if !reflect.DeepEqual(lines, want) {
@@ -133,7 +132,7 @@ func TestBuildFallbackSet_CapsForeignAtMax(t *testing.T) {
 	if !ok {
 		t.Fatal("ok must be true")
 	}
-	want := []string{quad9DoH, controlDDoH}
+	want := []string{controlDDoH, cloudflareDoH}
 	want = append(want, domainLines(cloudflareDoH, pinnedZones)...)
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("lines:\n got %q\nwant %q", lines, want)
@@ -141,8 +140,11 @@ func TestBuildFallbackSet_CapsForeignAtMax(t *testing.T) {
 
 	// Default cap is 3 even when the config leaves it unset.
 	cfg.MaxForeign = 0
-	lines, _, _ = BuildFallbackSet(cfg, nil, []string{quad9DoT, cloudflareDoT, controlDDoH, quad9DoH})
-	if want := []string{quad9DoT, cloudflareDoT, controlDDoH}; !reflect.DeepEqual(lines, want) {
+	lines, _, _ = BuildFallbackSet(cfg, nil, []string{cloudflareDoT2, cloudflareDoT, controlDDoH, cloudflareDoH})
+	// Cloudflare DoH is the 4th live candidate -- over the cap, yet the pinned
+	// zones still go to it.
+	want = append([]string{cloudflareDoT2, cloudflareDoT, controlDDoH}, domainLines(cloudflareDoH, pinnedZones)...)
+	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("unset cap:\n got %q\nwant %q", lines, want)
 	}
 }
@@ -151,11 +153,11 @@ func TestBuildFallbackSet_CapsForeignAtMax(t *testing.T) {
 // Cloudflare DoH only when that exact candidate passed its probe. Cloudflare
 // DoT being alive does not count — it is a different line.
 func TestBuildFallbackSet_PinnedOnlyWhenCloudflareLive(t *testing.T) {
-	lines, _, ok := BuildFallbackSet(defaultSetConfig(), DefaultRUCandidates, []string{quad9DoH, controlDDoH, cloudflareDoT, quad9DoT})
+	lines, _, ok := BuildFallbackSet(defaultSetConfig(), DefaultRUCandidates, []string{controlDDoH, cloudflareDoT, cloudflareDoT2})
 	if !ok {
 		t.Fatal("ok must be true")
 	}
-	want := []string{quad9DoH, controlDDoH, cloudflareDoT}
+	want := []string{controlDDoH, cloudflareDoT, cloudflareDoT2}
 	want = append(want, domainLines(yandexDoT, ruZones)...)
 	if !reflect.DeepEqual(lines, want) {
 		t.Fatalf("lines:\n got %q\nwant %q", lines, want)
@@ -173,11 +175,11 @@ func TestBuildFallbackSet_NoDuplicates(t *testing.T) {
 	cfg := defaultSetConfig()
 	cfg.RUZones = []string{"ru", "su", "ru"}
 	cfg.PinnedZones = []string{"tmdb.org", "tmdb.org"}
-	lines, _, ok := BuildFallbackSet(cfg, []string{yandexDoT, yandexDoT}, []string{quad9DoH, quad9DoH, cloudflareDoH, controlDDoH})
+	lines, _, ok := BuildFallbackSet(cfg, []string{yandexDoT, yandexDoT}, []string{controlDDoH, controlDDoH, cloudflareDoH, cloudflareDoT})
 	if !ok {
 		t.Fatal("ok must be true")
 	}
-	want := []string{quad9DoH, cloudflareDoH, controlDDoH,
+	want := []string{controlDDoH, cloudflareDoH, cloudflareDoT,
 		yandexDoT + " domain ru", yandexDoT + " domain su",
 		cloudflareDoH + " domain tmdb.org"}
 	if !reflect.DeepEqual(lines, want) {
