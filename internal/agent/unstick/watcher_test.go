@@ -649,3 +649,21 @@ func TestNew_StartCountsAsRouterWideCommand(t *testing.T) {
 		t.Fatalf("no action after the start guard: %v", c)
 	}
 }
+
+// Живая приёмка 09.10.2026 на workrouter: stop → enable оставил туннель в
+// needs_stop при enabled=true на минуты, awg-manager сам не выходит (#669 в
+// его исходниках: «nothing reconciles tunnels back»), start поднял за 10 с.
+func TestTick_NeedsStopEnabledIsStarted(t *testing.T) {
+	h := newHarness(tun("awg10", "needs_stop", true))
+	h.awg.onAction = healOn("start")
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); !slices.Equal(c, []string{"start:awg10"}) {
+		t.Fatalf("calls: %v", c)
+	}
+	ev := h.w.Facts().Events[0]
+	if ev.Result != wire.UnstickFixed || ev.From != "needs_stop" || ev.To != "running" || !slices.Equal(ev.Steps, []string{"start"}) {
+		t.Errorf("event: %+v", ev)
+	}
+}

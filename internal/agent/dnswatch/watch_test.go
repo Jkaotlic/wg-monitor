@@ -377,12 +377,12 @@ func TestWatch_NoLiveFallbackLeavesConfigUntouched(t *testing.T) {
 // listed — each probed with its own canary.
 func TestWatch_SwitchesToSplitSetOfLiveCandidates(t *testing.T) {
 	yandexDoT, yandexDoH := DefaultRUCandidates[0], DefaultRUCandidates[1]
-	quad9DoH, controlD, cfDoH, cfDoT, quad9DoT := DefaultForeignCandidates[0], DefaultForeignCandidates[1],
-		DefaultForeignCandidates[2], DefaultForeignCandidates[3], DefaultForeignCandidates[4]
-	h := newHarness(t, newRouter(ownLine, unrelated), yandexDoT, quad9DoH, cfDoH)
+	controlD, cfDoH, cfDoT, cfDoT2 := DefaultForeignCandidates[0], DefaultForeignCandidates[1],
+		DefaultForeignCandidates[2], DefaultForeignCandidates[3]
+	h := newHarness(t, newRouter(ownLine, unrelated), yandexDoT, controlD, cfDoH)
 	s := h.goFallback()
 
-	want := []string{unrelated, controlD, echoForm(cfDoT), echoForm(quad9DoT)}
+	want := []string{unrelated, echoForm(cfDoT), echoForm(cfDoT2)}
 	for _, z := range DefaultRUZones {
 		want = append(want, yandexDoH+" domain "+z)
 	}
@@ -391,7 +391,7 @@ func TestWatch_SwitchesToSplitSetOfLiveCandidates(t *testing.T) {
 	if !s.Since.Equal(t0.Add(time.Minute)) {
 		t.Errorf("Since = %v, want the switch time", s.Since)
 	}
-	if !reflect.DeepEqual(s.Foreign, []string{controlD, cfDoT, quad9DoT}) || s.RU != yandexDoH || s.RUDegraded || s.NoLiveFallback {
+	if !reflect.DeepEqual(s.Foreign, []string{cfDoT, cfDoT2}) || s.RU != yandexDoH || s.RUDegraded || s.NoLiveFallback {
 		t.Errorf("snapshot = %+v", s)
 	}
 	for _, pr := range h.p.probed {

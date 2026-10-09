@@ -55,12 +55,12 @@ var (
 		"https upstream https://" + yandexDoTHost + "/dns-query",
 	}
 
+	// Quad9 убран 09.10.2026: из России не отвечает (решение оператора).
 	foreignCandidates = []string{
-		"https upstream https://dns.quad9.net/dns-query",
 		"https upstream https://freedns.controld.com/p0",
 		"https upstream https://cloudflare-dns.com/dns-query",
 		"tls upstream 1.1.1.1 sni cloudflare-dns.com",
-		"tls upstream 9.9.9.9 sni dns.quad9.net",
+		"tls upstream 1.0.0.1 sni cloudflare-dns.com",
 	}
 
 	pinnedZones = []string{"themoviedb.org", "tmdb.org", "b-cdn.net", "phncdn.com", "pornhub.com", "rncdn7.com"}
@@ -68,9 +68,11 @@ var (
 	// Заграничная часть эталона ручного сброса. В отличие от кандидатов
 	// сторожа это DoT: набор сохраняется в конфиг роутера и должен работать
 	// без сторожа вовсе.
+	// Quad9 заменён вторым адресом Cloudflare 09.10.2026: из России Quad9 не
+	// отвечает; два адреса -- запас, если один зарежут по IP.
 	referenceForeignDoT = []string{
-		"tls upstream 9.9.9.9 sni dns.quad9.net",
 		"tls upstream 1.1.1.1 sni cloudflare-dns.com",
+		"tls upstream 1.0.0.1 sni cloudflare-dns.com",
 	}
 )
 

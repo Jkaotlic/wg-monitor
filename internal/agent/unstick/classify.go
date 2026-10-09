@@ -25,7 +25,8 @@ const (
 
 // Classify относит статус awg-manager к виду зависания и лекарству.
 // Выключенный владельцем туннель (enabled=false): только остановка или ничего,
-// никогда не запуск. Включённый в stopping: перезапуск (цель -- running).
+// никогда не запуск. Включённый в stopping: перезапуск, в needs_stop: запуск
+// (цель включённого -- running).
 func Classify(status string, enabled bool) (Kind, Remedy) {
 	switch status {
 	case "broken":
@@ -41,6 +42,12 @@ func Classify(status string, enabled bool) (Kind, Remedy) {
 		if !enabled {
 			return KindNeeds, RemedyStop
 		}
+		// Включён, но needs_stop («conf disabled, процесс жив»): тумблер в
+		// KeenOS awg-manager сам за секунды доводит до enabled=false, так что
+		// минутное сочетание -- не намерение владельца, а несогласованность,
+		// из которой awg-manager не выходит (его #669). Живая приёмка
+		// 09.10.2026: stop → enable на workrouter, start поднял за 10 с.
+		return KindNeeds, RemedyStart
 	case "starting":
 		if enabled {
 			return KindTransition, RemedyRestart

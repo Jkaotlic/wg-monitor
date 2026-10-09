@@ -217,3 +217,42 @@ func TestZoneCanaryIsInTheZone(t *testing.T) {
 		t.Errorf("ru: %q", dnsref.ZoneCanary("RU."))
 	}
 }
+
+// Quad9 из России не отвечает (оператор, 09.10.2026; проба эталона перед
+// сбросом на роутерах). Держать его в эталоне -- ставить на роутер мёртвый
+// сервер, а у сторожа -- тратить попытку запаса на заведомо молчащий.
+func TestQuad9AppearsNowhere(t *testing.T) {
+	all := append(append(append([]string{},
+		dnsref.ReferenceDoTLines()...),
+		dnsref.RUCandidates()...),
+		dnsref.ForeignCandidates()...)
+	all = append(all, dnsref.PinnedCandidate())
+	for _, line := range all {
+		for _, q := range []string{"9.9.9.9", "quad9"} {
+			if strings.Contains(line, q) {
+				t.Errorf("Quad9 остался в наборе: %q", line)
+			}
+		}
+	}
+}
+
+// Заграничная часть эталона -- оба адреса Cloudflare по DoT (решение
+// оператора 09.10.2026 вместо Quad9): запас по адресу, если один зарежут.
+func TestReferenceForeignIsBothCloudflareDoT(t *testing.T) {
+	var foreign []string
+	for _, u := range dnsref.ReferenceUpstreams() {
+		if u.Purpose == dnsref.PurposeForeign {
+			foreign = append(foreign, u.Line)
+		}
+	}
+	want := []string{
+		"tls upstream 1.1.1.1 sni cloudflare-dns.com",
+		"tls upstream 1.0.0.1 sni cloudflare-dns.com",
+	}
+	if strings.Join(foreign, "|") != strings.Join(want, "|") {
+		t.Errorf("заграничная часть эталона %q, хотим %q", foreign, want)
+	}
+	if n := len(dnsref.ReferenceDoTLines()); n > dnsref.KeeneticDoTLimit {
+		t.Errorf("эталон %d строк, KeenOS держит %d", n, dnsref.KeeneticDoTLimit)
+	}
+}

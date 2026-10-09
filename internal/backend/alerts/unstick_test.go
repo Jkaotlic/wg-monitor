@@ -27,6 +27,7 @@ func TestFormatUnstickFixed(t *testing.T) {
 		{"starting", []string{"restart"}, "running", restarted},
 		{"needs_start", []string{"start"}, "running", started},
 		{"needs_stop", []string{"stop"}, "stopped", stopped},
+		{"needs_stop", []string{"start"}, "running", started},
 		{"stopping", []string{"restart", "service_restart"}, "running", restarted},
 		{"broken", []string{"stop"}, "stopped", stopped},
 		{"starting", []string{"stop"}, "stopped", stopped},
