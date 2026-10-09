@@ -3,11 +3,10 @@ package alerts
 import (
 	"context"
 	"errors"
-
-	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"strings"
 	"testing"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 

@@ -91,13 +91,13 @@ func sandboxCleanFreed() {
 
 // Пробы эталона: 1.1.1.1 не отвечает -- экран показывает пропущенный сервер.
 var sandboxDNSProbes = []wire.DNSProbe{
-	{Server: "9.9.9.9", Purpose: "foreign", OK: true},
+	{Server: "1.0.0.1", Purpose: "foreign", OK: true},
 	{Server: "1.1.1.1", Purpose: "foreign", Error: "нет ответа за 5s"},
 	{Server: "common.dot.dns.yandex.net", Purpose: "ru", OK: true},
 }
 
 const sandboxDNSProbeText = "проверка доступности эталона (3):\n" +
-	"  ✓ 9.9.9.9 — отвечает\n" +
+	"  ✓ 1.0.0.1 — отвечает\n" +
 	"  ✗ 1.1.1.1 — не отвечает: нет ответа за 5s\n" +
 	"  ✓ common.dot.dns.yandex.net — отвечает\n" +
 	"сервер не отвечает, не ставим (1):\n" +
@@ -107,7 +107,7 @@ func sandboxDNSReset(args map[string]any) string {
 	if dry, _ := args["dry_run"].(bool); dry {
 		return "Предпросмотр сброса DNS — ничего не изменено\n\n" + sandboxDNSProbeText +
 			"Уберём (1):\n  − tls upstream 8.8.8.8 sni dns.google\n\n" +
-			"Заменим на эталонные (7):\n  + tls upstream 9.9.9.9 sni dns.quad9.net\n"
+			"Заменим на эталонные (7):\n  + tls upstream 1.0.0.1 sni cloudflare-dns.com\n"
 	}
 	return "DNS reset → reference DoT\n\n" + sandboxDNSProbeText + "снимок «до»: /opt/etc/wg-monitor/dns-before-1791360000.txt\n"
 }
