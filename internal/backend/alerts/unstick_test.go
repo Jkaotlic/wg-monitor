@@ -1,6 +1,10 @@
 package alerts
 
 import (
+	"context"
+	"errors"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"strings"
 	"testing"
 
@@ -33,5 +37,27 @@ func TestFormatUnstickFixed(t *testing.T) {
 	svc := FormatUnstickFixed("home", wire.UnstickEvent{TunnelID: "nwg0", From: "broken", Steps: []string{"restart", "service_restart"}, Result: wire.UnstickFixed})
 	if !strings.Contains(svc, "Пришлось перезапустить awg-manager целиком") || !strings.Contains(svc, "«nwg0»") || strings.Contains(svc, "service_restart") {
 		t.Errorf("service/no name: %q", svc)
+	}
+}
+
+type failFirstSender struct{ calls, ok int }
+
+func (f *failFirstSender) SendSilentKeyboard(_ context.Context, _ int64, _, _ string, _ *tg.InlineKeyboardMarkup) (int, error) {
+	f.calls++
+	if f.calls == 1 {
+		return 0, errors.New("boom")
+	}
+	f.ok++
+	return 1, nil
+}
+
+func TestSendUnstick_ContinuesAfterError(t *testing.T) {
+	s := &failFirstSender{}
+	ev := func(id string) wire.UnstickEvent {
+		return wire.UnstickEvent{ID: id, TunnelID: "nwg0", From: "broken", Result: wire.UnstickFixed}
+	}
+	err := NewUnstickNotifier(s).SendUnstick(context.Background(), 1, "home", []wire.UnstickEvent{ev("a"), ev("b")})
+	if err == nil || s.calls != 2 || s.ok != 1 {
+		t.Fatalf("err=%v calls=%d ok=%d", err, s.calls, s.ok)
 	}
 }

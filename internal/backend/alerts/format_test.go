@@ -1351,3 +1351,11 @@ func TestFormatRecovery_AwgmUnstick(t *testing.T) {
 		t.Errorf("recovery:\n%s", got)
 	}
 }
+
+func TestFormatHard_AwgmUnstickNoTunnels(t *testing.T) {
+	got := FormatHard(HardArgs{Nickname: "home", CheckName: "awgm_unstick",
+		Check: wire.Check{Name: "awgm_unstick", Status: "fail", Details: map[string]any{"reason": "gave_up", "tunnels": []any{}}}})
+	if !strings.Contains(got, "Линия не поднимается") || strings.Contains(got, "Несколько") {
+		t.Errorf("no tunnels:\n%s", got)
+	}
+}

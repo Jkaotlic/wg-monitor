@@ -1708,7 +1708,10 @@ func unstickTunnels(d map[string]any) []unstickTunnel {
 
 func unstickHeadline(d map[string]any) string {
 	ts := unstickTunnels(d)
-	if len(ts) == 1 {
+	switch len(ts) {
+	case 0:
+		return "Линия не поднимается"
+	case 1:
 		return fmt.Sprintf("Линия «%s» не поднимается", ts[0].name)
 	}
 	return "Несколько линий не поднимаются"

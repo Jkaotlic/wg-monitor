@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,15 +22,16 @@ type UnstickNotifier struct{ s UnstickSender }
 func NewUnstickNotifier(s UnstickSender) *UnstickNotifier { return &UnstickNotifier{s: s} }
 
 func (n *UnstickNotifier) SendUnstick(ctx context.Context, userID int64, nickname string, events []wire.UnstickEvent) error {
+	var errs []error
 	for _, ev := range events {
 		if ev.Result != wire.UnstickFixed {
 			continue
 		}
 		if _, err := n.s.SendSilentKeyboard(ctx, userID, FormatUnstickFixed(nickname, ev), "", nil); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // FormatUnstickFixed -- текст владельцу. Без служебных слов awg-manager

@@ -17,8 +17,8 @@ ON CONFLICT(user_id, event_id) DO NOTHING`
 
 // UnstickEventArgs -- аргументы InsertUnstickEventSQL в его порядке.
 func UnstickEventArgs(userID int64, e wire.UnstickEvent) []any {
-	return []any{userID, e.ID, e.TunnelID, wire.ClipText(e.TunnelName), wire.ClipText(e.From),
-		strings.Join(e.Steps, ","), e.Result, wire.ClipText(e.To), factTS(e.At)}
+	return []any{userID, wire.ClipText(e.ID), wire.ClipText(e.TunnelID), wire.ClipText(e.TunnelName), wire.ClipText(e.From),
+		strings.Join(e.Steps, ","), wire.ClipText(e.Result), wire.ClipText(e.To), factTS(e.At)}
 }
 
 type UnstickEventsRepo struct{ d *DB }

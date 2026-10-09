@@ -102,6 +102,7 @@ func insertReportUnstickEvents(ctx context.Context, tx *sql.Tx, uid int64, f *wi
 		if err != nil {
 			return nil, err
 		}
+		// Возраст считаем по часам роутера (e.At от агента): им и верим.
 		if n, _ := res.RowsAffected(); n == 1 && e.Result == wire.UnstickFixed && now.Sub(e.At) <= unstickNotifyMaxAge {
 			notify = append(notify, e)
 		}
