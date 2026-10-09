@@ -101,7 +101,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.1 # 2026.2
+      # staticcheck v0.8.1 (2026.2) тянет x/tools, который не читает формат
+      # экспорта Go 1.27.2 («export data version 5»), а 1.27.2 обязателен из-за
+      # уязвимостей net/http (GO-2026-6609..6617). Собираем тот же staticcheck
+      # со свежим x/tools; вернуть простой `go install …@vX`, когда выйдет
+      # релиз staticcheck с поддержкой 1.27.2.
+      - name: staticcheck v0.8.1 с x/tools v0.51.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/staticcheck" && cd "$RUNNER_TEMP/staticcheck"
+          go mod init scbuild
+          go get honnef.co/go/tools/cmd/staticcheck@v0.8.1 golang.org/x/tools@v0.51.0
+          go build -o "$(go env GOPATH)/bin/staticcheck" honnef.co/go/tools/cmd/staticcheck
       - run: staticcheck ./...
 
   grype:
