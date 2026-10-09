@@ -101,6 +101,7 @@ func newHarness(tunnels ...awgmgr.Tunnel) *harness {
 		Sleep:          h.clk.sleep,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
+	h.w.clearStartGuard()
 	return h
 }
 

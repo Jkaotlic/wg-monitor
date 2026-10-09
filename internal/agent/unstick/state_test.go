@@ -12,13 +12,15 @@ import (
 
 func newOnDisk(t *testing.T, path string, h *harness) *Watcher {
 	t.Helper()
-	return New(Config{Enabled: true, StatePath: path}, Deps{
+	w := New(Config{Enabled: true, StatePath: path}, Deps{
 		AWG:            h.awg,
 		RestartService: func(context.Context) error { h.services++; return nil },
 		Now:            h.clk.now,
 		Sleep:          h.clk.sleep,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
+	w.clearStartGuard()
+	return w
 }
 
 func TestState_SurvivesRestart(t *testing.T) {

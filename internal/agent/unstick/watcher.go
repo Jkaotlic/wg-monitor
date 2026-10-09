@@ -125,6 +125,9 @@ func New(cfg Config, d Deps) *Watcher {
 		w.log = slog.Default()
 	}
 	w.load()
+	// перезапуск агента (self_update, firmware_install, opkg) стирает окна
+	// тишины -- старт считается командой по всему роутеру
+	w.cmdRouter = w.now()
 	return w
 }
 

@@ -527,3 +527,26 @@ func TestEvents_Retention(t *testing.T) {
 		t.Fatalf("events older than 24h kept: %d", len(f.Events))
 	}
 }
+
+// Перезапуск агента (self_update, firmware_install, opkg) стирает окна тишины:
+// старт считается командой по всему роутеру.
+func TestNew_StartCountsAsRouterWideCommand(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w = New(Config{Enabled: true}, Deps{
+		AWG: h.awg, Now: h.clk.now, Sleep: h.clk.sleep,
+		RestartService: func(context.Context) error { h.services++; return nil },
+	})
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second) // давно за порогом
+	h.w.Tick(ctx)
+	h.clk.advance(8 * time.Minute)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) != 0 || h.services != 0 {
+		t.Fatalf("acted inside the start guard: %v services=%d", c, h.services)
+	}
+	h.clk.advance(2*time.Minute + time.Second) // GuardWindow (10 мин) от старта прошло
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); !slices.Equal(c, []string{"restart:nwg0"}) {
+		t.Fatalf("no action after the start guard: %v", c)
+	}
+}
