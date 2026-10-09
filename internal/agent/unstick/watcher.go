@@ -55,6 +55,9 @@ type giveUp struct {
 	Steps   []string  `json:"steps"`
 	Since   time.Time `json:"since"`
 	At      time.Time `json:"at"`
+	// Retrying -- прошло RetryAfterGiveUp, идёт повторная лесенка (без ступени 2);
+	// запись остаётся и для проверки это по-прежнему «сдался».
+	Retrying bool `json:"retrying,omitempty"`
 }
 
 type track struct {
@@ -69,6 +72,7 @@ type due struct {
 	remedy Remedy
 	since  time.Time
 	steps  []string
+	retry  bool // повтор после RetryAfterGiveUp: ступень 2 не положена
 }
 
 const (
@@ -219,8 +223,16 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		// «сдался» держится, пока туннель не вышел из зависания, не сменился его
 		// enabled, не пропал или не прошло RetryAfterGiveUp; переход в другое
 		// зависшее состояние не освобождает (иначе broken<->starting крутит лесенку).
-		if g, ok := w.gaveUp[t.ID]; ok && (Resolved(t.Status, t.Enabled) || g.Enabled != t.Enabled || now.Sub(g.At) >= w.cfg.RetryAfterGiveUp) {
-			delete(w.gaveUp, t.ID)
+		// По истечении RetryAfterGiveUp запись НЕ удаляется: она помечается
+		// повтором и остаётся «сдался» для проверки, пока лесенка не решит.
+		if g, ok := w.gaveUp[t.ID]; ok {
+			switch {
+			case Resolved(t.Status, t.Enabled) || g.Enabled != t.Enabled:
+				delete(w.gaveUp, t.ID)
+			case !g.Retrying && now.Sub(g.At) >= w.cfg.RetryAfterGiveUp:
+				g.Retrying = true
+				w.gaveUp[t.ID] = g
+			}
 		}
 		if !KnownStatus(t.Status) {
 			if w.unknown[t.ID] != t.Status {
@@ -240,13 +252,14 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 		if t.Locked {
 			continue
 		}
-		if _, ok := w.gaveUp[t.ID]; ok {
+		g, gaveUp := w.gaveUp[t.ID]
+		if gaveUp && !g.Retrying {
 			continue
 		}
 		if now.Sub(w.cmdRouter) < w.cfg.GuardWindow || now.Sub(w.cmdTunnel[t.ID]) < w.cfg.GuardWindow {
 			continue
 		}
-		out = append(out, &due{t: t, from: t.Status, remedy: remedy, since: tr.since})
+		out = append(out, &due{t: t, from: t.Status, remedy: remedy, since: tr.since, retry: gaveUp})
 	}
 	for id := range w.tracks {
 		if !seen[id] {
@@ -288,14 +301,20 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	if len(list) == 0 {
 		return
 	}
-	switch w.serviceDecision() {
+	hasFresh := false
+	for _, d := range list {
+		hasFresh = hasFresh || !d.retry
+	}
+	switch w.serviceDecision(hasFresh) {
 	case serviceAbort:
 		// команда бэкенда посреди лесенки: молча уходим, без «сдался» и события;
 		// since не тронут -- после окна ступень 1 пойдёт заново
 		return
 	case serviceRun:
 		for _, d := range list {
-			d.steps = append(d.steps, "service_restart")
+			if !d.retry {
+				d.steps = append(d.steps, "service_restart")
+			}
 		}
 		if w.d.RestartService != nil {
 			if err := w.d.RestartService(ctx); err != nil {
@@ -311,6 +330,16 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, d := range list {
+		if d.retry {
+			// повтор не помог: запись обновляется, следующий повтор -- через
+			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось
+			w.gaveUp[d.t.ID] = giveUp{
+				Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
+				Steps: d.steps, Since: d.since, At: now,
+			}
+			w.log.Warn("unstick: повтор не помог", "tunnel", d.t.ID, "status", d.t.Status, "steps", d.steps)
+			continue
+		}
 		w.gaveUp[d.t.ID] = giveUp{
 			Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
 			Steps: d.steps, Since: d.since, At: now,
@@ -382,6 +411,7 @@ func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*
 		d.t = t
 		if Resolved(t.Status, t.Enabled) {
 			w.addEventLocked(start, d, wire.UnstickFixed, now)
+			delete(w.gaveUp, d.t.ID) // повтор после «сдался» удался
 			continue
 		}
 		rest = append(rest, d)
@@ -397,7 +427,9 @@ const (
 	serviceAbort                       // свежая команда бэкенда -- лесенка прервана молча
 )
 
-func (w *Watcher) serviceDecision() serviceVerdict {
+// allowRun=false -- в списке только повторы: службу не трогаем (и час не
+// штампуем), но свежая команда бэкенда по-прежнему прерывает лесенку.
+func (w *Watcher) serviceDecision(allowRun bool) serviceVerdict {
 	now := w.now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -416,6 +448,9 @@ func (w *Watcher) serviceDecision() serviceVerdict {
 		// ступень 1 повторяется на каждом опросе)
 		w.pausedUntil = latest.Add(w.cfg.GuardWindow)
 		return serviceAbort
+	}
+	if !allowRun {
+		return serviceSkip
 	}
 	if !w.serviceAt.IsZero() && now.Sub(w.serviceAt) < w.cfg.ServiceEvery {
 		return serviceSkip

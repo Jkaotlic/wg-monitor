@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func newOnDisk(t *testing.T, path string, h *harness) *Watcher {
@@ -123,5 +125,28 @@ func TestState_GaveUpForGoneTunnelIsCleared(t *testing.T) {
 	w2.Tick(ctx)
 	if s := w2.Snapshot(); len(s.GaveUp) != 0 {
 		t.Fatalf("stale gave_up for a deleted tunnel: %+v", s)
+	}
+}
+
+func TestState_RetryingFlagSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unstick-state.json")
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w = newOnDisk(t, path, h)
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx) // сдался
+	h.clk.advance(6 * time.Hour)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		h.w.NoteCommand(wire.Command{Action: "awgm_update"}) // лесенка прервана, повтор не закончен
+		return nil
+	}
+	h.w.Tick(ctx)
+	w2 := newOnDisk(t, path, h)
+	if g, ok := w2.gaveUp["nwg0"]; !ok || !g.Retrying {
+		t.Fatalf("retrying flag lost: %+v ok=%v", g, ok)
+	}
+	if len(w2.Snapshot().GaveUp) != 1 {
+		t.Fatal("snapshot must keep reporting gave_up while retrying")
 	}
 }

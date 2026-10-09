@@ -333,16 +333,115 @@ func TestClipDetails_Limit(t *testing.T) {
 	}
 }
 
-func TestTick_RetryAfterSixHours(t *testing.T) {
+// gaveUpHarness -- туннель, который не чинится: сторож сдался (restart +
+// service_restart), services == 1.
+func gaveUpHarness(t *testing.T) *harness {
+	t.Helper()
 	h := newHarness(tun("nwg0", "broken", true))
 	h.w.Tick(ctx)
 	h.clk.advance(61 * time.Second)
-	h.w.Tick(ctx) // сдался
-	n := len(h.awg.callList())
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 1 || h.services != 1 {
+		t.Fatalf("setup: %+v services=%d", h.w.Snapshot(), h.services)
+	}
+	return h
+}
+
+func countCalls(h *harness, call string) int {
+	n := 0
+	for _, c := range h.awg.callList() {
+		if c == call {
+			n++
+		}
+	}
+	return n
+}
+
+// Повтор через RetryAfterGiveUp: ступень 1 без перезапуска службы, пока он идёт,
+// «сдался» остаётся в снимке (проверка не говорит «в порядке»), провал
+// обновляет At -- следующий повтор через 6 ч.
+func TestTick_RetryAfterSixHours_FailedKeepsGaveUpAndNoService(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	inLadder := 0
+	h.w.Deps().Sleep = func(c context.Context, d time.Duration) error {
+		if s := h.w.Snapshot(); len(s.GaveUp) != 1 || s.GaveUp[0].TunnelID != "nwg0" {
+			t.Errorf("gave_up dropped during the retry ladder: %+v", s)
+		}
+		inLadder++
+		return h.clk.sleep(c, d)
+	}
+	h.w.Tick(ctx)
+	if inLadder == 0 {
+		t.Fatal("no retry ladder ran after 6h")
+	}
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("restarts = %d; want 2 (first ladder + retry)", n)
+	}
+	if h.services != 1 {
+		t.Fatalf("retry restarted awg-manager: services=%d", h.services)
+	}
+	if len(h.w.Snapshot().GaveUp) != 1 {
+		t.Fatalf("gave_up lost after a failed retry: %+v", h.w.Snapshot())
+	}
+	g := h.w.gaveUp["nwg0"]
+	if g.Retrying || h.clk.now().Sub(g.At) > 2*time.Minute {
+		t.Errorf("entry not refreshed: %+v", g)
+	}
+	// следующий повтор -- через 6 ч от обновлённого At, не раньше
+	h.w.Deps().Sleep = h.clk.sleep
+	h.clk.advance(5*time.Hour + 58*time.Minute)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("retried again before 6h: restarts=%d", n)
+	}
+	h.clk.advance(3 * time.Minute)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 3 {
+		t.Fatalf("no second retry after 6h: restarts=%d", n)
+	}
+	if h.services != 1 {
+		t.Fatalf("services = %d", h.services)
+	}
+}
+
+func TestTick_RetryAfterSixHours_FixedDeletesEntry(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.awg.onAction = healOn("restart")
 	h.clk.advance(6 * time.Hour)
 	h.w.Tick(ctx)
-	if len(h.awg.callList()) == n {
-		t.Fatal("no retry after 6h")
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave_up kept after a successful retry: %+v", s)
+	}
+	if _, ok := h.w.gaveUp["nwg0"]; ok {
+		t.Fatal("entry not deleted")
+	}
+	evs := h.w.Facts().Events
+	if last := evs[len(evs)-1]; last.Result != wire.UnstickFixed || !slices.Equal(last.Steps, []string{"restart"}) {
+		t.Fatalf("last event: %+v", last)
+	}
+	if h.services != 1 {
+		t.Fatalf("services = %d", h.services)
+	}
+}
+
+// Закрытое/снятое по-прежнему освобождает сразу, даже в режиме повтора.
+func TestTick_RetryRelease_ResolvedFlipGone(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.clk.advance(6 * time.Hour)
+	h.w.Deps().Sleep = func(_ context.Context, d time.Duration) error {
+		h.clk.advance(d)
+		h.w.NoteCommand(wire.Command{Action: "awgm_update"}) // прервать лесенку, Retrying остаётся
+		return nil
+	}
+	h.w.Tick(ctx)
+	if g, ok := h.w.gaveUp["nwg0"]; !ok || !g.Retrying {
+		t.Fatalf("aborted retry must stay retrying: %+v ok=%v", g, ok)
+	}
+	h.awg.set("nwg0", "running")
+	h.w.Tick(ctx)
+	if len(h.w.Snapshot().GaveUp) != 0 {
+		t.Error("resolved tunnel not released")
 	}
 }
 
