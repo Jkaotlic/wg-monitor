@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/unstick"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/wakehook"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -98,6 +100,11 @@ func main() {
 	if resolverGuard != nil {
 		singleChecks = append(singleChecks, resolverGuard)
 	}
+	unstickWatcher, unstickCheck := buildUnstick(cfg, awgClient, actions.DefaultExec, logger)
+	singleChecks = append(singleChecks, unstickCheck)
+	if unstickWatcher != nil {
+		signals.hub.Unstick = unstickWatcher.Facts
+	}
 	// MultiChecks emit per-tunnel results
 	multiChecks := []checks.MultiCheck{
 		checks.TunnelsCheck{
@@ -149,10 +156,18 @@ func main() {
 	}
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
 	runner.ExitProbeNow = signals.prober.ProbeNow
+	if unstickWatcher != nil {
+		runner.OnCommand = unstickWatcher.NoteCommand
+	}
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
 	signals.start(ctx, rep.RequestWake)
+	// Сторож зависаний: своя петля -- лесенка с ожиданиями 60/90 с не
+	// влезает в бюджет проверки репортёра.
+	if unstickWatcher != nil {
+		go unstickWatcher.Run(ctx)
+	}
 
 	// The watchdog's own probe, candidate probes and ndmc calls don't fit the
 	// reporter's 10 s per-check budget, so it is a loop of its own. On
@@ -211,6 +226,36 @@ func dnsWatchdogConfig(cfg *agent.Config) dnswatch.Config {
 		PinnedCandidate:   w.PinnedCandidate,
 		StatePath:         cfg.State.DNSWatchdogStatePath(),
 	}
+}
+
+// buildUnstick собирает сторож зависших состояний awg-manager (v0.59) и его
+// проверку. Выключен в конфиге -- сторожа нет, проверка отвечает disabled.
+func buildUnstick(cfg *agent.Config, awg unstick.AWG, exec actions.ExecFunc, logger *slog.Logger) (*unstick.Watcher, checks.Check) {
+	if !cfg.Unstick.IsEnabled() {
+		return nil, unstick.Check{Disabled: true}
+	}
+	if exec == nil {
+		exec = actions.DefaultExec
+	}
+	sec := func(n int) time.Duration { return time.Duration(n) * time.Second }
+	w := unstick.New(unstick.Config{
+		Enabled:         true,
+		BrokenAfter:     sec(cfg.Unstick.BrokenAfterSec),
+		NeedsAfter:      sec(cfg.Unstick.NeedsAfterSec),
+		TransitionAfter: sec(cfg.Unstick.TransitionAfterSec),
+		StatePath:       cfg.State.UnstickStatePath(),
+	}, unstick.Deps{
+		AWG: awg,
+		RestartService: func(ctx context.Context) error {
+			out, err := exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart")
+			if err != nil {
+				return fmt.Errorf("S99awg-manager restart: %v: %s", err, out)
+			}
+			return nil
+		},
+		Logger: logger.With("component", "unstick"),
+	})
+	return w, unstick.Check{Source: w}
 }
 
 // buildDNSWatchdog returns the DNS watchdog loop and its resolver_guard check
