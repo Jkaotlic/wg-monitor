@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -341,9 +342,27 @@ free_kb() {
 }
 
 if ! mkdir "$LOCK" 2>/dev/null; then
-  log "status=locked another run is active"
-  trim_log
-  exit 0
+  # владелец замка мёртв (kill -9, OOM) -- замок брошен, снимаем
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  case "$owner" in
+    ''|*[!0-9]*) owner="" ;;
+  esac
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    log "status=stale_lock_removed pid=$owner"
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
+  elif [ -n "$owner" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+    # обновление столько не идёт: pid занят чужим процессом (переиспользован).
+    # find без -mmin ничего не напечатает -- замок останется, как раньше.
+    log "status=stale_lock_removed pid=$owner age_min=120+"
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    log "status=locked another run is active"
+    trim_log
+    exit 0
+  fi
 fi
 echo $$ > "$LOCK/pid"
 trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
@@ -407,4 +426,26 @@ func (m *OpkgCronManager) maxLogKB() int64 {
 		return m.MaxLogKB
 	}
 	return defaultOpkgCronMaxLogKB
+}
+
+// RefreshScript переписывает уже установленный скрипт текущим текстом
+// (атомарно: запущенный по cron sh дочитывает старый файл). Скрипта нет
+// (автообновление не включено) -- ничего не ставит; текст тот же -- не
+// трогает. changed -- файл переписан.
+func (m *OpkgCronManager) RefreshScript() (changed bool, err error) {
+	cur, err := os.ReadFile(m.scriptPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	want := m.scriptText()
+	if string(cur) == want {
+		return false, nil
+	}
+	if err := writeFileAtomic(m.scriptPath(), []byte(want), 0o755); err != nil {
+		return false, fmt.Errorf("rewrite script: %w", err)
+	}
+	return true, nil
 }

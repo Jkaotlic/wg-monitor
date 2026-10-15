@@ -631,20 +631,16 @@ func (o *OpkgRunner) takeSharedLock() error {
 	}
 	err := os.Mkdir(o.SharedLockDir, 0o755)
 	if errors.Is(err, os.ErrExist) {
-		switch pid, alive := opkgLockOwner(o.SharedLockDir); {
-		case pid > 0 && alive:
+		switch MkdirLockState(o.SharedLockDir, o.now(), opkgSharedLockStale) {
+		case LockHeld:
 			return errOpkgCronBusy
-		case pid > 0:
+		case LockHeldUnknownOwner:
+			return errOpkgLockUnknownOwner
+		case LockAbandoned:
 			_ = os.RemoveAll(o.SharedLockDir)
-			err = os.Mkdir(o.SharedLockDir, 0o755)
-		default:
-			st, serr := os.Stat(o.SharedLockDir)
-			if serr != nil || o.now().Sub(st.ModTime()) <= opkgSharedLockStale {
-				return errOpkgLockUnknownOwner
-			}
-			_ = os.RemoveAll(o.SharedLockDir)
-			err = os.Mkdir(o.SharedLockDir, 0o755)
 		}
+		// LockFree: владелец снял замок между mkdir и проверкой -- берём
+		err = os.Mkdir(o.SharedLockDir, 0o755)
 	}
 	if errors.Is(err, os.ErrExist) {
 		return errOpkgCronBusy // кто-то успел взять между снятием и взятием

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { JOB_POLL_MS, JOB_POLL_FAILURE_LIMIT, jobPollStart, jobPollStep, jobPollDone, jobReconnecting, pollJob } from '../src/jobPoll.js'
+import { JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS, JOB_POLL_FAILURE_LIMIT, jobPollStart, jobPollStep, jobPollDone, jobReconnecting, pollJob } from '../src/jobPoll.js'
 
 const running = { id: 'j1', state: 'running', steps: [] }
 const success = { id: 'j1', state: 'success', steps: [] }
@@ -105,7 +105,7 @@ describe('pollJob', () => {
 
 describe('отказ доступа -- выход сразу, словами сервера', () => {
   it('401, 403, 503 и прочие 4xx кроме 404 -- denied без повторов', () => {
-    for (const status of [401, 403, 400, 409, 503]) {
+    for (const status of [401, 403, 400, 409]) {
       const s = jobPollStep({ phase: 'live', job: running, failures: 0 }, { type: 'error', status, message: 'Нет доступа' })
       expect(s.phase, String(status)).toBe('denied')
       expect(s.message).toBe('Нет доступа')
@@ -133,5 +133,46 @@ describe('отказ доступа -- выход сразу, словами с�
     })
     expect(asked).toBe(1)
     expect(final).toMatchObject({ phase: 'denied', message: 'Только админ' })
+  })
+})
+
+describe('GAP-02: 503 и 429 -- временные, как 502/504', () => {
+  it('503 и 429 без кода -- повтор, а не denied', () => {
+    for (const status of [503, 429, 502, 504]) {
+      const s = jobPollStep({ phase: 'live', job: running, failures: 0 }, { type: 'error', status, message: '' })
+      expect(s.phase, String(status)).toBe('live')
+      expect(s.failures, String(status)).toBe(1)
+      expect(jobPollDone(s)).toBe(false)
+    }
+  })
+  it('503 provision_not_configured -- окончательный отказ', () => {
+    const s = jobPollStep({ phase: 'live', job: running, failures: 0 }, { type: 'error', status: 503, code: 'provision_not_configured', message: 'Не настроено' })
+    expect(s.phase).toBe('denied')
+  })
+  it('pollJob передаёт код ошибки: пять 503 подряд не останавливают опрос', async () => {
+    const calls = []
+    const fetchJob = async () => {
+      calls.push(1)
+      if (calls.length <= 5) throw Object.assign(new Error('x'), { status: 503, code: 'unknown', serverMessage: '' })
+      return success
+    }
+    const final = await pollJob({ jobId: 'j1', fetchJob, sleep: async () => {}, onState: () => {}, signal: { cancelled: false } })
+    expect(final.phase).toBe('live')
+    expect(calls.length).toBe(6)
+  })
+})
+
+describe('GAP-02: пауза после 429 длиннее обычной', () => {
+  it('429 -- 5 с, 503 -- обычные 1,5 с', async () => {
+    const sleeps = []
+    const seq = [429, 503, 'ok']
+    const fetchJob = async () => {
+      const x = seq.shift()
+      if (x === 'ok') return success
+      throw Object.assign(new Error('x'), { status: x, code: 'unknown', serverMessage: '' })
+    }
+    await pollJob({ jobId: 'j1', fetchJob, sleep: async (ms) => { sleeps.push(ms) }, onState: () => {}, signal: { cancelled: false } })
+    expect(sleeps).toEqual([JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS])
+    expect(JOB_POLL_RATE_LIMIT_MS).toBe(5000)
   })
 })

@@ -3,6 +3,7 @@ import { fetchRouterSettings } from '../api.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
 import { commandErrorText } from '../maintenance.js'
+import { parsePackagesStatus } from '../packagesSchedule.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -56,6 +57,12 @@ export function SpaceScreen({ routerID, routerName, asleep, onClose }) {
     cleanCmd.run('entware_clean_run', {}, deadline('entware_clean_run')).then((res) => {
       if (!res) return
       if (res.status !== 'ok') {
+        setClean({ run: res, before, after: null })
+        return
+      }
+      // Старый агент на «занято» отвечает ok с last_status locked: очистка не
+      // шла, замер места до/после не нужен.
+      if (parsePackagesStatus(res)?.lastStatus === 'locked') {
         setClean({ run: res, before, after: null })
         return
       }

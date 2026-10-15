@@ -37,12 +37,34 @@ func NextCutoff(now time.Time, hour int, loc *time.Location) time.Time {
 	return target
 }
 
+// RoleAdmin -- роль нажавшего «Тише» для админа из конфига. Владелец и
+// оператор -- роли db.RouterAccessRole ("owner", "operator").
+const RoleAdmin = "admin"
+
 // ApplySilence returns st with SilencedUntil set to now+ttl, plus the status line.
-func ApplySilence(st db.IncidentState, ttl time.Duration, now time.Time) (db.IncidentState, string) {
+// role -- кто нажал (RoleAdmin или роль db.RouterAccessRole).
+func ApplySilence(st db.IncidentState, ttl time.Duration, now time.Time, role string) (db.IncidentState, string) {
 	until := now.Add(ttl)
 	st.SilencedUntil = &until
-	line := fmt.Sprintf("⏸ Уведомления скрыты до %s МСК (админ)", until.In(MoscowLoc()).Format("15:04"))
+	line := fmt.Sprintf("⏸ Уведомления скрыты до %s МСК", until.In(MoscowLoc()).Format("15:04"))
+	if who := roleLabel(role); who != "" {
+		line += " (" + who + ")"
+	}
 	return st, line
+}
+
+// roleLabel -- подпись роли для людей. Неизвестная роль -- без подписи:
+// лучше промолчать, чем приписать нажатие другому (BOT-07).
+func roleLabel(role string) string {
+	switch role {
+	case RoleAdmin:
+		return "админ"
+	case "owner":
+		return "владелец"
+	case "operator":
+		return "оператор"
+	}
+	return ""
 }
 
 // ApplyAck returns st with Acked set, plus the status line. now is accepted

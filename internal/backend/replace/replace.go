@@ -245,7 +245,17 @@ type runState struct {
 	NewTunnelName string
 	Imported      bool
 	Promoted      bool
+	// Retire -- чем кончилось выключение прежнего VPN-туннеля: retireDone,
+	// retireUnconfirmed (partial: команду принял, остановку не увидел) или
+	// retireFailed. Итог в личку говорит именно это.
+	Retire string
 }
+
+const (
+	retireDone        = "done"
+	retireUnconfirmed = "unconfirmed"
+	retireFailed      = "failed"
+)
 
 func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *runState) error {
 	// 1. Конфиг выпускает сервер: клиент передал только выбор.
@@ -343,9 +353,18 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		// Не провал операции: новый туннель уже несёт трафик. Прежний
 		// остался включённым -- это видно на экране туннелей, и выключить
 		// его можно там же.
+		if routerStatus(err) == "partial" {
+			// Выключение роутер принял, но остановки за срок не увидел
+			// (tunnel_power v0.61): «остался включённым» было бы неправдой.
+			d.step(jobID, StepRetire, provision.StepFailed, "выключение прежнего VPN-туннеля не подтвердилось: роутер команду принял, но остановку пока не видно — проверьте на экране туннелей")
+			state.Retire = retireUnconfirmed
+			return nil
+		}
 		d.step(jobID, StepRetire, provision.StepFailed, "прежний VPN-туннель остался включённым: "+err.Error())
+		state.Retire = retireFailed
 		return nil
 	}
+	state.Retire = retireDone
 	d.step(jobID, StepRetire, provision.StepDone, "прежний VPN-туннель выключен и остался на роутере")
 	if d.Retired != nil {
 		d.Retired(req.RouterID, req.OldTunnelID)
@@ -383,9 +402,16 @@ func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *run
 		j.State = provision.StateSuccess
 		j.Hint = "готово: общий набор «" + req.PolicyName + "» идёт через «" + state.NewTunnelName + "»"
 	})
+	old := "прежний VPN-туннель выключен и остался на роутере."
+	switch state.Retire {
+	case retireUnconfirmed:
+		old = "выключение прежнего VPN-туннеля не подтвердилось — проверьте его на экране туннелей."
+	case retireFailed:
+		old = "прежний VPN-туннель выключить не удалось: он остался включённым, выключить его можно на экране туннелей."
+	}
 	d.notify(ctx, req.RouterID, fmt.Sprintf(
-		"Замена конфига завершена.\nНовый VPN-туннель «%s» работает: общий набор «%s» идёт через него, прежний VPN-туннель выключен и остался на роутере.",
-		state.NewTunnelName, req.PolicyName))
+		"Замена конфига завершена.\nНовый VPN-туннель «%s» работает: общий набор «%s» идёт через него, %s",
+		state.NewTunnelName, req.PolicyName, old))
 }
 
 // rollback возвращает роутер в исходное состояние: политику -- прежнему
@@ -408,7 +434,11 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 			"tunnel_id": state.NewTunnelID,
 			"on":        false,
 		}); err != nil {
-			notes = append(notes, "выключить новый VPN-туннель не удалось: "+err.Error())
+			if routerStatus(err) == "partial" {
+				notes = append(notes, "выключение нового VPN-туннеля не подтвердилось: роутер команду принял, но остановку пока не видно — проверьте на экране туннелей")
+			} else {
+				notes = append(notes, "выключить новый VPN-туннель не удалось: "+err.Error())
+			}
 		} else {
 			notes = append(notes, "новый VPN-туннель выключен и оставлен на роутере")
 		}
@@ -473,9 +503,25 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	}
 	if res.Status != "ok" {
 		d.logCommandFailure(action, res.Status, res.Output)
-		return nil, errors.New(RouterFailure(true, res.Status))
+		return nil, &routerError{status: res.Status, text: RouterFailure(true, res.Status)}
 	}
 	return res, nil
+}
+
+// routerError -- отказ роутера с его статусом: вызывающему иногда важно,
+// чем именно ответил роутер (partial у tunnel_power -- «команду принял, но
+// состояния не увидел»), а текст для владельца остаётся тем же.
+type routerError struct{ status, text string }
+
+func (e *routerError) Error() string { return e.text }
+
+// routerStatus -- статус ответа роутера в ошибке command; "" -- не ответ.
+func routerStatus(err error) string {
+	var re *routerError
+	if errors.As(err, &re) {
+		return re.status
+	}
+	return ""
 }
 
 // Тексты отказа роутера для владельца. Общие для мастера замены и починки:

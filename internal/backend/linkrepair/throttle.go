@@ -43,29 +43,42 @@ func attemptKey(nickname, checkName string) string {
 	return "linkrepair:attempts:" + nickname + ":" + checkName
 }
 
-func (a Attempts) load(nickname, checkName string) attemptLog {
+// WhyAttemptsUnread -- причина отказа, когда история попыток не прочиталась:
+// стоит ли стоп «нужен человек» и не исчерпан ли потолок, неизвестно.
+const WhyAttemptsUnread = "не смог прочитать историю попыток"
+
+// load -- история попыток. Записи нет -- пустая история; ошибка чтения --
+// ошибка: пустая история на её месте молча сняла бы стоп и потолок.
+func (a Attempts) load(nickname, checkName string) (attemptLog, error) {
 	var log attemptLog
 	raw, err := a.KV.Get(attemptKey(nickname, checkName))
-	if err != nil || raw == "" {
-		return log
+	if err != nil {
+		return log, fmt.Errorf("история попыток не прочиталась: %w", err)
+	}
+	if raw == "" {
+		return log, nil
 	}
 	_ = json.Unmarshal([]byte(raw), &log)
-	return log
+	return log, nil
 }
 
 // Allow отвечает, можно ли начинать автопочинку. Причина отказа -- текст
 // для человека, а не код: её печатает экран.
 func (a Attempts) Allow(nickname, checkName string) (bool, string) {
-	ok, why, _ := a.verdict(nickname, checkName)
+	ok, why, _, _ := a.verdict(nickname, checkName)
 	return ok, why
 }
 
 // verdict -- Allow и отдельно: отказ из-за потолка попыток (а не из-за
-// провала). Тогда человеку ещё говорится, что делать.
-func (a Attempts) verdict(nickname, checkName string) (bool, string, bool) {
-	log := a.load(nickname, checkName)
+// провала). Тогда человеку ещё говорится, что делать. err -- история не
+// прочиталась: тогда отказ (fail-closed), а сама ошибка -- оператору в лог.
+func (a Attempts) verdict(nickname, checkName string) (bool, string, bool, error) {
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return false, WhyAttemptsUnread, false, err
+	}
 	if log.Failed {
-		return false, "прошлая попытка починить не помогла — нужен человек", false
+		return false, "прошлая попытка починить не помогла — нужен человек", false, nil
 	}
 	cutoff := a.now().Add(-attemptWindow)
 	fresh := 0
@@ -75,16 +88,19 @@ func (a Attempts) verdict(nickname, checkName string) (bool, string, bool) {
 		}
 	}
 	if fresh >= attemptLimit {
-		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh), true
+		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh), true, nil
 	}
-	return true, "", false
+	return true, "", false, nil
 }
 
 // Record запоминает попытку. ok=false запрещает следующую автопочинку до
 // вмешательства человека: раз автоматика не справилась, повторять её на том
 // же месте бессмысленно.
 func (a Attempts) Record(nickname, checkName string, ok bool) error {
-	log := a.load(nickname, checkName)
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return err
+	}
 	cutoff := a.now().Add(-attemptWindow)
 	kept := log.At[:0]
 	for _, t := range log.At {
@@ -106,7 +122,10 @@ func (a Attempts) Record(nickname, checkName string, ok bool) error {
 // не пишет, и без этого перезапуски давали бы бесконечный цикл «падает --
 // чиним». Итог -- Finish.
 func (a Attempts) Started(nickname, checkName string) error {
-	log := a.load(nickname, checkName)
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return err
+	}
 	cutoff := a.now().Add(-attemptWindow)
 	kept := log.At[:0]
 	for _, t := range log.At {
@@ -121,7 +140,10 @@ func (a Attempts) Started(nickname, checkName string) error {
 // Finish -- итог попытки, уже засчитанной Started: ok=false ставит стоп до
 // человека. Новой отметки в окне не добавляет.
 func (a Attempts) Finish(nickname, checkName string, ok bool) error {
-	log := a.load(nickname, checkName)
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return err
+	}
 	log.Failed = !ok
 	return a.save(nickname, checkName, log)
 }
@@ -145,7 +167,10 @@ func (a Attempts) Blocked(nickname, checkName string) (bool, string) {
 // флапающий VPN-туннель, который каждый раз чинится, всё равно упирается в
 // потолок за 6 часов.
 func (a Attempts) Clear(nickname, checkName string) error {
-	log := a.load(nickname, checkName)
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return err
+	}
 	if !log.Failed {
 		return nil
 	}

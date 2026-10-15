@@ -16,6 +16,10 @@ import (
 // failingOffline -- отправка, которая всегда падает с заданной ошибкой.
 type failingOffline struct{ err error }
 
+func (f failingOffline) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return f.err
+}
+
 func (f failingOffline) SendOffline(context.Context, int64, string, time.Duration) error {
 	return f.err
 }
@@ -102,6 +106,7 @@ func TestWatcherLastOfflineErrorIsTruncated(t *testing.T) {
 type fakeOffline struct {
 	mu    sync.Mutex
 	calls []callRec
+	back  []int64 // кому ушло «снова на связи»
 }
 
 type callRec struct {
@@ -114,6 +119,13 @@ func (f *fakeOffline) SendOffline(_ context.Context, uid int64, nick string, sin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, callRec{uid, nick, since})
+	return nil
+}
+
+func (f *fakeOffline) SendBackOnline(_ context.Context, uid int64, nick string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.back = append(f.back, uid)
 	return nil
 }
 
@@ -277,7 +289,6 @@ func TestWatcherLifecycle_NeverReported_ThenReports_ThenSilent(t *testing.T) {
 	off := &fakeOffline{}
 	w := NewWatcher(d, off, Config{
 		StaleAfterStatic: 5 * time.Minute,
-		RenotifyEvery:    6 * time.Hour,
 		ScanEvery:        time.Hour,
 	})
 	t0 := time.Now().UTC()
@@ -299,6 +310,9 @@ func TestWatcherLifecycle_NeverReported_ThenReports_ThenSilent(t *testing.T) {
 	driveScan(w, t0.Add(45*time.Minute))
 	if got := len(off.snapshot()); got != 2 {
 		t.Fatalf("phase 3 expected 2nd OFFLINE after silence, got %d", got)
+	}
+	if got := len(off.back); got != 1 {
+		t.Fatalf("phase 2: «снова на связи» ушло %d раз, ждали одно", got)
 	}
 }
 
@@ -337,8 +351,9 @@ func TestWatcherSilent_NeverReported_InsideGrace(t *testing.T) {
 	}
 }
 
-func TestWatcherRefiresAfterCooldown(t *testing.T) {
-	// Covers the 6h re-notify branch deterministically without sleeping for hours.
+// BOT-05: сторож больше не повторяет полную тревогу сам -- ни через час,
+// ни через 7 часов: повтор -- короткое напоминание realert с затуханием.
+func TestWatcherDoesNotRefireItself(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "2020202020202020202020202020202020202020202020202020202020202020"
@@ -353,19 +368,17 @@ func TestWatcherRefiresAfterCooldown(t *testing.T) {
 	if got := len(off.snapshot()); got != 1 {
 		t.Fatalf("first scan: expected 1 call, got %d", got)
 	}
-	// Within the cooldown window — must NOT refire.
 	driveScan(w, t0.Add(time.Hour))
-	if got := len(off.snapshot()); got != 1 {
-		t.Fatalf("scan inside cooldown: expected 1 call, got %d", got)
-	}
-	// Past 6h — must refire.
 	driveScan(w, t0.Add(7*time.Hour))
-	if got := len(off.snapshot()); got != 2 {
-		t.Fatalf("scan past cooldown: expected 2 calls, got %d", got)
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("сторож повторил тревогу сам: %d вызовов", got)
 	}
 }
 
-func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
+// Тишина на agent_heartbeat без тревоги (строка ok, «Тише на час» от
+// прошлого молчания) не глушит новую тревогу: сторож её шлёт (диспетчер --
+// без звука) и записывает hard, а тишину не трогает.
+func TestWatcherSendsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "2121212121212121212121212121212121212121212121212121212121212121"
@@ -376,9 +389,7 @@ func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
 		UserID:        uid,
 		CheckName:     "agent_heartbeat",
-		CurrentStatus: "hard",
-		HardSince:     &t0,
-		LastAlertAt:   &t0,
+		CurrentStatus: "ok",
 		SilencedUntil: &silencedUntil,
 	}); err != nil {
 		t.Fatal(err)
@@ -386,11 +397,17 @@ func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 
 	off := &fakeOffline{}
 	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, t0)
 
-	driveScan(w, t0.Add(7*time.Hour))
-
-	if got := len(off.snapshot()); got != 0 {
-		t.Fatalf("silenced agent_heartbeat must not send offline notice, got %d", got)
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("под тишиной тревога должна уйти (тихо), вызовов %d", got)
+	}
+	if got := metricSuppressed.Value(); got != 0 {
+		t.Fatalf("тишина посчитана как заглушка: %d", got)
+	}
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	if st.CurrentStatus != "hard" || st.SilencedUntil == nil || !st.SilencedUntil.Equal(silencedUntil) {
+		t.Fatalf("строка после тревоги: %+v", st)
 	}
 }
 
@@ -612,5 +629,141 @@ func TestWatcherStaticUnaffectedByMobileLifecycle(t *testing.T) {
 	}
 	if got := len(sleep.snapshot()); got != 0 {
 		t.Fatalf("static must NOT hit SendSleeping; got %d", got)
+	}
+}
+
+// BOT-05: «уже предупредил» живёт в базе, а не в памяти сторожа. После
+// рестарта бэкенда (watchtower, выпуск) карта сторожа пуста, но строка
+// agent_heartbeat = hard с отметкой отправки час назад говорит: тревога
+// ушла. Новой «Роутер не на связи» быть не должно -- ни сейчас, ни после
+// срока напоминания: повтор -- дело realert с его затуханием.
+func TestWatcherRestartDoesNotRealertAlreadyWarnedRouter(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2323232323232323232323232323232323232323232323232323232323232323"
+	uid, _ := d.Users().Insert("restart", tok, "198.51.100.30", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-2*time.Hour))
+	hardSince := now.Add(-2 * time.Hour)
+	alertAt := now.Add(-time.Hour)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID: uid, CheckName: "agent_heartbeat", CurrentStatus: "hard",
+		ConsecutiveFails: 1, HardSince: &hardSince, LastAlertAt: &alertAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, now)
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("после рестарта ушло %d тревог «не на связи» по уже предупреждённому роутеру", got)
+	}
+	driveScan(w, now.Add(7*time.Hour))
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("сторож сам повторил тревогу (%d) -- повтор принадлежит realert", got)
+	}
+}
+
+// Отметку «уже предупредил» сторож пишет в базу сам после удачной отправки:
+// без неё следующий сторож (после рестарта) не узнал бы о тревоге. Тишина,
+// поставленная до тревоги, не затирается.
+func TestWatcherPersistsOfflineAlertAsHard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2424242424242424242424242424242424242424242424242424242424242424"
+	uid, _ := d.Users().Insert("persist", tok, "198.51.100.31", "awg0")
+	now := time.Now().UTC()
+	latest := now.Add(-10 * time.Minute)
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", latest)
+	until := now.Add(time.Hour)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID: uid, CheckName: "agent_heartbeat", CurrentStatus: "ok", SilencedUntil: &until,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, now)
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("тревог: %d, ждали одну (под тишиной -- тихую, но одну)", got)
+	}
+	st, err := d.State().Get(uid, "agent_heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.CurrentStatus != "hard" || st.LastAlertAt == nil || !st.LastAlertAt.Equal(now) {
+		t.Fatalf("отметка тревоги не записана: %+v", st)
+	}
+	if st.HardSince == nil || !st.HardSince.Equal(latest) {
+		t.Fatalf("hard_since=%v, ждали время последнего отчёта %v", st.HardSince, latest)
+	}
+	if st.SilencedUntil == nil || !st.SilencedUntil.Equal(until) {
+		t.Fatalf("тишина затёрта: %v", st.SilencedUntil)
+	}
+
+	w2 := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w2, now.Add(time.Minute))
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("новый сторож повторил тревогу: %d", got)
+	}
+}
+
+// countingFailOffline -- отправка, которая всегда падает, и счётчик попыток.
+type countingFailOffline struct{ n int }
+
+func (c *countingFailOffline) SendOffline(context.Context, int64, string, time.Duration) error {
+	c.n++
+	return errors.New("telegram: timeout awaiting response")
+}
+
+func (c *countingFailOffline) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return nil
+}
+
+// Тревога «не на связи», упавшая целиком, повторяется не на каждом обходе
+// (30 с): таймаут ответа бывает и тогда, когда Telegram сообщение принял, и
+// частый повтор дал бы по дублю карточки каждые 30 с. Паузы: 1 мин, 5 мин,
+// дальше раз в 30 мин.
+func TestWatcherBacksOffFailedOfflineAlert(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2525252525252525252525252525252525252525252525252525252525252525"
+	uid, _ := d.Users().Insert("flaky", tok, "198.51.100.32", "awg0")
+	t0 := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", t0.Add(-10*time.Minute))
+
+	off := &countingFailOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: 30 * time.Second})
+	steps := []struct {
+		at   time.Duration
+		want int
+	}{
+		{0, 1},
+		{30 * time.Second, 1},
+		{time.Minute, 2},
+		{90 * time.Second, 2},
+		{5 * time.Minute, 2},
+		{6 * time.Minute, 3},
+		{20 * time.Minute, 3},
+		{36 * time.Minute, 4},
+		{50 * time.Minute, 4},
+		{66 * time.Minute, 5},
+	}
+	for _, s := range steps {
+		driveScan(w, t0.Add(s.at))
+		if off.n != s.want {
+			t.Fatalf("в %s попыток %d, ждали %d", s.at, off.n, s.want)
+		}
+	}
+
+	// Роутер вернулся -- пауза сброшена: следующее молчание шлёт сразу.
+	back := t0.Add(70 * time.Minute)
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", back)
+	driveScan(w, back.Add(time.Second))
+	driveScan(w, back.Add(10*time.Minute))
+	if off.n != 6 {
+		t.Fatalf("после возвращения пауза не сброшена: попыток %d, ждали 6", off.n)
 	}
 }

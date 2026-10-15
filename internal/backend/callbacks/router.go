@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alertaction"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -41,7 +43,15 @@ type Router struct {
 	tg      TGClient
 	cfg     Config
 	silence *SilenceAction
+	// memory -- память тревог диспетчера (notify.AlertMemory); nil -- не
+	// сообщать. После «Тише на час» нить починки правит тревогу уже со
+	// строкой тишины и без кнопок (BOT-06).
+	memory notify.AlertMemory
 }
+
+// SetAlertMemory -- кому сообщать о «Тише на час» (alerts.Dispatcher).
+// Вызывается до Run.
+func (r *Router) SetAlertMemory(m notify.AlertMemory) { r.memory = m }
 
 func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 	return &Router{d: d, tg: tgClient, cfg: cfg, silence: NewSilenceAction(d)}
@@ -130,10 +140,11 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	slog.Info("callback", "from", q.From.ID, "data", q.Data)
-	if !r.silenceAllowed(ctx, q, args) {
+	role, ok := r.silenceAllowed(ctx, q, args)
+	if !ok {
 		return
 	}
-	statusLine, err := r.silence.Apply(ctx, q, args)
+	statusLine, err := r.silence.Apply(ctx, q, args, role)
 	if err != nil {
 		msg := "Ошибка: " + err.Error()
 		if len(msg) > 200 {
@@ -144,6 +155,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+	if r.memory != nil {
+		r.memory.NoteAlertAction(args.UserID, args.CheckName, statusLine)
+	}
 	newText := q.Message.Text + "\n\n" + statusLine
 	empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, newText, "", &empty); err != nil {
@@ -154,29 +168,30 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 // silenceAllowed -- право заглушить тревогу роутера: админ, владелец или
 // оператор (db.RouterAccessRole). Раньше роль смотрелась только при
 // привязанном владельце, и оператор роутера без владельца не мог заглушить
-// тревогу, пришедшую ему же в личку.
-func (r *Router) silenceAllowed(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
+// тревогу, пришедшую ему же в личку. Возвращает роль нажавшего -- ею
+// подписана строка тишины (BOT-07).
+func (r *Router) silenceAllowed(ctx context.Context, q *tg.CallbackQuery, args Args) (string, bool) {
 	u, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || u == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка: роутер не найден")
 		slog.Warn("silence: роутер не найден", "router_user_id", args.UserID, "err", err)
-		return false
+		return "", false
 	}
 	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
-		return true
+		return alertaction.RoleAdmin, true
 	}
 	role, err := r.d.RouterAccessRole(u.ID, q.From.ID)
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка проверки доступа")
 		slog.Warn("silence: роль не прочиталась", "router_user_id", u.ID, "from", q.From.ID, "err", err)
-		return false
+		return "", false
 	}
 	if role == "" {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
 		slog.Warn("silence: отказ без доступа", "router_user_id", u.ID, "from", q.From.ID)
-		return false
+		return "", false
 	}
-	return true
+	return role, true
 }
 
 // HandleMessage -- сообщение боту. Отвечает бот только в личке: сторожа

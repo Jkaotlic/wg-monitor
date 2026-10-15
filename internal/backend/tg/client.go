@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -120,6 +121,10 @@ type Client struct {
 	// wrapping, so logs never expose the bot-token even when slog dumps
 	// `err`.
 	Logger *slog.Logger
+
+	// pause -- ожидание между попытками отправки (sendWithRetry). nil --
+	// настоящий таймер; тесты подменяют, чтобы не спать.
+	pause func(ctx context.Context, d time.Duration) error
 }
 
 type apiResp struct {
@@ -164,7 +169,7 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, threadID *int64,
 		ReplyToMessageID: replyTo,
 	})
 	var out sendMessageResult
-	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
 		return 0, err
 	}
 	return out.MessageID, nil
@@ -194,7 +199,7 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 		ReplyMarkup:      markup,
 	})
 	var out sendMessageResult
-	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
 		return 0, err
 	}
 	return out.MessageID, nil
@@ -214,7 +219,7 @@ func (c *Client) SendSilentMessageWithKeyboard(ctx context.Context, chatID int64
 		DisableNotification: true,
 	})
 	var out sendMessageResult
-	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
 		return 0, err
 	}
 	return out.MessageID, nil
@@ -312,7 +317,7 @@ func (c *Client) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64,
 		ReplyMarkup:      rawMarkup,
 	})
 	var out sendMessageResult
-	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
 		return 0, err
 	}
 	return out.MessageID, nil
@@ -536,6 +541,12 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		return fmt.Errorf("tg %s: build request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Срок уже истёк -- запрос не уйдёт вовсе: это «заведомо не отправлено»,
+	// а не «могло дойти» (у http-клиента это была бы обычная ошибка с
+	// текстом срока, неотличимая от таймаута ответа).
+	if cerr := ctx.Err(); cerr != nil {
+		return NotSent(fmt.Errorf("tg %s: не отправлено: %w", method, cerr))
+	}
 	resp, err := httpc.Do(req)
 	if err != nil {
 		// Go's *url.Error embeds the full URL — including our bot-token —
@@ -544,14 +555,26 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		// failure / etc.) survive on the underlying error.
 		safe := redactURLError(err)
 		c.warn(method, "transport error", "err", safe)
-		return fmt.Errorf("tg %s: %s", method, safe)
+		out := fmt.Errorf("tg %s: %s", method, safe)
+		if notSent(err) {
+			return &retryableError{err: out}
+		}
+		return out
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	var ar apiResp
 	if err := json.Unmarshal(raw, &ar); err != nil {
 		c.warn(method, "bad response", "status", resp.StatusCode, "body_len", len(raw))
-		return fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
+		out := fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
+		if retryableStatus(resp.StatusCode) {
+			// Прокси перед Telegram ответил HTML-страницей 5xx (кроме 504):
+			// он не передал запрос дальше или Telegram отказал до исполнения.
+			// 504 -- шлюз не дождался ответа, а Telegram мог сообщение уже
+			// отправить: повтор дал бы дубль.
+			return &retryableError{err: out}
+		}
+		return out
 	}
 	if !ar.OK {
 		if isMessageNotModified(method, ar.ErrorCode, ar.Description) {
@@ -567,6 +590,137 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		}
 	}
 	return nil
+}
+
+// Повтор отправки (BOT-01). Временный сбой Telegram в момент тревоги не
+// должен откладывать её до напоминания через 6 часов. Повторяем только то, что
+// заведомо НЕ доставлено: 429 (Telegram отказал до доставки), 5xx, кроме
+// 504, и ошибки соединения до отправки запроса. Таймаут ожидания ответа и обрыв после
+// отправки не повторяем: сообщение могло уже прийти, повтор дал бы дубль.
+const (
+	sendMaxAttempts = 3
+	// sendMaxRateWait -- потолок ожидания по retry_after. Дольше ждать внутри
+	// одной отправки нельзя: веер тревог стоит на месте. Ошибка с RetryAfter
+	// уходит вызывающему, и он сам решает, когда повторить.
+	sendMaxRateWait = 30 * time.Second
+)
+
+// sendRetryPauses -- пауза перед 2-й и 3-й попыткой при 5xx и ошибках
+// соединения.
+var sendRetryPauses = [sendMaxAttempts - 1]time.Duration{time.Second, 3 * time.Second}
+
+// retryableError -- ошибка, при которой запрос до Telegram заведомо не дошёл
+// (соединение не установлено, 5xx кроме 504 от прокси без ответа API). Текст -- как у
+// обёрнутой ошибки.
+type retryableError struct{ err error }
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+// notSent -- ошибка транспорта случилась до отправки запроса: не нашли адрес
+// или не смогли соединиться. Всё остальное (таймаут ответа, обрыв чтения)
+// считается «могло дойти».
+func notSent(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
+// ErrMaybeDelivered -- метка в составной ошибке рассылки: хоть одному
+// получателю сообщение могло дойти. KnownNotSent по такой ошибке -- false,
+// даже если рядом лежит заведомый отказ (например 429, который нужен
+// RateLimitDelay).
+var ErrMaybeDelivered = errors.New("сообщение могло дойти")
+
+// NotSent помечает err как «заведомо не отправлено» (KnownNotSent = true):
+// для отправителей, которые сами знают, что запроса не было.
+func NotSent(err error) error { return &retryableError{err: err} }
+
+// KnownNotSent -- по ошибке отправки известно, что сообщение НЕ отправлено:
+// Telegram ответил отказом (APIError, кроме 504) или запрос не ушёл вовсе
+// (ошибка соединения, 5xx от прокси -- retryableError). Всё остальное --
+// таймаут ответа, срок контекста, обрыв чтения -- «могло дойти»: повторная
+// отправка того же сообщения дала бы дубль (I-2).
+func KnownNotSent(err error) bool {
+	if err == nil || errors.Is(err, ErrMaybeDelivered) {
+		return false
+	}
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Code != http.StatusGatewayTimeout
+	}
+	var re *retryableError
+	return errors.As(err, &re)
+}
+
+// retryableStatus -- 5xx, после которого повтор безопасен. 504 Gateway
+// Timeout исключён: шлюз не дождался Telegram, но тот мог запрос исполнить.
+func retryableStatus(code int) bool {
+	return code >= 500 && code != http.StatusGatewayTimeout
+}
+
+// retryWait -- можно ли повторить отправку после err и сколько ждать.
+// fallback -- пауза для 5xx и ошибок соединения.
+func retryWait(err error, fallback time.Duration) (time.Duration, bool) {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		switch {
+		case ae.Code == http.StatusTooManyRequests:
+			d := ae.RetryAfter
+			if d <= 0 {
+				d = fallback
+			}
+			if d > sendMaxRateWait {
+				return 0, false
+			}
+			return d, true
+		case retryableStatus(ae.Code):
+			return fallback, true
+		}
+		return 0, false
+	}
+	var re *retryableError
+	if errors.As(err, &re) {
+		return fallback, true
+	}
+	return 0, false
+}
+
+// sendWithRetry -- call с ограниченным повтором (не больше sendMaxAttempts
+// попыток) для методов, создающих сообщение. Правки сообщений сюда не идут:
+// у нити починки свой повтор с дедлайном (notify.repairThread.tryEdit).
+func (c *Client) sendWithRetry(ctx context.Context, method string, body []byte, dst any) error {
+	for attempt := 0; ; attempt++ {
+		err := c.call(ctx, method, body, dst)
+		if err == nil || attempt >= len(sendRetryPauses) {
+			return err
+		}
+		wait, ok := retryWait(err, sendRetryPauses[attempt])
+		if !ok {
+			return err
+		}
+		c.warn(method, "повтор отправки", "attempt", attempt+2, "wait", wait, "err", err)
+		if perr := c.waitPause(ctx, wait); perr != nil {
+			return err
+		}
+	}
+}
+
+func (c *Client) waitPause(ctx context.Context, d time.Duration) error {
+	if c.pause != nil {
+		return c.pause(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // warn emits a structured log if Logger is configured. method is the TG

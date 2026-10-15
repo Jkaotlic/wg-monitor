@@ -106,6 +106,8 @@ func TestIntegration_MobileLifecycle_WakeAndSleep(t *testing.T) {
 
 type noopOffline struct{}
 
+func (noopOffline) SendBackOnline(context.Context, int64, string, time.Time) error { return nil }
+
 func (noopOffline) SendOffline(_ context.Context, _ int64, _ string, _ time.Duration) error {
 	return nil
 }

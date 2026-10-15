@@ -67,6 +67,10 @@ type blockingOffline struct {
 	entered chan struct{}
 }
 
+func (b *blockingOffline) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return nil
+}
+
 func (b *blockingOffline) SendOffline(ctx context.Context, _ int64, _ string, _ time.Duration) error {
 	select {
 	case b.entered <- struct{}{}:

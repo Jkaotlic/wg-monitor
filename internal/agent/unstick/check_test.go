@@ -51,3 +51,22 @@ func TestCheck_FlappingKeysOnlyWhenFlapping(t *testing.T) {
 		t.Errorf("fixes key on a normal item: %#v", tl[1])
 	}
 }
+
+// AG-07: текст отказа -- по фактическим шагам: без перезапуска службы не
+// утверждаем, что он был.
+func TestCheck_FailTextFollowsSteps(t *testing.T) {
+	run := func(g ...GaveUpTunnel) string {
+		c := (Check{Source: snap{Ready: true, GaveUp: g}}).Run(ctx, checks.Deps{})
+		msg, _ := c.Details["error"].(string)
+		return msg
+	}
+	if m := run(GaveUpTunnel{TunnelID: "a", Steps: []string{"restart", "service_restart"}}); m != "awg-manager tunnel stays stuck after restart and awg-manager restart" {
+		t.Errorf("full ladder: %q", m)
+	}
+	if m := run(GaveUpTunnel{TunnelID: "a", Steps: []string{"restart"}}); m != "awg-manager tunnel stays stuck after restart" {
+		t.Errorf("step 1 only: %q", m)
+	}
+	if m := run(GaveUpTunnel{TunnelID: "a", Steps: []string{}, Flapping: true, Fixes: 3}); m != "awg-manager tunnel keeps getting stuck again and again" {
+		t.Errorf("flapping: %q", m)
+	}
+}

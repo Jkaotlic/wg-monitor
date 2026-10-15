@@ -359,6 +359,12 @@ export const ACTION_LABELS = {
 // echo below. force_recheck/check_via_tunnel/check_direct are unaffected:
 // their Output is exit IPs and per-site checkmarks, not router topology, so
 // they keep the honest echo.
+// Когда после команды обновлять список: успех, а у tunnel_power ещё и
+// partial -- состояние туннеля могло смениться, экран не должен врать.
+export function commandRefreshesList(action, status) {
+  return status === 'ok' || (action === 'tunnel_power' && status === 'partial')
+}
+
 export function commandOutcomeLabel(action, result) {
   switch (result.status) {
     case 'locked':
@@ -378,6 +384,12 @@ export function commandOutcomeLabel(action, result) {
       if (action === 'tunnel_restart') return 'VPN-туннель перезапущен'
       // Частичный сброс DNS -- не «готово»: часть команд роутер не принял,
       // и что именно осталось, показывает экран сброса.
+      // tunnel_power: роутер принял команду, но туннель за 15 с не дошёл до
+      // нужного состояния; Output называет настоящее -- не успех.
+      if (action === 'tunnel_power' && result.status === 'partial') {
+        const real = String(result.output ?? '').trim()
+        return real ? `Не подтвердилось: ${real}` : 'Не подтвердилось: туннель не дошёл до нужного состояния'
+      }
       if (action === 'dns_reset' && result.status === 'partial') return 'Сброс DNS прошёл не целиком — подробности на экране'
       return routeOutcomeLabel(action, result.output) || 'Готово'
   }

@@ -122,18 +122,35 @@ func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time
 	return err
 }
 
-// SetLastAlert is a small targeted UPDATE used by the Hard dispatch path as a
-// fallback when the full Save fails (DB momentarily locked, etc.). It writes
-// only the two fields that matter for realert correctness — without it a
-// successful TG send followed by a failed Save leaves last_alert_at=NULL and
-// the realert poller re-fires every tick until the next FSM transition.
-// Only touches rows whose current_status is 'hard' to mirror BumpLastAlertAt
-// safety against a concurrent Recovery.
-func (s *StateRepo) SetLastAlert(userID int64, checkName string, msgID int64, ts time.Time) error {
+// MarkHard -- строка проверки стала hard и тревога по ней ушла: hard_since,
+// last_alert_at, счётчики. Тишину и «понятно» не трогает -- человек мог
+// нажать кнопку под тревогой, пока шла рассылка. Зовёт сторож молчания
+// после «Роутер не на связи» (BOT-05).
+func (s *StateRepo) MarkHard(userID int64, checkName string, hardSince, alertAt time.Time) error {
 	_, err := s.d.db.Exec(
-		`UPDATE incident_state SET last_alert_msg_id = ?, last_alert_at = ?
+		`INSERT INTO incident_state(user_id, check_name, consecutive_fails, consecutive_oks, current_status,
+		    hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until, acked)
+		 VALUES(?,?,1,0,'hard',?,NULL,?,NULL,NULL,0)
+		 ON CONFLICT(user_id, check_name) DO UPDATE SET
+		    consecutive_fails = 1,
+		    consecutive_oks   = 0,
+		    current_status    = 'hard',
+		    hard_since        = excluded.hard_since,
+		    last_alert_msg_id = NULL,
+		    last_alert_at     = excluded.last_alert_at`,
+		userID, checkName, hardSince.UTC(), alertAt.UTC())
+	return err
+}
+
+// ClearLastAlertAt снимает отметку отправки с HARD-строки: тревога не дошла
+// никому, и realert (StaleHards: last_alert_at IS NULL) доставит её на
+// ближайшем обходе. Точечный UPDATE, а не Save: остальные поля (тишину,
+// «понятно») за время отправки мог поменять человек.
+func (s *StateRepo) ClearLastAlertAt(userID int64, checkName string) error {
+	_, err := s.d.db.Exec(
+		`UPDATE incident_state SET last_alert_at = NULL
 		 WHERE user_id = ? AND check_name = ? AND current_status = 'hard'`,
-		msgID, ts.UTC(), userID, checkName)
+		userID, checkName)
 	return err
 }
 
@@ -242,6 +259,10 @@ func (s *StateRepo) ActiveHardForUserStatus(userID int64) ([]ActiveIncidentRow, 
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
 //
+// last_alert_at IS NULL -- тревога не дошла ни до кого (Telegram лежал,
+// alerts.Dispatcher не пометил её отправленной): берём на ближайшем обходе, а
+// не через RealertEvery (BOT-01).
+//
 // silenced_until is compared against the SAME `cutoff` parameter rather than
 // SQL CURRENT_TIMESTAMP. modernc.org/sqlite serialises Go time.Time as
 // `2026-05-10T14:30:00Z` (RFC3339, capital T) while SQL CURRENT_TIMESTAMP
@@ -255,7 +276,7 @@ func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
 	rows, err := s.d.db.Query(
 		`SELECT user_id, check_name, hard_since FROM incident_state
 		 WHERE current_status = 'hard'
-		   AND last_alert_at < ?
+		   AND (last_alert_at < ? OR last_alert_at IS NULL)
 		   AND (silenced_until IS NULL OR silenced_until < ?)
 		   AND acked = 0`,
 		now, now)

@@ -218,6 +218,32 @@ func FirmwareNewerThan(installed, candidate string) bool {
 }
 
 func compareSeg(a, b string) int {
+	// «3-9» против «3-10»: хвост сборки через «-» сравниваем по частям
+	// числами, иначе строка «3-9» окажется больше «3-10».
+	if strings.Contains(a, "-") || strings.Contains(b, "-") {
+		ap := strings.Split(a, "-")
+		bp := strings.Split(b, "-")
+		n := len(ap)
+		if len(bp) < n {
+			n = len(bp)
+		}
+		for i := 0; i < n; i++ {
+			if c := compareSegPart(ap[i], bp[i]); c != 0 {
+				return c
+			}
+		}
+		switch {
+		case len(ap) < len(bp):
+			return -1
+		case len(ap) > len(bp):
+			return 1
+		}
+		return 0
+	}
+	return compareSegPart(a, b)
+}
+
+func compareSegPart(a, b string) int {
 	ai, aerr := parsePosInt(a)
 	bi, berr := parsePosInt(b)
 	if aerr == nil && berr == nil {

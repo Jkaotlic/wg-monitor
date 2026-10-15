@@ -8,26 +8,31 @@
 
 export const JOB_POLL_MS = 1500
 export const JOB_POLL_FAILURE_LIMIT = 40
+// После 429 ограничитель просит не частить: пауза длиннее обычной.
+export const JOB_POLL_RATE_LIMIT_MS = 5000
 
 export function jobPollStart() {
   return { phase: 'loading', job: null, failures: 0 }
 }
 
-// denied -- сервер отказал не сетью: 401/403/503 и прочие 4xx, кроме 404.
-// Повторять бессмысленно, экран говорит словами сервера.
+// denied -- сервер отказал не сетью: 401/403 и прочие 4xx, кроме 404 и 429.
+// Повторять бессмысленно, экран говорит словами сервера. 503 и 429 --
+// временные (перегрузка, релей, перезапуск бэкенда), как 502/504: повтор.
+// Единственный законный 503 маршрута -- provision_not_configured.
 function terminal(state) {
   return state.phase === 'expired' || state.phase === 'lost' || state.phase === 'denied'
 }
 
-function deniedStatus(status) {
-  return status === 503 || (status >= 400 && status < 500 && status !== 404)
+function deniedStatus(status, code) {
+  if (status === 503) return code === 'provision_not_configured'
+  return status >= 400 && status < 500 && status !== 404 && status !== 429
 }
 
 export function jobPollStep(state, event) {
   if (terminal(state)) return state
   if (event?.type === 'job') return { phase: 'live', job: event.job, failures: 0 }
   if (event?.status === 404) return { ...state, phase: 'expired' }
-  if (deniedStatus(event?.status)) return { ...state, phase: 'denied', message: String(event?.message ?? '') }
+  if (deniedStatus(event?.status, event?.code)) return { ...state, phase: 'denied', message: String(event?.message ?? '') }
   const failures = state.failures + 1
   if (failures >= JOB_POLL_FAILURE_LIMIT) return { ...state, phase: 'lost', failures }
   return { ...state, failures }
@@ -51,13 +56,13 @@ export async function pollJob({ jobId, fetchJob, sleep, onState, signal, interva
     try {
       event = { type: 'job', job: await fetchJob(jobId) }
     } catch (err) {
-      event = { type: 'error', status: err?.status ?? 0, message: err?.serverMessage ?? '' }
+      event = { type: 'error', status: err?.status ?? 0, code: err?.code ?? '', message: err?.serverMessage ?? '' }
     }
     if (signal.cancelled) return state
     state = jobPollStep(state, event)
     onState(state)
     if (jobPollDone(state)) return state
-    await sleep(intervalMs)
+    await sleep(event.status === 429 ? Math.max(intervalMs, JOB_POLL_RATE_LIMIT_MS) : intervalMs)
   }
   return state
 }

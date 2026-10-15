@@ -59,8 +59,10 @@ func TestEntwareCleanInstallWritesSafeScriptAndManagedCrontab(t *testing.T) {
 			t.Fatalf("script missing %q:\n%s", want, s)
 		}
 	}
+	// kill -0 -- только проверка «жив ли владелец замка» (AG-01): сигнала нет.
+	noProbe := strings.ReplaceAll(s, `kill -0 "$owner"`, "")
 	for _, unsafe := range []string{"opkg remove", "kill ", "rm -rf /opt", "/opt/etc/*", "/opt/etc/"} {
-		if strings.Contains(s, unsafe) {
+		if strings.Contains(noProbe, unsafe) {
 			t.Fatalf("script contains unsafe fragment %q:\n%s", unsafe, s)
 		}
 	}
@@ -202,6 +204,7 @@ func newTestEntwareCleanManager(t *testing.T) *EntwareCleanManager {
 		MinFreeKB:         2048,
 		MinMemAvailableKB: 65_536,
 		MaxLogKB:          64,
+		LockDir:           filepath.Join(root, "tmp", "wg-monitor-entware-cleanup.lock"),
 		Now: func() time.Time {
 			return time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
 		},

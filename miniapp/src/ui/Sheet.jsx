@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
-import { commandOutcomeLabel } from '../labels.js'
+import { commandOutcomeLabel, commandRefreshesList } from '../labels.js'
 import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs, commandName } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
 import { plainHyphens } from '../text.js'
@@ -135,7 +135,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
       // onResult -- любой исход, для экранов, которым нужен сам ответ роутера
       // (сброс DNS: путь снимка, частичный успех). onDone -- только успех.
       if (res && sheet.onResult) sheet.onResult(res)
-      if (res?.status === 'ok' && sheet.onDone) sheet.onDone()
+      if (commandRefreshesList(sheet.action, res?.status) && sheet.onDone) sheet.onDone()
     })
   }
 

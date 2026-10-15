@@ -144,7 +144,7 @@ func main() {
 	// Command channel: long-poll /v1/cmd, dispatch to actions.Runner.
 	// force_recheck wires straight into reporter.ForceResumed so an admin
 	// taps "🔁 Force recheck" in TG and the agent emits a fresh report
-	// with Resumed=true within seconds.
+	// with Resumed=true within seconds. Tunnel actions use rep.SendNow.
 	opkg := &actions.OpkgRunner{
 		LockPath: "/opt/var/wg-monitor/opkg.lock",
 		// Установка отвязана от срока команды и может идти до 20 минут
@@ -154,7 +154,12 @@ func main() {
 		// Общий замок с cron-обновлением пакетов (AGENT-14).
 		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
+	refreshOpkgCronScript(logger)
+	refreshEntwareCleanScript(logger)
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
+	// Действия с туннелем шлют внеплановый отчёт без Resumed (AG-05);
+	// ForceResumed -- только force_recheck.
+	runner.ReportNow = rep.SendNow
 	runner.ExitProbeNow = signals.prober.ProbeNow
 	if unstickWatcher != nil {
 		runner.OnCommand = unstickWatcher.NoteCommand
@@ -310,17 +315,49 @@ func unstickThreshold(n int) time.Duration {
 // (как opkgSharedLockStale в actions).
 const opkgLockAbandonedAfter = 2 * time.Hour
 
-// upgradeInProgress -- идёт ли автообновление пакетов по cron: каталог-замок
-// есть и моложе 2 ч. Само обновление перезапускает awg-manager -- сторожу
-// в это время лечить нечего.
+// upgradeInProgress -- идёт ли автообновление пакетов по cron: замок занят
+// (pid из замка жив, а без pid -- по возрасту) и каталог моложе 2 ч. Замок
+// мёртвого владельца брошен сразу (AG-06); живой или переиспользованный pid
+// глушит сторожа не дольше прежнего потолка 2 ч. Само обновление
+// перезапускает awg-manager -- сторожу в это время лечить нечего.
 func upgradeInProgress(dir string, now func() time.Time) func() bool {
 	return func() bool {
-		fi, err := os.Stat(dir)
-		if err != nil {
+		t := now()
+		if !actions.MkdirLockState(dir, t, opkgLockAbandonedAfter).Held() {
 			return false
 		}
-		return now().Sub(fi.ModTime()) < opkgLockAbandonedAfter
+		fi, err := os.Stat(dir)
+		return err == nil && t.Sub(fi.ModTime()) < opkgLockAbandonedAfter
 	}
+}
+
+// refreshOpkgCronScript -- уже установленный cron-скрипт автообновления
+// переписывается текущим текстом (иначе старый скрипт без kill -0 жил бы до
+// opkg_cron_install). Не установлен -- не ставит.
+func refreshOpkgCronScript(log *slog.Logger) {
+	changed, err := (&actions.OpkgCronManager{}).RefreshScript()
+	switch {
+	case err != nil:
+		log.Warn("opkg cron: обновить скрипт не удалось", "err", err)
+	case changed:
+		log.Info("opkg cron: скрипт обновлён до текущей версии")
+	}
+}
+
+// refreshEntwareCleanScript -- то же для скрипта очистки Entware (AG-01):
+// установленная копия без снятия брошенного замка переписывается, а замок
+// без pid, брошенный скриптом до v0.61, снимается -- иначе ночная очистка
+// по расписанию так и писала бы «занято» до перезагрузки.
+func refreshEntwareCleanScript(log *slog.Logger) {
+	m := &actions.EntwareCleanManager{}
+	changed, err := m.RefreshScript()
+	switch {
+	case err != nil:
+		log.Warn("entware cleanup: обновить скрипт не удалось", "err", err)
+	case changed:
+		log.Info("entware cleanup: скрипт обновлён до текущей версии")
+	}
+	m.ClearAbandonedLock()
 }
 
 // awgmServiceRestart -- ступень 2 сторожа: перезапуск службы awg-manager.

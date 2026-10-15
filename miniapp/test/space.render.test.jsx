@@ -136,4 +136,15 @@ describe('«Свободное место»', () => {
     expect(root.querySelector('.space-screen details pre').textContent).toContain('no space left')
     cleanup(root)
   })
+
+  it('AG-01: старый агент ответил ok с last_status locked -- «другая очистка», замера нет', async () => {
+    mocks.answers.entware_clean_run = ok({ ...CLEAN, last_status: 'locked' })
+    const root = await mount()
+    const before = mocks.calls.length
+    await click(button(root, 'Почистить сейчас'))
+    expect(mocks.calls.slice(before).map((c) => c.action)).toEqual(['entware_clean_run'])
+    expect(root.textContent).toContain('Уже идёт другая очистка')
+    expect(root.textContent).not.toContain('Очистка выполнена')
+    cleanup(root)
+  })
 })

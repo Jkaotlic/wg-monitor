@@ -22,17 +22,20 @@ const (
 )
 
 type repairSource struct {
-	cab    VPNCabinet
-	panels Awg3Panels
-	db     *db.DB
+	cab     VPNCabinet
+	panels  Awg3Panels
+	db      *db.DB
+	adminTG int64
 }
 
 // RepairSource -- источник конфига для лесенки автопочинки. Провал кабинета
 // или панели -- это не «попробуй ещё», а «нужен человек»: ключ не принят,
 // код истёк, сервер не отвечает. Поэтому такие ошибки уходят движку как
-// *linkrepair.NeedHuman с готовой фразой действия.
-func RepairSource(cab VPNCabinet, panels Awg3Panels, database *db.DB) linkrepair.Source {
-	return repairSource{cab: cab, panels: panels, db: database}
+// *linkrepair.NeedHuman с готовой фразой действия. adminTG -- Telegram ID
+// администратора: ему выпуск со своего сервера разрешён всегда, как и на
+// экране выпуска.
+func RepairSource(cab VPNCabinet, panels Awg3Panels, database *db.DB, adminTG int64) linkrepair.Source {
+	return repairSource{cab: cab, panels: panels, db: database, adminTG: adminTG}
 }
 
 func (s repairSource) Issue(ctx context.Context, routerID int64, provider, option string) (replace.Issued, error) {
@@ -174,6 +177,20 @@ func (s repairSource) awg3(ctx context.Context, routerID int64, option string, f
 	u, err := s.db.Users().GetByID(routerID)
 	if err != nil {
 		return replace.Issued{}, fmt.Errorf("роутер не нашёлся: %w", err)
+	}
+	// Право выпуска -- в момент выпуска (BE-02), той же проверкой, что у
+	// экрана выпуска: допуск к панели могли снять, а оператора -- убрать с
+	// роутера уже после включения автопочинки. От чьего имени выпуск,
+	// говорит движок; не знает -- от имени владельца роутера.
+	tg := linkrepair.IssuerFrom(ctx)
+	if tg == 0 && u.TelegramUserID != nil {
+		tg = *u.TelegramUserID
+	}
+	if !canIssueAwg3(s.db, s.adminTG, s.panels, tg, routerID, panel) {
+		return replace.Issued{}, &linkrepair.NeedHuman{
+			Cause:  fmt.Errorf("у Telegram ID %d нет права выпуска с панели «%s» на этот роутер", tg, panel),
+			Action: linkrepair.ActNoPanelAccess,
+		}
 	}
 	var rc awg3panel.RouterConfig
 	if fresh {

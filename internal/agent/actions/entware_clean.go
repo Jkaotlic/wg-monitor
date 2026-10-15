@@ -18,6 +18,7 @@ import (
 const (
 	defaultEntwareCleanScriptPath        = "/opt/etc/wg-monitor/entware-cleanup.sh"
 	defaultEntwareCleanLogPath           = "/opt/var/log/wg-monitor/entware-cleanup.log"
+	defaultEntwareCleanLockDir           = "/tmp/wg-monitor-entware-cleanup.lock"
 	defaultEntwareCleanSchedule          = "15 5 * * *"
 	defaultEntwareCleanMinFreeKB         = int64(2 * 1024)
 	defaultEntwareCleanMinMemAvailableKB = int64(64 * 1024)
@@ -37,6 +38,72 @@ type EntwareCleanManager struct {
 	MinFreeKB         int64
 	MinMemAvailableKB int64
 	MaxLogKB          int64
+	// LockDir -- mkdir-замок скрипта; пусто -- defaultEntwareCleanLockDir.
+	LockDir string
+}
+
+// ErrEntwareCleanBusy -- скрипт не стал чистить: замок держит другая очистка
+// (ночная по расписанию или второе нажатие). Раннер отвечает статусом
+// locked, а не ok (AG-01): чистки не было.
+var ErrEntwareCleanBusy = errors.New("уже идёт другая очистка — повторите через несколько минут")
+
+// entwareCleanLockStaleAfter -- замок без pid (его оставил скрипт до v0.61,
+// убитый по сроку) старше этого считается брошенным. Очистка живёт не дольше
+// срока действия (330 с), так что полчаса -- с большим запасом.
+const entwareCleanLockStaleAfter = 30 * time.Minute
+
+// entwareCleanLockMaxAge -- замок старше этого брошен, даже если процесс с
+// его pid жив: очистка столько не идёт (срок действия 330 с), а на busybox
+// pid переиспользуются -- чужой процесс с тем же номером держал бы очистку
+// до перезагрузки. Скрипт проверяет то же через find -mmin +120.
+const entwareCleanLockMaxAge = 2 * time.Hour
+
+// entwareCleanLockedMarker -- строка, которую скрипт пишет в вывод, когда
+// замок занят живым владельцем.
+const entwareCleanLockedMarker = "status=locked"
+
+// RefreshScript переписывает уже установленный скрипт очистки текущим
+// текстом (атомарно: запущенный cron'ом sh дочитывает старый файл). Иначе
+// скрипт без снятия брошенного замка жил бы на роутере до переустановки
+// расписания. Скрипта нет -- ничего не ставит; текст тот же -- не трогает.
+func (m *EntwareCleanManager) RefreshScript() (changed bool, err error) {
+	cur, err := os.ReadFile(m.scriptPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	want, err := m.scriptText()
+	if err != nil {
+		return false, err
+	}
+	if string(cur) == want {
+		return false, nil
+	}
+	if err := m.writeScript(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ClearAbandonedLock снимает брошенный замок очистки: pid мёртв; pid нет
+// (старый скрипт) и замок старше entwareCleanLockStaleAfter; pid жив, но замок
+// старше entwareCleanLockMaxAge. Живой и свежий не трогаем.
+func (m *EntwareCleanManager) ClearAbandonedLock() {
+	dir := m.lockDir()
+	switch MkdirLockState(dir, m.now(), entwareCleanLockStaleAfter) {
+	case LockAbandoned:
+	case LockHeld:
+		st, err := os.Stat(dir)
+		if err != nil || m.now().Sub(st.ModTime()) <= entwareCleanLockMaxAge {
+			return
+		}
+	default:
+		return
+	}
+	_ = os.Remove(filepath.Join(dir, "pid"))
+	_ = os.Remove(dir)
 }
 
 func (m *EntwareCleanManager) Install(ctx context.Context, schedule string) (wire.EntwareCleanStatus, error) {
@@ -109,15 +176,23 @@ func (m *EntwareCleanManager) Status(ctx context.Context, tailLines int) (wire.E
 func (m *EntwareCleanManager) Run(ctx context.Context) (wire.EntwareCleanStatus, error) {
 	// v0.57: без включённого расписания скрипта нет -- пишем его сами, без
 	// cron. Раньше здесь был отказ, а чистка нужнее всего, когда места нет.
+	// Скрипт старого образца (без снятия брошенного замка) -- переписывается.
 	if _, err := os.Stat(m.scriptPath()); errors.Is(err, fs.ErrNotExist) {
 		if err := m.writeScript(); err != nil {
 			return wire.EntwareCleanStatus{}, err
 		}
 	} else if err != nil {
 		return wire.EntwareCleanStatus{}, fmt.Errorf("stat cleanup script: %w", err)
+	} else if _, err := m.RefreshScript(); err != nil {
+		return wire.EntwareCleanStatus{}, fmt.Errorf("refresh cleanup script: %w", err)
 	}
-	if out, err := m.exec(ctx, m.scriptPath()); err != nil {
+	m.ClearAbandonedLock()
+	out, err := m.exec(ctx, m.scriptPath())
+	if err != nil {
 		return wire.EntwareCleanStatus{}, fmt.Errorf("run cleanup script: %w\n%s", err, string(out))
+	}
+	if strings.Contains(string(out), entwareCleanLockedMarker) {
+		return wire.EntwareCleanStatus{}, ErrEntwareCleanBusy
 	}
 	return m.Status(ctx, 80)
 }
@@ -364,6 +439,7 @@ func (m *EntwareCleanManager) scriptText() (string, error) {
 		{"MIN_FREE_KB", strconv.FormatInt(m.minFreeKB(), 10)},
 		{"MIN_MEM_AVAILABLE_KB", strconv.FormatInt(m.minMemAvailableKB(), 10)},
 		{"MAX_LOG_KB", strconv.FormatInt(m.maxLogKB(), 10)},
+		{"LOCK", strconv.Quote(m.lockDir())},
 	})
 	if err != nil {
 		return "", err
@@ -383,6 +459,20 @@ func (m *EntwareCleanManager) scriptPath() string {
 		return m.ScriptPath
 	}
 	return defaultEntwareCleanScriptPath
+}
+
+func (m *EntwareCleanManager) lockDir() string {
+	if m.LockDir != "" {
+		return m.LockDir
+	}
+	return defaultEntwareCleanLockDir
+}
+
+func (m *EntwareCleanManager) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
 }
 
 func (m *EntwareCleanManager) logPath() string {

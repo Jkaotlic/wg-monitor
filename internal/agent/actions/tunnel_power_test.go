@@ -2,9 +2,12 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -15,41 +18,146 @@ import (
 // только NDMS-интерфейсы. Половина туннелей живого роутера -- opkg, у них
 // имени в NDMS нет вовсе, и выключить их было нечем: ни из бота, ни из
 // приложения, ни мастеру замены конфига, которому это нужно на шаге отката.
-func TestRunner_TunnelPower_StartsByID(t *testing.T) {
-	var path string
-	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path + "?" + r.URL.RawQuery
-		w.WriteHeader(200)
+// powerFake -- awg-manager с состоянием одного туннеля, как его ведёт живой
+// роутер (заметка mcp-stop-disables-tunnel, 11.09): stop выключает туннель
+// (enabled=false), start выключенный не поднимает -- нужен toggle-enabled.
+type powerFake struct {
+	mu      sync.Mutex
+	enabled bool
+	status  string
+	// startTo -- куда start переводит включённый туннель ("" → running).
+	startTo string
+	// stopTo -- куда stop переводит туннель ("" → stopped).
+	stopTo string
+	calls  []string
+	gets   int
+	// getFail -- чтение туннеля после команды отвечает 500.
+	getFail bool
+	// ctrlFail -- путь управления (start/stop/toggle-enabled) отвечает 500.
+	ctrlFail string
+}
+
+func (f *powerFake) handler(t *testing.T) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if id := r.URL.Query().Get("id"); id != "awg11" {
+			t.Errorf("id = %q", id)
+		}
+		switch r.URL.Path {
+		case "/api/tunnels/get":
+			f.gets++
+			if f.getFail && len(f.calls) > 0 {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"success":false,"error":"internal: db locked"}`))
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"success":true,"data":{"id":"awg11","name":"nl","status":%q,"enabled":%v}}`, f.status, f.enabled)
+			return
+		case f.ctrlFail:
+			f.calls = append(f.calls, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"success":false,"error":"internal: ndm busy"}`))
+			return
+		case "/api/control/start":
+			if f.enabled {
+				f.status = "running"
+				if f.startTo != "" {
+					f.status = f.startTo
+				}
+			}
+		case "/api/control/stop":
+			f.enabled = false
+			f.status = "stopped"
+			if f.stopTo != "" {
+				f.status = f.stopTo
+			}
+		case "/api/control/toggle-enabled":
+			f.enabled = !f.enabled
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		f.calls = append(f.calls, r.URL.Path)
 		_, _ = w.Write([]byte(`{"success":true}`))
-	}))
-	r := Runner{AwgClient: cli, Now: mockNow()}
-	res := r.Execute(context.Background(), wire.Command{
-		ID: "p1", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": true},
 	})
-	if res.Status != "ok" {
-		t.Fatalf("status=%q output=%q", res.Status, res.Output)
-	}
-	if path != "/api/control/start?id=awg11" {
-		t.Fatalf("путь = %q", path)
+}
+
+func powerRunner(t *testing.T, f *powerFake) *Runner {
+	return &Runner{
+		AwgClient: awgmgrFake(t, f.handler(t)),
+		Now:       mockNow(),
+		Sleep:     func(ctx context.Context, d time.Duration) error { return ctx.Err() },
 	}
 }
 
-func TestRunner_TunnelPower_StopsByID(t *testing.T) {
-	var path string
-	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path + "?" + r.URL.RawQuery
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true}`))
-	}))
-	r := Runner{AwgClient: cli, Now: mockNow()}
-	res := r.Execute(context.Background(), wire.Command{
-		ID: "p2", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": false},
+func runPower(r *Runner, on bool) wire.CommandResult {
+	return r.Execute(context.Background(), wire.Command{
+		ID: "p1", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": on},
 	})
+}
+
+// AG-02: туннель, выключенный этой же кнопкой (stop ставит enabled=false),
+// включается: сначала enable, потом start; «запущен» -- только увидев running.
+func TestRunner_TunnelPower_OnEnablesDisabledTunnel(t *testing.T) {
+	f := &powerFake{enabled: false, status: "stopped"}
+	res := runPower(powerRunner(t, f), true)
+	if res.Status != "ok" || !strings.Contains(res.Output, "запущен") {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := "/api/control/toggle-enabled\n/api/control/start"
+	if got := strings.Join(f.calls, "\n"); got != want {
+		t.Fatalf("calls:\n%s\nwant:\n%s", got, want)
+	}
+	if !f.enabled || f.status != "running" {
+		t.Fatalf("tunnel left enabled=%v status=%q", f.enabled, f.status)
+	}
+}
+
+// Включённый туннель повторно не переключается: toggle выключил бы его.
+func TestRunner_TunnelPower_OnEnabledTunnelOnlyStarts(t *testing.T) {
+	f := &powerFake{enabled: true, status: "stopped"}
+	res := runPower(powerRunner(t, f), true)
 	if res.Status != "ok" {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
-	if path != "/api/control/stop?id=awg11" {
-		t.Fatalf("путь = %q", path)
+	if got := strings.Join(f.calls, "\n"); got != "/api/control/start" {
+		t.Fatalf("calls = %q, want only start", got)
+	}
+}
+
+// AG-02: start ответил success, но туннель за срок не дошёл до running --
+// ответ не ok и называет настоящее состояние, «запущен» не говорит.
+func TestRunner_TunnelPower_OnNotRunningIsNotOK(t *testing.T) {
+	f := &powerFake{enabled: true, status: "stopped", startTo: "starting"}
+	r := powerRunner(t, f)
+	var slept time.Duration
+	r.Sleep = func(ctx context.Context, d time.Duration) error { slept += d; return nil }
+	res := runPower(r, true)
+	if res.Status == "ok" || strings.Contains(res.Output, "запущен") {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "запускается") {
+		t.Fatalf("output does not name the real state: %q", res.Output)
+	}
+	if slept < 10*time.Second || slept > 15*time.Second {
+		t.Fatalf("waited %v, want 10..15s", slept)
+	}
+}
+
+func TestRunner_TunnelPower_OffChecksStopped(t *testing.T) {
+	f := &powerFake{enabled: true, status: "running"}
+	res := runPower(powerRunner(t, f), false)
+	if res.Status != "ok" || !strings.Contains(res.Output, "остановлен") {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if got := strings.Join(f.calls, "\n"); got != "/api/control/stop" {
+		t.Fatalf("calls = %q", got)
+	}
+
+	f = &powerFake{enabled: true, status: "running", stopTo: "stopping"}
+	res = runPower(powerRunner(t, f), false)
+	if res.Status == "ok" || !strings.Contains(res.Output, "останавливается") {
+		t.Fatalf("stuck stop: status=%q output=%q", res.Status, res.Output)
 	}
 }
 
@@ -68,5 +176,146 @@ func TestRunner_TunnelPower_RequiresTunnelID(t *testing.T) {
 	}
 	if called {
 		t.Fatal("роутер не должен был получить ни одного запроса")
+	}
+}
+
+// AG-05: действия с туннелем просят внеплановый отчёт (ReportNow), а не
+// «вернулся после отвала» (ForceRecheck → Resumed=true): у мобильного роутера
+// бэкенд выбросил бы из такого отчёта упавшие проверки туннелей.
+func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tunnels/get" {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg11","status":"running","enabled":true}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	for _, cmd := range []wire.Command{
+		{ID: "a", Action: "tunnel_restart", Args: map[string]any{"tunnel_id": "awg11"}},
+		{ID: "b", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": true}},
+		{ID: "c", Action: "tunnel_enable", Args: map[string]any{"ndms_name": "Wireguard3"}},
+	} {
+		var now, resumed int
+		r := Runner{
+			AwgClient:    awgmgrFake(t, ok),
+			Exec:         func(ctx context.Context, name string, args ...string) ([]byte, error) { return nil, nil },
+			Now:          mockNow(),
+			ForceRecheck: func(ctx context.Context) { resumed++ },
+			ReportNow:    func(ctx context.Context) { now++ },
+		}
+		res := r.Execute(context.Background(), cmd)
+		if res.Status != "ok" {
+			t.Fatalf("%s: status=%q output=%q", cmd.Action, res.Status, res.Output)
+		}
+		if now != 1 || resumed != 0 {
+			t.Fatalf("%s: ReportNow=%d ForceRecheck=%d, want 1/0", cmd.Action, now, resumed)
+		}
+	}
+}
+
+// Ревью Task 7: ожидание состояния ограничено часами, а не числом чтений --
+// медленный awg-manager (5 с на чтение) не растягивает его за срок действия.
+func TestRunner_TunnelPower_SettleBoundedByWallClock(t *testing.T) {
+	oldSettle, oldStep := tunnelPowerSettle, tunnelPowerStep
+	tunnelPowerSettle, tunnelPowerStep = 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { tunnelPowerSettle, tunnelPowerStep = oldSettle, oldStep })
+
+	f := &powerFake{enabled: true, status: "stopped", startTo: "starting"}
+	slow := f.handler(t)
+	r := powerRunner(t, f)
+	r.AwgClient = awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api/tunnels/get" {
+			time.Sleep(100 * time.Millisecond)
+		}
+		slow.ServeHTTP(w, req)
+	}))
+	start := time.Now()
+	res := runPower(r, true)
+	if el := time.Since(start); el > 900*time.Millisecond {
+		t.Fatalf("settle took %v with a 300ms budget (reads: %d)", el, f.gets)
+	}
+	if res.Status != "partial" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+// Ревью Task 7: внеплановый отчёт после действия идёт со своим сроком, а не
+// с почти истёкшим сроком действия: обрезанные проверки дали бы ложные
+// тревоги (отчёт больше не Resumed).
+func TestRunner_ReportNowGetsOwnContext(t *testing.T) {
+	f := &powerFake{enabled: true, status: "running"}
+	r := powerRunner(t, f)
+	r.ActionTimeout = func(string) time.Duration { return time.Second }
+	var (
+		gotErr      error
+		gotDeadline time.Time
+		hasDeadline bool
+	)
+	r.ReportNow = func(ctx context.Context) {
+		gotErr = ctx.Err()
+		gotDeadline, hasDeadline = ctx.Deadline()
+	}
+	res := runPower(r, true)
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if gotErr != nil || !hasDeadline {
+		t.Fatalf("report ctx err=%v deadline=%v", gotErr, hasDeadline)
+	}
+	if left := time.Until(gotDeadline); left < 10*time.Second {
+		t.Fatalf("report ctx has only %v left: bound to the action deadline", left)
+	}
+}
+
+// M-2: ответ «не подтвердилось» мини-апп показывает владельцу дословно --
+// в нём имя туннеля, а не id, и нет сырого текста ошибки.
+func TestRunner_TunnelPower_PartialSpeaksToOwner(t *testing.T) {
+	t.Run("state", func(t *testing.T) {
+		f := &powerFake{enabled: true, status: "stopped", startTo: "starting"}
+		res := runPower(powerRunner(t, f), true)
+		if res.Status != "partial" || strings.Contains(res.Output, "awg11") || !strings.Contains(res.Output, "«nl»") {
+			t.Fatalf("status=%q output=%q", res.Status, res.Output)
+		}
+	})
+	t.Run("read failed", func(t *testing.T) {
+		f := &powerFake{enabled: false, status: "running", getFail: true}
+		res := runPower(powerRunner(t, f), false)
+		if res.Status != "partial" {
+			t.Fatalf("status=%q output=%q", res.Status, res.Output)
+		}
+		for _, bad := range []string{"awg11", "500", "internal", "db locked", "awgmgr", "("} {
+			if strings.Contains(res.Output, bad) {
+				t.Fatalf("в тексте владельцу %q: %q", bad, res.Output)
+			}
+		}
+	})
+}
+
+// Ревью M-2: отказ роутера (err) мини-апп тоже показывает дословно -- имя
+// туннеля вместо id, без сырого текста ошибки.
+func TestRunner_TunnelPower_ErrSpeaksToOwner(t *testing.T) {
+	for name, c := range map[string]struct {
+		f    *powerFake
+		on   bool
+		verb string
+	}{
+		"start":  {&powerFake{enabled: true, status: "stopped", ctrlFail: "/api/control/start"}, true, "запустить"},
+		"enable": {&powerFake{enabled: false, status: "stopped", ctrlFail: "/api/control/toggle-enabled"}, true, "запустить"},
+		"stop":   {&powerFake{enabled: true, status: "running", ctrlFail: "/api/control/stop"}, false, "остановить"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := runPower(powerRunner(t, c.f), c.on)
+			if res.Status != "err" {
+				t.Fatalf("status=%q output=%q", res.Status, res.Output)
+			}
+			if !strings.Contains(res.Output, "«nl»") || !strings.Contains(res.Output, c.verb) {
+				t.Fatalf("нет имени туннеля или действия: %q", res.Output)
+			}
+			for _, bad := range []string{"awg11", "500", "internal", "ndm busy", "awgmgr", "tunnel_power"} {
+				if strings.Contains(res.Output, bad) {
+					t.Fatalf("в тексте владельцу %q: %q", bad, res.Output)
+				}
+			}
+		})
 	}
 }

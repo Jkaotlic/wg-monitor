@@ -298,13 +298,15 @@ func TestTick_EmptyRecheckListIsNotFixedNotGone(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	if h.services != 1 {
-		t.Fatalf("empty list must act like a read error and escalate; services=%d", h.services)
+	// AG-03: пустой список -- сбой чтения, а сбой чтения -- не вердикт
+	if h.services != 0 {
+		t.Fatalf("empty list must act like a read error and not escalate; services=%d", h.services)
 	}
-	for _, e := range h.w.Facts().Events {
-		if e.Result == wire.UnstickFixed {
-			t.Fatalf("fixed without proof: %+v", e)
-		}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without proof: %+v", f.Events)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without proof: %+v", s.GaveUp)
 	}
 }
 
@@ -497,19 +499,93 @@ func TestTick_TwoStuck_OneServiceRestart(t *testing.T) {
 	}
 }
 
+// AG-03: неудачное чтение -- не вердикт. После ступени 1 awg-manager не
+// ответил ни разу (и на повторах) -- на ступень 2 не идём, «починил» и
+// «сдался» не говорим; since не сброшен -- следующий тик решает сам.
 func TestTick_RecheckErrorIsNotFixed(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.readErr = errors.New("connection refused") }
 	h.w.Tick(ctx)
 	h.clk.advance(61 * time.Second)
+	readsBefore := h.awg.reads
 	h.w.Tick(ctx)
-	for _, e := range h.w.Facts().Events {
-		if e.Result == wire.UnstickFixed {
-			t.Fatalf("fixed without proof: %+v", e)
-		}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without a read: %+v", f.Events)
+	}
+	if h.services != 0 {
+		t.Fatalf("unread after step 1 must not escalate; services=%d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without a read: %+v", s.GaveUp)
+	}
+	// 1 опрос + 3 попытки перечитать (первая и два повтора)
+	if n := h.awg.reads - readsBefore; n != 4 {
+		t.Fatalf("reads in the tick = %d; want 4 (poll + recheck with 2 retries)", n)
+	}
+	// awg-manager снова отвечает, туннель всё ещё завис: до конца окна
+	// тишины -- ничего, потом since прежний -- лесенка сразу, без нового
+	// ожидания порога
+	h.awg.mu.Lock()
+	h.awg.readErr = nil
+	h.awg.onAction = nil
+	h.awg.mu.Unlock()
+	h.clk.advance(30 * time.Second)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 1 {
+		t.Fatalf("restarts = %d; want 1 (paused after an unread recheck)", n)
+	}
+	h.clk.advance(10 * time.Minute)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("restarts = %d; want 2 (since kept)", n)
 	}
 	if h.services != 1 {
-		t.Errorf("unread after step 1 must escalate; services=%d", h.services)
+		t.Fatalf("read still stuck must escalate; services=%d", h.services)
+	}
+}
+
+// AG-03: один неудачный ответ после ступени 1 -- повтор чтения, и по
+// прочитанному «вышел» -- починил, без перезапуска службы.
+func TestTick_RecheckTransientErrorRetried(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.awg.onAction = func(_, _ string, tn *awgmgr.Tunnel) {
+		tn.Status = "running"
+		h.awg.failReads = 1
+	}
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if h.services != 0 {
+		t.Fatalf("one failed read escalated to a service restart; services=%d", h.services)
+	}
+	f := h.w.Facts()
+	if f == nil || len(f.Events) != 1 || f.Events[0].Result != wire.UnstickFixed {
+		t.Fatalf("facts: %+v", f)
+	}
+}
+
+// AG-03: после ступени 2 awg-manager не отвечает (ещё поднимается) --
+// без «сдался» и без события: тревогу о туннеле без чтения не шлём.
+func TestTick_RecheckErrorAfterServiceIsNotGaveUp(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = func(context.Context) error {
+		h.services++
+		h.awg.mu.Lock()
+		h.awg.readErr = errors.New("connection refused")
+		h.awg.mu.Unlock()
+		return nil
+	}
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if h.services != 1 {
+		t.Fatalf("services = %d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without a read after the service restart: %+v", s.GaveUp)
+	}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without a read: %+v", f.Events)
 	}
 }
 
@@ -578,7 +654,9 @@ func TestTick_RouterWideCommandSilencesAll(t *testing.T) {
 	if c := h.awg.callList(); len(c) != 0 {
 		t.Fatalf("acted during router-wide command window: %v", c)
 	}
-	for _, a := range []string{"restart_tunnel", "service_restart", "firmware_install", "self_update", "opkg_upgrade"} {
+	for _, a := range []string{"restart_tunnel", "service_restart", "firmware_install", "self_update", "opkg_upgrade",
+		// AG-04: после правки фидов -- полный opkg upgrade с перезапуском awg-manager
+		"opkg_feed_disable"} {
 		h2 := newHarness(tun("a", "broken", true))
 		h2.w.Tick(ctx)
 		h2.w.NoteCommand(wire.Command{Action: a})
@@ -785,9 +863,18 @@ func TestTick_UpgradeInProgressSilencesWatcher(t *testing.T) {
 		t.Fatalf("watcher acted during opkg upgrade: %v", c)
 	}
 	upgrading = false
+	// AG-04: обновление только что кончилось -- awg-manager ещё поднимает
+	// туннели: окно тишины GuardWindow от конца обновления
+	h.w.Tick(ctx)
+	h.clk.advance(9 * time.Minute)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) != 0 {
+		t.Fatalf("watcher acted right after the upgrade ended: %v", c)
+	}
+	h.clk.advance(2 * time.Minute)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); len(c) == 0 {
-		t.Fatal("watcher stayed silent after the upgrade ended")
+		t.Fatal("watcher stayed silent after the post-upgrade window")
 	}
 }
 
@@ -981,5 +1068,79 @@ func TestTick_FailedServiceRestartStillRecorded(t *testing.T) {
 	g := h.w.Snapshot().GaveUp
 	if len(g) != 1 || !slices.Equal(g[0].Steps, []string{"restart", "service_restart"}) {
 		t.Fatalf("a failed attempt still counts: %+v", g)
+	}
+}
+
+// AG-07: туннель сдан как «зависает снова и снова»; повтор через
+// RetryAfterGiveUp не помог -- пометка и счёт выводов остаются.
+func TestTick_FailedRetryKeepsFlapping(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.clk.advance(5 * time.Minute)
+	}
+	fixCycle(h)
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping {
+		t.Fatalf("setup: %+v", s.GaveUp)
+	}
+	h.awg.mu.Lock()
+	h.awg.onAction = nil // повтор не поможет
+	h.awg.mu.Unlock()
+	restarts := countCalls(h, "restart:nwg0")
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != restarts+1 {
+		t.Fatalf("no retry ladder: restarts %d -> %d", restarts, n)
+	}
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 {
+		t.Fatalf("flapping lost after a failed retry: %+v", s.GaveUp)
+	}
+}
+
+// Ревью AG-03: перечитывание стабильно не удаётся (опрос при этом отвечает)
+// -- ступень 1 не чаще раза в GuardWindow.
+func TestTick_PersistentUnreadRecheckBacksOff(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.failReads = recheckRetries + 1 }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	for i := 0; i < 3; i++ {
+		h.w.Tick(ctx)
+		h.clk.advance(30 * time.Second)
+	}
+	if n := countCalls(h, "restart:nwg0"); n != 1 {
+		t.Fatalf("restarts within GuardWindow = %d; want 1", n)
+	}
+	if h.services != 0 {
+		t.Fatalf("services = %d", h.services)
+	}
+}
+
+// Ревью AG-03: повтор после «сдался», где перечитать не удалось, -- следующий
+// повтор через RetryAfterGiveUp, а не на следующем опросе.
+func TestTick_UnreadRetryWaitsRetryAfterGiveUp(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.awg.mu.Lock()
+	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.failReads = recheckRetries + 1 }
+	h.awg.mu.Unlock()
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	base := countCalls(h, "restart:nwg0")
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 {
+		t.Fatalf("gave_up lost after an unread retry: %+v", s)
+	}
+	for _, step := range []time.Duration{30 * time.Second, 11 * time.Minute, time.Hour, 4 * time.Hour} {
+		h.clk.advance(step)
+		h.w.Tick(ctx)
+	}
+	if n := countCalls(h, "restart:nwg0"); n != base {
+		t.Fatalf("retry tunnel restarted before RetryAfterGiveUp: %d -> %d", base, n)
+	}
+	h.clk.advance(time.Hour)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != base+1 {
+		t.Fatalf("no retry after RetryAfterGiveUp: %d -> %d", base, n)
 	}
 }

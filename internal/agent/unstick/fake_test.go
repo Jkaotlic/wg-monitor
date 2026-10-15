@@ -18,6 +18,8 @@ type fakeAWG struct {
 	tunnels    []awgmgr.Tunnel
 	calls      []string // "restart:nwg0", "start:x", "stop:x"
 	readErr    error
+	failReads  int // столько следующих чтений падает (сбой на время)
+	reads      int
 	restart404 bool
 	onAction   func(action, id string, t *awgmgr.Tunnel)
 }
@@ -25,8 +27,13 @@ type fakeAWG struct {
 func (f *fakeAWG) TunnelsAll(context.Context) (*awgmgr.TunnelsAll, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads++
 	if f.readErr != nil {
 		return nil, f.readErr
+	}
+	if f.failReads > 0 {
+		f.failReads--
+		return nil, errors.New("context deadline exceeded")
 	}
 	return &awgmgr.TunnelsAll{Tunnels: append([]awgmgr.Tunnel(nil), f.tunnels...)}, nil
 }

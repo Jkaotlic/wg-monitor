@@ -10,7 +10,7 @@ import (
 func TestApplySilenceSetsSilencedUntil(t *testing.T) {
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	st := db.IncidentState{UserID: 1, CheckName: "x", CurrentStatus: "hard"}
-	out, line := ApplySilence(st, time.Hour, now)
+	out, line := ApplySilence(st, time.Hour, now, RoleAdmin)
 	if out.SilencedUntil == nil || !out.SilencedUntil.Equal(now.Add(time.Hour)) {
 		t.Fatalf("SilencedUntil = %v, want %v", out.SilencedUntil, now.Add(time.Hour))
 	}
@@ -85,5 +85,21 @@ func TestTransitionsEmitsOnlyOnChange(t *testing.T) {
 	}
 	if tr[0].Status != "ok" || tr[1].Status != "fail" || tr[2].Status != "ok" {
 		t.Errorf("transition statuses = %v", tr)
+	}
+}
+
+// BOT-07: строка тишины подписана тем, кто нажал, а не всегда «(админ)».
+func TestApplySilenceNamesWhoPressed(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	st := db.IncidentState{UserID: 1, CheckName: "x", CurrentStatus: "hard"}
+	for role, want := range map[string]string{
+		"owner":    "⏸ Уведомления скрыты до 16:00 МСК (владелец)",
+		"operator": "⏸ Уведомления скрыты до 16:00 МСК (оператор)",
+		RoleAdmin:  "⏸ Уведомления скрыты до 16:00 МСК (админ)",
+		"":         "⏸ Уведомления скрыты до 16:00 МСК",
+	} {
+		if _, line := ApplySilence(st, time.Hour, now, role); line != want {
+			t.Errorf("role=%q: %q, want %q", role, line, want)
+		}
 	}
 }

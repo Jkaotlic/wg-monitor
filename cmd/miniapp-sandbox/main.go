@@ -248,7 +248,7 @@ func main() {
 	repairEngine := &linkrepair.Deps{
 		Store:           replaceEngine.Store,
 		Probe:           *replaceEngine,
-		Source:          backend.RepairSource(cabinet, awg3Panels, d),
+		Source:          backend.RepairSource(cabinet, awg3Panels, d, sandboxAdminID(*tgUser, *asAdmin)),
 		Settings:        backend.LinkRepairSettings(d, nil),
 		SaveOption:      backend.LinkRepairSaveOption(d, nil),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, nil),
@@ -342,6 +342,11 @@ type offlineToLog struct{}
 
 func (offlineToLog) SendOffline(_ context.Context, userID int64, nickname string, since time.Duration) error {
 	slog.Info("песочница: роутер молчит", "nickname", nickname, "user_id", userID, "молчит", since.Round(time.Second))
+	return nil
+}
+
+func (offlineToLog) SendBackOnline(_ context.Context, userID int64, nickname string, hardSince time.Time) error {
+	slog.Info("песочница: роутер снова на связи", "nickname", nickname, "user_id", userID, "молчал_с", hardSince)
 	return nil
 }
 

@@ -204,7 +204,7 @@ export function deleteErrorText(err) {
   if (err?.serverMessage) return err.serverMessage
   if (err?.code && DELETE_ERRORS[err.code]) return DELETE_ERRORS[err.code]
   if (err?.status === 404) return DELETE_ERRORS.not_found
-  if (!err?.status) return 'Сервер не ответил — ничего не удалено. Попробуйте ещё раз.'
+  if (!err?.status) return 'Не знаю, дошла ли команда до сервера. Обновите экран: если туннель пропал — удаление прошло.'
   return ''
 }
 

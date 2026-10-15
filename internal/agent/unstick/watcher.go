@@ -92,6 +92,10 @@ const (
 	// лесенка не лечит причину, сторож сдаётся сразу.
 	flapFixes  = 3
 	flapWindow = time.Hour
+	// recheckRetries повторов чтения через recheckPause, если awg-manager не
+	// ответил: неудачное чтение -- не вердикт (AG-03); в сумме до ~60 с.
+	recheckRetries = 2
+	recheckPause   = 30 * time.Second
 )
 
 // Команды бэкенда, после которых сторож молчит GuardWindow: по одному
@@ -106,6 +110,8 @@ var (
 		"awgm_update":    true, "service_restart": true,
 		"firmware_install": true, "self_update": true,
 		"opkg_upgrade": true, // обновляет и перезапускает awg-manager
+		// после правки фидов -- тот же SmartUpgrade, полный opkg upgrade (AG-04)
+		"opkg_feed_disable": true,
 	}
 )
 
@@ -126,6 +132,9 @@ type Watcher struct {
 	unknown     map[string]string // id -> незнакомый статус, уже записанный в журнал
 	lastSaved   []byte
 	pausedUntil time.Time // после прерванной лесенки до конца окна; не сохраняется
+	// wasUpgrading -- на прошлом опросе шло cron-обновление: его конец
+	// заводит окно тишины, как команда по всему роутеру (AG-04)
+	wasUpgrading bool
 }
 
 func New(cfg Config, d Deps) *Watcher {
@@ -227,6 +236,11 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.ready = true
+	if w.wasUpgrading && !upgrading {
+		// обновление только что кончилось: awg-manager ещё поднимает туннели
+		w.cmdRouter = now
+	}
+	w.wasUpgrading = upgrading
 	seen := map[string]bool{}
 	var out []*due
 	for _, t := range tunnels {
@@ -327,7 +341,13 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	if err := w.sleep(ctx, w.cfg.Verify1); err != nil {
 		return
 	}
-	list = w.recheck(ctx, list, start)
+	list, read := w.recheck(ctx, list, start)
+	if !read {
+		// awg-manager так и не ответил: «всё ещё завис» не доказано -- на
+		// ступень 2 не идём; since не тронут, решит опрос после окна тишины
+		w.holdUnread(list)
+		return
+	}
 	if len(list) == 0 {
 		return
 	}
@@ -355,7 +375,13 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		if err := w.sleep(ctx, w.cfg.Verify2); err != nil {
 			return
 		}
-		list = w.recheck(ctx, list, start)
+		if list, read = w.recheck(ctx, list, start); !read {
+			// awg-manager после перезапуска ещё не отвечает: тревогу «сдался»
+			// по туннелю без чтения не шлём, это покажет проверка awg_manager
+			w.log.Warn("unstick: после перезапуска awg-manager не ответил -- без вердикта")
+			w.holdUnread(list)
+			return
+		}
 	}
 	now := w.now()
 	w.mu.Lock()
@@ -363,10 +389,13 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	for _, d := range list {
 		if d.retry {
 			// повтор не помог: запись обновляется, следующий повтор -- через
-			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось
+			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось.
+			// «Зависает снова и снова» и счёт выводов остаются (AG-07)
+			prev := w.gaveUp[d.t.ID]
 			w.gaveUp[d.t.ID] = giveUp{
 				Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
-				Steps: mergeSteps(w.gaveUp[d.t.ID].Steps, d.steps), Since: d.since, At: now,
+				Steps: mergeSteps(prev.Steps, d.steps), Since: d.since, At: now,
+				Flapping: prev.Flapping, Fixes: prev.Fixes,
 			}
 			w.log.Warn("unstick: повтор не помог", "tunnel", d.t.ID, "status", d.t.Status, "steps", d.steps)
 			continue
@@ -409,19 +438,53 @@ func (w *Watcher) apply(ctx context.Context, id string, r Remedy) string {
 }
 
 // recheck перечитывает туннели; вышедшие -- событие fixed, удалённые --
-// забыты, остальные возвращаются со свежим состоянием. Не прочитали --
-// никто не вышел (без доказательства «починил» не говорим).
-func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*due {
-	all, err := w.d.AWG.TunnelsAll(ctx)
-	if err != nil {
-		w.log.Warn("unstick: перечитать не удалось", "err", err)
-		return list
+// забыты, остальные возвращаются со свежим состоянием. Не прочитали (и на
+// повторах) -- read=false и список как был: ни «починил», ни «завис».
+func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) (rest []*due, read bool) {
+	var all *awgmgr.TunnelsAll
+	for try := 0; ; try++ {
+		var err error
+		all, err = w.d.AWG.TunnelsAll(ctx)
+		switch {
+		case err != nil:
+			w.log.Warn("unstick: перечитать не удалось", "err", err, "try", try+1)
+		case len(all.Tunnels) == 0:
+			// пустой список при удачном чтении -- не доказательство ни «починил», ни «удалён»
+			w.log.Warn("unstick: перечитывание вернуло пустой список -- считаю сбоем чтения", "try", try+1)
+		default:
+			return w.recheckApply(list, all, start), true
+		}
+		if try >= recheckRetries {
+			return list, false
+		}
+		if err := w.sleep(ctx, recheckPause); err != nil {
+			return list, false
+		}
 	}
-	if len(all.Tunnels) == 0 {
-		// пустой список при удачном чтении -- не доказательство ни «починил», ни «удалён»
-		w.log.Warn("unstick: перечитывание вернуло пустой список -- считаю сбоем чтения")
-		return list
+}
+
+// holdUnread -- лесенка кончилась без чтения: следующую не начинаем до
+// конца GuardWindow (иначе ступень 1 на каждом опросе), а повтор после
+// «сдался» снова ждёт RetryAfterGiveUp.
+func (w *Watcher) holdUnread(list []*due) {
+	now := w.now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if until := now.Add(w.cfg.GuardWindow); until.After(w.pausedUntil) {
+		w.pausedUntil = until
 	}
+	for _, d := range list {
+		if !d.retry {
+			continue
+		}
+		if g, ok := w.gaveUp[d.t.ID]; ok {
+			g.At, g.Retrying = now, false
+			w.gaveUp[d.t.ID] = g
+		}
+	}
+}
+
+func (w *Watcher) recheckApply(list []*due, all *awgmgr.TunnelsAll, start time.Time) []*due {
 	byID := map[string]awgmgr.Tunnel{}
 	for _, t := range all.Tunnels {
 		byID[t.ID] = t
@@ -469,6 +532,7 @@ func (w *Watcher) serviceDecision(allowRun bool) serviceVerdict {
 		// cron-обновление пакетов само перезапускает awg-manager: молчим,
 		// как при команде бэкенда
 		w.pausedUntil = now.Add(w.cfg.GuardWindow)
+		w.wasUpgrading = true
 		return serviceAbort
 	}
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде

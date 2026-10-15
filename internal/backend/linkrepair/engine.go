@@ -66,6 +66,9 @@ type Setting struct {
 	// подписке, поэтому она одна на настройку навсегда: не пусто -- смены
 	// локации больше нет. Повторное включение отметку не снимает (это деньги).
 	RelocateSpent string
+	// UpdatedBy -- Telegram ID того, кто включил или менял настройку. От его
+	// имени автопочинка выпускает конфиг; 0 -- не записано (старые строки).
+	UpdatedBy int64
 }
 
 // Reporter -- как движок говорит с людьми по ходу починки. Реализация живёт
@@ -138,6 +141,9 @@ type StartReq struct {
 	// роутера. Нужно, когда снимок не пришёл и имени взять больше неоткуда.
 	// Пустое -- не знает.
 	TunnelName string
+	// By -- Telegram ID нажавшего «Починить». У ручного запуска конфиг
+	// выпускается от его имени; 0 -- не знаем (тогда как у автозапуска).
+	By int64
 }
 
 // renamed -- настройка записана для VPN-туннеля с другим именем. Не знаем
@@ -302,7 +308,11 @@ func (d Deps) Start(req StartReq) (string, error) {
 		if !set.Enabled {
 			return "", ErrAutoDisabled
 		}
-		if allow, why, tooOften := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+			if err != nil {
+				d.logWarn("linkrepair: история попыток не прочиталась — автозапуск отклонён",
+					"nickname", req.Nickname, "check", req.CheckName, "err", err)
+			}
 			// Потолок попыток -- не новый провал: громкого ответа нет, но что
 			// делать, человек читает в той же правке.
 			if tooOften {
@@ -324,8 +334,15 @@ func (d Deps) Start(req StartReq) (string, error) {
 		return "", ErrAlreadyRunning
 	}
 	if req.Auto {
-		// Попытка считается с запуска: прерванная итога не напишет.
-		_ = d.Attempts.Started(req.Nickname, req.CheckName)
+		// Попытка считается с запуска: прерванная итога не напишет. Не
+		// записалась -- не стартуем: потолок попыток без записи не работает.
+		if err := d.Attempts.Started(req.Nickname, req.CheckName); err != nil {
+			d.Store.Unlock(req.Nickname)
+			d.logWarn("linkrepair: попытка не записалась — автозапуск отклонён",
+				"nickname", req.Nickname, "check", req.CheckName, "err", err)
+			notStarted(whyAttemptUnsaved)
+			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, whyAttemptUnsaved)
+		}
 	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
@@ -338,7 +355,14 @@ func (d Deps) Start(req StartReq) (string, error) {
 // знает, что его переименовали; иначе сверка по снимку.
 func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedTo string, th Thread) {
 	defer d.Store.Unlock(req.Nickname)
-	ctx := d.baseCtx()
+	// Выпуск конфига -- от имени того, кто просил: нажавшего «Починить» или
+	// включившего автопочинку. Право источник сверяет в момент выпуска:
+	// снятый после включения допуск к панели выпуск останавливает.
+	issuer := set.UpdatedBy
+	if !req.Auto && req.By != 0 {
+		issuer = req.By
+	}
+	ctx := WithIssuer(d.baseCtx(), issuer)
 
 	plan, err := d.findPolicies(ctx, req.RouterID, sc.TunnelID)
 	brokenName := plan.name
@@ -371,7 +395,12 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 
 	// Ступень 1. Поднять.
 	th.Progress(ctx, progressText(names, log, "перезапускаю VPN-туннель «"+names.broken+"»"))
-	if d.tryRestart(ctx, jobID, req, sc, names) {
+	restarted, silent := d.tryRestart(ctx, jobID, req, sc, names)
+	if silent {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
+		return
+	}
+	if restarted {
 		d.skip(jobID, "не понадобилось", StepReissue, StepRecreate)
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRestarted))
 		return
@@ -424,6 +453,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textReissued(set.Provider)))
 		return
 	}
+	if noAnswer(nh) {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
+		return
+	}
 	if nh != nil {
 		d.skip(jobID, "не понадобилось: источник ждёт человека", StepRecreate)
 		d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
@@ -441,6 +474,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used.ID)
 		}
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRecreated(set.Provider, optionLabel(used))))
+		return
+	}
+	if noAnswer(nh) {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
 		return
 	}
 	if nh != nil {
@@ -470,21 +507,26 @@ func lastAction(set Setting) string {
 	}
 }
 
-// tryRestart -- ступень 1: перезапуск и доказательство.
-func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames) bool {
+// tryRestart -- ступень 1: перезапуск и доказательство. silent -- роутер
+// не ответил на перезапуск: занят, и ставить за ним в очередь замену конфига
+// нельзя.
+func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames) (ok, silent bool) {
 	d.step(jobID, StepRestart, provision.StepActive, "перезапускаю VPN-туннель «"+names.broken+"»")
 	if _, err := d.command(ctx, req.RouterID, "tunnel_restart", map[string]any{"tunnel_id": sc.TunnelID}); err != nil {
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не прошёл: "+err.Error())
-		return false
+		return false, errors.Is(err, errNoAnswer)
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не помог: "+err.Error())
-		return false
+		return false, false
 	}
 	d.step(jobID, StepRestart, provision.StepDone, "перезапустил, "+verdict)
-	return true
+	return true, false
 }
+
+// noAnswer -- ступень кончилась молчанием роутера, а не вердиктом.
+func noAnswer(nh *NeedHuman) bool { return nh != nil && errors.Is(nh, errNoAnswer) }
 
 // MinAgentExitProbe -- агент, который меряет адрес выхода по конкретному
 // VPN-туннелю (exit_ip_probe tunnel_id, v0.47). Старше -- мерить нечем:
@@ -564,6 +606,12 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 		"target_id": sc.TunnelID,
 	}); err != nil {
 		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
+		if errors.Is(err, errNoAnswer) {
+			// Выполнил ли роутер замену, неизвестно: это не «не помогло», и
+			// следующая ступень (вторая замена в очередь за первой, новая
+			// страна) не начинается.
+			return false, &NeedHuman{Cause: errNoAnswer, Action: ActRouterLate}, false
+		}
 		return false, nil, false
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
@@ -672,6 +720,9 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 		}
 		if imported {
 			d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
+		}
+		if noAnswer(nh) {
+			return false, nh, Option{}
 		}
 		if nh != nil {
 			lastNH = nh
@@ -895,9 +946,9 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
 	}
 	if req.Auto {
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
-	} else {
-		_ = d.Attempts.Clear(req.Nickname, req.CheckName)
+		d.finishAttempt(req, true)
+	} else if err := d.Attempts.Clear(req.Nickname, req.CheckName); err != nil {
+		d.logWarn("linkrepair: стоп после провала не снялся", "nickname", req.Nickname, "check", req.CheckName, "err", err)
 	}
 	d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
 	th.Done(context.WithoutCancel(ctx), doneText(names, log))
@@ -909,7 +960,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, false)
+		d.finishAttempt(req, false)
 	}
 	text := failText(names, log)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -920,6 +971,22 @@ func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, t
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
 }
 
+// finishNoAnswer -- роутер не ответил на команду лесенки вовремя: он на связи
+// (снимок пришёл), но занят. Вердикта нет: стоп не ставится, дальше ступени
+// не идут, трафик остаётся там, где он сейчас.
+func (d Deps) finishNoAnswer(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string) {
+	d.skip(jobID, "не начинал — роутер не ответил вовремя", StepRestart, StepReissue, StepRecreate)
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		d.finishAttempt(req, true)
+	}
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = ActRouterLate
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), lateText(names, log), ActRouterLate)
+}
+
 // finishFail -- провал до лесенки (снимок, увод): шаг step провален с
 // причиной, остальные ступени не начинались.
 func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thread, step string, names lineNames, cause error, action string) {
@@ -927,9 +994,10 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
-		// но стоп не ставится, следующая тревога снова может её запустить.
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, names.noSnapshot)
+		// Роутер молчит или VPN-туннель вне наборов правил -- это не вердикт
+		// автопочинке (ремонта не было): попытка считается, но стоп не
+		// ставится, следующая тревога снова может её запустить.
+		d.finishAttempt(req, names.noSnapshot || names.notInSet)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -938,6 +1006,17 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 		j.Hint = action
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
+}
+
+// whyAttemptUnsaved -- автозапуск не начат: попытка не записалась в историю.
+const whyAttemptUnsaved = "не смог записать попытку в историю"
+
+// finishAttempt -- итог автозапуска в историю попыток. Не записался --
+// оператору в лог: стоп «нужен человек» тогда не поставлен.
+func (d Deps) finishAttempt(req StartReq, ok bool) {
+	if err := d.Attempts.Finish(req.Nickname, req.CheckName, ok); err != nil {
+		d.logWarn("linkrepair: итог попытки не записался", "nickname", req.Nickname, "check", req.CheckName, "ok", ok, "err", err)
+	}
 }
 
 func (d Deps) skipFailback(jobID string, names lineNames) {
@@ -973,11 +1052,48 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
+// Сроки ответа агента на действия лесенки -- копия
+// internal/agent/actions.AnswerBudget (срок действия плюс внеплановый отчёт
+// после действий с туннелем); тест budget_test.go сверяет их. agentImportBudget
+// -- самое долгое действие лесенки: ждать его меньше -- считать «не помогло»
+// замену, которая ещё идёт. tunnel_restart отвечает после внепланового
+// отчёта (до 30 с сверх 45 с действия, M-1).
+const (
+	agentImportBudget  = 300 * time.Second
+	agentRestartBudget = 75 * time.Second
+	agentDefaultBudget = 45 * time.Second
+	// minQueueLife -- нижняя граница срока команды в очереди: при коротком
+	// ожидании (песочница, тесты) агент всё равно успевает её забрать.
+	minQueueLife = 30 * time.Second
+)
+
+// agentBudget -- сколько агент может выполнять действие action.
+func agentBudget(action string) time.Duration {
+	switch action {
+	case "tunnel_import":
+		return agentImportBudget
+	case "tunnel_restart":
+		return agentRestartBudget
+	}
+	return agentDefaultBudget
+}
+
+// queueLife -- сколько команда ждёт выдачи агенту: ожидание ответа минус
+// срок действия у агента. Выданная в последний момент команда успевает
+// ответить, пока её ждут, а не выполняется после того, как починка ушла
+// дальше.
+func queueLife(action string, wait time.Duration) time.Duration {
+	if life := wait - agentBudget(action); life > minQueueLife {
+		return life
+	}
+	return minQueueLife
+}
+
 func (d Deps) awaitStep() time.Duration {
 	if d.AwaitStep > 0 {
 		return d.AwaitStep
 	}
-	return 3 * time.Minute
+	return agentImportBudget + time.Minute
 }
 
 func newCmdID() (string, error) {
@@ -996,12 +1112,17 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	if err != nil {
 		return nil, err
 	}
-	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: d.now().UTC()}
+	// Срок жизни в очереди -- ожидание минус срок действия у агента (см.
+	// queueLife): команда, которую уже не дождутся, агенту не выдаётся и
+	// не выполняется тайком (очередь выбрасывает протухшие при выдаче).
+	issued := d.now().UTC()
+	wait := d.awaitStep()
+	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: issued, ExpiresAt: issued.Add(queueLife(action, wait))}
 	if err := d.Commands.Enqueue(routerID, cmd); err != nil {
 		d.logCommandFailure(action, "enqueue", err.Error())
 		return nil, errors.New(replace.CommandNotSent)
 	}
-	res, ok := d.Commands.AwaitResult(ctx, routerID, id, d.awaitStep())
+	res, ok := d.Commands.AwaitResult(ctx, routerID, id, wait)
 	if !ok || res == nil {
 		d.logCommandFailure(action, "no answer", "")
 		return nil, errNoAnswer

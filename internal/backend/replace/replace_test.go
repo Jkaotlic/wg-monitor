@@ -584,3 +584,96 @@ func TestReplace_RetireDropsOldTunnel(t *testing.T) {
 		t.Fatalf("списание прежнего VPN-туннеля: %v", retired)
 	}
 }
+
+// Ревью Task 7 (AG-02): выключение прежнего VPN-туннеля роутер принял, но
+// остановку за срок не увидел (partial). Это не «остался включённым»:
+// команда ушла, туннель, скорее всего, ещё останавливается.
+func TestReplace_RetirePartialSaysNotConfirmed(t *testing.T) {
+	cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+		"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+		"tunnel_power":     {Status: "partial", Output: "туннель «nl» не остановился за 15 с: сейчас останавливается"},
+	}}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &noteLog{})
+	id, err := d.Start(startReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := waitJob(t, d, id)
+	var detail string
+	for _, s := range job.Steps {
+		if s.Name == StepRetire {
+			if s.Status != provision.StepFailed {
+				t.Fatalf("retire step = %s (%s)", s.Status, s.Detail)
+			}
+			detail = s.Detail
+		}
+	}
+	if strings.Contains(detail, "остался включённым") || !strings.Contains(detail, "выключение прежнего VPN-туннеля не подтвердилось") {
+		t.Fatalf("retire detail = %q", detail)
+	}
+	assertOwnerVocabulary(t, []string{detail})
+}
+
+// Ревью Task 7, раунд 2: итог в личку говорит о прежнем VPN-туннеле то, что
+// было на деле: не подтвердилось -- так и сказано, не вышло -- остался
+// включённым; «выключен» -- только когда выключение подтвердилось.
+func TestReplace_FinishNoteFollowsRetireOutcome(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply wire.CommandResult
+		want  string
+	}{
+		{"partial", wire.CommandResult{Status: "partial", Output: "туннель «nl» не остановился за 15 с: сейчас останавливается"}, "не подтвердилось"},
+		{"err", wire.CommandResult{Status: "err", Output: "Роутер не смог остановить туннель «nl» — повторите или проверьте экран туннелей"}, "остался включённым"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+				"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+				"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+				"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+				"tunnel_power":     tc.reply,
+			}}
+			notes := &noteLog{}
+			d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
+			id, err := d.Start(startReq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			job := waitJob(t, d, id)
+			got := notes.wait(t, 1)
+			if len(got) != 1 {
+				t.Fatalf("notes: %+v", got)
+			}
+			if strings.Contains(got[0], "прежний VPN-туннель выключен") || !strings.Contains(got[0], tc.want) {
+				t.Fatalf("итог в личку: %q", got[0])
+			}
+			assertOwnerVocabulary(t, ownerReads(job, got))
+		})
+	}
+}
+
+// Ревью Task 7, раунд 2: откат выключил новый VPN-туннель, но остановку не
+// увидел (partial) -- это «не подтвердилось», а не «не удалось».
+func TestReplace_RollbackPartialPowerOffNotConfirmed(t *testing.T) {
+	cmd := &fakeCommander{
+		replies: map[string]wire.CommandResult{
+			"tunnel_import": {Status: "ok", Output: "создан (id=awg21)"},
+			"tunnel_power":  {Status: "partial", Output: "туннель awg21 не остановился за 15 с: сейчас останавливается"},
+		},
+		handshakeAfter: 99,
+	}
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
+	id, _ := d.Start(startReq())
+	job := waitJob(t, d, id)
+	if job.State != provision.StateFailed {
+		t.Fatalf("state=%s", job.State)
+	}
+	if strings.Contains(job.Hint, "выключить новый VPN-туннель не удалось") || !strings.Contains(job.Hint, "выключение нового VPN-туннеля не подтвердилось") {
+		t.Fatalf("подсказка: %q", job.Hint)
+	}
+	assertOwnerVocabulary(t, ownerReads(job, notes.wait(t, 1)))
+}

@@ -75,6 +75,9 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 		if err := vacuumSQLite(ctx, e.dbPath, dbCopy); err != nil {
 			return nil, err
 		}
+		if err := clearFullArchiveTables(ctx, dbCopy); err != nil {
+			return nil, err
+		}
 		if c, err := countArchivedDB(ctx, dbCopy); err == nil {
 			counts = c
 		}
@@ -181,6 +184,32 @@ func vacuumSQLite(ctx context.Context, src, dst string) error {
 	escaped := strings.ReplaceAll(dst, "'", "''")
 	if _, err := db.ExecContext(ctx, "VACUUM INTO '"+escaped+"'"); err != nil { // #nosec G202 -- путь временного файла, кавычки экранированы
 		return fmt.Errorf("vacuum sqlite: %w", err)
+	}
+	return nil
+}
+
+// fullArchiveClearTables -- таблицы, которые полный архив везёт пустыми
+// (схема остаётся). owed_replies -- недоставленные «восстановилось»: после
+// восстановления архива нескольких часов давности обход напоминаний прислал
+// бы старый ответ на тревогу, тоже поднятую из архива (M-4). Малый архив
+// пропускает её через smalldb.SkipTables.
+var fullArchiveClearTables = []string{"owed_replies"}
+
+// clearFullArchiveTables опустошает fullArchiveClearTables в копии базы.
+// Таблицы нет (база старее схемы) -- не ошибка.
+func clearFullArchiveTables(ctx context.Context, dbCopy string) error {
+	db, err := sql.Open("sqlite", dbCopy)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	for _, table := range fullArchiveClearTables {
+		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil { // #nosec G202 -- имя из списка выше
+			if strings.Contains(err.Error(), "no such table") {
+				continue
+			}
+			return fmt.Errorf("clear %s in archive copy: %w", table, err)
+		}
 	}
 	return nil
 }

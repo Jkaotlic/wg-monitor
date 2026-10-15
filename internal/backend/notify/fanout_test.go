@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -147,7 +148,7 @@ func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
 	}
 
 	s := &fakeKeyboardSender{}
-	n, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{})
+	n, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +184,7 @@ func TestFanout_ReplyToEachUsesOwnMessage(t *testing.T) {
 	// «починилось» обычным сообщением, а не остаться без него.
 
 	s := &replyCapturingSender{replies: map[int64]*int64{}}
-	if err := NewFanout(d, s, quietLogger(), 0).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
+	if err := NewFanout(d, s, quietLogger(), 0).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.replies) != 2 {
@@ -300,7 +301,7 @@ func TestFanout_OnlyUnreachableRecipientsIsNobodyToNotify(t *testing.T) {
 			if n != 0 || err != nil {
 				t.Fatalf("Send: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
 			}
-			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{})
+			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{}, false)
 			if n != 0 || err != nil {
 				t.Fatalf("SendTracked: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
 			}
@@ -429,5 +430,118 @@ func TestFanout_SendSilentKeyboardErrors(t *testing.T) {
 	plain := &fakeSender{}
 	if _, err := NewFanout(d, plain, quietLogger(), 0).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", nil); err == nil || len(plain.sent) != 0 {
 		t.Fatalf("отправитель без тихой отправки: err=%v отправлено %v", err, plain.sent)
+	}
+}
+
+// BOT-02: тихая тревога и тихий ответ уходят вызовом без звука (с ответом на
+// исходное сообщение у «восстановилось»), а не обычным.
+func TestFanout_SilentTrackedAndReply(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &silentSender{}
+	f := NewFanout(d, s, quietLogger(), 0)
+	if _, err := f.SendTracked(context.Background(), router, "tunnel_awg0", "упал", "", &tg.InlineKeyboardMarkup{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.silent) != 2 || len(s.loud) != 0 || len(s.sent) != 0 {
+		t.Fatalf("тихо %v, громко %v, без кнопок %v; ждали две тихих", s.silent, s.loud, s.sent)
+	}
+}
+
+// I-2: если хоть одному получателю ответ не пришёл (могло дойти), вердикт
+// SendTracked это сохраняет, в каком бы порядке ни шли ошибки.
+func TestFanout_SendTrackedKeepsMaybeDelivered(t *testing.T) {
+	timeout := errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers")
+	refused := &tg.APIError{Method: "sendMessage", Code: 502}
+	for name, fail := range map[string]map[int64]error{
+		"timeout first": {1001: timeout, 1002: refused},
+		"timeout last":  {1001: refused, 1002: timeout},
+		"all refused":   {1001: refused, 1002: refused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+				t.Fatal(err)
+			}
+			s := &fakeKeyboardSender{fakeSender: fakeSender{fail: fail}}
+			_, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "x", "", &tg.InlineKeyboardMarkup{}, false)
+			if !errors.Is(err, ErrNoneDelivered) {
+				t.Fatalf("err = %v", err)
+			}
+			want := name == "all refused"
+			if got := tg.KnownNotSent(err); got != want {
+				t.Fatalf("KnownNotSent = %v, want %v (err %v)", got, want, err)
+			}
+		})
+	}
+}
+
+// ctxCancelSender -- первый получатель получает 429, и за время ожидания
+// истекает общий срок рассылки (отмена ctx). second задан -- срок не
+// истекает, второй получает second.
+type ctxCancelSender struct {
+	fakeKeyboardSender
+	cancel  context.CancelFunc
+	second  error
+	callsNo int
+}
+
+func (s *ctxCancelSender) SendMessageWithKeyboard(ctx context.Context, chatID int64, th *int64, text, pm string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	s.callsNo++
+	if s.callsNo == 1 {
+		if s.second == nil {
+			s.cancel()
+		}
+		return 0, &tg.APIError{Method: "sendMessage", Code: 429, RetryAfter: 25 * time.Second}
+	}
+	if s.second != nil {
+		return 0, s.second
+	}
+	if err := ctx.Err(); err != nil {
+		// как настоящий http-клиент: обычная ошибка с текстом срока
+		return 0, errors.New("tg sendMessage: Post \"sendMessage\": " + err.Error())
+	}
+	return s.fakeKeyboardSender.SendMessageWithKeyboard(ctx, chatID, th, text, pm, replyTo, kb)
+}
+
+// I-2 (повторное ревью): первому 429, второму запрос не ушёл (срок истёк) --
+// вердикт «заведомо не дошло», и 429 видно для паузы realert. Смешанный
+// вердикт (429 + таймаут ответа) -- «могло дойти», но 429 тоже видно.
+func TestFanout_SendTrackedExpiredCtxAfter429(t *testing.T) {
+	for name, second := range map[string]error{
+		"expired ctx":      nil,
+		"response timeout": errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := &ctxCancelSender{cancel: cancel, second: second}
+			_, err := NewFanout(d, s, quietLogger(), 0).SendTracked(ctx, router, "tunnel_awg0", "x", "", &tg.InlineKeyboardMarkup{}, false)
+			if !errors.Is(err, ErrNoneDelivered) {
+				t.Fatalf("err = %v", err)
+			}
+			wantNotSent := second == nil
+			if got := tg.KnownNotSent(err); got != wantNotSent {
+				t.Fatalf("KnownNotSent = %v, want %v (err %v)", got, wantNotSent, err)
+			}
+			if _, ok := tg.RateLimitDelay(err); !ok {
+				t.Fatalf("429 не виден в вердикте: %v", err)
+			}
+		})
 	}
 }

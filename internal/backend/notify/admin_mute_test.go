@@ -128,11 +128,11 @@ func TestFanout_EveryMethodGivesAdminMuteRowOnly(t *testing.T) {
 			return err
 		}, false},
 		{"SendTracked", func(f *Fanout, r int64) error {
-			_, err := f.SendTracked(context.Background(), r, "tunnel_awg0", "текст", "", baseKB())
+			_, err := f.SendTracked(context.Background(), r, "tunnel_awg0", "текст", "", baseKB(), false)
 			return err
 		}, false},
 		{"ReplyToEach", func(f *Fanout, r int64) error {
-			return f.ReplyToEach(context.Background(), r, "tunnel_awg0", "починилось", "")
+			return f.ReplyToEach(context.Background(), r, "tunnel_awg0", "починилось", "", false)
 		}, false},
 		{"SendWithReplyKeyboard/inline", func(f *Fanout, r int64) error {
 			_, err := f.SendWithReplyKeyboard(context.Background(), r, "текст", "", *baseKB())
@@ -226,7 +226,7 @@ func TestFanout_ReplyToEachAdminKeepsReplyTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newKBRecorder()
-	if err := NewFanout(d, s, quietLogger(), adminTG).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
+	if err := NewFanout(d, s, quietLogger(), adminTG).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if s.replyTo[adminTG] == nil || *s.replyTo[adminTG] != 555 {
@@ -278,7 +278,7 @@ func TestFanout_MutedAdminGetsNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newKBRecorder()
-	if _, err := NewFanout(d, s, quietLogger(), adminTG).SendTracked(context.Background(), router, "tunnel_awg0", "текст", "", &tg.InlineKeyboardMarkup{}); err != nil {
+	if _, err := NewFanout(d, s, quietLogger(), adminTG).SendTracked(context.Background(), router, "tunnel_awg0", "текст", "", &tg.InlineKeyboardMarkup{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if s.count[adminTG] != 0 {

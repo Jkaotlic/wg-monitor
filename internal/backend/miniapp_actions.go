@@ -67,8 +67,9 @@ var miniappSilenceTTLs = map[string]time.Duration{
 // access-checks the (router, check), loads the incident state, applies the
 // caller-supplied mutation, saves, best-effort-syncs the Telegram message, and
 // returns the updated incident. mutate returns the new state + the status line
-// used for the breadcrumb.
-func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutate func(st db.IncidentState) (db.IncidentState, string)) {
+// used for the breadcrumb; role -- кто нажал (alertaction.RoleAdmin или роль
+// db.RouterAccessRole), им подписана строка тишины (BOT-07).
+func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutate func(st db.IncidentState, role string) (db.IncidentState, string)) {
 	telegramUserID, _ := miniappUserFromContext(r.Context())
 	routerID, ok := parseMiniappRouterID(r)
 	check := r.PathValue("check")
@@ -85,7 +86,7 @@ func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutat
 		writeJSONError(w, http.StatusNotFound, "incident_not_active", "incident is no longer active")
 		return
 	}
-	newSt, statusLine := mutate(st)
+	newSt, statusLine := mutate(st, miniappActorRole(d, telegramUserID, routerID))
 	if err := d.DB.State().Save(routerID, check, newSt); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "state save failed")
 		return
@@ -93,6 +94,20 @@ func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutat
 	miniappSyncAlertMessage(d, r, routerID, check, statusLine)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(miniappIncidentResp{Incident: miniappIncidentFromState(newSt)})
+}
+
+// miniappActorRole -- кто действует из приложения: админ из конфига, иначе
+// роль на роутере. Доступ уже проверен (miniappRouterAllowed); ошибка чтения
+// роли -- пустая роль, строка тишины тогда без подписи, а не с чужой.
+func miniappActorRole(d Deps, telegramUserID, routerID int64) string {
+	if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+		return alertaction.RoleAdmin
+	}
+	role, err := d.DB.RouterAccessRole(routerID, telegramUserID)
+	if err != nil {
+		return ""
+	}
+	return role
 }
 
 // miniappSyncAlertMessage снимает кнопки с исходной тревоги и дописывает под
@@ -105,6 +120,11 @@ func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutat
 func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, checkName, statusLine string) {
 	if d.MiniappTG == nil || statusLine == "" || checkName == "" {
 		return
+	}
+	// Кнопки снимаются ниже -- нить починки не должна вернуть их правкой
+	// (BOT-06). Текст тревоги прежний: ответ уходит отдельным сообщением.
+	if d.AlertMemory != nil {
+		d.AlertMemory.NoteAlertAction(routerID, checkName, "")
 	}
 	msgs, err := d.DB.AlertMessages().List(routerID, checkName)
 	if err != nil {
@@ -160,15 +180,15 @@ func miniappSilenceHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "bad_ttl", "ttl must be 1h, 4h or 24h")
 			return
 		}
-		miniappIncidentAction(d, w, r, func(st db.IncidentState) (db.IncidentState, string) {
-			return alertaction.ApplySilence(st, ttl, time.Now())
+		miniappIncidentAction(d, w, r, func(st db.IncidentState, role string) (db.IncidentState, string) {
+			return alertaction.ApplySilence(st, ttl, time.Now(), role)
 		})
 	}
 }
 
 func miniappAckHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		miniappIncidentAction(d, w, r, func(st db.IncidentState) (db.IncidentState, string) {
+		miniappIncidentAction(d, w, r, func(st db.IncidentState, _ string) (db.IncidentState, string) {
 			return alertaction.ApplyAck(st, time.Now())
 		})
 	}
@@ -176,7 +196,7 @@ func miniappAckHandler(d Deps) http.HandlerFunc {
 
 func miniappMuteHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		miniappIncidentAction(d, w, r, func(st db.IncidentState) (db.IncidentState, string) {
+		miniappIncidentAction(d, w, r, func(st db.IncidentState, _ string) (db.IncidentState, string) {
 			return alertaction.ApplyMute(st, d.MuteCutoffHour, time.Now())
 		})
 	}

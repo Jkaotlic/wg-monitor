@@ -53,9 +53,18 @@ func (f *Fanout) isAdmin(chatID int64) bool {
 // выключения (или создаётся клавиатура из одного этого ряда). Остальным --
 // ровно прежний вызов: с кнопками, если они есть и отправитель их умеет,
 // иначе простым сообщением.
-func (f *Fanout) sendOne(ctx context.Context, chatID, routerUserID int64, text, parseMode string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+//
+// silent -- без звука (disable_notification): тревога по проверке, которую
+// человек попросил не беспокоить (BOT-02). Отправитель тихих сообщений не
+// умеет -- уходит обычное: тревога со звуком лучше потерянной.
+func (f *Fanout) sendOne(ctx context.Context, chatID, routerUserID int64, text, parseMode string, replyTo *int64, kb *tg.InlineKeyboardMarkup, silent bool) (int64, error) {
 	if f.isAdmin(chatID) {
 		kb = withAdminMuteRow(kb, routerUserID)
+	}
+	if silent {
+		if ss, ok := f.s.(SilentKeyboardSender); ok {
+			return ss.SendSilentMessageWithKeyboard(ctx, chatID, nil, text, parseMode, replyTo, kb)
+		}
 	}
 	if ks, ok := f.s.(KeyboardSender); ok && kb != nil {
 		return ks.SendMessageWithKeyboard(ctx, chatID, nil, text, parseMode, replyTo, kb)
@@ -81,7 +90,7 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 	delivered := 0
 	var lastErr error
 	for _, chatID := range targets {
-		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil); err != nil {
+		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil, false); err != nil {
 			if !f.noteFailure(chatID, routerUserID, err) {
 				lastErr = err
 			}
@@ -118,7 +127,7 @@ func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, par
 	delivered := 0
 	var lastErr error
 	for _, chatID := range targets {
-		_, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb)
+		_, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, false)
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
 				lastErr = sendErr
@@ -211,19 +220,41 @@ type KeyboardSender interface {
 // мини-апп дописывает в него статус.
 //
 // Если отправитель не умеет кнопок, уведомление уходит без них: потерять
-// кнопку лучше, чем потерять тревогу.
-func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
+// кнопку лучше, чем потерять тревогу. silent -- без звука (см. sendOne).
+func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup, silent bool) (int, error) {
 	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return 0, err
 	}
 	delivered := 0
-	var lastErr error
+	// notSentErr -- последний заведомый отказ, maybeErr -- последняя ошибка
+	// «могло дойти». Вердикт хранит обе (I-2): «могло дойти» не даёт
+	// DeliverHard снять отметку (иначе realert прислал бы дубль карточки),
+	// а 429 остаётся виден tg.RateLimitDelay для паузы обхода.
+	var notSentErr, maybeErr error
 	for _, chatID := range targets {
-		mid, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb)
+		var (
+			mid     int64
+			sendErr error
+		)
+		if cerr := ctx.Err(); cerr != nil {
+			// Общий срок рассылки кончился на прежних получателях: этому
+			// запрос не уходит вовсе -- заведомо не отправлено.
+			sendErr = tg.NotSent(fmt.Errorf("срок рассылки истёк до отправки: %w", cerr))
+		} else {
+			mid, sendErr = f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, silent)
+		}
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
-				lastErr = sendErr
+				if tg.KnownNotSent(sendErr) {
+					// 429 не затирается другим отказом: по нему realert
+					// выдерживает паузу.
+					if _, wasRate := tg.RateLimitDelay(notSentErr); !wasRate {
+						notSentErr = sendErr
+					}
+				} else {
+					maybeErr = sendErr
+				}
 			}
 			continue
 		}
@@ -234,6 +265,13 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		}
 		f.noteSuccess(chatID)
 	}
+	lastErr := notSentErr
+	switch {
+	case maybeErr != nil && notSentErr != nil:
+		lastErr = errors.Join(notSentErr, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, maybeErr))
+	case maybeErr != nil:
+		lastErr = maybeErr
+	}
 	return f.result(delivered, len(targets), lastErr)
 }
 
@@ -241,7 +279,12 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 // поломке. Кому сообщения не досталось (был недоступен, подключился позже),
 // получает обычное сообщение без привязки -- лучше без ветки переписки, чем
 // вообще без «починилось».
-func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error {
+//
+// Вердикт -- как у рассылки тревоги: ErrNoneDelivered, если получатели были,
+// но не дошло никому (повторять стоит), nil -- если дошло хоть кому-то или
+// слать некому (BOT-01: раньше сбой молча терялся). silent -- без звука (см.
+// sendOne).
+func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string, silent bool) error {
 	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return err
@@ -250,18 +293,24 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 	if err != nil {
 		return err
 	}
+	delivered := 0
+	var lastErr error
 	for _, chatID := range targets {
 		var replyTo *int64
 		if mid, ok := msgs[chatID]; ok {
 			replyTo = &mid
 		}
-		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, replyTo, nil); err != nil {
-			f.noteFailure(chatID, routerUserID, err)
+		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, replyTo, nil, silent); err != nil {
+			if !f.noteFailure(chatID, routerUserID, err) {
+				lastErr = err
+			}
 			continue
 		}
+		delivered++
 		f.noteSuccess(chatID)
 	}
-	return nil
+	_, err = f.result(delivered, len(targets), lastErr)
+	return err
 }
 
 // ReplyKeyboardSender -- отправка с любым reply_markup. Нижних клавиатур у
@@ -292,7 +341,7 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 		} else {
 			// Разметки нет или отправитель её не умеет: админ всё равно
 			// получает ряд выключения через sendOne.
-			_, sendErr = f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil)
+			_, sendErr = f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil, false)
 		}
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {

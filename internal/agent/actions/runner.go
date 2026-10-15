@@ -74,11 +74,18 @@ type Runner struct {
 	// OnCommand -- наблюдатель команд (сторож зависаний, v0.59): зовётся
 	// до и после действия, чтобы окно тишины считалось от конца долгой
 	// команды. nil -- никто не слушает.
-	OnCommand    func(cmd wire.Command)
-	AwgClient    *awgmgr.Client
-	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
-	Opkg         OpkgExecutor
-	Exec         ExecFunc // for tunnel_enable/disable via ndmc
+	OnCommand func(cmd wire.Command)
+	AwgClient *awgmgr.Client
+	// ForceRecheck -- отчёт с Resumed=true (reporter.ForceResumed); только
+	// для force_recheck: «роутер вернулся, проверь всё заново».
+	ForceRecheck func(ctx context.Context)
+	// ReportNow -- внеплановый отчёт без Resumed (reporter.SendNow, AG-05):
+	// после действий с туннелем, чтобы экран и тревоги увидели свежее
+	// состояние. Resumed=true здесь соврал бы бэкенду, и у мобильного
+	// роутера упавшие проверки туннелей выпали бы из тревог. nil -- не шлём.
+	ReportNow func(ctx context.Context)
+	Opkg      OpkgExecutor
+	Exec      ExecFunc // for tunnel_enable/disable via ndmc
 	// RCI -- локальный REST-интерфейс KeenOS для команд прошивки: `ndmc -c`
 	// обрывает «продолжаемые» команды (components commit/list). nil --
 	// команды прошивки идут старым путём через Exec.
@@ -136,6 +143,8 @@ type Runner struct {
 	// агента ставит dnswatch.ProbeLine). nil -- сброс без проб, как раньше.
 	DNSProbe DNSLineProbe
 	routeMu  sync.Mutex // serialises concurrent route_rebind calls
+	// entwareClean -- для тестов: свои пути очистки. nil -- пути по умолчанию.
+	entwareClean *EntwareCleanManager
 }
 
 // defaultActionTimeout bounds any dispatched action with no entry in
@@ -163,7 +172,7 @@ const defaultActionTimeout = 45 * time.Second
 //
 // firmware_install additionally kicks off a router reboot. Sibling actions
 // in the same families that only read state or touch local files
-// (opkg_cron_status/logs/remove, entware_clean_status/run/logs/remove) are
+// (opkg_cron_status/logs/remove, entware_clean_status/logs/remove) are
 // deliberately left at the 45s default — they do not run opkg or the network.
 // diag_now additionally gets 75s: DiagFresh runs a full IncludeRestart=false
 // diagnostic pass over SSE (a live run measured 34 checks) plus a possible
@@ -175,10 +184,14 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"hrneo_update":          300 * time.Second,
 	"opkg_cron_install":     300 * time.Second,
 	"entware_clean_install": 300 * time.Second,
-	"tunnel_import":         300 * time.Second,
-	"self_update":           600 * time.Second,
-	"firmware_install":      600 * time.Second,
-	"diag_now":              75 * time.Second,
+	// entware_clean_run: find+rm -rf в /opt/tmp и sync на медленной или
+	// почти полной флешке (AG-01). 330 с -- раньше, чем мини-апп перестаёт
+	// ждать (6 минут, miniapp/src/space.js spaceDeadlineMs).
+	"entware_clean_run": 330 * time.Second,
+	"tunnel_import":     300 * time.Second,
+	"self_update":       600 * time.Second,
+	"firmware_install":  600 * time.Second,
+	"diag_now":          75 * time.Second,
 	// dns_reset: до восьми снятий и восьми постановок через ndmc, сохранение
 	// и два чтения running-config -- на медленном роутере дольше 45 с
 	// (AGENT-03), а обрыв посередине оставил бы DNS наполовину.
@@ -327,6 +340,43 @@ func (r *Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string
 		return fmt.Errorf("verify legacy cleanup %s: %v", tunnelID, err)
 	}
 	return nil
+}
+
+// reportNowTimeout -- срок внепланового отчёта после действия. Свой, а не
+// остаток срока действия: почти истёкший ctx обрезал бы проверки, и отчёт
+// без Resumed принёс бы бэкенду ложные провалы.
+const reportNowTimeout = 30 * time.Second
+
+// reportsAfter -- действия, после которых reportNow шлёт внеплановый отчёт
+// синхронно, до ответа на команду: ответ приходит позже на срок отчёта.
+var reportsAfter = map[string]bool{
+	"tunnel_enable":  true,
+	"tunnel_disable": true,
+	"tunnel_restart": true,
+	"tunnel_delete":  true,
+	"tunnel_power":   true,
+}
+
+// AnswerBudget -- самое долгое время от начала действия до ответа на
+// команду: срок действия плюс, для действий с туннелем, срок внепланового
+// отчёта (M-1). Бэкенд держит копию для лесенки починки
+// (internal/backend/linkrepair agentBudget), тест там сверяет её с этой.
+func AnswerBudget(action string) time.Duration {
+	d := actionTimeoutFor(action)
+	if reportsAfter[action] {
+		d += reportNowTimeout
+	}
+	return d
+}
+
+// reportNow -- внеплановый отчёт после действия с туннелем (AG-05).
+func (r *Runner) reportNow(ctx context.Context) {
+	if r.ReportNow == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportNowTimeout)
+	defer cancel()
+	r.ReportNow(rctx)
 }
 
 func (r *Runner) now() time.Time {
@@ -485,7 +535,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		manager := &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
+		manager := r.entwareClean
+		if manager == nil {
+			manager = &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
+		}
 		lines := logLinesArg(cmd.Args)
 		var (
 			status wire.EntwareCleanStatus
@@ -503,6 +556,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			status, err = manager.Logs(ctx, lines)
 		case "entware_clean_remove":
 			status, err = manager.Remove(ctx)
+		}
+		if errors.Is(err, ErrEntwareCleanBusy) {
+			return "locked", err.Error(), payload
 		}
 		if err != nil {
 			return "err", err.Error(), payload
@@ -613,9 +669,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s %s: %v\n%s", ndms, state, err, string(out)), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
 	case "tunnel_restart":
 		tunnelID, _ := cmd.Args["tunnel_id"].(string)
@@ -634,9 +688,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if tunnelID != "" && r.AwgClient != nil {
 			err := r.AwgClient.RestartTunnel(ctx, tunnelID)
 			if err == nil {
-				if r.ForceRecheck != nil {
-					r.ForceRecheck(ctx)
-				}
+				r.reportNow(ctx)
 				return "ok", fmt.Sprintf("restarted %s via awg-manager", tunnelID), payload
 			}
 			if !awgmgr.IsEndpointMissing(err) {
@@ -665,9 +717,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s up: %v\n%s", ndms, err, string(outUp)), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("restarted %s\n-- down --\n%s\n-- up --\n%s", ndms, string(outDown), string(outUp)), payload
 	case "tunnel_delete":
 		if r.AwgClient == nil {
@@ -687,6 +737,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				if err := r.AwgClient.StopTunnel(ctx, tunnelID); err != nil {
 					return "err", fmt.Sprintf("stop tunnel %s before delete: %v", tunnelID, err), payload
 				}
+				// AG-08: остановка в awg-manager сама ставит enabled=false.
+				// Переключатели ниже -- toggle, поэтому решаются по свежему
+				// чтению: по снимку до остановки toggle-enabled включил бы
+				// туннель обратно. Чтение не вышло -- не переключаем вслепую.
+				fresh, err := getTunnel(ctx, r.AwgClient, tunnelID)
+				if err != nil {
+					return "err", fmt.Sprintf("re-read tunnel %s after stop: %v", tunnelID, err), payload
+				}
+				existing = fresh
 			}
 			if existing.DefaultRoute {
 				if err := r.AwgClient.ToggleDefaultRoute(ctx, tunnelID); err != nil {
@@ -705,9 +764,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				if cleanupErr := r.forceForgetLegacyAWGTunnel(ctx, tunnelID); cleanupErr != nil {
 					return "err", fmt.Sprintf("legacy cleanup %s after delete error %v: %v", tunnelID, err, cleanupErr), payload
 				}
-				if r.ForceRecheck != nil {
-					r.ForceRecheck(ctx)
-				}
+				r.reportNow(ctx)
 				return "ok", fmt.Sprintf("tunnel %s deleted with legacy cleanup after awgmgr delete error: %v", tunnelID, err), payload
 			}
 			return "err", err.Error(), payload
@@ -722,9 +779,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		} else if !tunnelNotFoundError(err) {
 			return "err", fmt.Sprintf("verify delete %s: %v", tunnelID, err), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("tunnel %s deleted", tunnelID), payload
 	case "tunnel_analyze":
 		// Проверка конфига до импорта (awg-manager 2.18.x). Старая панель
@@ -988,23 +1043,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "tunnel_power: tunnel_id is required", payload
 		}
 		on, _ := cmd.Args["on"].(bool)
-		var err error
-		if on {
-			err = r.AwgClient.StartTunnel(ctx, tunnelID)
-		} else {
-			err = r.AwgClient.StopTunnel(ctx, tunnelID)
+		status, out := r.tunnelPower(ctx, tunnelID, on)
+		if status != "err" {
+			r.reportNow(ctx)
 		}
-		if err != nil {
-			return "err", fmt.Sprintf("tunnel_power %s: %v", tunnelID, err), payload
-		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
-		state := "остановлен"
-		if on {
-			state = "запущен"
-		}
-		return "ok", fmt.Sprintf("туннель %s %s", tunnelID, state), payload
+		return status, out, payload
 	case "tunnel_traffic":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

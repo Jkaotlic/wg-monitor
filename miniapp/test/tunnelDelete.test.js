@@ -130,7 +130,7 @@ describe('лист и ответы сервера', () => {
     expect(deleteErrorText(new ApiError(404, 'tunnel_not_found', 'x'))).toBe('Роутер не знает этот VPN-туннель — обновите список VPN-туннелей.')
     expect(deleteErrorText(new ApiError(409, 'tunnel_not_managed', 'x'))).toBe('Этот VPN-туннель заведён не через awg-manager — из приложения его не удалить.')
     expect(deleteErrorText(new ApiError(409, 'snapshot_partial', 'x'))).toBe('Роутер прислал неполный снимок маршрутов — проверить правила не вышло, ничего не удалено. Попробуйте через минуту.')
-    expect(deleteErrorText(new Error('net'))).toBe('Сервер не ответил — ничего не удалено. Попробуйте ещё раз.')
+    expect(deleteErrorText(new Error('net'))).toBe('Не знаю, дошла ли команда до сервера. Обновите экран: если туннель пропал — удаление прошло.')
     expect(deleteErrorText(new ApiError(500, 'unknown', 'x'))).toBe('')
     expect(TUNNEL_TEXTS.checkingTimeout).toBe('Роутер не отвечает — проверьте, что он на связи. Ничего не удалено.')
     expect(deleteErrorText(Object.assign(new Error('checking_timeout'), { code: 'checking_timeout' }))).toBe(TUNNEL_TEXTS.checkingTimeout)

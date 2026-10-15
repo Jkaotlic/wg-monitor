@@ -28,10 +28,13 @@ const probeTimeout = 5 * time.Second
 // plain DNS to PlainResolver) and dialled by address, with the real host name
 // kept for SNI and the HTTP Host. IP literals are used as-is.
 type netProber struct {
-	resolver  string        // "" → PlainResolver
-	timeout   time.Duration // 0 → probeTimeout
-	tlsConfig *tls.Config   // nil → system roots; tests pass RootCAs
-	lookupFn  func(ctx context.Context, host string) (string, error)
+	resolver string        // "" → PlainResolver
+	timeout  time.Duration // 0 → probeTimeout
+	// plainTimeout -- свой срок plain-lookup внутри общего ctx (0 -- только
+	// timeout): запасной системный резолвер должен успеть (AG-09).
+	plainTimeout time.Duration
+	tlsConfig    *tls.Config // nil → system roots; tests pass RootCAs
+	lookupFn     func(ctx context.Context, host string) (string, error)
 	// systemLookupFn is the last resort after plain DNS and the last good
 	// address: the system resolver (nil → net.DefaultResolver).
 	systemLookupFn func(ctx context.Context, host string) (string, error)
@@ -82,8 +85,17 @@ func (p *netProber) ProbeCandidate(ctx context.Context, line, domain string) err
 // сервера резолвится через PlainResolver, запрос -- по TLS с SNI. Каждый
 // вызов -- свой prober: запоминать адреса между сбросами незачем.
 func ProbeLine(ctx context.Context, line, domain string) error {
-	return newNetProber().ProbeCandidate(ctx, line, domain)
+	return newLineProber().ProbeCandidate(ctx, line, domain)
 }
+
+// linePlainLookupTimeout -- срок plain-lookup имени сервера в ProbeLine
+// (AG-09). Бюджет всей пробы у сброса DNS -- 5 с; если UDP/53 к 77.88.8.8
+// молча режется, plain-запрос без своего срока съедал бы его целиком, и
+// системный резолвер получал бы уже истёкший ctx. 2 с -- с запасом для
+// живого ответа, и запасному пути с TLS остаётся ~3 с.
+const linePlainLookupTimeout = 2 * time.Second
+
+func newLineProber() *netProber { return &netProber{plainTimeout: linePlainLookupTimeout} }
 
 type candidate struct {
 	url             string // https upstream: the DoH URL
@@ -173,7 +185,12 @@ func (p *netProber) resolve(ctx context.Context, host, pinned string) (string, e
 	if lookup == nil {
 		lookup = p.plainLookup
 	}
-	ip, err := lookup(ctx, host)
+	lctx, lcancel := ctx, context.CancelFunc(func() {})
+	if p.plainTimeout > 0 {
+		lctx, lcancel = context.WithTimeout(ctx, p.plainTimeout)
+	}
+	ip, err := lookup(lctx, host)
+	lcancel()
 	p.mu.Lock()
 	if err == nil && ip != "" {
 		if p.lastGood == nil {

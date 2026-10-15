@@ -139,8 +139,8 @@ func TestRunner_TunnelToggle_ForcesFreshReportAfterSuccess(t *testing.T) {
 			seen = append(seen, append([]string{name}, args...)...)
 			return []byte("ok"), nil
 		},
-		ForceRecheck: func(ctx context.Context) { forced++ },
-		Now:          mockNow(),
+		ReportNow: func(ctx context.Context) { forced++ },
+		Now:       mockNow(),
 	}
 
 	res := r.Execute(context.Background(), wire.Command{
@@ -153,7 +153,7 @@ func TestRunner_TunnelToggle_ForcesFreshReportAfterSuccess(t *testing.T) {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
 	if forced != 1 {
-		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+		t.Fatalf("ReportNow calls = %d, want 1", forced)
 	}
 	if got := strings.Join(seen, " "); !strings.Contains(got, "interface Wireguard3 down") {
 		t.Fatalf("exec = %q", got)
@@ -166,8 +166,8 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return []byte("ndmc failed"), errors.New("exit status 122")
 		},
-		ForceRecheck: func(ctx context.Context) { forced++ },
-		Now:          mockNow(),
+		ReportNow: func(ctx context.Context) { forced++ },
+		Now:       mockNow(),
 	}
 
 	res := r.Execute(context.Background(), wire.Command{
@@ -180,7 +180,7 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
 	if forced != 0 {
-		t.Fatalf("ForceRecheck calls = %d, want 0", forced)
+		t.Fatalf("ReportNow calls = %d, want 0", forced)
 	}
 }
 
@@ -212,7 +212,7 @@ func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 			steps = append(steps, strings.Join(append([]string{name}, args...), " "))
 			return []byte("ok"), nil
 		},
-		ForceRecheck: func(ctx context.Context) { forced++ },
+		ReportNow: func(ctx context.Context) { forced++ },
 		Sleep: func(ctx context.Context, d time.Duration) error {
 			steps = append(steps, "sleep "+d.String())
 			return nil
@@ -238,7 +238,7 @@ func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 		t.Fatalf("steps:\n%v\nwant:\n%v", steps, want)
 	}
 	if forced != 1 {
-		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+		t.Fatalf("ReportNow calls = %d, want 1", forced)
 	}
 	if !strings.Contains(res.Output, "Wireguard3") || !strings.Contains(res.Output, "restarted") {
 		t.Fatalf("unexpected output: %q", res.Output)
@@ -277,9 +277,9 @@ func TestRunner_TunnelRestart_DoesNotBringUpAfterInterruptedSettleDelay(t *testi
 			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 			return []byte("ok"), nil
 		},
-		Sleep:        func(ctx context.Context, d time.Duration) error { return context.Canceled },
-		ForceRecheck: func(ctx context.Context) { forced++ },
-		Now:          mockNow(),
+		Sleep:     func(ctx context.Context, d time.Duration) error { return context.Canceled },
+		ReportNow: func(ctx context.Context) { forced++ },
+		Now:       mockNow(),
 	}
 
 	res := r.Execute(context.Background(), wire.Command{
@@ -295,7 +295,7 @@ func TestRunner_TunnelRestart_DoesNotBringUpAfterInterruptedSettleDelay(t *testi
 		t.Fatalf("commands = %+v, want only down", commands)
 	}
 	if forced != 0 {
-		t.Fatalf("ForceRecheck calls = %d, want 0", forced)
+		t.Fatalf("ReportNow calls = %d, want 0", forced)
 	}
 }
 
@@ -311,7 +311,7 @@ func TestRunner_TunnelDelete_DeletesByCheckNameAndForcesFreshReport(t *testing.T
 
 	r := Runner{
 		AwgClient: awgmgrFake(t, mux),
-		ForceRecheck: func(ctx context.Context) {
+		ReportNow: func(ctx context.Context) {
 			forced++
 		},
 		Now: mockNow(),
@@ -329,7 +329,7 @@ func TestRunner_TunnelDelete_DeletesByCheckNameAndForcesFreshReport(t *testing.T
 		t.Fatalf("deleted id = %q, want awg13", deletedID)
 	}
 	if forced != 1 {
-		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+		t.Fatalf("ReportNow calls = %d, want 1", forced)
 	}
 }
 
@@ -1609,5 +1609,21 @@ func TestRunner_OnCommandSeesEveryCommand(t *testing.T) {
 	r.Execute(context.Background(), wire.Command{ID: "1", Action: "no_such_action"})
 	if len(seen) != 2 || seen[0] != "no_such_action" {
 		t.Fatalf("OnCommand calls: %v (want before and after the action)", seen)
+	}
+}
+
+// M-1: действия с туннелем отвечают после внепланового отчёта -- срок
+// ответа включает его.
+func TestAnswerBudget(t *testing.T) {
+	for action, want := range map[string]time.Duration{
+		"tunnel_restart":       75 * time.Second,
+		"tunnel_power":         75 * time.Second,
+		"tunnel_import":        300 * time.Second,
+		"route_policy_promote": 45 * time.Second,
+		"route_status":         45 * time.Second,
+	} {
+		if got := AnswerBudget(action); got != want {
+			t.Errorf("AnswerBudget(%q) = %v, want %v", action, got, want)
+		}
 	}
 }

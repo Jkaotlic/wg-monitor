@@ -138,14 +138,19 @@ export function packagesStatusRows(status, kind, opts = {}) {
   return rows
 }
 
+// Очистка не запустилась: замок занят другой очисткой.
+export const CLEAN_BUSY_TEXT = 'Уже идёт другая очистка — повторите через несколько минут.'
+
 export function packagesOutcomeText(kind, verb, result) {
   if (!result) return ''
   if (result.status === 'timeout') return 'Роутер не ответил вовремя — проверьте состояние ещё раз.'
-  if (result.status === 'locked') return MAINT_TEXTS.busy
+  if (result.status === 'locked') return kind === 'clean' && verb === 'run' ? CLEAN_BUSY_TEXT : MAINT_TEXTS.busy
   if (/^unknown action:/i.test(String(result.output ?? '').trim())) return AGENT_OLDER_THAN_APP
   if (result.status !== 'ok') return 'Роутер ответил ошибкой — подробности ниже.'
   const status = parsePackagesStatus(result)
   if (!status) return 'Роутер ответил непонятно — проверьте состояние ещё раз.'
+  // Старый агент на «занято» отвечает ok, а причину кладёт в last_status.
+  if (kind === 'clean' && verb === 'run' && status.lastStatus === 'locked') return CLEAN_BUSY_TEXT
   switch (verb) {
     case 'install':
       return status.time ? `Расписание сохранено: каждый день в ${status.time}.` : 'Расписание сохранено.'

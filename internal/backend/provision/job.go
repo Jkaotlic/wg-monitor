@@ -97,6 +97,7 @@ type Store struct {
 	jobs  map[string]*Job
 	locks map[string]bool
 	now   func() time.Time // overridable for tests; nil -> time.Now
+	path  string           // файл заданий; пусто -- только память
 }
 
 // NewStore returns an empty, ready-to-use Store.
@@ -140,6 +141,7 @@ func (s *Store) Create(kind JobKind, nick string, steps []Step) *Job {
 
 	s.mu.Lock()
 	s.jobs[stored.ID] = stored
+	s.saveLocked()
 	s.mu.Unlock()
 
 	return &out
@@ -177,6 +179,7 @@ func (s *Store) Update(id string, mutate func(*Job)) {
 	if (job.State == StateSuccess || job.State == StateFailed) && job.ended.IsZero() {
 		job.ended = s.nowFn()
 	}
+	s.saveLocked()
 }
 
 // TryLock acquires the single-flight lock for nick, returning true if it was
@@ -241,13 +244,18 @@ func (s *Store) Sweep() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := s.nowFn().Add(-jobTTL)
+	changed := false
 	for id, job := range s.jobs {
 		if job.State == StateRunning {
 			continue
 		}
 		if job.ended.Before(cutoff) {
 			delete(s.jobs, id)
+			changed = true
 		}
+	}
+	if changed {
+		s.saveLocked()
 	}
 }
 

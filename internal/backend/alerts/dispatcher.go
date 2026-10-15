@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -27,8 +28,8 @@ type TGSender interface {
 // поднимают ради этого настоящую рассылку.
 type notifySink interface {
 	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
-	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
-	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
+	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup, silent bool) (int, error)
+	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string, silent bool) error
 }
 
 type Config struct {
@@ -130,6 +131,26 @@ func (di *Dispatcher) rememberHard(userID int64, checkName, text string, kb tg.I
 	di.lastHard[hardKey{userID, checkName}] = hardAlert{text: text, kb: kb}
 }
 
+// NoteAlertAction -- notify.AlertMemory: человек заглушил тревогу в боте
+// или ответил на неё в приложении. Память тревоги дополняется строкой
+// statusLine (пустая -- текст прежний) и теряет кнопки, как сама тревога в
+// Telegram: нить починки правит уже от этого (BOT-06). Тревоги в памяти нет
+// (перезапуск, «восстановилось») -- делать нечего.
+func (di *Dispatcher) NoteAlertAction(userID int64, checkName, statusLine string) {
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	key := hardKey{userID, checkName}
+	a, ok := di.lastHard[key]
+	if !ok {
+		return
+	}
+	if statusLine != "" {
+		a.text += "\n\n" + statusLine
+	}
+	a.kb = tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+	di.lastHard[key] = a
+}
+
 func (di *Dispatcher) forgetHard(userID int64, checkName string) {
 	di.mu.Lock()
 	defer di.mu.Unlock()
@@ -173,10 +194,10 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// 5xx/429 от TG возвращалась ошибка ДО Save, FSM оставался в
 		// pre-Hard состоянии, следующий fail-репорт снова пересекал
 		// порог → дубль алерта на каждый TG-глюк (BUG-02).
-		// LastAlertMsgID/LastAlertAt пишем вторым save'ом только при
-		// успехе TG-send. Если TG упал — FSM корректно в HARD, но
-		// LastAlertAt=NULL значит realert poller его не подхватит до
-		// следующего ручного refresh / OK-репорта.
+		// Первый Save несёт LastAlertAt=now от автомата: пока идёт отправка
+		// (с повторами -- до полуминуты), напоминания эту тревогу не трогают.
+		// Не дошла никому -- LastAlertAt снимается в NULL, и realert
+		// доставляет её на ближайшем обходе (BOT-01), а не через 6 часов.
 		next := tr.Next
 		if di.onHard != nil {
 			di.onHard(userID, checkName)
@@ -184,70 +205,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
 		}
-		args := HardArgs{
-			Nickname:    nickname,
-			CheckName:   checkName,
-			ConsecFails: tr.Next.ConsecutiveFails,
-			HardSince:   *tr.Next.HardSince,
-			Check:       check,
+		// Новая поломка: недоставленное «восстановилось» прошлой уже не к
+		// месту.
+		if err := di.d.OwedReplies().Delete(userID, checkName); err != nil {
+			slog.Warn("не удалось снять долг «восстановилось»", "user_id", userID, "check", checkName, "err", err)
 		}
-		if di.autoHint != nil {
-			args.AutoRepair = di.autoHint(userID, checkName)
-		}
-		if u, err := di.d.Users().GetByID(userID); err == nil {
-			args.IsMobile = u.IsMobile()
-		} else {
-			slog.Warn("dispatch HARD: user lookup failed; mobile-badge omitted", "user_id", userID, "err", err)
-		}
-		// Tunnel and DNS checks get tunnel context so the operator can see
-		// whether this is one tunnel flapping or the whole router/WAN.
-		if strings.HasPrefix(checkName, "tunnel_") || checkName == "dns" {
-			args.Neighbors = di.collectNeighbors(userID, checkName)
-		}
-		if checkName == "dns_ru" {
-			args.Neighbors = di.dnsRuNeighbors(userID)
-		}
-		if checkName == BypassLeakCheck {
-			args.Neighbors = di.collectNeighbors(userID, NeighborExclude(checkName, check.Details))
-		}
-		text := FormatHard(args)
-		// Под тревогой ровно две кнопки: открыть роутер в приложении (когда
-		// база настроена) и отложить эту проверку на час. Командные кнопки
-		// (restart/diag/pingcheck/force_recheck/maint_restart) переехали в
-		// приложение; обработчики в callbacks/ остаются для старых сообщений.
-		appURL := tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID)
-		kb := tg.AlertKeyboard(userID, checkName, appURL)
-		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)
-		if err != nil {
+		if _, err := di.DeliverHard(ctx, userID, nickname, checkName, next, check); err != nil {
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
-		}
-		di.rememberHard(userID, checkName, text, kb)
-		if delivered == 0 {
-			// Слать некому: владелец не привязан, операторы не заведены либо
-			// всем недоставимо. Тревога не теряется -- её видно в сводке
-			// дашборда; здесь только след в логе.
-			slog.Warn("тревогу некому доставить",
-				"user_id", userID, "nickname", nickname, "check", checkName)
-		}
-		// LastAlertMsgID больше не источник правды: получателей несколько, и
-		// кому какое сообщение ушло, помнит таблица alert_messages. Здесь
-		// остаётся только отметка времени -- по ней realert решает, пора ли
-		// напомнить.
-		const noSingleMsgID = 0
-		now := di.now()
-		next.LastAlertAt = &now
-		if err := di.d.State().Save(userID, checkName, next); err != nil {
-			// Full Save failed (DB momentarily locked / disk error). The HARD
-			// row was persisted earlier (line 75), so the FSM is correct, but
-			// LastAlertAt is still NULL — the realert poller would now fire
-			// on every tick instead of every RealertEvery. Targeted UPDATE
-			// just for last_alert_at + last_alert_msg_id is a smaller
-			// transaction more likely to succeed in this window.
-			slog.Error("HARD save failed; falling back to SetLastAlert",
-				"nickname", nickname, "check", checkName, "err", err)
-			if fbErr := di.d.State().SetLastAlert(userID, checkName, noSingleMsgID, now); fbErr != nil {
-				return fmt.Errorf("HARD save fallback %s/%s: %w (orig: %v)", nickname, checkName, fbErr, err)
-			}
 		}
 		return nil
 	case state.Recovery:
@@ -282,7 +246,20 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if di.covered != nil && di.covered(userID, checkName) {
 			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
 				"user_id", userID, "check", checkName)
-		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
+		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
+			// Не дошло никому: автомат уже в ok, напоминаний не будет.
+			// Долг повторит обход напоминаний (realert) ответом на ту же
+			// тревогу -- поэтому переписку не забываем. Саму тревогу
+			// человек не получал -- долга нет (M-7).
+			if !di.hardNeverDelivered(userID, checkName, prev, prevErr) {
+				if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
+					slog.Error("не удалось запомнить недоставленное «восстановилось»",
+						"user_id", userID, "check", checkName, "err", putErr)
+				}
+			} else {
+				slog.Info("«восстановилось» не дошло, тревога тоже не доходила: долга нет",
+					"user_id", userID, "check", checkName)
+			}
 			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
 		// Переписка по этой проверке закончилась: следующая поломка начнёт
@@ -294,6 +271,120 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		return nil
 	}
 	return nil
+}
+
+// Silenced -- действует ли «Тише на час» по проверке: тревога и
+// «восстановилось» тогда уходят без звука (BOT-02). Тишину ставит кнопка под
+// тревогой; автомат тревог переносит её через «восстановилось», так что
+// флап внутри часа тоже приходит тихо.
+func Silenced(st db.IncidentState, now time.Time) bool {
+	return st.SilencedUntil != nil && st.SilencedUntil.After(now)
+}
+
+// DeliverHard -- отправить карточку HARD-тревоги по строке st, которая уже
+// сохранена как hard: рассылка с записью в alert_messages, память текста для
+// нити починки, отметка last_alert_at. Зовут Handle при пересечении порога и
+// realert, когда первая тревога не дошла никому (last_alert_at NULL): человек
+// получает саму тревогу, а не «Всё ещё … #0», и «восстановилось» ответит на
+// неё (BOT-01).
+//
+// Отметка пишется точечным UPDATE, а не Save всей строки: отправка с
+// повторами длится до полуминуты, и за это время человек мог нажать «Тише
+// на час» -- снимок st затёр бы тишину. Не дошло никому и это известно
+// наверняка (Telegram отказал, запрос не ушёл) -- last_alert_at снимается в
+// NULL (realert повторит на ближайшем обходе). Могло дойти (таймаут ответа,
+// срок контекста) -- отметка ставится, дальше обычное напоминание: иначе
+// при медленном Telegram карточка дублировалась бы каждые 5 минут (I-2).
+// Ошибка возвращается в обоих случаях.
+func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, checkName string, st db.IncidentState, check wire.Check) (int, error) {
+	if st.HardSince == nil {
+		return 0, fmt.Errorf("HARD %s/%s: нет hard_since", nickname, checkName)
+	}
+	args := HardArgs{
+		Nickname:    nickname,
+		CheckName:   checkName,
+		ConsecFails: st.ConsecutiveFails,
+		HardSince:   *st.HardSince,
+		Check:       check,
+	}
+	if di.autoHint != nil {
+		args.AutoRepair = di.autoHint(userID, checkName)
+	}
+	if u, err := di.d.Users().GetByID(userID); err == nil {
+		args.IsMobile = u.IsMobile()
+	} else {
+		slog.Warn("dispatch HARD: user lookup failed; mobile-badge omitted", "user_id", userID, "err", err)
+	}
+	// Tunnel and DNS checks get tunnel context so the operator can see
+	// whether this is one tunnel flapping or the whole router/WAN.
+	if strings.HasPrefix(checkName, "tunnel_") || checkName == "dns" {
+		args.Neighbors = di.collectNeighbors(userID, checkName)
+	}
+	if checkName == "dns_ru" {
+		args.Neighbors = di.dnsRuNeighbors(userID)
+	}
+	if checkName == BypassLeakCheck {
+		args.Neighbors = di.collectNeighbors(userID, NeighborExclude(checkName, check.Details))
+	}
+	text := FormatHard(args)
+	// Под тревогой ровно две кнопки: открыть роутер в приложении (когда
+	// база настроена) и отложить эту проверку на час. Командные кнопки
+	// (restart/diag/pingcheck/force_recheck/maint_restart) переехали в
+	// приложение; обработчики в callbacks/ остаются для старых сообщений.
+	appURL := tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID)
+	kb := tg.AlertKeyboard(userID, checkName, appURL)
+	delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb, Silenced(st, di.now()))
+	if err != nil {
+		if hardMaybeDelivered(err) {
+			// Таймаут ответа или срок контекста: карточка могла дойти.
+			// Отметка ставится, как при доставке -- дальше обычное
+			// напоминание по расписанию, а не полная карточка на каждом
+			// обходе realert (I-2).
+			if bErr := di.d.State().BumpLastAlertAt(userID, checkName, di.now()); bErr != nil {
+				slog.Error("HARD: не удалось поставить отметку отправки", "user_id", userID, "check", checkName, "err", bErr)
+			}
+			return 0, err
+		}
+		if clrErr := di.d.State().ClearLastAlertAt(userID, checkName); clrErr != nil {
+			slog.Error("HARD: не удалось снять отметку отправки", "user_id", userID, "check", checkName, "err", clrErr)
+		}
+		return 0, err
+	}
+	di.rememberHard(userID, checkName, text, kb)
+	if delivered == 0 {
+		// Слать некому: владелец не привязан, операторы не заведены либо
+		// всем недоставимо. Тревога не теряется -- её видно в сводке
+		// дашборда; здесь только след в логе.
+		slog.Warn("тревогу некому доставить",
+			"user_id", userID, "nickname", nickname, "check", checkName)
+	}
+	// Кому какое сообщение ушло, помнит alert_messages; здесь только
+	// отметка времени -- по ней realert решает, пора ли напомнить.
+	if err := di.d.State().BumpLastAlertAt(userID, checkName, di.now()); err != nil {
+		return delivered, fmt.Errorf("HARD отметка отправки %s/%s: %w", nickname, checkName, err)
+	}
+	return delivered, nil
+}
+
+// hardNeverDelivered -- карточка тревоги заведомо не дошла никому: отметки
+// отправки нет (DeliverHard снимает её только при «заведомо не отправлено»)
+// и в alert_messages ни одного сообщения. Долг «восстановилось» по такой
+// тревоге сообщил бы человеку о починке того, о чём он не знал (M-7).
+// Ошибка чтения -- «не знаем», долг остаётся, как раньше.
+func (di *Dispatcher) hardNeverDelivered(userID int64, checkName string, prev db.IncidentState, prevErr error) bool {
+	if prevErr != nil || prev.LastAlertAt != nil {
+		return false
+	}
+	msgs, err := di.d.AlertMessages().List(userID, checkName)
+	return err == nil && len(msgs) == 0
+}
+
+// hardMaybeDelivered -- рассылка карточки провалилась так, что Telegram мог
+// её уже доставить: получатели были (ErrNoneDelivered), а ошибка -- не из
+// тех, что значат «заведомо не отправлено» (tg.KnownNotSent). Ошибка
+// составления списка получателей (база) -- не отправлено ничего.
+func hardMaybeDelivered(err error) bool {
+	return errors.Is(err, notify.ErrNoneDelivered) && !tg.KnownNotSent(err)
 }
 
 // collectNeighbors returns short summaries of the user's other tunnel checks.
@@ -368,13 +459,20 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 	return out
 }
 
-// SendOffline sends a ROUTER OFFLINE notice (used by the heartbeat watcher).
+// SendOffline -- первая тревога «Роутер не на связи» (зовёт сторож молчания).
+// Состояние agent_heartbeat пишет сторож (MarkHard) после удачной отправки;
+// повторяет realert коротким напоминанием (BOT-05). Под «Тише на час»,
+// оставшейся от прошлого раза, -- без звука (как HARD, BOT-02).
 func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error {
-	now := di.now()
-	hardSince := now.Add(-since)
+	silent := false
+	if st, err := di.d.State().Get(userID, "agent_heartbeat"); err != nil {
+		slog.Warn("«не на связи»: состояние не прочитано, шлём со звуком", "user_id", userID, "err", err)
+	} else {
+		silent = Silenced(st, di.now())
+	}
 	text := FormatRouterOffline(nickname, since)
 	kb := tg.AlertKeyboard(userID, "agent_heartbeat", tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID))
-	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb)
+	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb, silent)
 	if err != nil {
 		return err
 	}
@@ -385,17 +483,44 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		slog.Warn("«роутер не на связи» некому доставить",
 			"user_id", userID, "nickname", nickname)
 	}
-	return di.d.State().Save(userID, "agent_heartbeat", db.IncidentState{
-		UserID:           userID,
-		CheckName:        "agent_heartbeat",
-		ConsecutiveFails: 1,
-		CurrentStatus:    "hard",
-		HardSince:        &hardSince,
-		// LastAlertMsgID не заполняем: получателей несколько, и кому какое
-		// сообщение ушло, помнит таблица alert_messages.
-		LastAlertAt: &now,
+	return nil
+}
+
+// SendBackOnline -- «Роутер снова на связи» ответом на тревогу «Роутер не на
+// связи» (BOT-03): сторож уже перевёл строку agent_heartbeat в ok. Под «Тише
+// на час» -- без звука. Не дошло никому -- текст ложится в owed_replies, и
+// realert повторит его ответом на ту же тревогу; переписку тогда не
+// забываем. Дошло -- переписка по молчанию закончена.
+func (di *Dispatcher) SendBackOnline(ctx context.Context, userID int64, nickname string, hardSince time.Time) error {
+	const check = "agent_heartbeat"
+	now := di.now()
+	silent := false
+	if st, err := di.d.State().Get(userID, check); err != nil {
+		slog.Warn("«снова на связи»: состояние не прочитано, шлём со звуком", "user_id", userID, "err", err)
+	} else {
+		silent = Silenced(st, now)
+	}
+	text := FormatRecovery(RecoveryArgs{
+		Nickname:    nickname,
+		CheckName:   check,
+		HardSince:   hardSince,
+		RecoveredAt: now,
 	})
+	if err := di.notify.ReplyToEach(ctx, userID, check, text, "", silent); err != nil {
+		if putErr := di.d.OwedReplies().Put(userID, check, text, now); putErr != nil {
+			slog.Error("не удалось запомнить недоставленное «снова на связи»",
+				"user_id", userID, "err", putErr)
+		}
+		return fmt.Errorf("«снова на связи» %s: %w", nickname, err)
+	}
+	if err := di.d.AlertMessages().Clear(userID, check); err != nil {
+		slog.Warn("не удалось забыть переписку о молчании роутера", "user_id", userID, "err", err)
+	}
+	return nil
 }
 
 // Диспетчер -- память тревог для нити починки.
-var _ notify.AlertTexts = (*Dispatcher)(nil)
+var (
+	_ notify.AlertTexts  = (*Dispatcher)(nil)
+	_ notify.AlertMemory = (*Dispatcher)(nil)
+)

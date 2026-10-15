@@ -18,6 +18,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
@@ -165,6 +166,17 @@ func mobileWakeAfter(d Deps) time.Duration {
 		return d.MobileWakeAfter
 	}
 	return 5 * time.Minute
+}
+
+// offlineAlertOpen -- по роутеру открыта тревога «не на связи»
+// (agent_heartbeat в hard). Ошибка чтения -- «нет»: лишняя карточка лучше
+// пропавшей.
+func offlineAlertOpen(d Deps, uid int64) bool {
+	if d.DB == nil {
+		return false
+	}
+	st, err := d.DB.State().Get(uid, "agent_heartbeat")
+	return err == nil && st.CurrentStatus == "hard"
 }
 
 func shouldNotifyMobileWake(user *db.User, ts time.Time, threshold time.Duration) bool {
@@ -379,6 +391,10 @@ type Deps struct {
 	// a breadcrumb on the original Telegram alert (best-effort). Nil disables
 	// the sync (the DB write still happens). Wired from the shared *tg.Client.
 	MiniappTG MiniappTGClient
+	// AlertMemory -- память тревог диспетчера: снятие кнопок из приложения
+	// сообщается ей, чтобы нить починки не вернула их правкой (BOT-06). nil
+	// -- не сообщать.
+	AlertMemory notify.AlertMemory
 	// MuteCutoffHour (0-23 MSK) is the "тихо до утра" cutoff used by the
 	// mini-app mute endpoint, matching the callback MuteAction. Sourced from
 	// the same cfg.State.MuteCutoffHour the bot uses.
@@ -829,6 +845,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 			d.Resumer.MarkResumed(uid)
 		}
 		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, mobileWakeAfter(d))
+		if notifyWake && offlineAlertOpen(d, uid) {
+			// M-3: при heartbeat.mobile_lifecycle=false мобильный роутер
+			// уходит в обычную тревогу «не на связи», и ответ на неё --
+			// «снова на связи» от сторожа молчания. Карточка пробуждения
+			// стала бы вторым сообщением о том же возвращении.
+			notifyWake = false
+		}
 		// The operator-facing wake card uses the backend-observed last_seen
 		// gap. Older agents can over-report Resumed=true after short mobile
 		// jitter; a clean agent restart after real sleep may not set Resumed.

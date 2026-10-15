@@ -316,3 +316,54 @@ func TestMiniappSyncKeepsAdminMuteRowInsteadOfEmptyKeyboard(t *testing.T) {
 		t.Fatalf("у админа не ряд выключения этого роутера: %+v", adminKB)
 	}
 }
+
+// recordingAlertMemory -- что приложение сообщило памяти тревог.
+type recordingAlertMemory struct {
+	mu    sync.Mutex
+	calls []string // "router/check/statusLine"
+}
+
+func (m *recordingAlertMemory) NoteAlertAction(routerID int64, checkName, statusLine string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, fmt.Sprintf("%d/%s/%s", routerID, checkName, statusLine))
+}
+
+// BOT-06: приложение сняло кнопки с тревоги -- память тревог об этом знает
+// (текст прежний, строка пустая), и нить починки кнопки не вернёт.
+func TestMiniappActionTellsAlertMemory(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	seedHardIncident(t, d, ownedID, "dns")
+	if err := d.AlertMessages().Put(ownedID, "dns", ownerTG, 501); err != nil {
+		t.Fatal(err)
+	}
+	fake := &recordingMiniappTG{edits: map[int64]int{}, sends: map[int64]int{}}
+	mem := &recordingAlertMemory{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", MiniappTG: fake, AlertMemory: mem})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/dns/ack", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", ownerTG))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	want := fmt.Sprintf("%d/dns/", ownedID)
+	if len(mem.calls) != 1 || mem.calls[0] != want {
+		t.Fatalf("память тревог: %q, ждали [%q]", mem.calls, want)
+	}
+}
+
+// BOT-07: из приложения строка тишины подписана ролью нажавшего.
+func TestMiniappActorRole(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 4242, 999); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{DB: d, TelegramAdminUserID: 999}
+	for tgID, want := range map[int64]string{ownerTG: "owner", 4242: "operator", 999: "admin"} {
+		if got := miniappActorRole(deps, tgID, ownedID); got != want {
+			t.Errorf("tg=%d: роль %q, ждали %q", tgID, got, want)
+		}
+	}
+}

@@ -79,9 +79,8 @@ func TestOfflineToUnreachableOnlyRecipientDoesNotHammer(t *testing.T) {
 	disp := NewDispatcher(d, door, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	const scanEvery = 30 * time.Second
 	w := heartbeat.NewWatcher(d, disp, heartbeat.Config{
-		StaleAfter:    5 * time.Minute,
-		ScanEvery:     scanEvery,
-		RenotifyEvery: time.Hour,
+		StaleAfter: 5 * time.Minute,
+		ScanEvery:  scanEvery,
 	})
 	clock := start
 	w.SetNow(func() time.Time { return clock })
@@ -110,14 +109,25 @@ func TestOfflineToUnreachableOnlyRecipientDoesNotHammer(t *testing.T) {
 		t.Fatalf("недоступные=%v, ждали 1001 с причиной chat not found -- иначе оператор не увидит, почему тихо", un)
 	}
 
-	// Человек написал боту. Отдельного снятия отметки по /start нет: её снимает
-	// первая удачная доставка -- в срок повторного напоминания.
+	// Повторять «не на связи» сторож не будет вовсе: тревога записана
+	// (agent_heartbeat = hard), повтор -- коротким напоминанием realert
+	// (BOT-05). Отметку недоступности снимает первая удачная доставка любого
+	// сообщения -- здесь «снова на связи», когда роутер вернётся.
+	clock = clock.Add(7 * time.Hour)
+	w.ScanForTest(context.Background())
+	if got := door.attempts(); got != 1 {
+		t.Fatalf("сторож сам повторил тревогу: попыток %d", got)
+	}
+
 	door.open()
-	clock = clock.Add(time.Hour)
+	if err := d.Events().Insert(uid, "agent_heartbeat", "ok", "", clock); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(scanEvery)
 	w.ScanForTest(context.Background())
 
 	if got := door.attempts(); got != 2 {
-		t.Fatalf("попыток после срока напоминания: %d, ждали вторую", got)
+		t.Fatalf("попыток после возвращения роутера: %d, ждали вторую («снова на связи»)", got)
 	}
 	un, err = d.Unreachable().List()
 	if err != nil {

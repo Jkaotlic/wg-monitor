@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,18 +38,29 @@ type remoteRateLimiter struct {
 	rate    float64 // токенов в секунду
 	burst   float64 // ёмкость ведёрка
 	now     func() time.Time
+	// backstop -- потолок по RemoteAddr, не зависящий от заголовков: если
+	// прокси пропускает X-Forwarded-For клиента как есть, перебором заголовка
+	// ведёрко клиента не обойти. Десятикратный запас, считает каждый запрос.
+	backstop *remoteRateLimiter
 }
 
 func newRemoteRateLimiter(perSec float64, burst int) *remoteRateLimiter {
 	if perSec <= 0 || burst <= 0 {
 		return nil
 	}
-	return &remoteRateLimiter{
+	l := &remoteRateLimiter{
 		buckets: make(map[string]*tokenBucket),
 		rate:    perSec,
 		burst:   float64(burst),
 		now:     time.Now,
 	}
+	l.backstop = &remoteRateLimiter{
+		buckets: make(map[string]*tokenBucket),
+		rate:    perSec * 10,
+		burst:   float64(burst) * 10,
+		now:     func() time.Time { return l.now() },
+	}
+	return l
 }
 
 // Allow тратит один токен адреса. nil-лимитер пропускает всё: это
@@ -151,6 +163,75 @@ func remoteRateKey(remote string) string {
 	return remote
 }
 
+// trustedHop -- адрес прокси, которому можно верить в заголовках: loopback,
+// частная сеть (RFC1918, ULA fc00::/7) и link-local. Мост docker и роутер
+// KeenDNS приходят именно такими.
+func trustedHop(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+// clientRateKey -- ключ лимита: настоящий клиент, а не прокси перед нами.
+// X-Forwarded-For читается ТОЛЬКО если RemoteAddr -- доверенный прокси (иначе
+// заголовок подделывается одной строкой). В XFF идём справа налево и берём
+// первый недоверенный адрес: клиент может дописать свои адреса слева, но
+// справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при
+// проброске заголовков прокси он целиком в руках клиента. Нет годного
+// заголовка -- RemoteAddr.
+func clientRateKey(r *http.Request) string {
+	remote := remoteRateKey(r.RemoteAddr)
+	rip := net.ParseIP(remote)
+	if rip == nil || !trustedHop(rip) {
+		return remote
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip := net.ParseIP(strings.TrimSpace(hops[i]))
+		if ip == nil {
+			break // мусор в цепочке: дальше слева верить нечему
+		}
+		if !trustedHop(ip) {
+			return ip.String()
+		}
+	}
+	return remote
+}
+
+// statusRecorder запоминает код ответа, чтобы вернуть токен за удачный вход.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// refund возвращает один токен ключу (не выше ёмкости).
+func (l *remoteRateLimiter) refund(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[key]; ok {
+		b.tokens = l.tokensAt(b, l.now()) + 1
+		b.lastFill = l.now()
+		if b.tokens > l.burst {
+			b.tokens = l.burst
+		}
+	}
+}
+
 // pathSecret -- длинная шестнадцатеричная строка в пути: так выглядит любой
 // секрет в адресе (одноразовый билет, токен).
 var pathSecret = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
@@ -170,7 +251,17 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ok, retry := l.Allow(r.RemoteAddr)
+			key := clientRateKey(r)
+			// Сначала ведёрко самого клиента: отказанный им же запрос общий
+			// потолок не расходует, иначе один настойчивый клиент запер бы
+			// всех, кто идёт через тот же прокси.
+			ok, retry := l.Allow(key)
+			if ok {
+				if bok, bretry := l.backstop.Allow(r.RemoteAddr); !bok {
+					l.refund(key)
+					ok, retry = false, bretry
+				}
+			}
 			if !ok {
 				secs := int(retry.Round(time.Second).Seconds())
 				if secs < 1 {
@@ -179,7 +270,7 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 				w.Header().Set("Retry-After", strconv.Itoa(secs))
 				if logger != nil {
 					logger.Warn("вход: слишком много попыток",
-						"remote", remoteRateKey(r.RemoteAddr),
+						"remote", key,
 						"path", redactPathSecrets(r.URL.Path),
 						"retry_after_sec", secs,
 					)
@@ -188,7 +279,15 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 					"Слишком много попыток. Попробуйте через "+strconv.Itoa(secs)+" с.")
 				return
 			}
-			next.ServeHTTP(w, r)
+			// Токен тратится ДО работы, поэтому залив неудачными запросами
+			// упирается в лимит, не успев нагрузить проверку. Удачный вход
+			// (код < 400) токен возвращает: подделать подпись нельзя, а
+			// владелец не должен упираться в лимит своими заходами.
+			rec := &statusRecorder{ResponseWriter: w}
+			next.ServeHTTP(rec, r)
+			if rec.status == 0 || rec.status < http.StatusBadRequest {
+				l.refund(key)
+			}
 		})
 	}
 }

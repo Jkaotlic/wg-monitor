@@ -97,3 +97,17 @@ describe('spaceFailureText', () => {
     expect(spaceFailureText(ok(REPORT))).toBe('')
   })
 })
+
+describe('AG-01: очистка не запустилась, потому что идёт другая', () => {
+  it('новый агент: status locked -- свой текст, не про обновление пакетов', () => {
+    const t = cleanOutcomeText({ run: { status: 'locked', output: 'уже идёт другая очистка — повторите через несколько минут' } })
+    expect(t).toBe(SPACE_TEXTS.cleanBusy)
+    expect(t).not.toContain('обновление пакетов')
+    expect(t).not.toContain('Очистка выполнена')
+  })
+  it('старый агент: ok с last_status locked -- не «Очистка выполнена»', () => {
+    const run = ok({ installed: false, free_kb: 0, last_status: 'locked' })
+    const t = cleanOutcomeText({ run, before: { freeKB: 100 }, after: { freeKB: 100 } })
+    expect(t).toBe(SPACE_TEXTS.cleanBusy)
+  })
+})

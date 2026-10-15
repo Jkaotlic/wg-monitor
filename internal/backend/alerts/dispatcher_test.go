@@ -111,7 +111,7 @@ func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 	// Единственному получателю доставить не удалось -- значит тревога не
 	// ушла никому и обязана быть повторена. Состояние при этом сохраняется:
 	// иначе следующий fail-репорт снова пересёк бы порог и выдал дубль.
-	tgc := &fakeTG{sendErrOnce: errStub("telegram rate limited")}
+	tgc := &fakeTG{sendErrOnce: &tg.APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests"}}
 	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2})
 
 	hardSince := time.Now().Add(-2 * time.Minute).UTC()
@@ -383,10 +383,6 @@ func TestSendOfflineCarriesAppButton(t *testing.T) {
 	}
 }
 
-type errStub string
-
-func (e errStub) Error() string { return string(e) }
-
 // TestDispatcherSurfacesNonHealableTGError: a TG error that is NOT a
 // stale-topic signal (e.g. 403 forbidden, 429 rate-limit, malformed) must
 // propagate untouched — no retry, no thread_id reset.
@@ -516,10 +512,14 @@ func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
 	// SetNow(nil) restores the real wall clock (mirrors Watcher/Poller.SetNow).
 	disp.SetNow(nil)
 	before := time.Now()
-	if err := disp.SendOffline(context.Background(), uid, "clockuser", time.Minute); err != nil {
-		t.Fatalf("SendOffline: %v", err)
+	tr2 := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(before), LastAlertAt: ptrT(before.Add(-time.Hour))},
 	}
-	afterState, err := d.State().Get(uid, "agent_heartbeat")
+	if err := disp.Handle(context.Background(), uid, "clockuser", "dns", tr2, chk("dns", "fail", nil)); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	afterState, err := d.State().Get(uid, "dns")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,6 +615,9 @@ type recordingSink struct {
 	replies  []int64 // routerUserID для каждого «починилось»
 	checks   []string
 	delivers int
+	// trackedSilent / repliesSilent -- шла ли каждая отправка без звука.
+	trackedSilent []bool
+	repliesSilent []bool
 }
 
 func (r *recordingSink) Send(_ context.Context, routerUserID int64, _, _ string) (int, error) {
@@ -622,14 +625,16 @@ func (r *recordingSink) Send(_ context.Context, routerUserID int64, _, _ string)
 	return r.delivers, nil
 }
 
-func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup) (int, error) {
+func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup, silent bool) (int, error) {
 	r.tracked = append(r.tracked, routerUserID)
+	r.trackedSilent = append(r.trackedSilent, silent)
 	r.checks = append(r.checks, checkName)
 	return r.delivers, nil
 }
 
-func (r *recordingSink) ReplyToEach(_ context.Context, routerUserID int64, checkName, _, _ string) error {
+func (r *recordingSink) ReplyToEach(_ context.Context, routerUserID int64, checkName, _, _ string, silent bool) error {
 	r.replies = append(r.replies, routerUserID)
+	r.repliesSilent = append(r.repliesSilent, silent)
 	r.checks = append(r.checks, checkName)
 	return nil
 }

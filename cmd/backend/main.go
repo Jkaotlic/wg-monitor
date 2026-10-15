@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -128,7 +129,6 @@ func main() {
 		MobileLifecycle:  mobileLifecycle,
 		ResumeGrace:      time.Duration(cfg.Heartbeat.ResumeGraceSec) * time.Second,
 		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
-		RenotifyEvery:    time.Duration(cfg.State.RealertEverySec) * time.Second,
 	})
 
 	// Mobile-lifecycle notifiers: wake-card on Resumed=true, one-shot sleep-info
@@ -188,7 +188,9 @@ func main() {
 	// survives that handler returning (see provision.Deps' own doc). LastSeen
 	// reads the exact column POST /v1/report updates (provisionLastSeen, this
 	// package) — anything else would make verify_online lag or miss reports.
-	provisionStore := provision.NewStore()
+	// Задания хранятся в каталоге базы (том): после перезапуска экран знает,
+	// что установку оборвало, а не «завершилась 30 минут назад».
+	provisionStore := provision.NewPersistentStore(filepath.Join(filepath.Dir(cfg.DBPath), "provision-jobs.json"))
 	provisionDeps := provision.Deps{
 		Store:    provisionStore,
 		BaseCtx:  ctx,
@@ -256,10 +258,12 @@ func main() {
 	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
 	disp.SetCovered(repairs.TakeCovered)
 	disp.SetHardHook(repairs.Uncover)
+	// «Тише на час» в боте -- в память тревог, от которой правит починка.
+	cb.SetAlertMemory(disp)
 	repairEngine := &linkrepair.Deps{
 		Store:           provisionStore,
 		Probe:           *replaceEngine,
-		Source:          backend.RepairSource(cb, awg3Panels, d),
+		Source:          backend.RepairSource(cb, awg3Panels, d, cfg.Telegram.AdminUserID),
 		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, logger.With("component", "linkrepair")),
@@ -280,6 +284,7 @@ func main() {
 		BackupStatus: backend.NewBackupStatusSource(backup.StatusPath(cfg.DBPath), nil),
 		DB:           d,
 		Dispatcher:   disp,
+		AlertMemory:  disp,
 		Resumer:      watcher,
 		CommandSink:  cmdQueue,
 		// Кэш релизов апстрима: второй поход в GitHub сжёг бы лимит анонимного API.
@@ -417,6 +422,8 @@ func main() {
 	}()
 
 	rp := realert.NewPoller(d, tgClient, realertConfig(cfg))
+	// Тревога, не дошедшая никому, повторяется карточкой самой тревоги.
+	rp.SetHardDeliverer(disp)
 	go func() {
 		if err := rp.Run(ctx); err != nil {
 			logger.Error("realert poller exited", "err", err)
