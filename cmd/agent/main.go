@@ -154,6 +154,7 @@ func main() {
 		// Общий замок с cron-обновлением пакетов (AGENT-14).
 		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
+	refreshOpkgCronScript(logger)
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
 	runner.ExitProbeNow = signals.prober.ProbeNow
 	if unstickWatcher != nil {
@@ -311,12 +312,31 @@ func unstickThreshold(n int) time.Duration {
 const opkgLockAbandonedAfter = 2 * time.Hour
 
 // upgradeInProgress -- идёт ли автообновление пакетов по cron: замок занят
-// живым владельцем (pid из замка), а без pid -- каталог моложе 2 ч. Замок
-// мёртвого владельца брошен сразу (AG-06). Само обновление перезапускает
-// awg-manager -- сторожу в это время лечить нечего.
+// (pid из замка жив, а без pid -- по возрасту) и каталог моложе 2 ч. Замок
+// мёртвого владельца брошен сразу (AG-06); живой или переиспользованный pid
+// глушит сторожа не дольше прежнего потолка 2 ч. Само обновление
+// перезапускает awg-manager -- сторожу в это время лечить нечего.
 func upgradeInProgress(dir string, now func() time.Time) func() bool {
 	return func() bool {
-		return actions.MkdirLockState(dir, now(), opkgLockAbandonedAfter).Held()
+		t := now()
+		if !actions.MkdirLockState(dir, t, opkgLockAbandonedAfter).Held() {
+			return false
+		}
+		fi, err := os.Stat(dir)
+		return err == nil && t.Sub(fi.ModTime()) < opkgLockAbandonedAfter
+	}
+}
+
+// refreshOpkgCronScript -- уже установленный cron-скрипт автообновления
+// переписывается текущим текстом (иначе старый скрипт без kill -0 жил бы до
+// opkg_cron_install). Не установлен -- не ставит.
+func refreshOpkgCronScript(log *slog.Logger) {
+	changed, err := (&actions.OpkgCronManager{}).RefreshScript()
+	switch {
+	case err != nil:
+		log.Warn("opkg cron: обновить скрипт не удалось", "err", err)
+	case changed:
+		log.Info("opkg cron: скрипт обновлён до текущей версии")
 	}
 }
 

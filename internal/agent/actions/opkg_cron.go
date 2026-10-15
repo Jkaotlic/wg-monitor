@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -419,4 +420,26 @@ func (m *OpkgCronManager) maxLogKB() int64 {
 		return m.MaxLogKB
 	}
 	return defaultOpkgCronMaxLogKB
+}
+
+// RefreshScript переписывает уже установленный скрипт текущим текстом
+// (атомарно: запущенный по cron sh дочитывает старый файл). Скрипта нет
+// (автообновление не включено) -- ничего не ставит; текст тот же -- не
+// трогает. changed -- файл переписан.
+func (m *OpkgCronManager) RefreshScript() (changed bool, err error) {
+	cur, err := os.ReadFile(m.scriptPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	want := m.scriptText()
+	if string(cur) == want {
+		return false, nil
+	}
+	if err := writeFileAtomic(m.scriptPath(), []byte(want), 0o755); err != nil {
+		return false, fmt.Errorf("rewrite script: %w", err)
+	}
+	return true, nil
 }

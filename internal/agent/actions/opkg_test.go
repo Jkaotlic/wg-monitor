@@ -693,3 +693,56 @@ func TestOpkgCronScript_AbandonedLockTakenOver(t *testing.T) {
 		}
 	})
 }
+
+// Ревью AG-06: уже установленный cron-скрипт старого образца переписывается
+// при старте агента; одинаковый не трогается; не установленный не ставится.
+func TestOpkgCron_RefreshScript(t *testing.T) {
+	t.Run("outdated is rewritten", func(t *testing.T) {
+		d := t.TempDir()
+		m := &OpkgCronManager{ScriptPath: filepath.Join(d, "opkg-auto-upgrade.sh")}
+		if err := os.WriteFile(m.ScriptPath, []byte("#!/bin/sh\nmkdir \"$LOCK\" || exit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		changed, err := m.RefreshScript()
+		if err != nil || !changed {
+			t.Fatalf("changed=%v err=%v", changed, err)
+		}
+		b, _ := os.ReadFile(m.ScriptPath)
+		if string(b) != m.scriptText() {
+			t.Fatal("script not rewritten to the current text")
+		}
+		if st, _ := os.Stat(m.ScriptPath); st.Mode().Perm() != 0o755 {
+			t.Fatalf("mode = %v", st.Mode().Perm())
+		}
+		if changed, err := m.RefreshScript(); err != nil || changed {
+			t.Fatalf("second run: changed=%v err=%v (must be idempotent)", changed, err)
+		}
+	})
+	t.Run("current is untouched", func(t *testing.T) {
+		d := t.TempDir()
+		m := &OpkgCronManager{ScriptPath: filepath.Join(d, "opkg-auto-upgrade.sh")}
+		if err := os.WriteFile(m.ScriptPath, []byte(m.scriptText()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(m.ScriptPath, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := m.RefreshScript(); err != nil || changed {
+			t.Fatalf("changed=%v err=%v", changed, err)
+		}
+		if st, _ := os.Stat(m.ScriptPath); !st.ModTime().Equal(old) {
+			t.Fatal("equal script was rewritten")
+		}
+	})
+	t.Run("not installed stays absent", func(t *testing.T) {
+		d := t.TempDir()
+		m := &OpkgCronManager{ScriptPath: filepath.Join(d, "opkg-auto-upgrade.sh")}
+		if changed, err := m.RefreshScript(); err != nil || changed {
+			t.Fatalf("changed=%v err=%v", changed, err)
+		}
+		if _, err := os.Stat(m.ScriptPath); !os.IsNotExist(err) {
+			t.Fatalf("script installed where it was not: %v", err)
+		}
+	})
+}

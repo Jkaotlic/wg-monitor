@@ -121,6 +121,13 @@ func TestUpgradeInProgress_OwnerPid(t *testing.T) {
 	if !f() {
 		t.Error("lock of a live owner must mean an upgrade is running")
 	}
+	// живой (или переиспользованный) pid держит не дольше прежнего потолка 2 ч
+	if err := os.Chtimes(dir, now.Add(-3*time.Hour), now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if f() {
+		t.Error("live-pid lock older than 2h must not silence the watcher")
+	}
 }
 
 func TestRunUnstick_NilIsNoop(t *testing.T) {
