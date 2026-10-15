@@ -67,6 +67,7 @@ func TestApiErrorCarriesRetryAfter(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	recordPauses(c) // 17 с -- под потолком: клиент повторяет, но не спит в тесте
 	_, err := c.SendMessage(context.Background(), -100, nil, "x", "", nil)
 	delay, ok := RateLimitDelay(err)
 	if !ok {
