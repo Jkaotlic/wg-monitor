@@ -3,6 +3,8 @@ package actions
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
@@ -26,9 +28,16 @@ var (
 // до tunnelPowerSettle: «запущен» -- только увидев running, «остановлен» --
 // только увидев остановленный. Не дошёл -- partial с настоящим состоянием.
 func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (status, output string) {
+	// name -- имя туннеля для ответа владельцу (M-2): мини-апп показывает
+	// «не подтвердилось» дословно, id и текст ошибки там не к месту.
+	var name string
 	if on {
 		// Чтение не вышло -- запускаем как раньше: правду скажет перечитывание.
-		if cur, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil && !cur.Enabled {
+		cur, err := getTunnel(ctx, r.AwgClient, tunnelID)
+		if err == nil {
+			name = cur.Name
+		}
+		if err == nil && !cur.Enabled {
 			if err := r.AwgClient.ToggleEnabled(ctx, tunnelID); err != nil {
 				return "err", fmt.Sprintf("tunnel_power %s: enable: %v", tunnelID, err)
 			}
@@ -87,9 +96,21 @@ func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (sta
 	}
 	secs := int(tunnelPowerSettle / time.Second)
 	if last == nil {
-		return "partial", fmt.Sprintf("туннель %s: команду роутер принял, но состояние прочитать не удалось (%v) — проверьте экран туннелей", tunnelID, lastErr)
+		slog.Warn("tunnel_power: состояние после команды не прочиталось", "tunnel_id", tunnelID, "on", on, "err", lastErr)
+		return "partial", fmt.Sprintf("%s: команду роутер принял, но состояние прочитать не удалось — проверьте экран туннелей", tunnelWord(name))
 	}
-	return "partial", fmt.Sprintf("туннель %s %s за %d с: сейчас %s", tunnelID, verb, secs, tunnelStateWords(last))
+	if last.Name != "" {
+		name = last.Name
+	}
+	return "partial", fmt.Sprintf("%s %s за %d с: сейчас %s", tunnelWord(name), verb, secs, tunnelStateWords(last))
+}
+
+// tunnelWord -- «туннель «имя»», без имени -- просто «туннель».
+func tunnelWord(name string) string {
+	if name = strings.TrimSpace(name); name == "" {
+		return "туннель"
+	}
+	return "туннель «" + name + "»"
 }
 
 // tunnelStateWords -- состояние туннеля словами для ответа владельцу.

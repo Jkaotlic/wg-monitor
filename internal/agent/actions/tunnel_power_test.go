@@ -31,6 +31,8 @@ type powerFake struct {
 	stopTo string
 	calls  []string
 	gets   int
+	// getFail -- чтение туннеля после команды отвечает 500.
+	getFail bool
 }
 
 func (f *powerFake) handler(t *testing.T) http.Handler {
@@ -43,6 +45,11 @@ func (f *powerFake) handler(t *testing.T) http.Handler {
 		switch r.URL.Path {
 		case "/api/tunnels/get":
 			f.gets++
+			if f.getFail && len(f.calls) > 0 {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"success":false,"error":"internal: db locked"}`))
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"success":true,"data":{"id":"awg11","name":"nl","status":%q,"enabled":%v}}`, f.status, f.enabled)
 			return
 		case "/api/control/start":
@@ -251,4 +258,28 @@ func TestRunner_ReportNowGetsOwnContext(t *testing.T) {
 	if left := time.Until(gotDeadline); left < 10*time.Second {
 		t.Fatalf("report ctx has only %v left: bound to the action deadline", left)
 	}
+}
+
+// M-2: ответ «не подтвердилось» мини-апп показывает владельцу дословно --
+// в нём имя туннеля, а не id, и нет сырого текста ошибки.
+func TestRunner_TunnelPower_PartialSpeaksToOwner(t *testing.T) {
+	t.Run("state", func(t *testing.T) {
+		f := &powerFake{enabled: true, status: "stopped", startTo: "starting"}
+		res := runPower(powerRunner(t, f), true)
+		if res.Status != "partial" || strings.Contains(res.Output, "awg11") || !strings.Contains(res.Output, "«nl»") {
+			t.Fatalf("status=%q output=%q", res.Status, res.Output)
+		}
+	})
+	t.Run("read failed", func(t *testing.T) {
+		f := &powerFake{enabled: false, status: "running", getFail: true}
+		res := runPower(powerRunner(t, f), false)
+		if res.Status != "partial" {
+			t.Fatalf("status=%q output=%q", res.Status, res.Output)
+		}
+		for _, bad := range []string{"awg11", "500", "internal", "db locked", "awgmgr", "("} {
+			if strings.Contains(res.Output, bad) {
+				t.Fatalf("в тексте владельцу %q: %q", bad, res.Output)
+			}
+		}
+	})
 }

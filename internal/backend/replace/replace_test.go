@@ -593,7 +593,7 @@ func TestReplace_RetirePartialSaysNotConfirmed(t *testing.T) {
 		"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
 		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
 		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
-		"tunnel_power":     {Status: "partial", Output: "туннель awg11 не остановился за 15 с: сейчас останавливается"},
+		"tunnel_power":     {Status: "partial", Output: "туннель «nl» не остановился за 15 с: сейчас останавливается"},
 	}}
 	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &noteLog{})
 	id, err := d.Start(startReq())
@@ -625,7 +625,7 @@ func TestReplace_FinishNoteFollowsRetireOutcome(t *testing.T) {
 		reply wire.CommandResult
 		want  string
 	}{
-		{"partial", wire.CommandResult{Status: "partial", Output: "туннель awg11 не остановился за 15 с: сейчас останавливается"}, "не подтвердилось"},
+		{"partial", wire.CommandResult{Status: "partial", Output: "туннель «nl» не остановился за 15 с: сейчас останавливается"}, "не подтвердилось"},
 		{"err", wire.CommandResult{Status: "err", Output: "tunnel_power awg11: HTTP 500"}, "остался включённым"},
 	}
 	for _, tc := range cases {
