@@ -110,6 +110,8 @@ var (
 		"awgm_update":    true, "service_restart": true,
 		"firmware_install": true, "self_update": true,
 		"opkg_upgrade": true, // обновляет и перезапускает awg-manager
+		// после правки фидов -- тот же SmartUpgrade, полный opkg upgrade (AG-04)
+		"opkg_feed_disable": true,
 	}
 )
 
@@ -130,6 +132,9 @@ type Watcher struct {
 	unknown     map[string]string // id -> незнакомый статус, уже записанный в журнал
 	lastSaved   []byte
 	pausedUntil time.Time // после прерванной лесенки до конца окна; не сохраняется
+	// wasUpgrading -- на прошлом опросе шло cron-обновление: его конец
+	// заводит окно тишины, как команда по всему роутеру (AG-04)
+	wasUpgrading bool
 }
 
 func New(cfg Config, d Deps) *Watcher {
@@ -231,6 +236,11 @@ func (w *Watcher) observe(tunnels []awgmgr.Tunnel, now time.Time) []*due {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.ready = true
+	if w.wasUpgrading && !upgrading {
+		// обновление только что кончилось: awg-manager ещё поднимает туннели
+		w.cmdRouter = now
+	}
+	w.wasUpgrading = upgrading
 	seen := map[string]bool{}
 	var out []*due
 	for _, t := range tunnels {
@@ -496,6 +506,7 @@ func (w *Watcher) serviceDecision(allowRun bool) serviceVerdict {
 		// cron-обновление пакетов само перезапускает awg-manager: молчим,
 		// как при команде бэкенда
 		w.pausedUntil = now.Add(w.cfg.GuardWindow)
+		w.wasUpgrading = true
 		return serviceAbort
 	}
 	// перезапуск службы трогает все туннели: молчим при любой свежей команде

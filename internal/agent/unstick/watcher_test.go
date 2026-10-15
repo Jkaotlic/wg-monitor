@@ -648,7 +648,9 @@ func TestTick_RouterWideCommandSilencesAll(t *testing.T) {
 	if c := h.awg.callList(); len(c) != 0 {
 		t.Fatalf("acted during router-wide command window: %v", c)
 	}
-	for _, a := range []string{"restart_tunnel", "service_restart", "firmware_install", "self_update", "opkg_upgrade"} {
+	for _, a := range []string{"restart_tunnel", "service_restart", "firmware_install", "self_update", "opkg_upgrade",
+		// AG-04: после правки фидов -- полный opkg upgrade с перезапуском awg-manager
+		"opkg_feed_disable"} {
 		h2 := newHarness(tun("a", "broken", true))
 		h2.w.Tick(ctx)
 		h2.w.NoteCommand(wire.Command{Action: a})
@@ -855,9 +857,18 @@ func TestTick_UpgradeInProgressSilencesWatcher(t *testing.T) {
 		t.Fatalf("watcher acted during opkg upgrade: %v", c)
 	}
 	upgrading = false
+	// AG-04: обновление только что кончилось -- awg-manager ещё поднимает
+	// туннели: окно тишины GuardWindow от конца обновления
+	h.w.Tick(ctx)
+	h.clk.advance(9 * time.Minute)
+	h.w.Tick(ctx)
+	if c := h.awg.callList(); len(c) != 0 {
+		t.Fatalf("watcher acted right after the upgrade ended: %v", c)
+	}
+	h.clk.advance(2 * time.Minute)
 	h.w.Tick(ctx)
 	if c := h.awg.callList(); len(c) == 0 {
-		t.Fatal("watcher stayed silent after the upgrade ended")
+		t.Fatal("watcher stayed silent after the post-upgrade window")
 	}
 }
 
