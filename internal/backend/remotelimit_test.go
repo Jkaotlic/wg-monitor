@@ -327,3 +327,26 @@ func TestRemoteRateLimitSuccessfulEntriesDoNotSpendTokens(t *testing.T) {
 		t.Fatalf("неудачи не тратят токены: %d", c)
 	}
 }
+
+// Отказанный собственным ведёрком запрос общий потолок не расходует.
+func TestRemoteRateLimitRefusedClientDoesNotDrainBackstop(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusUnauthorized)
+	proxy := "192.168.1.1:5"
+	for i := 0; i < 100; i++ {
+		hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.5"})
+	}
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.6"}); c != http.StatusUnauthorized {
+		t.Fatalf("второй клиент заперт чужим натиском: %d", c)
+	}
+}
+
+func TestClientRateKeyIgnoresRealIPEntirely(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "127.0.0.1:4242"
+	r.Header.Set("X-Real-IP", "203.0.113.7")
+	if got := clientRateKey(r); got != "127.0.0.1" {
+		t.Fatalf("key = %q, want 127.0.0.1", got)
+	}
+}

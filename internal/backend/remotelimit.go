@@ -171,11 +171,11 @@ func trustedHop(ip net.IP) bool {
 }
 
 // clientRateKey -- ключ лимита: настоящий клиент, а не прокси перед нами.
-// X-Forwarded-For читается ТОЛЬКО если RemoteAddr -- доверенный
-// прокси (иначе заголовок подделывается одной строкой). В XFF идём справа
-// налево и берём первый недоверенный адрес: клиент может дописать свои
-// адреса слева, но справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при проброске заголовков прокси он целиком
-// в руках клиента. Нет годного
+// X-Forwarded-For читается ТОЛЬКО если RemoteAddr -- доверенный прокси (иначе
+// заголовок подделывается одной строкой). В XFF идём справа налево и берём
+// первый недоверенный адрес: клиент может дописать свои адреса слева, но
+// справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при
+// проброске заголовков прокси он целиком в руках клиента. Нет годного
 // заголовка -- RemoteAddr.
 func clientRateKey(r *http.Request) string {
 	remote := remoteRateKey(r.RemoteAddr)
@@ -252,9 +252,15 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := clientRateKey(r)
-			ok, retry := l.backstop.Allow(r.RemoteAddr)
+			// Сначала ведёрко самого клиента: отказанный им же запрос общий
+			// потолок не расходует, иначе один настойчивый клиент запер бы
+			// всех, кто идёт через тот же прокси.
+			ok, retry := l.Allow(key)
 			if ok {
-				ok, retry = l.Allow(key)
+				if bok, bretry := l.backstop.Allow(r.RemoteAddr); !bok {
+					l.refund(key)
+					ok, retry = false, bretry
+				}
 			}
 			if !ok {
 				secs := int(retry.Round(time.Second).Seconds())
