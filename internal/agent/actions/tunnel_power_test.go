@@ -33,6 +33,8 @@ type powerFake struct {
 	gets   int
 	// getFail -- чтение туннеля после команды отвечает 500.
 	getFail bool
+	// ctrlFail -- путь управления (start/stop/toggle-enabled) отвечает 500.
+	ctrlFail string
 }
 
 func (f *powerFake) handler(t *testing.T) http.Handler {
@@ -51,6 +53,11 @@ func (f *powerFake) handler(t *testing.T) http.Handler {
 				return
 			}
 			_, _ = fmt.Fprintf(w, `{"success":true,"data":{"id":"awg11","name":"nl","status":%q,"enabled":%v}}`, f.status, f.enabled)
+			return
+		case f.ctrlFail:
+			f.calls = append(f.calls, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"success":false,"error":"internal: ndm busy"}`))
 			return
 		case "/api/control/start":
 			if f.enabled {
@@ -282,4 +289,33 @@ func TestRunner_TunnelPower_PartialSpeaksToOwner(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Ревью M-2: отказ роутера (err) мини-апп тоже показывает дословно -- имя
+// туннеля вместо id, без сырого текста ошибки.
+func TestRunner_TunnelPower_ErrSpeaksToOwner(t *testing.T) {
+	for name, c := range map[string]struct {
+		f    *powerFake
+		on   bool
+		verb string
+	}{
+		"start":  {&powerFake{enabled: true, status: "stopped", ctrlFail: "/api/control/start"}, true, "запустить"},
+		"enable": {&powerFake{enabled: false, status: "stopped", ctrlFail: "/api/control/toggle-enabled"}, true, "запустить"},
+		"stop":   {&powerFake{enabled: true, status: "running", ctrlFail: "/api/control/stop"}, false, "остановить"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := runPower(powerRunner(t, c.f), c.on)
+			if res.Status != "err" {
+				t.Fatalf("status=%q output=%q", res.Status, res.Output)
+			}
+			if !strings.Contains(res.Output, "«nl»") || !strings.Contains(res.Output, c.verb) {
+				t.Fatalf("нет имени туннеля или действия: %q", res.Output)
+			}
+			for _, bad := range []string{"awg11", "500", "internal", "ndm busy", "awgmgr", "tunnel_power"} {
+				if strings.Contains(res.Output, bad) {
+					t.Fatalf("в тексте владельцу %q: %q", bad, res.Output)
+				}
+			}
+		})
+	}
 }

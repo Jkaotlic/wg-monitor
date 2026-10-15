@@ -626,7 +626,7 @@ func TestReplace_FinishNoteFollowsRetireOutcome(t *testing.T) {
 		want  string
 	}{
 		{"partial", wire.CommandResult{Status: "partial", Output: "туннель «nl» не остановился за 15 с: сейчас останавливается"}, "не подтвердилось"},
-		{"err", wire.CommandResult{Status: "err", Output: "tunnel_power awg11: HTTP 500"}, "остался включённым"},
+		{"err", wire.CommandResult{Status: "err", Output: "Роутер не смог остановить туннель «nl» — повторите или проверьте экран туннелей"}, "остался включённым"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

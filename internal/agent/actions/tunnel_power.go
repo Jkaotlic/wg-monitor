@@ -39,14 +39,14 @@ func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (sta
 		}
 		if err == nil && !cur.Enabled {
 			if err := r.AwgClient.ToggleEnabled(ctx, tunnelID); err != nil {
-				return "err", fmt.Sprintf("tunnel_power %s: enable: %v", tunnelID, err)
+				return "err", r.tunnelPowerRefused(ctx, tunnelID, name, on, "enable", err)
 			}
 		}
 		if err := r.AwgClient.StartTunnel(ctx, tunnelID); err != nil {
-			return "err", fmt.Sprintf("tunnel_power %s: %v", tunnelID, err)
+			return "err", r.tunnelPowerRefused(ctx, tunnelID, name, on, "start", err)
 		}
 	} else if err := r.AwgClient.StopTunnel(ctx, tunnelID); err != nil {
-		return "err", fmt.Sprintf("tunnel_power %s: %v", tunnelID, err)
+		return "err", r.tunnelPowerRefused(ctx, tunnelID, name, on, "stop", err)
 	}
 
 	reached := func(t *awgmgr.Tunnel) bool {
@@ -103,6 +103,23 @@ func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (sta
 		name = last.Name
 	}
 	return "partial", fmt.Sprintf("%s %s за %d с: сейчас %s", tunnelWord(name), verb, secs, tunnelStateWords(last))
+}
+
+// tunnelPowerRefused -- ответ владельцу, когда awg-manager отказал в
+// команде: имя туннеля (дочитывается, если ещё не известно) и что делать,
+// без id и сырого текста ошибки -- он уходит в журнал агента (M-2).
+func (r *Runner) tunnelPowerRefused(ctx context.Context, tunnelID, name string, on bool, step string, err error) string {
+	slog.Warn("tunnel_power: awg-manager отказал", "tunnel_id", tunnelID, "step", step, "err", err)
+	if name == "" {
+		if t, gerr := getTunnel(ctx, r.AwgClient, tunnelID); gerr == nil {
+			name = t.Name
+		}
+	}
+	verb := "остановить"
+	if on {
+		verb = "запустить"
+	}
+	return fmt.Sprintf("Роутер не смог %s %s — повторите или проверьте экран туннелей", verb, tunnelWord(name))
 }
 
 // tunnelWord -- «туннель «имя»», без имени -- просто «туннель».
