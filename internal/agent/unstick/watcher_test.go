@@ -298,13 +298,15 @@ func TestTick_EmptyRecheckListIsNotFixedNotGone(t *testing.T) {
 		return nil
 	}
 	h.w.Tick(ctx)
-	if h.services != 1 {
-		t.Fatalf("empty list must act like a read error and escalate; services=%d", h.services)
+	// AG-03: пустой список -- сбой чтения, а сбой чтения -- не вердикт
+	if h.services != 0 {
+		t.Fatalf("empty list must act like a read error and not escalate; services=%d", h.services)
 	}
-	for _, e := range h.w.Facts().Events {
-		if e.Result == wire.UnstickFixed {
-			t.Fatalf("fixed without proof: %+v", e)
-		}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without proof: %+v", f.Events)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without proof: %+v", s.GaveUp)
 	}
 }
 
@@ -497,19 +499,87 @@ func TestTick_TwoStuck_OneServiceRestart(t *testing.T) {
 	}
 }
 
+// AG-03: неудачное чтение -- не вердикт. После ступени 1 awg-manager не
+// ответил ни разу (и на повторах) -- на ступень 2 не идём, «починил» и
+// «сдался» не говорим; since не сброшен -- следующий тик решает сам.
 func TestTick_RecheckErrorIsNotFixed(t *testing.T) {
 	h := newHarness(tun("nwg0", "broken", true))
 	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.readErr = errors.New("connection refused") }
 	h.w.Tick(ctx)
 	h.clk.advance(61 * time.Second)
+	readsBefore := h.awg.reads
 	h.w.Tick(ctx)
-	for _, e := range h.w.Facts().Events {
-		if e.Result == wire.UnstickFixed {
-			t.Fatalf("fixed without proof: %+v", e)
-		}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without a read: %+v", f.Events)
+	}
+	if h.services != 0 {
+		t.Fatalf("unread after step 1 must not escalate; services=%d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without a read: %+v", s.GaveUp)
+	}
+	// 1 опрос + 3 попытки перечитать (первая и два повтора)
+	if n := h.awg.reads - readsBefore; n != 4 {
+		t.Fatalf("reads in the tick = %d; want 4 (poll + recheck with 2 retries)", n)
+	}
+	// awg-manager снова отвечает, туннель всё ещё завис: since прежний --
+	// лесенка сразу, без нового ожидания порога
+	h.awg.mu.Lock()
+	h.awg.readErr = nil
+	h.awg.onAction = nil
+	h.awg.mu.Unlock()
+	h.clk.advance(30 * time.Second)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 2 {
+		t.Fatalf("restarts = %d; want 2 (since kept)", n)
 	}
 	if h.services != 1 {
-		t.Errorf("unread after step 1 must escalate; services=%d", h.services)
+		t.Fatalf("read still stuck must escalate; services=%d", h.services)
+	}
+}
+
+// AG-03: один неудачный ответ после ступени 1 -- повтор чтения, и по
+// прочитанному «вышел» -- починил, без перезапуска службы.
+func TestTick_RecheckTransientErrorRetried(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.awg.onAction = func(_, _ string, tn *awgmgr.Tunnel) {
+		tn.Status = "running"
+		h.awg.failReads = 1
+	}
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if h.services != 0 {
+		t.Fatalf("one failed read escalated to a service restart; services=%d", h.services)
+	}
+	f := h.w.Facts()
+	if f == nil || len(f.Events) != 1 || f.Events[0].Result != wire.UnstickFixed {
+		t.Fatalf("facts: %+v", f)
+	}
+}
+
+// AG-03: после ступени 2 awg-manager не отвечает (ещё поднимается) --
+// без «сдался» и без события: тревогу о туннеле без чтения не шлём.
+func TestTick_RecheckErrorAfterServiceIsNotGaveUp(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.w.Deps().RestartService = func(context.Context) error {
+		h.services++
+		h.awg.mu.Lock()
+		h.awg.readErr = errors.New("connection refused")
+		h.awg.mu.Unlock()
+		return nil
+	}
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	h.w.Tick(ctx)
+	if h.services != 1 {
+		t.Fatalf("services = %d", h.services)
+	}
+	if s := h.w.Snapshot(); len(s.GaveUp) != 0 {
+		t.Fatalf("gave up without a read after the service restart: %+v", s.GaveUp)
+	}
+	if f := h.w.Facts(); f != nil {
+		t.Fatalf("event without a read: %+v", f.Events)
 	}
 }
 

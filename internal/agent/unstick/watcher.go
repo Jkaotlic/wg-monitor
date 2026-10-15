@@ -92,6 +92,10 @@ const (
 	// лесенка не лечит причину, сторож сдаётся сразу.
 	flapFixes  = 3
 	flapWindow = time.Hour
+	// recheckRetries повторов чтения через recheckPause, если awg-manager не
+	// ответил: неудачное чтение -- не вердикт (AG-03); в сумме до ~60 с.
+	recheckRetries = 2
+	recheckPause   = 30 * time.Second
 )
 
 // Команды бэкенда, после которых сторож молчит GuardWindow: по одному
@@ -327,7 +331,12 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	if err := w.sleep(ctx, w.cfg.Verify1); err != nil {
 		return
 	}
-	list = w.recheck(ctx, list, start)
+	list, read := w.recheck(ctx, list, start)
+	if !read {
+		// awg-manager так и не ответил: «всё ещё завис» не доказано -- на
+		// ступень 2 не идём; since не тронут, решит следующий опрос
+		return
+	}
 	if len(list) == 0 {
 		return
 	}
@@ -355,7 +364,12 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 		if err := w.sleep(ctx, w.cfg.Verify2); err != nil {
 			return
 		}
-		list = w.recheck(ctx, list, start)
+		if list, read = w.recheck(ctx, list, start); !read {
+			// awg-manager после перезапуска ещё не отвечает: тревогу «сдался»
+			// по туннелю без чтения не шлём, это покажет проверка awg_manager
+			w.log.Warn("unstick: после перезапуска awg-manager не ответил -- без вердикта")
+			return
+		}
 	}
 	now := w.now()
 	w.mu.Lock()
@@ -409,19 +423,32 @@ func (w *Watcher) apply(ctx context.Context, id string, r Remedy) string {
 }
 
 // recheck перечитывает туннели; вышедшие -- событие fixed, удалённые --
-// забыты, остальные возвращаются со свежим состоянием. Не прочитали --
-// никто не вышел (без доказательства «починил» не говорим).
-func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) []*due {
-	all, err := w.d.AWG.TunnelsAll(ctx)
-	if err != nil {
-		w.log.Warn("unstick: перечитать не удалось", "err", err)
-		return list
+// забыты, остальные возвращаются со свежим состоянием. Не прочитали (и на
+// повторах) -- read=false и список как был: ни «починил», ни «завис».
+func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) (rest []*due, read bool) {
+	var all *awgmgr.TunnelsAll
+	for try := 0; ; try++ {
+		var err error
+		all, err = w.d.AWG.TunnelsAll(ctx)
+		switch {
+		case err != nil:
+			w.log.Warn("unstick: перечитать не удалось", "err", err, "try", try+1)
+		case len(all.Tunnels) == 0:
+			// пустой список при удачном чтении -- не доказательство ни «починил», ни «удалён»
+			w.log.Warn("unstick: перечитывание вернуло пустой список -- считаю сбоем чтения", "try", try+1)
+		default:
+			return w.recheckApply(list, all, start), true
+		}
+		if try >= recheckRetries {
+			return list, false
+		}
+		if err := w.sleep(ctx, recheckPause); err != nil {
+			return list, false
+		}
 	}
-	if len(all.Tunnels) == 0 {
-		// пустой список при удачном чтении -- не доказательство ни «починил», ни «удалён»
-		w.log.Warn("unstick: перечитывание вернуло пустой список -- считаю сбоем чтения")
-		return list
-	}
+}
+
+func (w *Watcher) recheckApply(list []*due, all *awgmgr.TunnelsAll, start time.Time) []*due {
 	byID := map[string]awgmgr.Tunnel{}
 	for _, t := range all.Tunnels {
 		byID[t.ID] = t
