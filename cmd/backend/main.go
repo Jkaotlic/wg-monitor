@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -187,7 +188,9 @@ func main() {
 	// survives that handler returning (see provision.Deps' own doc). LastSeen
 	// reads the exact column POST /v1/report updates (provisionLastSeen, this
 	// package) — anything else would make verify_online lag or miss reports.
-	provisionStore := provision.NewStore()
+	// Задания хранятся в каталоге базы (том): после перезапуска экран знает,
+	// что установку оборвало, а не «завершилась 30 минут назад».
+	provisionStore := provision.NewPersistentStore(filepath.Join(filepath.Dir(cfg.DBPath), "provision-jobs.json"))
 	provisionDeps := provision.Deps{
 		Store:    provisionStore,
 		BaseCtx:  ctx,
