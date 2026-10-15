@@ -25,8 +25,10 @@ const (
 )
 
 type sentCmd struct {
-	Action string
-	Args   map[string]any
+	Action    string
+	Args      map[string]any
+	IssuedAt  time.Time
+	ExpiresAt time.Time
 }
 
 // scriptCommander -- поддельный агент. Состояние упавшего VPN-туннеля awg12
@@ -63,7 +65,7 @@ func (c *scriptCommander) Enqueue(_ int64, cmd wire.Command) error {
 		c.byID = map[string]string{}
 		c.counts = map[string]int{}
 	}
-	c.sent = append(c.sent, sentCmd{Action: cmd.Action, Args: cmd.Args})
+	c.sent = append(c.sent, sentCmd{Action: cmd.Action, Args: cmd.Args, IssuedAt: cmd.IssuedAt, ExpiresAt: cmd.ExpiresAt})
 	c.byID[cmd.ID] = cmd.Action
 	c.counts[cmd.Action]++
 	if hook := c.on[cmd.Action]; hook != nil {
@@ -2034,5 +2036,87 @@ func TestLadder_PanelCauseNeverReachesOwner(t *testing.T) {
 	}
 	if final.Action != ActVPSPanel("Main") {
 		t.Fatalf("действие: %q", final.Action)
+	}
+}
+
+// ---- BE-01: срок команды и молчание роутера ----
+
+// Команда, которую починка перестала ждать, не должна выполниться позже
+// тайком: срок её жизни в очереди -- ровно срок ожидания ответа.
+func TestCommand_ExpiresWithAwait(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	c := newScript()
+	d := Deps{Commands: c, Now: func() time.Time { return now }, AwaitStep: 4 * time.Minute}
+
+	if _, err := d.command(context.Background(), 1, "tunnel_restart", map[string]any{"tunnel_id": "awg12"}); err != nil {
+		t.Fatalf("command: %v", err)
+	}
+	sent := c.all()
+	if len(sent) != 1 {
+		t.Fatalf("отправлено %d команд", len(sent))
+	}
+	if !sent[0].IssuedAt.Equal(now) || !sent[0].ExpiresAt.Equal(now.Add(4*time.Minute)) {
+		t.Fatalf("выдана %v, срок %v; ждали срок %v", sent[0].IssuedAt, sent[0].ExpiresAt, now.Add(4*time.Minute))
+	}
+}
+
+// Ждать ответа меньше, чем агенту отведено на замену конфига, -- считать
+// «не помогло» команду, которая ещё выполняется.
+func TestAwaitStep_DefaultCoversAgentImport(t *testing.T) {
+	got := Deps{}.awaitStep()
+	if got < agentImportBudget+time.Minute {
+		t.Fatalf("ожидание по умолчанию %v, а агенту на замену конфига отведено %v -- нужен запас", got, agentImportBudget)
+	}
+	if got < 6*time.Minute {
+		t.Fatalf("ожидание по умолчанию %v, ждали не меньше 6 минут", got)
+	}
+}
+
+// Роутер не ответил на замену конфига вовремя: выполнил ли он её, неизвестно.
+// Это не «не помогло» -- новую страну (место в подписке) лесенка не тратит,
+// стоп «нужен человек» не ставит.
+func TestLadder_ImportSilentNoNewCountry(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.cmd.silent = map[string]bool{"tunnel_import": true}
+
+	job, final := e.run(t, ladderReq())
+
+	if sp := e.spentMarks(); len(sp) != 0 {
+		t.Fatalf("новая страна потрачена, хотя роутер просто не ответил: %v", sp)
+	}
+	for _, c := range e.src.got() {
+		if c == "issue:amnezia:de" {
+			t.Fatal("выпущена новая страна после молчания роутера")
+		}
+	}
+	if n := len(e.cmd.actions("tunnel_import")); n != 1 {
+		t.Fatalf("замен конфига %d, ждали одну -- вторая встала бы в очередь за первой", n)
+	}
+	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRouterLate {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("молчание роутера поставило стоп: %s", why)
+	}
+	wantSteps(t, job, map[string]provision.StepStatus{StepRecreate: provision.StepSkipped})
+}
+
+// Роутер не ответил на перезапуск: лесенка не ставит в очередь за ним замену
+// конфига, стоп не ставится.
+func TestLadder_RestartSilentStops(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.cmd.silent = map[string]bool{"tunnel_restart": true}
+
+	job, final := e.run(t, ladderReq())
+
+	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
+		t.Fatalf("замен конфига %d после молчания роутера", n)
+	}
+	if final.Kind != "need" || final.Action != ActRouterLate {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 }

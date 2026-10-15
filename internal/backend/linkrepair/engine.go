@@ -371,7 +371,12 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 
 	// Ступень 1. Поднять.
 	th.Progress(ctx, progressText(names, log, "перезапускаю VPN-туннель «"+names.broken+"»"))
-	if d.tryRestart(ctx, jobID, req, sc, names) {
+	restarted, silent := d.tryRestart(ctx, jobID, req, sc, names)
+	if silent {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
+		return
+	}
+	if restarted {
 		d.skip(jobID, "не понадобилось", StepReissue, StepRecreate)
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRestarted))
 		return
@@ -424,6 +429,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textReissued(set.Provider)))
 		return
 	}
+	if noAnswer(nh) {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
+		return
+	}
 	if nh != nil {
 		d.skip(jobID, "не понадобилось: источник ждёт человека", StepRecreate)
 		d.finishNeedHuman(ctx, jobID, req, th, names, log, nh.Action)
@@ -441,6 +450,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 			d.SaveOption(req.RouterID, sc.TunnelID, set.Provider, used.ID)
 		}
 		d.finishOK(ctx, jobID, req, th, moved, sc, names, append(log, textRecreated(set.Provider, optionLabel(used))))
+		return
+	}
+	if noAnswer(nh) {
+		d.finishNoAnswer(ctx, jobID, req, th, names, log)
 		return
 	}
 	if nh != nil {
@@ -470,21 +483,26 @@ func lastAction(set Setting) string {
 	}
 }
 
-// tryRestart -- ступень 1: перезапуск и доказательство.
-func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames) bool {
+// tryRestart -- ступень 1: перезапуск и доказательство. silent -- роутер
+// не ответил на перезапуск: занят, и ставить за ним в очередь замену конфига
+// нельзя.
+func (d Deps) tryRestart(ctx context.Context, jobID string, req StartReq, sc Scenario, names lineNames) (ok, silent bool) {
 	d.step(jobID, StepRestart, provision.StepActive, "перезапускаю VPN-туннель «"+names.broken+"»")
 	if _, err := d.command(ctx, req.RouterID, "tunnel_restart", map[string]any{"tunnel_id": sc.TunnelID}); err != nil {
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не прошёл: "+err.Error())
-		return false
+		return false, errors.Is(err, errNoAnswer)
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
 	if err != nil {
 		d.step(jobID, StepRestart, provision.StepFailed, "перезапуск не помог: "+err.Error())
-		return false
+		return false, false
 	}
 	d.step(jobID, StepRestart, provision.StepDone, "перезапустил, "+verdict)
-	return true
+	return true, false
 }
+
+// noAnswer -- ступень кончилась молчанием роутера, а не вердиктом.
+func noAnswer(nh *NeedHuman) bool { return nh != nil && errors.Is(nh, errNoAnswer) }
 
 // MinAgentExitProbe -- агент, который меряет адрес выхода по конкретному
 // VPN-туннелю (exit_ip_probe tunnel_id, v0.47). Старше -- мерить нечем:
@@ -564,6 +582,12 @@ func (d Deps) tryIssue(ctx context.Context, jobID, step string, req StartReq, sc
 		"target_id": sc.TunnelID,
 	}); err != nil {
 		d.step(jobID, step, provision.StepFailed, "заменить конфиг на роутере не вышло: "+err.Error())
+		if errors.Is(err, errNoAnswer) {
+			// Выполнил ли роутер замену, неизвестно: это не «не помогло», и
+			// следующая ступень (вторая замена в очередь за первой, новая
+			// страна) не начинается.
+			return false, &NeedHuman{Cause: errNoAnswer, Action: ActRouterLate}, false
+		}
 		return false, nil, false
 	}
 	verdict, err := d.prove(ctx, req, sc.TunnelID, names.broken)
@@ -672,6 +696,9 @@ func (d Deps) tryRecreate(ctx context.Context, jobID string, req StartReq, sc Sc
 		}
 		if imported {
 			d.saveUnconfirmed(req, sc, set.Provider, opt.ID)
+		}
+		if noAnswer(nh) {
+			return false, nh, Option{}
 		}
 		if nh != nil {
 			lastNH = nh
@@ -920,6 +947,22 @@ func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, t
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
 }
 
+// finishNoAnswer -- роутер не ответил на команду лесенки вовремя: он на связи
+// (снимок пришёл), но занят. Вердикта нет: стоп не ставится, дальше ступени
+// не идут, трафик остаётся там, где он сейчас.
+func (d Deps) finishNoAnswer(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string) {
+	d.skip(jobID, "не начинал — роутер не ответил вовремя", StepRestart, StepReissue, StepRecreate)
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
+	}
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = ActRouterLate
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), ActRouterLate)
+}
+
 // finishFail -- провал до лесенки (снимок, увод): шаг step провален с
 // причиной, остальные ступени не начинались.
 func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thread, step string, names lineNames, cause error, action string) {
@@ -973,11 +1016,17 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
+// agentImportBudget -- сколько агент отводит себе на tunnel_import
+// (internal/agent/actions/runner.go, actionTimeoutOverrides). Самое долгое
+// действие лесенки: ждать его меньше -- считать «не помогло» замену, которая
+// ещё идёт.
+const agentImportBudget = 300 * time.Second
+
 func (d Deps) awaitStep() time.Duration {
 	if d.AwaitStep > 0 {
 		return d.AwaitStep
 	}
-	return 3 * time.Minute
+	return agentImportBudget + time.Minute
 }
 
 func newCmdID() (string, error) {
@@ -996,12 +1045,17 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	if err != nil {
 		return nil, err
 	}
-	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: d.now().UTC()}
+	// Срок жизни в очереди -- срок ожидания: команда, которую перестали
+	// ждать, не выдаётся агенту позже и не выполняется тайком (очередь
+	// выбрасывает протухшие при выдаче).
+	issued := d.now().UTC()
+	wait := d.awaitStep()
+	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: issued, ExpiresAt: issued.Add(wait)}
 	if err := d.Commands.Enqueue(routerID, cmd); err != nil {
 		d.logCommandFailure(action, "enqueue", err.Error())
 		return nil, errors.New(replace.CommandNotSent)
 	}
-	res, ok := d.Commands.AwaitResult(ctx, routerID, id, d.awaitStep())
+	res, ok := d.Commands.AwaitResult(ctx, routerID, id, wait)
 	if !ok || res == nil {
 		d.logCommandFailure(action, "no answer", "")
 		return nil, errNoAnswer
