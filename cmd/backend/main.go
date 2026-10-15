@@ -256,6 +256,8 @@ func main() {
 	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
 	disp.SetCovered(repairs.TakeCovered)
 	disp.SetHardHook(repairs.Uncover)
+	// «Тише на час» в боте -- в память тревог, от которой правит починка.
+	cb.SetAlertMemory(disp)
 	repairEngine := &linkrepair.Deps{
 		Store:           provisionStore,
 		Probe:           *replaceEngine,
@@ -280,6 +282,7 @@ func main() {
 		BackupStatus: backend.NewBackupStatusSource(backup.StatusPath(cfg.DBPath), nil),
 		DB:           d,
 		Dispatcher:   disp,
+		AlertMemory:  disp,
 		Resumer:      watcher,
 		CommandSink:  cmdQueue,
 		// Кэш релизов апстрима: второй поход в GitHub сжёг бы лимит анонимного API.

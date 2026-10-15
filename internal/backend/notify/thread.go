@@ -31,6 +31,17 @@ type AlertTexts interface {
 	Last(routerID int64, checkName string) (text string, kb *tg.InlineKeyboardMarkup, ok bool)
 }
 
+// AlertMemory -- что человек сделал с тревогой в обход нити починки:
+// «Тише на час» в боте (statusLine -- строка «⏸ Уведомления скрыты до …»,
+// которой бот дополнил тревогу) или действие в приложении (statusLine пуст:
+// текст тревоги прежний, ответ ушёл отдельным сообщением). Кнопки под
+// тревогой в обоих случаях сняты. Реализует alerts.Dispatcher: следующая
+// правка нити починки собирается уже от этого текста и без снятых кнопок
+// (BOT-06).
+type AlertMemory interface {
+	NoteAlertAction(routerID int64, checkName, statusLine string)
+}
+
 // coveredFor -- сколько после «Починил» гасится ответ «восстановилось»:
 // проверка роутера приходит раз в минуту-две, порог восстановления -- пара
 // отчётов, и тридцати минут хватает с запасом.
@@ -348,6 +359,15 @@ func (t *repairThread) send(ctx context.Context, text string) {
 // флуд-контроля Telegram хуже пропущенной правки: следующий ход починки
 // поправит сообщение снова.
 func (t *repairThread) edit(ctx context.Context, ph repairPhase, block string, cur map[int64]bool) {
+	// Текст и кнопки тревоги -- свежие на каждую правку, а не снимок с Begin:
+	// «Тише на час» посреди починки дописывает строку и снимает кнопки
+	// (AlertMemory), и правка не должна их вернуть (BOT-06). Памяти уже нет
+	// («восстановилось» её забыло) -- правим от снимка.
+	if t.r.texts != nil {
+		if b, kb, ok := t.r.texts.Last(t.key.routerID, t.key.checkName); ok {
+			t.base, t.kb = b, kb
+		}
+	}
 	full := composeRepair(t.base, ph, block)
 	base := t.kb
 	if ph == phaseDone {

@@ -106,6 +106,11 @@ func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, checkName,
 	if d.MiniappTG == nil || statusLine == "" || checkName == "" {
 		return
 	}
+	// Кнопки снимаются ниже -- нить починки не должна вернуть их правкой
+	// (BOT-06). Текст тревоги прежний: ответ уходит отдельным сообщением.
+	if d.AlertMemory != nil {
+		d.AlertMemory.NoteAlertAction(routerID, checkName, "")
+	}
 	msgs, err := d.DB.AlertMessages().List(routerID, checkName)
 	if err != nil {
 		if d.Logger != nil {

@@ -130,6 +130,26 @@ func (di *Dispatcher) rememberHard(userID int64, checkName, text string, kb tg.I
 	di.lastHard[hardKey{userID, checkName}] = hardAlert{text: text, kb: kb}
 }
 
+// NoteAlertAction -- notify.AlertMemory: человек заглушил тревогу в боте
+// или ответил на неё в приложении. Память тревоги дополняется строкой
+// statusLine (пустая -- текст прежний) и теряет кнопки, как сама тревога в
+// Telegram: нить починки правит уже от этого (BOT-06). Тревоги в памяти нет
+// (перезапуск, «восстановилось») -- делать нечего.
+func (di *Dispatcher) NoteAlertAction(userID int64, checkName, statusLine string) {
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	key := hardKey{userID, checkName}
+	a, ok := di.lastHard[key]
+	if !ok {
+		return
+	}
+	if statusLine != "" {
+		a.text += "\n\n" + statusLine
+	}
+	a.kb = tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+	di.lastHard[key] = a
+}
+
 func (di *Dispatcher) forgetHard(userID int64, checkName string) {
 	di.mu.Lock()
 	defer di.mu.Unlock()
@@ -422,4 +442,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 }
 
 // Диспетчер -- память тревог для нити починки.
-var _ notify.AlertTexts = (*Dispatcher)(nil)
+var (
+	_ notify.AlertTexts  = (*Dispatcher)(nil)
+	_ notify.AlertMemory = (*Dispatcher)(nil)
+)

@@ -18,6 +18,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
@@ -379,6 +380,10 @@ type Deps struct {
 	// a breadcrumb on the original Telegram alert (best-effort). Nil disables
 	// the sync (the DB write still happens). Wired from the shared *tg.Client.
 	MiniappTG MiniappTGClient
+	// AlertMemory -- память тревог диспетчера: снятие кнопок из приложения
+	// сообщается ей, чтобы нить починки не вернула их правкой (BOT-06). nil
+	// -- не сообщать.
+	AlertMemory notify.AlertMemory
 	// MuteCutoffHour (0-23 MSK) is the "тихо до утра" cutoff used by the
 	// mini-app mute endpoint, matching the callback MuteAction. Sourced from
 	// the same cfg.State.MuteCutoffHour the bot uses.

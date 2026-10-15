@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -41,7 +42,15 @@ type Router struct {
 	tg      TGClient
 	cfg     Config
 	silence *SilenceAction
+	// memory -- память тревог диспетчера (notify.AlertMemory); nil -- не
+	// сообщать. После «Тише на час» нить починки правит тревогу уже со
+	// строкой тишины и без кнопок (BOT-06).
+	memory notify.AlertMemory
 }
+
+// SetAlertMemory -- кому сообщать о «Тише на час» (alerts.Dispatcher).
+// Вызывается до Run.
+func (r *Router) SetAlertMemory(m notify.AlertMemory) { r.memory = m }
 
 func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 	return &Router{d: d, tg: tgClient, cfg: cfg, silence: NewSilenceAction(d)}
@@ -144,6 +153,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+	if r.memory != nil {
+		r.memory.NoteAlertAction(args.UserID, args.CheckName, statusLine)
+	}
 	newText := q.Message.Text + "\n\n" + statusLine
 	empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, newText, "", &empty); err != nil {
