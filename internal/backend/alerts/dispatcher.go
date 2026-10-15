@@ -249,10 +249,16 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
 			// Не дошло никому: автомат уже в ok, напоминаний не будет.
 			// Долг повторит обход напоминаний (realert) ответом на ту же
-			// тревогу -- поэтому переписку не забываем.
-			if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
-				slog.Error("не удалось запомнить недоставленное «восстановилось»",
-					"user_id", userID, "check", checkName, "err", putErr)
+			// тревогу -- поэтому переписку не забываем. Саму тревогу
+			// человек не получал -- долга нет (M-7).
+			if !di.hardNeverDelivered(userID, checkName, prev, prevErr) {
+				if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
+					slog.Error("не удалось запомнить недоставленное «восстановилось»",
+						"user_id", userID, "check", checkName, "err", putErr)
+				}
+			} else {
+				slog.Info("«восстановилось» не дошло, тревога тоже не доходила: долга нет",
+					"user_id", userID, "check", checkName)
 			}
 			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
@@ -358,6 +364,19 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 		return delivered, fmt.Errorf("HARD отметка отправки %s/%s: %w", nickname, checkName, err)
 	}
 	return delivered, nil
+}
+
+// hardNeverDelivered -- карточка тревоги заведомо не дошла никому: отметки
+// отправки нет (DeliverHard снимает её только при «заведомо не отправлено»)
+// и в alert_messages ни одного сообщения. Долг «восстановилось» по такой
+// тревоге сообщил бы человеку о починке того, о чём он не знал (M-7).
+// Ошибка чтения -- «не знаем», долг остаётся, как раньше.
+func (di *Dispatcher) hardNeverDelivered(userID int64, checkName string, prev db.IncidentState, prevErr error) bool {
+	if prevErr != nil || prev.LastAlertAt != nil {
+		return false
+	}
+	msgs, err := di.d.AlertMessages().List(userID, checkName)
+	return err == nil && len(msgs) == 0
 }
 
 // hardMaybeDelivered -- рассылка карточки провалилась так, что Telegram мог

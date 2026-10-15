@@ -368,3 +368,42 @@ func TestRealertHardTimeoutMarksSent(t *testing.T) {
 		t.Fatalf("сообщений %d, ждали 2: после таймаута карточка ушла снова", n)
 	}
 }
+
+// M-7: тревога не дошла никому (Telegram отказал), потом не дошло и
+// «восстановилось» -- долга нет: «снова работает» о тревоге, которой человек
+// не видел, -- неправда. Тревога, которая могла дойти (таймаут), долг
+// оставляет.
+func TestNoOwedReplyForNeverDeliveredHard(t *testing.T) {
+	for name, hardErr := range map[string]error{"never delivered": errTG502, "maybe delivered": errTGTimeout} {
+		t.Run(name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			f := &fakeTG{sendErr: hardErr}
+			now := time.Now().UTC().Truncate(time.Second)
+			disp := alerts.NewDispatcher(d, dispTG{f}, alerts.Config{FailThreshold: 3, RecoveryThreshold: 2})
+			disp.SetNow(func() time.Time { return now })
+			prev := db.IncidentState{UserID: uid, CheckName: "awg_handshake", CurrentStatus: "fail", ConsecutiveFails: 2}
+			tr := state.Apply(prev, "fail", now, th)
+			_ = disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "fail"})
+
+			f.sendErr = errTG502
+			prev, _ = d.State().Get(uid, "awg_handshake")
+			prev.ConsecutiveOKs = 1
+			tr = state.Apply(prev, "ok", now.Add(2*time.Minute), th)
+			if tr.Kind != state.Recovery {
+				t.Fatalf("переход %v, ждали recovery", tr.Kind)
+			}
+			_ = disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "ok"})
+			owed, err := d.OwedReplies().List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if name == "never delivered" {
+				want = 0
+			}
+			if len(owed) != want {
+				t.Fatalf("долгов «восстановилось» %d, ждали %d", len(owed), want)
+			}
+		})
+	}
+}
