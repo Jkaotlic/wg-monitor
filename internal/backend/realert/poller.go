@@ -94,6 +94,56 @@ type Poller struct {
 // отвечать на корневую тревогу, а не на последнее напоминание.
 type realertSink interface {
 	SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
+	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
+}
+
+// owedReplyMaxAge -- сколько повторять недоставленное «восстановилось». Сутки
+// спустя оно уже шум: человек давно увидел роутер живым в приложении.
+const owedReplyMaxAge = 24 * time.Hour
+
+// retryOwedReplies повторяет ответы на тревоги, которые не дошли ни до кого
+// (db.OwedReplies, BOT-01). Доставлено -- долг снят и переписка по проверке
+// забыта, как после обычного «восстановилось». Проверка снова в аварии --
+// долг снят: новая тревога важнее. Лимит частоты -- обход останавливается.
+// Возвращает false, если обход надо прервать.
+func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
+	owed, err := p.d.OwedReplies().List()
+	if err != nil {
+		slog.Error("realert: owed replies query failed", "err", err)
+		return true
+	}
+	for _, o := range owed {
+		drop := now.Sub(o.CreatedAt) > owedReplyMaxAge
+		if !drop {
+			st, err := p.d.State().Get(o.UserID, o.CheckName)
+			if err != nil {
+				slog.Warn("realert: owed reply state get failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+				continue
+			}
+			drop = st.CurrentStatus == "hard"
+		}
+		if drop {
+			if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
+				slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+			}
+			continue
+		}
+		if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, ""); err != nil {
+			slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
+			if delay, ok := tg.RateLimitDelay(err); ok {
+				p.markRateLimited(now, delay)
+				return false
+			}
+			continue
+		}
+		if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
+			slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		}
+		if err := p.d.AlertMessages().Clear(o.UserID, o.CheckName); err != nil {
+			slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		}
+	}
+	return true
 }
 
 // SetNotifySink подменяет рассылку. Только для тестов.
@@ -273,6 +323,9 @@ func (p *Poller) neighborsFor(userID int64, checkName string, d map[string]any) 
 func (p *Poller) tick(ctx context.Context) {
 	now := p.now()
 	if p.rateLimitActive(now) {
+		return
+	}
+	if !p.retryOwedReplies(ctx, now) {
 		return
 	}
 	cutoff := now.Add(-p.cfg.RealertEvery)

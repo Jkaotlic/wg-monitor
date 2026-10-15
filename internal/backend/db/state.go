@@ -242,6 +242,10 @@ func (s *StateRepo) ActiveHardForUserStatus(userID int64) ([]ActiveIncidentRow, 
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
 //
+// last_alert_at IS NULL -- тревога не дошла ни до кого (Telegram лежал,
+// alerts.Dispatcher не пометил её отправленной): берём на ближайшем обходе, а
+// не через RealertEvery (BOT-01).
+//
 // silenced_until is compared against the SAME `cutoff` parameter rather than
 // SQL CURRENT_TIMESTAMP. modernc.org/sqlite serialises Go time.Time as
 // `2026-05-10T14:30:00Z` (RFC3339, capital T) while SQL CURRENT_TIMESTAMP
@@ -255,7 +259,7 @@ func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
 	rows, err := s.d.db.Query(
 		`SELECT user_id, check_name, hard_since FROM incident_state
 		 WHERE current_status = 'hard'
-		   AND last_alert_at < ?
+		   AND (last_alert_at < ? OR last_alert_at IS NULL)
 		   AND (silenced_until IS NULL OR silenced_until < ?)
 		   AND acked = 0`,
 		now, now)

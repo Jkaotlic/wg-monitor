@@ -22,6 +22,7 @@ type fakeTG struct {
 	chats     []int64
 	threads   []*int64
 	keyboards []*tg.InlineKeyboardMarkup
+	replyTos  []*int64
 	sendErr   error
 }
 
@@ -31,6 +32,7 @@ func (f *fakeTG) SendMessage(ctx context.Context, chatID int64, threadID *int64,
 	f.sent = append(f.sent, text)
 	f.chats = append(f.chats, chatID)
 	f.threads = append(f.threads, threadID)
+	f.replyTos = append(f.replyTos, replyTo)
 	return 99, f.sendErr
 }
 
@@ -41,6 +43,7 @@ func (f *fakeTG) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 	f.chats = append(f.chats, chatID)
 	f.threads = append(f.threads, threadID)
 	f.keyboards = append(f.keyboards, kb)
+	f.replyTos = append(f.replyTos, replyTo)
 	return 99, f.sendErr
 }
 

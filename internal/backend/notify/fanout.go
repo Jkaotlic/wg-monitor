@@ -241,6 +241,10 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 // поломке. Кому сообщения не досталось (был недоступен, подключился позже),
 // получает обычное сообщение без привязки -- лучше без ветки переписки, чем
 // вообще без «починилось».
+//
+// Вердикт -- как у рассылки тревоги: ErrNoneDelivered, если получатели были,
+// но не дошло никому (повторять стоит), nil -- если дошло хоть кому-то или
+// слать некому (BOT-01: раньше сбой молча терялся).
 func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error {
 	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
@@ -250,18 +254,24 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 	if err != nil {
 		return err
 	}
+	delivered := 0
+	var lastErr error
 	for _, chatID := range targets {
 		var replyTo *int64
 		if mid, ok := msgs[chatID]; ok {
 			replyTo = &mid
 		}
 		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, replyTo, nil); err != nil {
-			f.noteFailure(chatID, routerUserID, err)
+			if !f.noteFailure(chatID, routerUserID, err) {
+				lastErr = err
+			}
 			continue
 		}
+		delivered++
 		f.noteSuccess(chatID)
 	}
-	return nil
+	_, err = f.result(delivered, len(targets), lastErr)
+	return err
 }
 
 // ReplyKeyboardSender -- отправка с любым reply_markup. Нижних клавиатур у

@@ -188,6 +188,19 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     PRIMARY KEY (user_id, check_name, telegram_user_id)
 );
 
+-- Ответ на тревогу, который не дошёл ни одному получателю (Telegram лежал):
+-- «восстановилось» и подобные. Автомат тревог к этому времени уже в ok, и
+-- повторить сообщение некому, кроме обхода напоминаний (realert), который
+-- шлёт его ответом на исходную тревогу и стирает строку. Одна строка на
+-- проверку: новое «должен» заменяет старое (BOT-01, v0.61).
+CREATE TABLE IF NOT EXISTS owed_replies (
+    user_id    INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    check_name TEXT      NOT NULL,
+    text       TEXT      NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (user_id, check_name)
+);
+
 -- Снимок версий на роутер: что стоит сейчас и что стояло до этого. Сказать
 -- «вышло обновление» по одному отчёту нельзя -- отчёт приносит только «стало»,
 -- а «было» не помнил никто: версии жили в кэше на пользователя, умиравшем с

@@ -173,16 +173,21 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// 5xx/429 от TG возвращалась ошибка ДО Save, FSM оставался в
 		// pre-Hard состоянии, следующий fail-репорт снова пересекал
 		// порог → дубль алерта на каждый TG-глюк (BUG-02).
-		// LastAlertMsgID/LastAlertAt пишем вторым save'ом только при
-		// успехе TG-send. Если TG упал — FSM корректно в HARD, но
-		// LastAlertAt=NULL значит realert poller его не подхватит до
-		// следующего ручного refresh / OK-репорта.
+		// Первый Save несёт LastAlertAt=now от автомата: пока идёт отправка
+		// (с повторами -- до полуминуты), напоминания эту тревогу не трогают.
+		// Не дошла никому -- LastAlertAt снимается в NULL, и realert
+		// доставляет её на ближайшем обходе (BOT-01), а не через 6 часов.
 		next := tr.Next
 		if di.onHard != nil {
 			di.onHard(userID, checkName)
 		}
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
+		}
+		// Новая поломка: недоставленное «восстановилось» прошлой уже не к
+		// месту.
+		if err := di.d.OwedReplies().Delete(userID, checkName); err != nil {
+			slog.Warn("не удалось снять долг «восстановилось»", "user_id", userID, "check", checkName, "err", err)
 		}
 		args := HardArgs{
 			Nickname:    nickname,
@@ -219,6 +224,10 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		kb := tg.AlertKeyboard(userID, checkName, appURL)
 		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)
 		if err != nil {
+			next.LastAlertAt = nil
+			if saveErr := di.d.State().Save(userID, checkName, next); saveErr != nil {
+				slog.Error("HARD: не удалось снять отметку отправки", "user_id", userID, "check", checkName, "err", saveErr)
+			}
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
 		di.rememberHard(userID, checkName, text, kb)
@@ -283,6 +292,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
 				"user_id", userID, "check", checkName)
 		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
+			// Не дошло никому: автомат уже в ok, напоминаний не будет.
+			// Долг повторит обход напоминаний (realert) ответом на ту же
+			// тревогу -- поэтому переписку не забываем.
+			if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
+				slog.Error("не удалось запомнить недоставленное «восстановилось»",
+					"user_id", userID, "check", checkName, "err", putErr)
+			}
 			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
 		// Переписка по этой проверке закончилась: следующая поломка начнёт
