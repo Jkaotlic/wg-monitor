@@ -197,6 +197,12 @@ func TestFirmwareNewerThan(t *testing.T) {
 		{"longer candidate, same prefix", "5.0", "5.0.1", true},
 		{"longer installed, same prefix", "5.0.1", "5.0", false},
 		// Empty fallthroughs
+		// Хвост сборки «-N» сравнивается числом, а не строкой (GAP-04)
+		{"build tail 9→10", "4.03.C.6.3-9", "4.03.C.6.3-10", true},
+		{"build tail 10→9 reverse", "4.03.C.6.3-10", "4.03.C.6.3-9", false},
+		{"build tail equal", "4.03.C.6.3-10", "4.03.C.6.3-10", false},
+		{"build tail added", "5.0.0", "5.0.0-0", true},
+		{"build tail dropped", "5.0.0-0", "5.0.0", false},
 		{"empty installed", "", "5.0.1", false},
 		{"empty candidate", "4.2.6", "", false},
 		{"overflowing installed segment does not look older", "5.999999999999999999999999999999", "5.1", false},
