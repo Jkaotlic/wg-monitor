@@ -411,14 +411,21 @@ func TestImportTunnel_TargetIDMismatchFails(t *testing.T) {
 // hrImportFake -- awg-manager с установленным HydraRoute Neo и политикой
 // «HydraRoute», в цепочке которой уже стоит прежний туннель. newStatus --
 // что отдаёт список про только что импортированный туннель.
-func hrImportFake(t *testing.T, statuses []string, permits *[]string) *httptest.Server {
+type hrFakeOpts struct {
+	chain      string // цепочка политики HydraRoute до импорта
+	permitFail bool
+	hrStatus   int  // код ответа hydraroute-status; 0 -- 200
+	sameName   bool // туннель с этим именем уже есть (replace по имени)
+}
+
+func hrImportFakeOpts(t *testing.T, statuses []string, permits *[]string, o hrFakeOpts) *httptest.Server {
 	t.Helper()
 	calls := 0
 	newCalls := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if calls == 1 {
+		if calls == 1 && !o.sameName {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
 				{"id":"awg11","name":"old","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"status":"running","backend":"nativewg"}
 			]}}`))
@@ -440,13 +447,23 @@ func hrImportFake(t *testing.T, statuses []string, permits *[]string) *httptest.
 	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true}`))
 	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg50","name":"a3-nl2_awgtop","interfaceName":"nwg0"}}`))
+	})
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		if o.hrStatus != 0 {
+			w.WriteHeader(o.hrStatus)
+			return
+		}
 		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
 	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 	})
 	chain := `{"name":"Wireguard1","order":0}`
+	if o.chain != "" {
+		chain = o.chain
+	}
 	policies := func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"HydraRoute","description":"HydraRoute","interfaces":[` + chain + `]}]}`))
 	}
@@ -456,6 +473,10 @@ func hrImportFake(t *testing.T, statuses []string, permits *[]string) *httptest.
 		_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"Wireguard1","label":"old"},{"name":"Wireguard0","label":"a3-nl2_awgtop"}]}`))
 	})
 	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		if o.permitFail {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		*permits = append(*permits, fmt.Sprint(body["name"], "/", body["interface"]))
@@ -468,9 +489,13 @@ func hrImportFake(t *testing.T, statuses []string, permits *[]string) *httptest.
 }
 
 func importHR(t *testing.T, statuses []string) (string, []string, error) {
+	return importHROpts(t, statuses, hrFakeOpts{})
+}
+
+func importHROpts(t *testing.T, statuses []string, o hrFakeOpts) (string, []string, error) {
 	t.Helper()
 	var permits []string
-	srv := hrImportFake(t, statuses, &permits)
+	srv := hrImportFakeOpts(t, statuses, &permits, o)
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil }
 	noSleep := func(context.Context, time.Duration) error { return nil }
 	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
@@ -557,5 +582,49 @@ func TestImportTunnel_NoHydraRouteEndpointIsOK(t *testing.T) {
 	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "x", false, "nativewg", "")
 	if err != nil {
 		t.Fatalf("без HydraRoute импорт должен быть ok: %v\n%s", err, out)
+	}
+}
+
+// Повторный выпуск под тем же именем: туннель уже стоит в политике HydraRoute
+// и не поднялся за отведённое время. «Не добавлен — добавьте вручную» здесь
+// неправда: он там есть (находка verify-done 15.10).
+func TestImportTunnel_ReplaceByNameAlreadyInPolicyIsOK(t *testing.T) {
+	o := hrFakeOpts{sameName: true, chain: `{"name":"Wireguard1","order":0},{"name":"Wireguard0","order":1}`}
+	out, _, err := importHROpts(t, []string{"starting"}, o)
+	if err != nil {
+		t.Fatalf("туннель уже в политике -- не partial: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "не добавлен") || strings.Contains(out, "создан") {
+		t.Fatalf("ответ врёт про политику или «создан» при замене: %s", out)
+	}
+}
+
+// Замена по имени, туннеля в политике нет: partial, но слово -- «заменён».
+func TestImportTunnel_ReplaceByNameNotInPolicySaysReplaced(t *testing.T) {
+	out, _, err := importHROpts(t, []string{"starting"}, hrFakeOpts{sameName: true})
+	if !errors.Is(err, ErrImportPartial) {
+		t.Fatalf("err = %v, want ErrImportPartial\n%s", err, out)
+	}
+	first := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(first, "заменён") || strings.Contains(first, "создан") {
+		t.Fatalf("первая строка: %q", first)
+	}
+}
+
+func TestImportTunnel_PermitFailIsPartial(t *testing.T) {
+	out, _, err := importHROpts(t, []string{"running"}, hrFakeOpts{permitFail: true})
+	if !errors.Is(err, ErrImportPartial) {
+		t.Fatalf("err = %v, want ErrImportPartial\n%s", err, out)
+	}
+}
+
+func TestImportTunnel_HydraRouteStatusUnreadIsPartial(t *testing.T) {
+	out, _, err := importHROpts(t, []string{"running"}, hrFakeOpts{hrStatus: http.StatusInternalServerError})
+	if !errors.Is(err, ErrImportPartial) {
+		t.Fatalf("500 на статусе HydraRoute: err = %v, want ErrImportPartial\n%s", err, out)
+	}
+	out, _, err = importHROpts(t, []string{"running"}, hrFakeOpts{hrStatus: http.StatusNotFound})
+	if err != nil {
+		t.Fatalf("404 -- HydraRoute нет, ok: %v\n%s", err, out)
 	}
 }

@@ -315,6 +315,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 
 	var result strings.Builder
 	var newID string
+	verb := "создан" // для фразы владельцу: что стало с туннелем
 	if targetID != "" {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -350,6 +351,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 			return "", fmt.Errorf("tunnel_import: replace of %s returned another tunnel id %s", target.ID, newTun.ID)
 		}
 		fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", target.Name, newID)
+		verb = "заменён"
 	} else if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -376,6 +378,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 				return "", fmt.Errorf("recreate tunnel as nativeWG (old tunnel %s kept): %w", oldTunnel.ID, err)
 			}
 			newID = newTun.ID
+			verb = "пересоздан"
 			fmt.Fprintf(&result, "✅ Туннель %q пересоздан в nativeWG (id=%s)", name, newTun.ID)
 			if err := client.DeleteTunnel(ctx, oldTunnel.ID); err != nil {
 				slog.Warn("tunnel import: old tunnel not deleted", "name", name, "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
@@ -388,6 +391,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 				return "", fmt.Errorf("replace tunnel: %w", err)
 			}
 			newID = newTun.ID
+			verb = "заменён"
 			fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", name, newTun.ID)
 		} else {
 			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
@@ -426,7 +430,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 	// partial. Не прочитался существующий адрес -- статус неизвестен.
 	if hsErr != nil && targetID == "" && !awgmgr.IsEndpointMissing(hsErr) {
 		slog.Warn("tunnel import: hydraroute status unknown", "name", name, "id", newID, "err", hsErr)
-		notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» создан, но проверить HydraRoute не вышло — убедитесь, что туннель есть в политике HydraRoute.", name)
+		notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но проверить HydraRoute не вышло — убедитесь, что туннель есть в политике HydraRoute.", name, verb)
 	}
 	if hsErr == nil && hs.Installed {
 		// Замена по target_id наборов правил не трогает: членство в них -- по
@@ -438,14 +442,18 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 			switch {
 			case ferr != nil:
 				slog.Warn("tunnel import: tunnel not re-read for hydraroute policy", "name", name, "id", newID, "err", ferr)
-				notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» создан, но перечитать его не вышло, поэтому в политику HydraRoute он не добавлен — добавьте его туда вручную.", name)
+				notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но перечитать его не вышло — проверьте, что он есть в политике HydraRoute.", name, verb)
 			case !tunnelLooksStarted(*imported):
-				notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» создан, но за %d секунд не поднялся, поэтому в политику HydraRoute он не добавлен. Когда он заработает, добавьте его в политику HydraRoute вручную.", name, int(importStartBudget().Seconds()))
+				// Замена по имени оставляет туннель в политике, где он уже был:
+				// «не добавлен» тогда неправда.
+				if !tunnelInHydraRoutePolicy(ctx, client, *imported) {
+					notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но за %d секунд не поднялся, поэтому в политику HydraRoute он не добавлен. Когда он заработает, добавьте его в политику HydraRoute вручную.", name, verb, int(importStartBudget().Seconds()))
+				}
 			default:
 				if changed, perr := addTunnelToHydraRoutePolicies(ctx, client, *imported); perr != nil {
 					slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
 					fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
-					notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» создан, но добавить его в политику HydraRoute не вышло — добавьте его туда вручную.", name)
+					notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но добавить его в политику HydraRoute не вышло — добавьте его туда вручную.", name, verb)
 				} else if changed > 0 {
 					fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s targets=%d", imported.InterfaceName, changed)
 				}
