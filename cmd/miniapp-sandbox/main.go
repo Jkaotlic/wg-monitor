@@ -345,6 +345,11 @@ func (offlineToLog) SendOffline(_ context.Context, userID int64, nickname string
 	return nil
 }
 
+func (offlineToLog) SendBackOnline(_ context.Context, userID int64, nickname string, hardSince time.Time) error {
+	slog.Info("песочница: роутер снова на связи", "nickname", nickname, "user_id", userID, "молчал_с", hardSince)
+	return nil
+}
+
 // tgToLog -- Telegram песочницы: отправки и правки уведомлений о починке
 // уходят строкой в консоль.
 type tgToLog struct{}

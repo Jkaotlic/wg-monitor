@@ -21,6 +21,10 @@ import (
 // failingOfflineSender -- отправка «роутер не на связи», которая всегда падает.
 type failingOfflineSender struct{ err error }
 
+func (f failingOfflineSender) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return f.err
+}
+
 func (f failingOfflineSender) SendOffline(context.Context, int64, string, time.Duration) error {
 	return f.err
 }

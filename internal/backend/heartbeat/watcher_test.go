@@ -16,6 +16,10 @@ import (
 // failingOffline -- отправка, которая всегда падает с заданной ошибкой.
 type failingOffline struct{ err error }
 
+func (f failingOffline) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return f.err
+}
+
 func (f failingOffline) SendOffline(context.Context, int64, string, time.Duration) error {
 	return f.err
 }
@@ -102,6 +106,7 @@ func TestWatcherLastOfflineErrorIsTruncated(t *testing.T) {
 type fakeOffline struct {
 	mu    sync.Mutex
 	calls []callRec
+	back  []int64 // кому ушло «снова на связи»
 }
 
 type callRec struct {
@@ -114,6 +119,13 @@ func (f *fakeOffline) SendOffline(_ context.Context, uid int64, nick string, sin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, callRec{uid, nick, since})
+	return nil
+}
+
+func (f *fakeOffline) SendBackOnline(_ context.Context, uid int64, nick string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.back = append(f.back, uid)
 	return nil
 }
 

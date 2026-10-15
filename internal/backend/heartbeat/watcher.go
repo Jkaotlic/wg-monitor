@@ -13,6 +13,11 @@ import (
 
 type OfflineSender interface {
 	SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error
+	// SendBackOnline -- «Роутер снова на связи» ответом на тревогу о
+	// молчании. Зовётся, только если тревога была (строка agent_heartbeat
+	// была hard): тревога обещает «Когда роутер вернётся, бот напишет сам»
+	// (BOT-03). hardSince -- с какого момента роутер молчал.
+	SendBackOnline(ctx context.Context, userID int64, nickname string, hardSince time.Time) error
 }
 
 // SleepNotifier is called once when a mobile user crosses MobileSleepAfter
@@ -311,7 +316,7 @@ func (w *Watcher) scan(ctx context.Context) {
 				delete(w.resumed, u.ID)
 			}
 			w.mu.Unlock()
-			w.clearOfflineStateIfHard(u.ID)
+			w.clearOfflineStateIfHard(ctx, u)
 			if u.IsMobile() && w.cfg.MobileLifecycle {
 				if err := w.d.KV().ClearMobileSleepNotified(u.ID); err != nil {
 					slog.Warn("heartbeat: clear mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
@@ -434,7 +439,8 @@ func (w *Watcher) offlineNotificationsSuppressed(userID int64, now time.Time) bo
 //
 // «Понятно, вижу» обещает напомнить ПОСЛЕ восстановления, поэтому возвращение
 // роутера снимает отметку независимо от того, что записано в статусе.
-func (w *Watcher) clearOfflineStateIfHard(userID int64) {
+func (w *Watcher) clearOfflineStateIfHard(ctx context.Context, u db.User) {
+	userID := u.ID
 	st, err := w.d.State().Get(userID, "agent_heartbeat")
 	if err != nil {
 		slog.Warn("heartbeat: read offline recovery state failed", "user_id", userID, "err", err)
@@ -448,9 +454,14 @@ func (w *Watcher) clearOfflineStateIfHard(userID int64) {
 	if st.CurrentStatus != "hard" && !suppressionLeftOver {
 		return
 	}
-	if st.CurrentStatus != "hard" {
+	wasHard := st.CurrentStatus == "hard"
+	if !wasHard {
 		slog.Info("heartbeat: снимаем заглушку с вернувшегося роутера",
 			"user_id", userID, "status", st.CurrentStatus, "acked", st.Acked)
+	}
+	hardSince := w.now()
+	if st.HardSince != nil {
+		hardSince = *st.HardSince
 	}
 	st.CurrentStatus = "ok"
 	st.ConsecutiveFails = 0
@@ -460,7 +471,22 @@ func (w *Watcher) clearOfflineStateIfHard(userID int64) {
 	st.LastAlertAt = nil
 	st.Acked = false
 	st.AckedUntil = nil
+	// Сначала строка в ok, потом сообщение -- как у Recovery в диспетчере:
+	// следующий обход уже не увидит hard и второго «снова на связи» не
+	// пришлёт. Не дошло никому -- долг повторит обход напоминаний.
 	if err := w.d.State().Save(userID, "agent_heartbeat", st); err != nil {
 		slog.Warn("heartbeat: clear offline recovery state failed", "user_id", userID, "err", err)
+		return
 	}
+	if !wasHard || w.off == nil {
+		return
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, w.sendTimeout())
+	err = w.off.SendBackOnline(sendCtx, userID, u.Nickname, hardSince)
+	cancel()
+	if err != nil {
+		slog.Warn("heartbeat: «роутер снова на связи» не отправлено", "user_id", userID, "nickname", u.Nickname, "err", err)
+		return
+	}
+	slog.Info("heartbeat: router back online notice sent", "user_id", userID, "nickname", u.Nickname)
 }

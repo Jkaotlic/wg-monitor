@@ -447,6 +447,39 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	})
 }
 
+// SendBackOnline -- «Роутер снова на связи» ответом на тревогу «Роутер не на
+// связи» (BOT-03): сторож уже перевёл строку agent_heartbeat в ok. Под «Тише
+// на час» -- без звука. Не дошло никому -- текст ложится в owed_replies, и
+// realert повторит его ответом на ту же тревогу; переписку тогда не
+// забываем. Дошло -- переписка по молчанию закончена.
+func (di *Dispatcher) SendBackOnline(ctx context.Context, userID int64, nickname string, hardSince time.Time) error {
+	const check = "agent_heartbeat"
+	now := di.now()
+	silent := false
+	if st, err := di.d.State().Get(userID, check); err != nil {
+		slog.Warn("«снова на связи»: состояние не прочитано, шлём со звуком", "user_id", userID, "err", err)
+	} else {
+		silent = Silenced(st, now)
+	}
+	text := FormatRecovery(RecoveryArgs{
+		Nickname:    nickname,
+		CheckName:   check,
+		HardSince:   hardSince,
+		RecoveredAt: now,
+	})
+	if err := di.notify.ReplyToEach(ctx, userID, check, text, "", silent); err != nil {
+		if putErr := di.d.OwedReplies().Put(userID, check, text, now); putErr != nil {
+			slog.Error("не удалось запомнить недоставленное «снова на связи»",
+				"user_id", userID, "err", putErr)
+		}
+		return fmt.Errorf("«снова на связи» %s: %w", nickname, err)
+	}
+	if err := di.d.AlertMessages().Clear(userID, check); err != nil {
+		slog.Warn("не удалось забыть переписку о молчании роутера", "user_id", userID, "err", err)
+	}
+	return nil
+}
+
 // Диспетчер -- память тревог для нити починки.
 var (
 	_ notify.AlertTexts  = (*Dispatcher)(nil)
