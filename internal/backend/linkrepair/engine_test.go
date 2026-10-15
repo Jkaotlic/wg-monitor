@@ -2144,3 +2144,20 @@ func TestStart_AttemptsReadErrorRefuses(t *testing.T) {
 		t.Fatalf("история попыток переписана вслепую: %d", kv.sets)
 	}
 }
+
+// BE-04: VPN-туннель вне общих наборов правил -- чинить нечего, ремонта не
+// было. Стоп «прошлая попытка не помогла» здесь ложь: добавленный в набор
+// VPN-туннель обязан чиниться при следующей поломке.
+func TestLadder_NotInSetNotSticky(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	e.cmd.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
+
+	_, final := e.run(t, ladderReq())
+
+	if final.Kind != "need" || !strings.Contains(final.Text, "чинить нечего") {
+		t.Fatalf("итог %+v", final)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("VPN-туннель вне наборов получил стоп: %s", why)
+	}
+}

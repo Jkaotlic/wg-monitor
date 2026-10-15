@@ -981,9 +981,10 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	d.skip(jobID, "не начинали", StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
-		// но стоп не ставится, следующая тревога снова может её запустить.
-		d.finishAttempt(req, names.noSnapshot)
+		// Роутер молчит или VPN-туннель вне наборов правил -- это не вердикт
+		// автопочинке (ремонта не было): попытка считается, но стоп не
+		// ставится, следующая тревога снова может её запустить.
+		d.finishAttempt(req, names.noSnapshot || names.notInSet)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
