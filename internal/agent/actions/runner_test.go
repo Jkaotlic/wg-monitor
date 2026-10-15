@@ -1611,3 +1611,19 @@ func TestRunner_OnCommandSeesEveryCommand(t *testing.T) {
 		t.Fatalf("OnCommand calls: %v (want before and after the action)", seen)
 	}
 }
+
+// M-1: действия с туннелем отвечают после внепланового отчёта -- срок
+// ответа включает его.
+func TestAnswerBudget(t *testing.T) {
+	for action, want := range map[string]time.Duration{
+		"tunnel_restart":       75 * time.Second,
+		"tunnel_power":         75 * time.Second,
+		"tunnel_import":        300 * time.Second,
+		"route_policy_promote": 45 * time.Second,
+		"route_status":         45 * time.Second,
+	} {
+		if got := AnswerBudget(action); got != want {
+			t.Errorf("AnswerBudget(%q) = %v, want %v", action, got, want)
+		}
+	}
+}

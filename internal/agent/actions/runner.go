@@ -347,6 +347,28 @@ func (r *Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string
 // без Resumed принёс бы бэкенду ложные провалы.
 const reportNowTimeout = 30 * time.Second
 
+// reportsAfter -- действия, после которых reportNow шлёт внеплановый отчёт
+// синхронно, до ответа на команду: ответ приходит позже на срок отчёта.
+var reportsAfter = map[string]bool{
+	"tunnel_enable":  true,
+	"tunnel_disable": true,
+	"tunnel_restart": true,
+	"tunnel_delete":  true,
+	"tunnel_power":   true,
+}
+
+// AnswerBudget -- самое долгое время от начала действия до ответа на
+// команду: срок действия плюс, для действий с туннелем, срок внепланового
+// отчёта (M-1). Бэкенд держит копию для лесенки починки
+// (internal/backend/linkrepair agentBudget), тест там сверяет её с этой.
+func AnswerBudget(action string) time.Duration {
+	d := actionTimeoutFor(action)
+	if reportsAfter[action] {
+		d += reportNowTimeout
+	}
+	return d
+}
+
 // reportNow -- внеплановый отчёт после действия с туннелем (AG-05).
 func (r *Runner) reportNow(ctx context.Context) {
 	if r.ReportNow == nil {

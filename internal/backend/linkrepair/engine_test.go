@@ -2103,7 +2103,7 @@ func TestCommand_ExpiryLeavesAgentBudget(t *testing.T) {
 		{"tunnel_import", 6 * time.Minute, time.Minute},
 		{"tunnel_import", time.Minute, 30 * time.Second},                          // нижняя граница
 		{"route_policy_promote", 6 * time.Minute, 5*time.Minute + 15*time.Second}, // 45 с по умолчанию
-		{"tunnel_restart", 4 * time.Minute, 3*time.Minute + 15*time.Second},
+		{"tunnel_restart", 4 * time.Minute, 2*time.Minute + 45*time.Second},       // 45 с + 30 с отчёта (M-1)
 		{"route_status", 6 * time.Minute, 5*time.Minute + 15*time.Second},
 	}
 	for _, tc := range cases {

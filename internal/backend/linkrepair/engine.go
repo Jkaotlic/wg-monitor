@@ -1052,12 +1052,15 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
-// Сроки действий лесенки у агента -- копия internal/agent/actions/runner.go
-// (defaultActionTimeout и actionTimeoutOverrides); меняются там -- менять
-// здесь. agentImportBudget -- самое долгое действие лесенки: ждать его
-// меньше -- считать «не помогло» замену, которая ещё идёт.
+// Сроки ответа агента на действия лесенки -- копия
+// internal/agent/actions.AnswerBudget (срок действия плюс внеплановый отчёт
+// после действий с туннелем); тест budget_test.go сверяет их. agentImportBudget
+// -- самое долгое действие лесенки: ждать его меньше -- считать «не помогло»
+// замену, которая ещё идёт. tunnel_restart отвечает после внепланового
+// отчёта (до 30 с сверх 45 с действия, M-1).
 const (
 	agentImportBudget  = 300 * time.Second
+	agentRestartBudget = 75 * time.Second
 	agentDefaultBudget = 45 * time.Second
 	// minQueueLife -- нижняя граница срока команды в очереди: при коротком
 	// ожидании (песочница, тесты) агент всё равно успевает её забрать.
@@ -1066,8 +1069,11 @@ const (
 
 // agentBudget -- сколько агент может выполнять действие action.
 func agentBudget(action string) time.Duration {
-	if action == "tunnel_import" {
+	switch action {
+	case "tunnel_import":
 		return agentImportBudget
+	case "tunnel_restart":
+		return agentRestartBudget
 	}
 	return agentDefaultBudget
 }
