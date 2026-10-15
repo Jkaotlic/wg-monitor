@@ -266,17 +266,17 @@ func (t *repairThread) Progress(ctx context.Context, text string) {
 	if !t.editable() {
 		return
 	}
-	t.edit(ctx, text, t.recipients())
+	t.edit(ctx, phaseProgress, text, t.recipients())
 }
 
 func (t *repairThread) Done(ctx context.Context, text string) {
 	t.r.finish(t.key, t.gen, true)
-	t.say(ctx, text)
+	t.say(ctx, phaseDone, text)
 }
 
 func (t *repairThread) NotStarted(ctx context.Context, why string) {
 	t.r.finish(t.key, t.gen, false)
-	t.say(ctx, "Автопочинка не запускалась: "+strings.TrimRight(strings.TrimSpace(why), ".")+".")
+	t.say(ctx, phaseNotStarted, "Автопочинка не запускалась: "+strings.TrimRight(strings.TrimSpace(why), ".")+".")
 }
 
 // NeedHuman -- итог правкой и, если человеку есть что сделать, ответ со
@@ -287,19 +287,19 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 	action = strings.TrimRight(strings.TrimSpace(action), ".")
 	if !t.editable() {
 		if action == "" {
-			t.send(ctx, text)
+			t.send(ctx, phaseFailed.badge()+" "+text)
 			return
 		}
 		// Править нечего: итог и действие -- одним новым сообщением, оно и
 		// так со звуком.
-		msg := text + "\n\nНужно ваше участие: " + action + "."
+		msg := phaseFailed.badge() + " " + text + "\n\nНужно ваше участие: " + action + "."
 		if _, err := t.r.fanout.SendKeyboard(ctx, t.key.routerID, msg, "", t.appKeyboard()); err != nil {
 			t.r.warn("починка: «нужно участие» не доставлено", "router_user_id", t.key.routerID, "check", t.key.checkName, "err", err)
 		}
 		return
 	}
 	cur := t.recipients()
-	t.edit(ctx, text, cur)
+	t.edit(ctx, phaseFailed, text, cur)
 	if action == "" {
 		return
 	}
@@ -321,12 +321,12 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 
 // say -- итог: правкой, если есть что править, иначе новым сообщением всем
 // получателям роутера.
-func (t *repairThread) say(ctx context.Context, text string) {
+func (t *repairThread) say(ctx context.Context, ph repairPhase, text string) {
 	if t.editable() {
-		t.edit(ctx, text, t.recipients())
+		t.edit(ctx, ph, text, t.recipients())
 		return
 	}
-	t.send(ctx, text)
+	t.send(ctx, ph.badge()+" "+text)
 }
 
 func (t *repairThread) send(ctx context.Context, text string) {
@@ -335,7 +335,7 @@ func (t *repairThread) send(ctx context.Context, text string) {
 	}
 }
 
-// edit дописывает блок под тревогу каждому получателю с теми же кнопками,
+// edit ставит блок починки над тревогой каждому получателю с теми же кнопками,
 // что были под ней (админу -- с его рядом «Не писать мне»). Блок заменяет
 // прежний: текст хода от движка уже несёт всё сделанное. cur -- получатели
 // сейчас (nil -- неизвестно): кто выпал из них, тому ни правки, ни нового
@@ -347,8 +347,12 @@ func (t *repairThread) send(ctx context.Context, text string) {
 // (наша ошибка в тексте) -- только в журнал. Громкий дубль всей тревоги из-за
 // флуд-контроля Telegram хуже пропущенной правки: следующий ход починки
 // поправит сообщение снова.
-func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]bool) {
-	full := withRepairBlock(t.base, block)
+func (t *repairThread) edit(ctx context.Context, ph repairPhase, block string, cur map[int64]bool) {
+	full := composeRepair(t.base, ph, block)
+	base := t.kb
+	if ph == phaseDone {
+		base = appRowsOnly(base)
+	}
 	f := t.r.fanout
 	// Потолок -- реальное время правки (сами попытки тоже идут: таймаут
 	// HTTP-клиента Telegram 15 с), а не сумма пауз. Повторы и паузы идут под
@@ -363,7 +367,7 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		if cur != nil && !cur[tgt.chatID] {
 			continue
 		}
-		kb := t.kb
+		kb := base
 		if f.isAdmin(tgt.chatID) {
 			kb = withAdminMuteRow(kb, t.key.routerID)
 		}
@@ -379,7 +383,7 @@ func (t *repairThread) edit(ctx context.Context, block string, cur map[int64]boo
 		t.r.warn("починка: тревога не правится, шлём новым сообщением",
 			"telegram_user_id", tgt.chatID, "message_id", tgt.messageID, "check", t.key.checkName, "err", err)
 		// sendOne сам добавит админу ряд выключения -- передаём исходные кнопки.
-		mid, sendErr := f.sendOne(ctx, tgt.chatID, t.key.routerID, full, "", nil, t.kb)
+		mid, sendErr := f.sendOne(ctx, tgt.chatID, t.key.routerID, full, "", nil, base)
 		if sendErr != nil {
 			f.noteFailure(tgt.chatID, t.key.routerID, sendErr)
 			continue
@@ -465,30 +469,144 @@ func messageGone(desc string) bool {
 		strings.Contains(d, "message_id_invalid")
 }
 
+// AutoRepairLine -- последняя строка тревоги, когда у VPN-туннеля включена
+// автопочинка. Живёт здесь, а не в alerts (alerts импортирует notify): нить
+// вырезает это обещание, как только починка заговорила сама.
+const AutoRepairLine = "Автопочинка включена — начинаю чинить, допишу сюда."
+
+// AdviceTitle -- заголовок совета в тревоге («Что делать»). Пока починка
+// идёт и после «Починил» совет «нажмите «Починить»» -- неправда.
+const AdviceTitle = "Что делать"
+
+// repairPhase -- на чём стоит починка; от неё зависят значок итога и то,
+// что остаётся от тревоги под ним.
+type repairPhase int
+
+const (
+	phaseProgress   repairPhase = iota // чиню
+	phaseDone                          // починил
+	phaseFailed                        // сам не смог
+	phaseNotStarted                    // не запускалась
+)
+
+func (p repairPhase) badge() string {
+	switch p {
+	case phaseDone:
+		return "✅"
+	case phaseFailed:
+		return "❌"
+	case phaseNotStarted:
+		return "⚠️"
+	}
+	return "🛠"
+}
+
+// composeRepair -- тревога после правки. 13.10 итог «Починил» приклеивался
+// под красную тревогу: сверху «не отвечает», в середине «нажмите
+// «Починить»» и «начинаю чинить», внизу «снова работает» -- человек не
+// понимал, всё в порядке или нет. Поэтому:
+//   - состояние починки -- первой строкой со своим значком: его видно и в
+//     списке чатов;
+//   - обещание «начинаю чинить, допишу сюда» уходит, как только починка
+//     заговорила;
+//   - совет «что делать» уходит, пока чиню сам и когда починил, и остаётся,
+//     когда нужен человек;
+//   - после «Починил» тревога сворачивается в «Было: …» -- заголовок без
+//     красного значка и строка «с какого времени».
+func composeRepair(base string, ph repairPhase, block string) string {
+	return fitRepair(ph.badge()+" "+block, alertUnder(base, ph))
+}
+
+// alertUnder -- что остаётся от тревоги под блоком починки. Тревога -- это
+// Card: заголовок со строкой «проверка · с …», дальше разделы через пустую
+// строку.
+func alertUnder(base string, ph repairPhase) string {
+	blocks := strings.Split(strings.TrimSpace(base), "\n\n")
+	if ph == phaseDone {
+		return "Было: " + withoutBadge(blocks[0])
+	}
+	kept := blocks[:0:0]
+	for _, b := range blocks {
+		body := strings.TrimSpace(b)
+		if strings.TrimSpace(strings.TrimPrefix(body, "•")) == AutoRepairLine {
+			continue
+		}
+		if ph == phaseProgress && strings.HasPrefix(body, AdviceTitle+":") {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	return strings.Join(kept, "\n\n")
+}
+
+// withoutBadge -- заголовок тревоги без значка: «🔴 [del]: …» -> «[del]: …».
+// Подпись начинается с «[ник]» или «📱 [ник]»; чего-то другого -- не трогаем.
+func withoutBadge(head string) string {
+	i := strings.Index(head, "[")
+	if j := strings.Index(head, "📱"); j >= 0 && (i < 0 || j < i) {
+		i = j
+	}
+	if i <= 0 || i > len("🔁🔴 ") {
+		return head
+	}
+	return head[i:]
+}
+
 // maxEditRunes -- потолок правки с запасом до лимита Telegram в 4096 знаков.
 const maxEditRunes = 4000
 
-// withRepairBlock -- тревога и блок починки одним текстом. Не влезает в
+// fitRepair -- блок починки и тревога под ним одним текстом. Не влезает в
 // лимит -- ужимается тревога (хвост, голова остаётся), блок целым: он и
 // есть новость. Блок сам длиннее лимита (не бывает: лесенка короткая) --
 // режется и он.
-func withRepairBlock(base, block string) string {
+func fitRepair(top, base string) string {
 	const sep, cut = "\n\n", "…"
-	full := base + sep + block
+	if strings.TrimSpace(base) == "" {
+		base = ""
+	}
+	full := top
+	if base != "" {
+		full += sep + base
+	}
 	if utf8.RuneCountInString(full) <= maxEditRunes {
 		return full
 	}
-	room := maxEditRunes - utf8.RuneCountInString(sep+block) - utf8.RuneCountInString(cut)
+	room := maxEditRunes - utf8.RuneCountInString(top+sep) - utf8.RuneCountInString(cut)
 	if room <= 0 {
 		// Блок в 3997-3998 знаков короче среза: резать по своей длине.
-		b := []rune(block)
+		b := []rune(top)
 		return string(b[:min(len(b), maxEditRunes-1)]) + cut
 	}
-	head := []rune(base)
-	if len(head) > room {
-		head = head[:room]
+	tail := []rune(base)
+	if len(tail) > room {
+		tail = tail[:room]
 	}
-	return strings.TrimRight(string(head), " \n") + cut + sep + block
+	return top + sep + strings.TrimRight(string(tail), " \n") + cut
+}
+
+// appRowsOnly -- кнопки тревоги после «Починил»: глушить уже нечего, и
+// «⏸ Тише на час» под исправленным VPN-туннелем сбивает с толку. Остаются
+// ряды с дорогой в приложение. Не осталось ничего -- nil (без кнопок).
+func appRowsOnly(kb *tg.InlineKeyboardMarkup) *tg.InlineKeyboardMarkup {
+	if kb == nil {
+		return nil
+	}
+	var rows [][]tg.InlineKeyboardButton
+	for _, row := range kb.InlineKeyboard {
+		var keep []tg.InlineKeyboardButton
+		for _, b := range row {
+			if b.WebApp != nil {
+				keep = append(keep, b)
+			}
+		}
+		if len(keep) > 0 {
+			rows = append(rows, keep)
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return &tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 // appKeyboard -- одна кнопка «открыть роутер в приложении»; адреса нет --

@@ -66,13 +66,10 @@ func progressText(_ lineNames, log []string, now string) string {
 	return "Чиню: " + joinLog(log) + " · сейчас: " + now + "…"
 }
 
-// doneText -- итог удачи.
+// doneText -- итог удачи: сначала результат, потом шаги. Шаги первыми
+// («увёл трафик на запасной…») читались как то, что сейчас.
 func doneText(n lineNames, log []string) string {
-	text := "Починил"
-	if len(log) > 0 {
-		text += ": " + joinLog(log)
-	}
-	text += ". VPN-туннель «" + n.broken + "» снова работает"
+	text := "Починил сам — VPN-туннель «" + n.broken + "» снова работает"
 	switch {
 	case n.backup != "" && n.failbackFailed:
 		text += ", но вернуть на него трафик не вышло — он идёт через запасной VPN-туннель «" + n.backup + "»."
@@ -80,6 +77,9 @@ func doneText(n lineNames, log []string) string {
 		text += ", трафик вернул на него."
 	default:
 		text += "."
+	}
+	if len(log) > 0 {
+		text += " Что сделал: " + joinLog(log) + "."
 	}
 	return text
 }
