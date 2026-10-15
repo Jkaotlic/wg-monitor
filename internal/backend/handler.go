@@ -168,6 +168,17 @@ func mobileWakeAfter(d Deps) time.Duration {
 	return 5 * time.Minute
 }
 
+// offlineAlertOpen -- по роутеру открыта тревога «не на связи»
+// (agent_heartbeat в hard). Ошибка чтения -- «нет»: лишняя карточка лучше
+// пропавшей.
+func offlineAlertOpen(d Deps, uid int64) bool {
+	if d.DB == nil {
+		return false
+	}
+	st, err := d.DB.State().Get(uid, "agent_heartbeat")
+	return err == nil && st.CurrentStatus == "hard"
+}
+
 func shouldNotifyMobileWake(user *db.User, ts time.Time, threshold time.Duration) bool {
 	if user == nil || !user.IsMobile() {
 		return false
@@ -834,6 +845,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 			d.Resumer.MarkResumed(uid)
 		}
 		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, mobileWakeAfter(d))
+		if notifyWake && offlineAlertOpen(d, uid) {
+			// M-3: при heartbeat.mobile_lifecycle=false мобильный роутер
+			// уходит в обычную тревогу «не на связи», и ответ на неё --
+			// «снова на связи» от сторожа молчания. Карточка пробуждения
+			// стала бы вторым сообщением о том же возвращении.
+			notifyWake = false
+		}
 		// The operator-facing wake card uses the backend-observed last_seen
 		// gap. Older agents can over-report Resumed=true after short mobile
 		// jitter; a clean agent restart after real sleep may not set Resumed.

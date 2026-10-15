@@ -2192,3 +2192,42 @@ func TestRecovery_ClearsRepairBlock(t *testing.T) {
 		t.Fatal("стоп другого VPN-туннеля снят чужим восстановлением")
 	}
 }
+
+// M-3: при heartbeat.mobile_lifecycle=false мобильный роутер уходит в
+// обычную тревогу «не на связи», и на неё отвечает сторож молчания («снова
+// на связи»). Карточка пробуждения сверху была бы вторым сообщением о том же.
+func TestHandleReport_MobileWakeSkippedWhenOfflineAlertOpen(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "abab22abab22abab22abab22abab22abab22abab22abab22abab22abab22abab"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	lastSeen := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, lastSeen, uid); err != nil {
+		t.Fatal(err)
+	}
+	hs := lastSeen.Add(10 * time.Minute)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{UserID: uid, CheckName: "agent_heartbeat", CurrentStatus: "hard", HardSince: &hs, LastAlertAt: &hs}); err != nil {
+		t.Fatal(err)
+	}
+	wake := &fakeWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		Resumer:      &fakeResumer{},
+		WakeNotifier: wake,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:31:00Z","agent_version":"t","resumed":true,"checks":[{"name":"tunnels","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := len(wake.snapshot()); got != 0 {
+		t.Fatalf("карточка пробуждения поверх открытой тревоги «не на связи»: %d", got)
+	}
+}
