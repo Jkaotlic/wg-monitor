@@ -407,3 +407,57 @@ func TestNoOwedReplyForNeverDeliveredHard(t *testing.T) {
 		})
 	}
 }
+
+// cancelOn429TG -- первому получателю 429, и общий срок рассылки истекает
+// (как 30 с dispatchCtx при ожидании retry_after).
+type cancelOn429TG struct {
+	dispTG
+	cancel context.CancelFunc
+	armed  bool
+}
+
+func (c *cancelOn429TG) SendMessageWithKeyboard(ctx context.Context, chatID int64, th *int64, text, pm string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	if c.armed {
+		c.armed = false
+		c.cancel()
+		_, _ = c.fakeTG.SendMessageWithKeyboard(ctx, chatID, th, text, pm, replyTo, kb) // учёт попытки
+		return 0, &tg.APIError{Method: "sendMessage", Code: 429, RetryAfter: 25 * time.Second}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, errors.New("tg sendMessage: Post \"sendMessage\": " + err.Error())
+	}
+	return c.fakeTG.SendMessageWithKeyboard(ctx, chatID, th, text, pm, replyTo, kb)
+}
+
+// I-2 (повторное ревью): двое получателей, первому 429, второму запрос не
+// ушёл (срок истёк) -- никто карточку не получил, отметка снята, и ближайший
+// обход доставляет саму карточку, а не напоминание через 6 ч.
+func TestHard429ThenExpiredCtxIsRedelivered(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.RouterOperators().Add(uid, 6002, 6001); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sender := &cancelOn429TG{dispTG: dispTG{f}, cancel: cancel, armed: true}
+	now := time.Now().UTC().Truncate(time.Second)
+	disp := alerts.NewDispatcher(d, sender, alerts.Config{FailThreshold: 3, RecoveryThreshold: 2})
+	disp.SetNow(func() time.Time { return now })
+	prev := db.IncidentState{UserID: uid, CheckName: "awg_handshake", CurrentStatus: "fail", ConsecutiveFails: 2}
+	tr := state.Apply(prev, "fail", now, th)
+	_ = disp.Handle(ctx, uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "fail"})
+	if st, _ := d.State().Get(uid, "awg_handshake"); st.LastAlertAt != nil {
+		t.Fatalf("никто не получил карточку, а отметка стоит: %v", st.LastAlertAt)
+	}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetHardDeliverer(disp)
+	at := now.Add(5 * time.Minute)
+	disp.SetNow(func() time.Time { return at })
+	p.SetNow(func() time.Time { return at })
+	p.tick(context.Background())
+	msgs, _ := d.AlertMessages().List(uid, "awg_handshake")
+	if len(msgs) != 2 {
+		t.Fatalf("карточка не доставлена на ближайшем обходе: alert_messages=%v sent=%q", msgs, f.sent)
+	}
+}

@@ -227,16 +227,34 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		return 0, err
 	}
 	delivered := 0
-	var lastErr error
+	// notSentErr -- последний заведомый отказ, maybeErr -- последняя ошибка
+	// «могло дойти». Вердикт хранит обе (I-2): «могло дойти» не даёт
+	// DeliverHard снять отметку (иначе realert прислал бы дубль карточки),
+	// а 429 остаётся виден tg.RateLimitDelay для паузы обхода.
+	var notSentErr, maybeErr error
 	for _, chatID := range targets {
-		mid, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, silent)
+		var (
+			mid     int64
+			sendErr error
+		)
+		if cerr := ctx.Err(); cerr != nil {
+			// Общий срок рассылки кончился на прежних получателях: этому
+			// запрос не уходит вовсе -- заведомо не отправлено.
+			sendErr = tg.NotSent(fmt.Errorf("срок рассылки истёк до отправки: %w", cerr))
+		} else {
+			mid, sendErr = f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, silent)
+		}
 		if sendErr != nil {
-			// «Могло дойти» важнее «заведомо не дошло»: если хоть одному
-			// ответ не пришёл, вердикт должен это сохранить, иначе
-			// DeliverHard снимет отметку и realert пришлёт дубль карточки
-			// (I-2).
-			if !f.noteFailure(chatID, routerUserID, sendErr) && (lastErr == nil || tg.KnownNotSent(lastErr)) {
-				lastErr = sendErr
+			if !f.noteFailure(chatID, routerUserID, sendErr) {
+				if tg.KnownNotSent(sendErr) {
+					// 429 не затирается другим отказом: по нему realert
+					// выдерживает паузу.
+					if _, wasRate := tg.RateLimitDelay(notSentErr); !wasRate {
+						notSentErr = sendErr
+					}
+				} else {
+					maybeErr = sendErr
+				}
 			}
 			continue
 		}
@@ -246,6 +264,13 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 				"telegram_user_id", chatID, "check", checkName, "err", err)
 		}
 		f.noteSuccess(chatID)
+	}
+	lastErr := notSentErr
+	switch {
+	case maybeErr != nil && notSentErr != nil:
+		lastErr = errors.Join(notSentErr, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, maybeErr))
+	case maybeErr != nil:
+		lastErr = maybeErr
 	}
 	return f.result(delivered, len(targets), lastErr)
 }

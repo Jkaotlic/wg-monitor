@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -478,6 +479,68 @@ func TestFanout_SendTrackedKeepsMaybeDelivered(t *testing.T) {
 			want := name == "all refused"
 			if got := tg.KnownNotSent(err); got != want {
 				t.Fatalf("KnownNotSent = %v, want %v (err %v)", got, want, err)
+			}
+		})
+	}
+}
+
+// ctxCancelSender -- первый получатель получает 429, и за время ожидания
+// истекает общий срок рассылки (отмена ctx). second задан -- срок не
+// истекает, второй получает second.
+type ctxCancelSender struct {
+	fakeKeyboardSender
+	cancel  context.CancelFunc
+	second  error
+	callsNo int
+}
+
+func (s *ctxCancelSender) SendMessageWithKeyboard(ctx context.Context, chatID int64, th *int64, text, pm string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	s.callsNo++
+	if s.callsNo == 1 {
+		if s.second == nil {
+			s.cancel()
+		}
+		return 0, &tg.APIError{Method: "sendMessage", Code: 429, RetryAfter: 25 * time.Second}
+	}
+	if s.second != nil {
+		return 0, s.second
+	}
+	if err := ctx.Err(); err != nil {
+		// как настоящий http-клиент: обычная ошибка с текстом срока
+		return 0, errors.New("tg sendMessage: Post \"sendMessage\": " + err.Error())
+	}
+	return s.fakeKeyboardSender.SendMessageWithKeyboard(ctx, chatID, th, text, pm, replyTo, kb)
+}
+
+// I-2 (повторное ревью): первому 429, второму запрос не ушёл (срок истёк) --
+// вердикт «заведомо не дошло», и 429 видно для паузы realert. Смешанный
+// вердикт (429 + таймаут ответа) -- «могло дойти», но 429 тоже видно.
+func TestFanout_SendTrackedExpiredCtxAfter429(t *testing.T) {
+	for name, second := range map[string]error{
+		"expired ctx":      nil,
+		"response timeout": errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := &ctxCancelSender{cancel: cancel, second: second}
+			_, err := NewFanout(d, s, quietLogger(), 0).SendTracked(ctx, router, "tunnel_awg0", "x", "", &tg.InlineKeyboardMarkup{}, false)
+			if !errors.Is(err, ErrNoneDelivered) {
+				t.Fatalf("err = %v", err)
+			}
+			wantNotSent := second == nil
+			if got := tg.KnownNotSent(err); got != wantNotSent {
+				t.Fatalf("KnownNotSent = %v, want %v (err %v)", got, wantNotSent, err)
+			}
+			if _, ok := tg.RateLimitDelay(err); !ok {
+				t.Fatalf("429 не виден в вердикте: %v", err)
 			}
 		})
 	}

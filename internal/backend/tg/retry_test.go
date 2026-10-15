@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -237,5 +238,29 @@ func TestKnownNotSent(t *testing.T) {
 		if got := KnownNotSent(c.err); got != c.want {
 			t.Errorf("%s: KnownNotSent = %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// I-2 (повторное ревью): запрос, который не ушёл, потому что срок контекста
+// уже истёк, -- заведомо не отправлен, а не «могло дойти».
+func TestExpiredCtxIsKnownNotSent(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.SendMessage(ctx, 5, nil, "x", "", nil)
+	if err == nil || !KnownNotSent(err) {
+		t.Fatalf("err = %v, KnownNotSent = %v; want known not sent", err, KnownNotSent(err))
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("запросов %d, want 0", n)
+	}
+	if strings.Contains(err.Error(), "tok") {
+		t.Fatalf("токен в ошибке: %v", err)
 	}
 }

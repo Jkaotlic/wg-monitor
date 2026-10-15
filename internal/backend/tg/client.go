@@ -541,6 +541,12 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		return fmt.Errorf("tg %s: build request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Срок уже истёк -- запрос не уйдёт вовсе: это «заведомо не отправлено»,
+	// а не «могло дойти» (у http-клиента это была бы обычная ошибка с
+	// текстом срока, неотличимая от таймаута ответа).
+	if cerr := ctx.Err(); cerr != nil {
+		return NotSent(fmt.Errorf("tg %s: не отправлено: %w", method, cerr))
+	}
 	resp, err := httpc.Do(req)
 	if err != nil {
 		// Go's *url.Error embeds the full URL — including our bot-token —
@@ -623,13 +629,23 @@ func notSent(err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
+// ErrMaybeDelivered -- метка в составной ошибке рассылки: хоть одному
+// получателю сообщение могло дойти. KnownNotSent по такой ошибке -- false,
+// даже если рядом лежит заведомый отказ (например 429, который нужен
+// RateLimitDelay).
+var ErrMaybeDelivered = errors.New("сообщение могло дойти")
+
+// NotSent помечает err как «заведомо не отправлено» (KnownNotSent = true):
+// для отправителей, которые сами знают, что запроса не было.
+func NotSent(err error) error { return &retryableError{err: err} }
+
 // KnownNotSent -- по ошибке отправки известно, что сообщение НЕ отправлено:
 // Telegram ответил отказом (APIError, кроме 504) или запрос не ушёл вовсе
 // (ошибка соединения, 5xx от прокси -- retryableError). Всё остальное --
 // таймаут ответа, срок контекста, обрыв чтения -- «могло дойти»: повторная
 // отправка того же сообщения дала бы дубль (I-2).
 func KnownNotSent(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrMaybeDelivered) {
 		return false
 	}
 	var ae *APIError
