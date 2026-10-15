@@ -167,3 +167,50 @@ func TestSendRetriesDialErrors(t *testing.T) {
 		t.Fatalf("попыток %d, пауз %v; want 3 и 2", n, *pauses)
 	}
 }
+
+// 504 от прокси -- шлюз не дождался Telegram, но Telegram мог запрос уже
+// исполнить: повтор дал бы дубль. Ни HTML-ответ, ни JSON с кодом 504 не
+// повторяются.
+func TestSend504IsNotRetried(t *testing.T) {
+	for name, body := range map[string]string{
+		"html": `<html><body>504 Gateway Time-out</body></html>`,
+		"json": `{"ok":false,"error_code":504,"description":"Gateway Timeout"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var hits int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&hits, 1)
+				w.WriteHeader(http.StatusGatewayTimeout)
+				w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+			pauses := recordPauses(c)
+			if _, err := c.SendMessage(context.Background(), 5, nil, "x", "", nil); err == nil {
+				t.Fatal("ждали ошибку 504")
+			}
+			if n := atomic.LoadInt32(&hits); n != 1 || len(*pauses) != 0 {
+				t.Fatalf("запросов %d, пауз %v; want 1 и ни одной", n, *pauses)
+			}
+		})
+	}
+}
+
+// HTML-страница 502 от прокси -- до бота запрос не дошёл, повтор безопасен.
+func TestSendRetriesHTML502(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&hits, 1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte(`<html>502 Bad Gateway</html>`))
+			return
+		}
+		w.Write([]byte(`{"ok":true,"result":{"message_id":9}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	recordPauses(c)
+	if mid, err := c.SendMessage(context.Background(), 5, nil, "x", "", nil); err != nil || mid != 9 {
+		t.Fatalf("SendMessage = %d, %v", mid, err)
+	}
+}

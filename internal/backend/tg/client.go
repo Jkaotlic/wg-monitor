@@ -561,9 +561,11 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 	if err := json.Unmarshal(raw, &ar); err != nil {
 		c.warn(method, "bad response", "status", resp.StatusCode, "body_len", len(raw))
 		out := fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
-		if resp.StatusCode >= 500 {
-			// Прокси перед Telegram ответил HTML-страницей 502/503: до бота
-			// запрос не дошёл, повтор безопасен.
+		if retryableStatus(resp.StatusCode) {
+			// Прокси перед Telegram ответил HTML-страницей 5xx (кроме 504):
+			// он не передал запрос дальше или Telegram отказал до исполнения.
+			// 504 -- шлюз не дождался ответа, а Telegram мог сообщение уже
+			// отправить: повтор дал бы дубль.
 			return &retryableError{err: out}
 		}
 		return out
@@ -586,8 +588,8 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 
 // Повтор отправки (BOT-01). Временный сбой Telegram в момент тревоги не
 // должен откладывать её до напоминания через 6 часов. Повторяем только то, что
-// заведомо НЕ доставлено: 429 (Telegram отказал до доставки), 5xx и ошибки
-// соединения до отправки запроса. Таймаут ожидания ответа и обрыв после
+// заведомо НЕ доставлено: 429 (Telegram отказал до доставки), 5xx, кроме
+// 504, и ошибки соединения до отправки запроса. Таймаут ожидания ответа и обрыв после
 // отправки не повторяем: сообщение могло уже прийти, повтор дал бы дубль.
 const (
 	sendMaxAttempts = 3
@@ -602,7 +604,7 @@ const (
 var sendRetryPauses = [sendMaxAttempts - 1]time.Duration{time.Second, 3 * time.Second}
 
 // retryableError -- ошибка, при которой запрос до Telegram заведомо не дошёл
-// (соединение не установлено, 5xx от прокси без ответа API). Текст -- как у
+// (соединение не установлено, 5xx кроме 504 от прокси без ответа API). Текст -- как у
 // обёрнутой ошибки.
 type retryableError struct{ err error }
 
@@ -621,6 +623,12 @@ func notSent(err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
+// retryableStatus -- 5xx, после которого повтор безопасен. 504 Gateway
+// Timeout исключён: шлюз не дождался Telegram, но тот мог запрос исполнить.
+func retryableStatus(code int) bool {
+	return code >= 500 && code != http.StatusGatewayTimeout
+}
+
 // retryWait -- можно ли повторить отправку после err и сколько ждать.
 // fallback -- пауза для 5xx и ошибок соединения.
 func retryWait(err error, fallback time.Duration) (time.Duration, bool) {
@@ -636,7 +644,7 @@ func retryWait(err error, fallback time.Duration) (time.Duration, bool) {
 				return 0, false
 			}
 			return d, true
-		case ae.Code >= 500:
+		case retryableStatus(ae.Code):
 			return fallback, true
 		}
 		return 0, false
