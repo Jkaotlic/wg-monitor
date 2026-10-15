@@ -178,8 +178,22 @@ func (r *Repairs) Begin(_ context.Context, routerID int64, checkName string) lin
 	r.mu.Unlock()
 
 	th := &repairThread{r: r, key: key, gen: gen, appURL: appURL}
-	if r.texts != nil {
-		th.base, th.kb, th.hasBase = r.texts.Last(routerID, checkName)
+	th.load()
+	return th
+}
+
+// load снимает текст тревоги из памяти и номера её сообщений -- то, чего у
+// нити ещё нет. Begin зовёт его сразу; вызовы нити -- повторно, пока править
+// нечего: первая тревога могла не дойти, и realert доставит карточку уже
+// посреди починки (M-5). Снятый снимок не перечитывается: «восстановилось»
+// может очистить таблицу, а итог обязан дописаться в тревогу.
+func (t *repairThread) load() {
+	r, routerID, checkName := t.r, t.key.routerID, t.key.checkName
+	if !t.hasBase && r.texts != nil {
+		t.base, t.kb, t.hasBase = r.texts.Last(routerID, checkName)
+	}
+	if len(t.targets) > 0 {
+		return
 	}
 	msgs, err := r.d.AlertMessages().List(routerID, checkName)
 	if err != nil {
@@ -188,16 +202,22 @@ func (r *Repairs) Begin(_ context.Context, routerID int64, checkName string) lin
 	// Снимок -- только тем, кто и сейчас получатель: заглушивший роутер
 	// (админ кнопкой «Не писать мне», оператор) и снятый оператор правок
 	// больше не получают. Таблица alert_messages от выключения не чистится.
-	cur := th.recipients()
+	cur := t.recipients()
 	for chatID, mid := range msgs {
 		if cur != nil && !cur[chatID] {
 			continue
 		}
-		th.targets = append(th.targets, threadTarget{chatID: chatID, messageID: mid})
+		t.targets = append(t.targets, threadTarget{chatID: chatID, messageID: mid})
 	}
 	// Порядок получателей -- по номеру чата: правки идут предсказуемо.
-	sort.Slice(th.targets, func(i, j int) bool { return th.targets[i].chatID < th.targets[j].chatID })
-	return th
+	sort.Slice(t.targets, func(i, j int) bool { return t.targets[i].chatID < t.targets[j].chatID })
+}
+
+// refresh -- дочитать тревогу, если править пока нечего (см. load).
+func (t *repairThread) refresh() {
+	if !t.editable() {
+		t.load()
+	}
 }
 
 // finish -- нить кончилась. done=true -- «Починил»: закрытие на 30 минут,
@@ -274,6 +294,7 @@ func (t *repairThread) editable() bool {
 // каждая ступень новым сообщением -- это спам, а итог (Done/NeedHuman/
 // NotStarted) всё равно придёт.
 func (t *repairThread) Progress(ctx context.Context, text string) {
+	t.refresh()
 	if !t.editable() {
 		return
 	}
@@ -281,11 +302,13 @@ func (t *repairThread) Progress(ctx context.Context, text string) {
 }
 
 func (t *repairThread) Done(ctx context.Context, text string) {
+	t.refresh()
 	t.r.finish(t.key, t.gen, true)
 	t.say(ctx, phaseDone, text)
 }
 
 func (t *repairThread) NotStarted(ctx context.Context, why string) {
+	t.refresh()
 	t.r.finish(t.key, t.gen, false)
 	t.say(ctx, phaseNotStarted, "Автопочинка не запускалась: "+strings.TrimRight(strings.TrimSpace(why), ".")+".")
 }
@@ -294,6 +317,7 @@ func (t *repairThread) NotStarted(ctx context.Context, why string) {
 // звуком на тревогу: правка беззвучна, и то, ради чего человек нужен, не
 // может жить только в ней.
 func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
+	t.refresh()
 	t.r.finish(t.key, t.gen, false)
 	action = strings.TrimRight(strings.TrimSpace(action), ".")
 	if !t.editable() {

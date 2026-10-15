@@ -949,3 +949,38 @@ func TestThread_DoneDropsSilenceButton(t *testing.T) {
 		}
 	}
 }
+
+// lateTexts -- память тревоги, которая появляется посреди починки.
+type lateTexts struct{ f *fakeTexts }
+
+func (l lateTexts) Last(a int64, b string) (string, *tg.InlineKeyboardMarkup, bool) {
+	return l.f.Last(a, b)
+}
+
+// M-5: первая тревога не дошла, починка началась без сообщений, а realert
+// доставил карточку позже -- итог дописывается в неё, а не уходит отдельным
+// сообщением мимо красной карточки.
+func TestThread_PicksUpCardDeliveredAfterBegin(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	tgc := &threadTG{}
+	mem := &fakeTexts{}
+	r := newTestRepairs(d, tgc, lateTexts{mem}, nil)
+
+	th := r.Begin(context.Background(), router, threadCheck)
+	// realert доставил карточку
+	if err := d.AlertMessages().Put(router, threadCheck, 1001, 11); err != nil {
+		t.Fatal(err)
+	}
+	*mem = fakeTexts{threadAlert, alertKB(), true}
+
+	th.Done(context.Background(), "Починил: перезапустил. VPN-туннель «Франкфурт» снова работает.")
+	if len(tgc.edits) != 1 || len(tgc.sends) != 0 {
+		t.Fatalf("правок=%d отправок=%d, ждали правку доставленной позже карточки", len(tgc.edits), len(tgc.sends))
+	}
+	if tgc.edits[0].messageID != 11 {
+		t.Fatalf("правка не той карточки: %+v", tgc.edits[0])
+	}
+}
