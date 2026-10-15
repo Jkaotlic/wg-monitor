@@ -971,7 +971,7 @@ func (d Deps) finishNoAnswer(ctx context.Context, jobID string, req StartReq, th
 		j.State = provision.StateFailed
 		j.Hint = ActRouterLate
 	})
-	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), ActRouterLate)
+	th.NeedHuman(context.WithoutCancel(ctx), lateText(names, log), ActRouterLate)
 }
 
 // finishFail -- провал до лесенки (снимок, увод): шаг step провален с
@@ -1039,11 +1039,36 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
-// agentImportBudget -- сколько агент отводит себе на tunnel_import
-// (internal/agent/actions/runner.go, actionTimeoutOverrides). Самое долгое
-// действие лесенки: ждать его меньше -- считать «не помогло» замену, которая
-// ещё идёт.
-const agentImportBudget = 300 * time.Second
+// Сроки действий лесенки у агента -- копия internal/agent/actions/runner.go
+// (defaultActionTimeout и actionTimeoutOverrides); меняются там -- менять
+// здесь. agentImportBudget -- самое долгое действие лесенки: ждать его
+// меньше -- считать «не помогло» замену, которая ещё идёт.
+const (
+	agentImportBudget  = 300 * time.Second
+	agentDefaultBudget = 45 * time.Second
+	// minQueueLife -- нижняя граница срока команды в очереди: при коротком
+	// ожидании (песочница, тесты) агент всё равно успевает её забрать.
+	minQueueLife = 30 * time.Second
+)
+
+// agentBudget -- сколько агент может выполнять действие action.
+func agentBudget(action string) time.Duration {
+	if action == "tunnel_import" {
+		return agentImportBudget
+	}
+	return agentDefaultBudget
+}
+
+// queueLife -- сколько команда ждёт выдачи агенту: ожидание ответа минус
+// срок действия у агента. Выданная в последний момент команда успевает
+// ответить, пока её ждут, а не выполняется после того, как починка ушла
+// дальше.
+func queueLife(action string, wait time.Duration) time.Duration {
+	if life := wait - agentBudget(action); life > minQueueLife {
+		return life
+	}
+	return minQueueLife
+}
 
 func (d Deps) awaitStep() time.Duration {
 	if d.AwaitStep > 0 {
@@ -1068,12 +1093,12 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	if err != nil {
 		return nil, err
 	}
-	// Срок жизни в очереди -- срок ожидания: команда, которую перестали
-	// ждать, не выдаётся агенту позже и не выполняется тайком (очередь
-	// выбрасывает протухшие при выдаче).
+	// Срок жизни в очереди -- ожидание минус срок действия у агента (см.
+	// queueLife): команда, которую уже не дождутся, агенту не выдаётся и
+	// не выполняется тайком (очередь выбрасывает протухшие при выдаче).
 	issued := d.now().UTC()
 	wait := d.awaitStep()
-	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: issued, ExpiresAt: issued.Add(wait)}
+	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: issued, ExpiresAt: issued.Add(queueLife(action, wait))}
 	if err := d.Commands.Enqueue(routerID, cmd); err != nil {
 		d.logCommandFailure(action, "enqueue", err.Error())
 		return nil, errors.New(replace.CommandNotSent)

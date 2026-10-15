@@ -95,7 +95,22 @@ func failText(n lineNames, log []string) string {
 	if len(log) > 0 {
 		text += " (" + joinLog(log) + ")"
 	}
-	text += "."
+	return text + "." + trafficText(n)
+}
+
+// lateText -- итог, когда роутер вовремя не ответил на команду лесенки: это
+// не провал починки, а «неизвестно» -- так и сказать.
+func lateText(n lineNames, log []string) string {
+	text := "Роутер не ответил вовремя — починку VPN-туннеля «" + n.broken + "» не довёл"
+	if len(log) > 0 {
+		text += " (" + joinLog(log) + ")"
+	}
+	return text + "." + trafficText(n)
+}
+
+// trafficText -- где сейчас идёт трафик, фразой с пробелом впереди.
+func trafficText(n lineNames) string {
+	text := ""
 	switch {
 	case n.reserve && n.carrier != "":
 		text += " Трафик и так идёт через «" + n.carrier + "»."

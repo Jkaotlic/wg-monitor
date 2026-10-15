@@ -2042,21 +2042,51 @@ func TestLadder_PanelCauseNeverReachesOwner(t *testing.T) {
 // ---- BE-01: срок команды и молчание роутера ----
 
 // Команда, которую починка перестала ждать, не должна выполниться позже
-// тайком: срок её жизни в очереди -- ровно срок ожидания ответа.
-func TestCommand_ExpiresWithAwait(t *testing.T) {
+// тайком. Срок в очереди -- ожидание минус срок действия у агента: выданная
+// в последний момент команда всё равно успевает ответить, пока её ждут.
+func TestCommand_ExpiryLeavesAgentBudget(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	c := newScript()
-	d := Deps{Commands: c, Now: func() time.Time { return now }, AwaitStep: 4 * time.Minute}
+	cases := []struct {
+		action string
+		wait   time.Duration
+		want   time.Duration
+	}{
+		{"tunnel_import", 6 * time.Minute, time.Minute},
+		{"tunnel_import", time.Minute, 30 * time.Second},                          // нижняя граница
+		{"route_policy_promote", 6 * time.Minute, 5*time.Minute + 15*time.Second}, // 45 с по умолчанию
+		{"tunnel_restart", 4 * time.Minute, 3*time.Minute + 15*time.Second},
+		{"route_status", 6 * time.Minute, 5*time.Minute + 15*time.Second},
+	}
+	for _, tc := range cases {
+		c := newScript()
+		d := Deps{Commands: c, Now: func() time.Time { return now }, AwaitStep: tc.wait}
+		if _, err := d.command(context.Background(), 1, tc.action, map[string]any{}); err != nil {
+			t.Fatalf("%s: %v", tc.action, err)
+		}
+		sent := c.all()
+		if len(sent) != 1 || !sent[0].IssuedAt.Equal(now) {
+			t.Fatalf("%s: отправлено %+v", tc.action, sent)
+		}
+		if got := sent[0].ExpiresAt.Sub(now); got != tc.want {
+			t.Errorf("%s при ожидании %v: срок в очереди %v, ждали %v", tc.action, tc.wait, got, tc.want)
+		}
+	}
+}
 
-	if _, err := d.command(context.Background(), 1, "tunnel_restart", map[string]any{"tunnel_id": "awg12"}); err != nil {
-		t.Fatalf("command: %v", err)
+// Увод трафика на запасной тоже получает срок: отложенный promote, выданный
+// после конца ожидания, переставил бы цепочку человека навсегда.
+func TestLadder_PromoteHasExpiry(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	e.run(t, ladderReq())
+	promotes := e.cmd.actions("route_policy_promote")
+	if len(promotes) == 0 {
+		t.Fatal("увода не было")
 	}
-	sent := c.all()
-	if len(sent) != 1 {
-		t.Fatalf("отправлено %d команд", len(sent))
-	}
-	if !sent[0].IssuedAt.Equal(now) || !sent[0].ExpiresAt.Equal(now.Add(4*time.Minute)) {
-		t.Fatalf("выдана %v, срок %v; ждали срок %v", sent[0].IssuedAt, sent[0].ExpiresAt, now.Add(4*time.Minute))
+	for _, p := range promotes {
+		if p.ExpiresAt.IsZero() || !p.ExpiresAt.After(p.IssuedAt) {
+			t.Fatalf("у увода нет срока: выдан %v, срок %v", p.IssuedAt, p.ExpiresAt)
+		}
 	}
 }
 
@@ -2159,5 +2189,70 @@ func TestLadder_NotInSetNotSticky(t *testing.T) {
 	}
 	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
 		t.Fatalf("VPN-туннель вне наборов получил стоп: %s", why)
+	}
+}
+
+// Ступень 3: новая страна выпущена, а замену конфига роутер вовремя не
+// выполнил. Протухшая команда не выполнялась вовсе, поэтому настройка не
+// переписывается на новую страну, итог -- «роутер не ответил вовремя».
+func TestLadder_NewCountryImportSilentNoSave(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.src.options = []Option{{ID: "nl", Issued: true}, {ID: "de", Label: "Германия"}}
+	e.cmd.on = map[string]func(*scriptCommander, int){
+		"tunnel_import": func(c *scriptCommander, n int) {
+			if n == 2 {
+				c.silent = map[string]bool{"tunnel_import": true}
+			}
+		},
+	}
+
+	job, final := e.run(t, ladderReq())
+
+	if sp := e.spentMarks(); len(sp) != 1 || sp[0] != "1/awg12/de" {
+		t.Fatalf("отметка о новой стране: %v", sp)
+	}
+	if u := e.unconfirmedOptions(); len(u) != 0 {
+		t.Fatalf("настройка переписана на страну, замена на которую не выполнилась: %+v", u)
+	}
+	if s := e.savedOptions(); len(s) != 0 {
+		t.Fatalf("настройка переписана: %+v", s)
+	}
+	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRouterLate {
+		t.Fatalf("state=%s final=%+v", job.State, final)
+	}
+	if !strings.Contains(final.Text, "не ответил вовремя") || strings.Contains(final.Text, "сам не смог") {
+		t.Fatalf("итог говорит о провале починки, а не о молчании роутера: %q", final.Text)
+	}
+	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+		t.Fatalf("молчание роутера поставило стоп: %s", why)
+	}
+}
+
+// setFailKV -- история читается, а попытка не записывается.
+type setFailKV struct{ safeKV }
+
+func (s *setFailKV) Set(string, string) error { return errors.New("disk I/O error") }
+
+// BE-03: попытка не записалась -- автозапуск не начинается (потолок без
+// записи не работает), замок роутера снят.
+func TestStart_StartedWriteFailureRefuses(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	e.d.Attempts = Attempts{KV: &setFailKV{safeKV{m: map[string]string{}}}}
+
+	_, err := e.d.Start(ladderReq())
+
+	if !errors.Is(err, ErrAutoDisabled) {
+		t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
+	}
+	if e.cmd.count() != 0 {
+		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+	}
+	if !e.d.Store.TryLock("роутер") {
+		t.Fatal("замок роутера не снят -- следующая починка не начнётся")
+	}
+	e.d.Store.Unlock("роутер")
+	calls := e.rep.waitCalls(t, 1)
+	if len(calls) != 1 || calls[0].Kind != "notstarted" || !strings.Contains(calls[0].Text, "не смог записать попытку") {
+		t.Fatalf("причина не сказана: %+v", calls)
 	}
 }
