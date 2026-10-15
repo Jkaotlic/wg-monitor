@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func (s *silencingSink) SendTracked(ctx context.Context, routerUserID int64, che
 // Review fix 2: отметка отправки пишется точечно и не затирает тишину,
 // поставленную, пока тревога отправлялась, -- ни при успехе, ни при сбое.
 func TestDispatcherHardKeepsSilenceSetDuringSend(t *testing.T) {
-	for name, sendErr := range map[string]error{"доставлено": nil, "не доставлено": notify.ErrNoneDelivered} {
+	for name, sendErr := range map[string]error{"доставлено": nil, "не доставлено": fmt.Errorf("%w: %w", notify.ErrNoneDelivered, &tg.APIError{Code: 502})} {
 		t.Run(name, func(t *testing.T) {
 			d := newDB(t)
 			uid, _ := d.Users().Insert("router-r", "6666000000000000000000000000000000000000000000000000000000000000", "1.1.1.1", "awg0")

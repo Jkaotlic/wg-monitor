@@ -623,6 +623,23 @@ func notSent(err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
+// KnownNotSent -- по ошибке отправки известно, что сообщение НЕ отправлено:
+// Telegram ответил отказом (APIError, кроме 504) или запрос не ушёл вовсе
+// (ошибка соединения, 5xx от прокси -- retryableError). Всё остальное --
+// таймаут ответа, срок контекста, обрыв чтения -- «могло дойти»: повторная
+// отправка того же сообщения дала бы дубль (I-2).
+func KnownNotSent(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Code != http.StatusGatewayTimeout
+	}
+	var re *retryableError
+	return errors.As(err, &re)
+}
+
 // retryableStatus -- 5xx, после которого повтор безопасен. 504 Gateway
 // Timeout исключён: шлюз не дождался Telegram, но тот мог запрос исполнить.
 func retryableStatus(code int) bool {

@@ -111,7 +111,7 @@ func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 	// Единственному получателю доставить не удалось -- значит тревога не
 	// ушла никому и обязана быть повторена. Состояние при этом сохраняется:
 	// иначе следующий fail-репорт снова пересёк бы порог и выдал дубль.
-	tgc := &fakeTG{sendErrOnce: errStub("telegram rate limited")}
+	tgc := &fakeTG{sendErrOnce: &tg.APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests"}}
 	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2})
 
 	hardSince := time.Now().Add(-2 * time.Minute).UTC()

@@ -3,6 +3,7 @@ package tg
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -212,5 +213,29 @@ func TestSendRetriesHTML502(t *testing.T) {
 	recordPauses(c)
 	if mid, err := c.SendMessage(context.Background(), 5, nil, "x", "", nil); err != nil || mid != 9 {
 		t.Fatalf("SendMessage = %d, %v", mid, err)
+	}
+}
+
+// I-2: KnownNotSent отличает «Telegram отказал / запрос не ушёл» от «могло
+// дойти».
+func TestKnownNotSent(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":            {nil, false},
+		"api 429":        {&APIError{Code: 429}, true},
+		"api 400":        {&APIError{Code: 400}, true},
+		"api 502":        {&APIError{Code: 502}, true},
+		"api 504":        {&APIError{Code: 504}, false},
+		"dial":           {&retryableError{err: errors.New("dial")}, true},
+		"wrapped 502":    {fmt.Errorf("x: %w", &APIError{Code: 502}), true},
+		"ctx deadline":   {context.DeadlineExceeded, false},
+		"response timeo": {errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers"), false},
+	}
+	for name, c := range cases {
+		if got := KnownNotSent(c.err); got != c.want {
+			t.Errorf("%s: KnownNotSent = %v, want %v", name, got, c.want)
+		}
 	}
 }

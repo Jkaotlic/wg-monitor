@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -283,9 +284,12 @@ func Silenced(st db.IncidentState, now time.Time) bool {
 //
 // Отметка пишется точечным UPDATE, а не Save всей строки: отправка с
 // повторами длится до полуминуты, и за это время человек мог нажать «Тише
-// на час» -- снимок st затёр бы тишину. Не дошло никому -- last_alert_at
-// снимается в NULL (realert повторит на ближайшем обходе), ошибка
-// возвращается.
+// на час» -- снимок st затёр бы тишину. Не дошло никому и это известно
+// наверняка (Telegram отказал, запрос не ушёл) -- last_alert_at снимается в
+// NULL (realert повторит на ближайшем обходе). Могло дойти (таймаут ответа,
+// срок контекста) -- отметка ставится, дальше обычное напоминание: иначе
+// при медленном Telegram карточка дублировалась бы каждые 5 минут (I-2).
+// Ошибка возвращается в обоих случаях.
 func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, checkName string, st db.IncidentState, check wire.Check) (int, error) {
 	if st.HardSince == nil {
 		return 0, fmt.Errorf("HARD %s/%s: нет hard_since", nickname, checkName)
@@ -325,6 +329,16 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 	kb := tg.AlertKeyboard(userID, checkName, appURL)
 	delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb, Silenced(st, di.now()))
 	if err != nil {
+		if hardMaybeDelivered(err) {
+			// Таймаут ответа или срок контекста: карточка могла дойти.
+			// Отметка ставится, как при доставке -- дальше обычное
+			// напоминание по расписанию, а не полная карточка на каждом
+			// обходе realert (I-2).
+			if bErr := di.d.State().BumpLastAlertAt(userID, checkName, di.now()); bErr != nil {
+				slog.Error("HARD: не удалось поставить отметку отправки", "user_id", userID, "check", checkName, "err", bErr)
+			}
+			return 0, err
+		}
 		if clrErr := di.d.State().ClearLastAlertAt(userID, checkName); clrErr != nil {
 			slog.Error("HARD: не удалось снять отметку отправки", "user_id", userID, "check", checkName, "err", clrErr)
 		}
@@ -344,6 +358,14 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 		return delivered, fmt.Errorf("HARD отметка отправки %s/%s: %w", nickname, checkName, err)
 	}
 	return delivered, nil
+}
+
+// hardMaybeDelivered -- рассылка карточки провалилась так, что Telegram мог
+// её уже доставить: получатели были (ErrNoneDelivered), а ошибка -- не из
+// тех, что значат «заведомо не отправлено» (tg.KnownNotSent). Ошибка
+// составления списка получателей (база) -- не отправлено ничего.
+func hardMaybeDelivered(err error) bool {
+	return errors.Is(err, notify.ErrNoneDelivered) && !tg.KnownNotSent(err)
 }
 
 // collectNeighbors returns short summaries of the user's other tunnel checks.

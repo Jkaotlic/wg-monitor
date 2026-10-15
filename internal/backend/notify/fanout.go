@@ -231,7 +231,11 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 	for _, chatID := range targets {
 		mid, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, silent)
 		if sendErr != nil {
-			if !f.noteFailure(chatID, routerUserID, sendErr) {
+			// «Могло дойти» важнее «заведомо не дошло»: если хоть одному
+			// ответ не пришёл, вердикт должен это сохранить, иначе
+			// DeliverHard снимет отметку и realert пришлёт дубль карточки
+			// (I-2).
+			if !f.noteFailure(chatID, routerUserID, sendErr) && (lastErr == nil || tg.KnownNotSent(lastErr)) {
 				lastErr = sendErr
 			}
 			continue

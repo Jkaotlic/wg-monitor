@@ -22,7 +22,8 @@ func (f dispTG) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, 
 	return f.SendMessage(ctx, chatID, threadID, text, parseMode, replyTo)
 }
 
-var errTG502 = errors.New("tg sendMessage: Bad Gateway (code=502)")
+// errTG502 -- Telegram ответил 502: заведомо не отправлено (tg.KnownNotSent).
+var errTG502 error = &tg.APIError{Method: "sendMessage", Code: 502, Description: "Bad Gateway"}
 
 var th = state.Thresholds{Fail: 3, Recovery: 2}
 
@@ -290,5 +291,80 @@ func TestRealertNeverDeliversHardCardForHeartbeat(t *testing.T) {
 	}
 	if f.count() != 1 || !strings.Contains(f.sent[0], "Всё ещё") {
 		t.Fatalf("ждали одно короткое напоминание, ушло %q", f.sent)
+	}
+}
+
+// errTGTimeout -- ответ Telegram не пришёл вовремя: запрос ушёл, сообщение
+// могло дойти (так tg.Client отдаёт таймаут ответа -- обычной ошибкой).
+var errTGTimeout = errors.New("tg sendMessage: Post \"sendMessage\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)")
+
+// I-2: карточка, которая могла дойти (таймаут ответа, срок контекста), не
+// шлётся заново полной карточкой на каждом обходе: отметка остаётся, дальше
+// только обычное напоминание по расписанию.
+func TestMaybeDeliveredHardIsNotResentOnNextTick(t *testing.T) {
+	for name, sendErr := range map[string]error{
+		"response timeout": errTGTimeout,
+		"ctx deadline":     context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			f := &fakeTG{sendErr: sendErr}
+			now := time.Now().UTC().Truncate(time.Second)
+			disp := alerts.NewDispatcher(d, dispTG{f}, alerts.Config{FailThreshold: 3, RecoveryThreshold: 2})
+			disp.SetNow(func() time.Time { return now })
+			prev := db.IncidentState{UserID: uid, CheckName: "awg_handshake", CurrentStatus: "fail", ConsecutiveFails: 2}
+			tr := state.Apply(prev, "fail", now, th)
+			_ = disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "fail"})
+			st, _ := d.State().Get(uid, "awg_handshake")
+			if st.LastAlertAt == nil {
+				t.Fatal("карточка, которая могла дойти, помечена недоставленной: realert пришлёт дубль")
+			}
+			f.sendErr = nil
+			p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+			p.SetHardDeliverer(disp)
+			for _, m := range []time.Duration{5, 10} {
+				at := now.Add(m * time.Minute)
+				disp.SetNow(func() time.Time { return at })
+				p.SetNow(func() time.Time { return at })
+				p.tick(context.Background())
+			}
+			if n := f.count(); n != 1 {
+				t.Fatalf("сообщений %d, ждали 1 (дубль карточки после таймаута): %q", n, f.sent)
+			}
+		})
+	}
+}
+
+// I-2: realert сам доставляет карточку (отметки нет), ответ не пришёл --
+// отметка ставится, следующий обход карточку не повторяет.
+func TestRealertHardTimeoutMarksSent(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{sendErr: &tg.APIError{Method: "sendMessage", Code: 502, Description: "Bad Gateway"}}
+	now := time.Now().UTC().Truncate(time.Second)
+	disp := alerts.NewDispatcher(d, dispTG{f}, alerts.Config{FailThreshold: 3, RecoveryThreshold: 2})
+	disp.SetNow(func() time.Time { return now })
+	prev := db.IncidentState{UserID: uid, CheckName: "awg_handshake", CurrentStatus: "fail", ConsecutiveFails: 2}
+	tr := state.Apply(prev, "fail", now, th)
+	_ = disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "fail"})
+	if st, _ := d.State().Get(uid, "awg_handshake"); st.LastAlertAt != nil {
+		t.Fatalf("502 от Telegram (заведомо не отправлено) не сняло отметку: %v", st.LastAlertAt)
+	}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetHardDeliverer(disp)
+	f.sendErr = errTGTimeout
+	at := now.Add(5 * time.Minute)
+	disp.SetNow(func() time.Time { return at })
+	p.SetNow(func() time.Time { return at })
+	p.tick(context.Background())
+	if n := f.count(); n != 2 {
+		t.Fatalf("сообщений %d, ждали 2 (недоставленная + повтор на обходе)", n)
+	}
+	f.sendErr = nil
+	at2 := now.Add(10 * time.Minute)
+	disp.SetNow(func() time.Time { return at2 })
+	p.SetNow(func() time.Time { return at2 })
+	p.tick(context.Background())
+	if n := f.count(); n != 2 {
+		t.Fatalf("сообщений %d, ждали 2: после таймаута карточка ушла снова", n)
 	}
 }

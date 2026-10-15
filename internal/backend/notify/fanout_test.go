@@ -451,3 +451,34 @@ func TestFanout_SilentTrackedAndReply(t *testing.T) {
 		t.Fatalf("тихо %v, громко %v, без кнопок %v; ждали две тихих", s.silent, s.loud, s.sent)
 	}
 }
+
+// I-2: если хоть одному получателю ответ не пришёл (могло дойти), вердикт
+// SendTracked это сохраняет, в каком бы порядке ни шли ошибки.
+func TestFanout_SendTrackedKeepsMaybeDelivered(t *testing.T) {
+	timeout := errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers")
+	refused := &tg.APIError{Method: "sendMessage", Code: 502}
+	for name, fail := range map[string]map[int64]error{
+		"timeout first": {1001: timeout, 1002: refused},
+		"timeout last":  {1001: refused, 1002: timeout},
+		"all refused":   {1001: refused, 1002: refused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+				t.Fatal(err)
+			}
+			s := &fakeKeyboardSender{fakeSender: fakeSender{fail: fail}}
+			_, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "x", "", &tg.InlineKeyboardMarkup{}, false)
+			if !errors.Is(err, ErrNoneDelivered) {
+				t.Fatalf("err = %v", err)
+			}
+			want := name == "all refused"
+			if got := tg.KnownNotSent(err); got != want {
+				t.Fatalf("KnownNotSent = %v, want %v (err %v)", got, want, err)
+			}
+		})
+	}
+}
