@@ -273,7 +273,9 @@ func TestMiniappEventsDropsResolverGuardStaleBeforeHeartbeat(t *testing.T) {
 // текущий ответ, и его показывать надо.
 func TestMiniappEventsKeepsResolverGuardAtSameTimeAsHeartbeat(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
-	ts := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	// Метка -- от текущего времени: зашитое 14.09.2026 вышло за окно событий
+	// (miniappEventsWindow, 30 дней) 15.10 и тест упал без изменений в коде.
+	ts := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	if err := d.Events().Insert(ownedID, "resolver_guard", "ok", `{"mode":"primary","reason":""}`, ts); err != nil {
 		t.Fatalf("insert resolver_guard: %v", err)
 	}
