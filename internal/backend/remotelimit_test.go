@@ -122,20 +122,14 @@ func TestRemoteRateLimiterForgetsFullBucketsAndStillLetsNewcomersIn(t *testing.T
 
 // Что лимитер видит за релеем -- зафиксировано намеренно, а не забыто.
 //
-// X-Forwarded-For не разбирается нигде: заголовок подделывается одной
-// строкой, и доверие к нему означало бы обход лимита вообще без залива.
-// Цена выбора названа вслух: за релеем KeenDNS RemoteAddr может оказаться
-// адресом релея для всех внешних клиентов сразу, и тогда ведёрко одно на
-// всех -- подбор не изолируется, а десять чужих неудач способны запереть
-// вход законному админу. Проверяется это на раскатке по журналу
-// «вход: слишком много попыток»: если remote у разных людей один и тот же,
-// ключ надо переводить на доверенный XFF от известного прокси.
+// Публичный RemoteAddr: X-Forwarded-For подделывается одной строкой, ему
+// не верим (BOT-04: верим только за частным/loopback прокси).
 func TestRemoteRateLimiterIgnoresForwardedForBehindRelay(t *testing.T) {
 	l := newRemoteRateLimiter(0.01, 1)
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	l.now = func() time.Time { return now }
 	h := remoteRateLimitMiddleware(l, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
 	hit := func(forwarded string) int {
@@ -147,8 +141,8 @@ func TestRemoteRateLimiterIgnoresForwardedForBehindRelay(t *testing.T) {
 		return rec.Code
 	}
 
-	if code := hit("203.0.113.5"); code != http.StatusNoContent {
-		t.Fatalf("первая попытка = %d, want 204", code)
+	if code := hit("203.0.113.5"); code != http.StatusUnauthorized {
+		t.Fatalf("первая попытка = %d, want 401", code)
 	}
 	// Другой XFF, тот же RemoteAddr -- то же ведёрко: подделываемый
 	// заголовок ключом не становится.
@@ -165,15 +159,15 @@ func TestRemoteRateLimitMiddlewareSaysRetryAfterAndSpeaksWords(t *testing.T) {
 	hits := 0
 	h := remoteRateLimitMiddleware(l, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits++
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
 	req.RemoteAddr = "198.51.100.7:40001"
 	first := httptest.NewRecorder()
 	h.ServeHTTP(first, req)
-	if first.Code != http.StatusNoContent {
-		t.Fatalf("первый запрос = %d, want 204", first.Code)
+	if first.Code != http.StatusUnauthorized {
+		t.Fatalf("первый запрос = %d, want 401", first.Code)
 	}
 	second := httptest.NewRecorder()
 	h.ServeHTTP(second, req)
@@ -204,5 +198,88 @@ func TestRemoteRateLimiterNilIsPassThrough(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent || hits != 1 {
 		t.Fatalf("выключенный лимитер: code=%d hits=%d", rec.Code, hits)
+	}
+}
+
+func limitedHandler(l *remoteRateLimiter, status int) http.Handler {
+	return remoteRateLimitMiddleware(l, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+}
+
+func hitFrom(h http.Handler, remote string, hdr map[string]string) int {
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", nil)
+	req.RemoteAddr = remote
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// BOT-04: за доверенным прокси (частный RemoteAddr) ключ -- клиент из XFF.
+func TestRemoteRateLimitKeysByForwardedClientBehindPrivateProxy(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusUnauthorized)
+	proxy := "192.168.1.1:40001"
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.5"}); c != http.StatusUnauthorized {
+		t.Fatalf("первый = %d", c)
+	}
+	// Другой клиент за тем же прокси лимит не делит.
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.6"}); c != http.StatusUnauthorized {
+		t.Fatalf("чужой клиент делит лимит: %d", c)
+	}
+	// Тот же клиент -- исчерпал.
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.5"}); c != http.StatusTooManyRequests {
+		t.Fatalf("повтор клиента = %d, want 429", c)
+	}
+}
+
+func TestRemoteRateLimitIgnoresForwardedFromPublicRemote(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusUnauthorized)
+	hitFrom(h, "198.51.100.9:1", map[string]string{"X-Forwarded-For": "203.0.113.1", "X-Real-IP": "203.0.113.2"})
+	if c := hitFrom(h, "198.51.100.9:2", map[string]string{"X-Forwarded-For": "203.0.113.3"}); c != http.StatusTooManyRequests {
+		t.Fatalf("подделка XFF обошла лимит: %d", c)
+	}
+}
+
+// Клиент дописывает свой XFF слева: берём крайний правый недоверенный.
+func TestRemoteRateLimitTakesRightmostUntrustedForwarded(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.RemoteAddr = "127.0.0.1:5"
+	r.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.4, 10.0.0.2")
+	if got := clientRateKey(r); got != "198.51.100.4" {
+		t.Fatalf("key = %q, want 198.51.100.4", got)
+	}
+	r.Header.Del("X-Forwarded-For")
+	r.Header.Set("X-Real-IP", "203.0.113.7")
+	if got := clientRateKey(r); got != "203.0.113.7" {
+		t.Fatalf("X-Real-IP key = %q", got)
+	}
+	r.Header.Set("X-Real-IP", "мусор")
+	if got := clientRateKey(r); got != "127.0.0.1" {
+		t.Fatalf("мусор: key = %q, want RemoteAddr", got)
+	}
+}
+
+// Удачные входы токен не тратят; неудачные -- тратят.
+func TestRemoteRateLimitSuccessfulEntriesDoNotSpendTokens(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 2)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	ok := limitedHandler(l, http.StatusOK)
+	for i := 0; i < 20; i++ {
+		if c := hitFrom(ok, "198.51.100.1:1", nil); c != http.StatusOK {
+			t.Fatalf("удачный вход %d отвергнут: %d", i, c)
+		}
+	}
+	bad := limitedHandler(l, http.StatusUnauthorized)
+	hitFrom(bad, "198.51.100.1:1", nil)
+	hitFrom(bad, "198.51.100.1:1", nil)
+	if c := hitFrom(bad, "198.51.100.1:1", nil); c != http.StatusTooManyRequests {
+		t.Fatalf("неудачи не тратят токены: %d", c)
 	}
 }
