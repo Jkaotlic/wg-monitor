@@ -78,6 +78,9 @@ const (
 	ActSubscriptionFull = "подписка «Amnezia Premium» заполнена — освободите место или смените сервер во вкладке «Управление»"
 	// ActRelocateNoHelp -- менять локацию было разрешено, и это не помогло.
 	ActRelocateNoHelp = "другие локации тоже не помогли — смените сервер во вкладке «Управление»"
+	// ActNoPanelAccess -- у того, от чьего имени идёт выпуск, нет права
+	// выпускать конфиги с этой панели (сняли допуск или роль на роутере).
+	ActNoPanelAccess = "нет доступа к панели сервера — попросите владельца сервера выдать доступ"
 )
 
 // ActRenamed -- VPN-туннель переименовали после включения автопочинки:
@@ -100,4 +103,20 @@ func ActNewCountryNoHelp(label string) string {
 // ActVPSPanel -- действие, когда не ответила панель своего сервера.
 func ActVPSPanel(panel string) string {
 	return "проверьте свой сервер «" + panel + "»"
+}
+
+// issuerKey -- ключ контекста: от чьего имени (Telegram ID) выпускается конфиг.
+type issuerKey struct{}
+
+// WithIssuer -- движок кладёт в контекст вызовов источника, от чьего имени
+// идёт выпуск: нажавший «Починить» или включивший автопочинку. Источник
+// сверяет по нему право выпуска в момент выпуска, а не только при включении.
+func WithIssuer(ctx context.Context, tg int64) context.Context {
+	return context.WithValue(ctx, issuerKey{}, tg)
+}
+
+// IssuerFrom -- Telegram ID из WithIssuer; 0 -- движок не знает, кто.
+func IssuerFrom(ctx context.Context) int64 {
+	tg, _ := ctx.Value(issuerKey{}).(int64)
+	return tg
 }

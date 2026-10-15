@@ -248,7 +248,7 @@ func main() {
 	repairEngine := &linkrepair.Deps{
 		Store:           replaceEngine.Store,
 		Probe:           *replaceEngine,
-		Source:          backend.RepairSource(cabinet, awg3Panels, d),
+		Source:          backend.RepairSource(cabinet, awg3Panels, d, sandboxAdminID(*tgUser, *asAdmin)),
 		Settings:        backend.LinkRepairSettings(d, nil),
 		SaveOption:      backend.LinkRepairSaveOption(d, nil),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, nil),

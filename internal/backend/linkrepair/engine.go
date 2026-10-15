@@ -66,6 +66,9 @@ type Setting struct {
 	// подписке, поэтому она одна на настройку навсегда: не пусто -- смены
 	// локации больше нет. Повторное включение отметку не снимает (это деньги).
 	RelocateSpent string
+	// UpdatedBy -- Telegram ID того, кто включил или менял настройку. От его
+	// имени автопочинка выпускает конфиг; 0 -- не записано (старые строки).
+	UpdatedBy int64
 }
 
 // Reporter -- как движок говорит с людьми по ходу починки. Реализация живёт
@@ -138,6 +141,9 @@ type StartReq struct {
 	// роутера. Нужно, когда снимок не пришёл и имени взять больше неоткуда.
 	// Пустое -- не знает.
 	TunnelName string
+	// By -- Telegram ID нажавшего «Починить». У ручного запуска конфиг
+	// выпускается от его имени; 0 -- не знаем (тогда как у автозапуска).
+	By int64
 }
 
 // renamed -- настройка записана для VPN-туннеля с другим именем. Не знаем
@@ -349,7 +355,14 @@ func (d Deps) Start(req StartReq) (string, error) {
 // знает, что его переименовали; иначе сверка по снимку.
 func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedTo string, th Thread) {
 	defer d.Store.Unlock(req.Nickname)
-	ctx := d.baseCtx()
+	// Выпуск конфига -- от имени того, кто просил: нажавшего «Починить» или
+	// включившего автопочинку. Право источник сверяет в момент выпуска:
+	// снятый после включения допуск к панели выпуск останавливает.
+	issuer := set.UpdatedBy
+	if !req.Auto && req.By != 0 {
+		issuer = req.By
+	}
+	ctx := WithIssuer(d.baseCtx(), issuer)
 
 	plan, err := d.findPolicies(ctx, req.RouterID, sc.TunnelID)
 	brokenName := plan.name

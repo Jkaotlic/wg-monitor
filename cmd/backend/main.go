@@ -259,7 +259,7 @@ func main() {
 	repairEngine := &linkrepair.Deps{
 		Store:           provisionStore,
 		Probe:           *replaceEngine,
-		Source:          backend.RepairSource(cb, awg3Panels, d),
+		Source:          backend.RepairSource(cb, awg3Panels, d, cfg.Telegram.AdminUserID),
 		Settings:        backend.LinkRepairSettings(d, logger.With("component", "linkrepair")),
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, logger.With("component", "linkrepair")),

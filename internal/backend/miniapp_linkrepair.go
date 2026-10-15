@@ -22,7 +22,8 @@ type miniappRepairReq struct {
 
 // miniappRepairStartHandler запускает починку по кнопке. Доступно всем, у
 // кого есть доступ к роутеру: починка ничего не удаляет, а прежний туннель
-// остаётся на месте выключенным.
+// остаётся на месте выключенным. Выпуск со своего сервера -- только если
+// у нажавшего есть право выпуска с этой панели (проверяет источник).
 func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
@@ -69,6 +70,9 @@ func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 			// Приложение присылает только проверку; имя VPN-туннеля --
 			// из событий роутера, на случай если снимок не придёт.
 			TunnelName: miniappTunnelNameForCheck(d, routerID, check),
+			// Конфиг со своего сервера выпускается от имени нажавшего: право
+			// выпуска сверяется его допуском, а не включившего автопочинку.
+			By: telegramUserID,
 		})
 		switch {
 		case errors.Is(err, linkrepair.ErrNoScenario):

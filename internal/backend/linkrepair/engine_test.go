@@ -188,6 +188,8 @@ type fakeSource struct {
 	onOptions func()
 	// full -- подписка кабинета заполнена: свободного места нет.
 	full bool
+	// issuers -- от чьего имени (IssuerFrom) шёл каждый выпуск.
+	issuers []int64
 }
 
 // issuedOpts -- варианты кабинета, все уже выпущенные; подпись -- id в
@@ -207,14 +209,28 @@ func (s *fakeSource) rec(key string) error {
 	return s.errs[key]
 }
 
-func (s *fakeSource) Issue(_ context.Context, _ int64, provider, option string) (replace.Issued, error) {
+func (s *fakeSource) issuedBy(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.issuers = append(s.issuers, IssuerFrom(ctx))
+}
+
+func (s *fakeSource) gotIssuers() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.issuers...)
+}
+
+func (s *fakeSource) Issue(ctx context.Context, _ int64, provider, option string) (replace.Issued, error) {
+	s.issuedBy(ctx)
 	if err := s.rec("issue:" + provider + ":" + option); err != nil {
 		return replace.Issued{}, err
 	}
 	return replace.Issued{TunnelName: provider + "_" + option, Conf: []byte("[Interface]\n"), Backend: "nativewg"}, nil
 }
 
-func (s *fakeSource) Fresh(_ context.Context, _ int64, provider, option string) (replace.Issued, error) {
+func (s *fakeSource) Fresh(ctx context.Context, _ int64, provider, option string) (replace.Issued, error) {
+	s.issuedBy(ctx)
 	if err := s.rec("fresh:" + provider + ":" + option); err != nil {
 		return replace.Issued{}, err
 	}
@@ -548,6 +564,39 @@ func TestLadder_RecreateAwg3NewPeer(t *testing.T) {
 	})
 	if s := e.savedOptions(); len(s) != 0 {
 		t.Fatalf("у своего сервера вариант не меняется, а записан: %+v", s)
+	}
+}
+
+// BE-02: источник обязан знать, от чьего имени выпуск, чтобы сверить право
+// в момент выпуска. Автозапуск -- включивший автопочинку (UpdatedBy), ручной
+// -- нажавший «Починить»; нажавший неизвестен -- как у автозапуска.
+func TestLadder_IssuerIsWhoAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		auto bool
+		by   int64
+		want int64
+	}{
+		{"автозапуск", true, 0, 55},
+		{"ручной", false, 77, 77},
+		{"ручной без нажавшего", false, 0, 55},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLadder(t, &Setting{Enabled: true, Provider: "awg3", Option: "vps1/wg0", UpdatedBy: 55})
+			fixOn(e.cmd, "tunnel_import", 2, true)
+			req := ladderReq()
+			req.Auto, req.By = tc.auto, tc.by
+			e.run(t, req)
+			got := e.src.gotIssuers()
+			if len(got) != 2 {
+				t.Fatalf("выпусков %d: %v", len(got), got)
+			}
+			for _, tg := range got {
+				if tg != tc.want {
+					t.Fatalf("выпуск от имени %v, ждали %d", got, tc.want)
+				}
+			}
+		})
 	}
 }
 

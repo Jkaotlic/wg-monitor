@@ -23,6 +23,13 @@ func (f *fakeAwg3) FreshConfigForRouter(_ context.Context, id, iface, nick strin
 	return f.routerConf, f.routerErr
 }
 
+// repairAdminTG -- администратор в тестах источника: выпуск со своего
+// сервера ему разрешён всегда.
+const repairAdminTG = 999
+
+// adminCtx -- выпуск от имени администратора.
+func adminCtx() context.Context { return linkrepair.WithIssuer(context.Background(), repairAdminTG) }
+
 func repairSourceEnv(t *testing.T, cab VPNCabinet, panels Awg3Panels) (linkrepair.Source, int64) {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
@@ -34,7 +41,7 @@ func repairSourceEnv(t *testing.T, cab VPNCabinet, panels Awg3Panels) (linkrepai
 	if err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	return RepairSource(cab, panels, d), id
+	return RepairSource(cab, panels, d, repairAdminTG), id
 }
 
 func TestRepairSource_AmneziaNoKeyNeedsHuman(t *testing.T) {
@@ -78,7 +85,7 @@ func TestRepairSource_AmneziaIssuePassesConfig(t *testing.T) {
 func TestRepairSource_Awg3IssueSplitsOption(t *testing.T) {
 	panels := &fakeAwg3{routerConf: awg3panel.RouterConfig{Conf: []byte("[Interface]\n"), PeerID: "p1", Reused: true}}
 	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
-	got, err := src.Issue(context.Background(), id, "awg3", "vps1/wg0")
+	got, err := src.Issue(adminCtx(), id, "awg3", "vps1/wg0")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -93,7 +100,7 @@ func TestRepairSource_Awg3IssueSplitsOption(t *testing.T) {
 func TestRepairSource_Awg3FreshAlwaysNewPeer(t *testing.T) {
 	panels := &fakeAwg3{routerConf: awg3panel.RouterConfig{Conf: []byte("[Interface]\n"), PeerID: "p2"}}
 	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
-	if _, err := src.Fresh(context.Background(), id, "awg3", "vps1/wg0"); err != nil {
+	if _, err := src.Fresh(adminCtx(), id, "awg3", "vps1/wg0"); err != nil {
 		t.Fatalf("Fresh: %v", err)
 	}
 	if len(panels.routerCalls) != 1 || panels.routerCalls[0] != "fresh|vps1|wg0|дача" {
@@ -105,8 +112,8 @@ func TestRepairSource_Awg3PanelErrorNeedsHuman(t *testing.T) {
 	panels := &fakeAwg3{routerErr: errors.New("панель не ответила")}
 	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
 	for _, call := range []func() error{
-		func() error { _, err := src.Issue(context.Background(), id, "awg3", "vps1/wg0"); return err },
-		func() error { _, err := src.Fresh(context.Background(), id, "awg3", "vps1/wg0"); return err },
+		func() error { _, err := src.Issue(adminCtx(), id, "awg3", "vps1/wg0"); return err },
+		func() error { _, err := src.Fresh(adminCtx(), id, "awg3", "vps1/wg0"); return err },
 	} {
 		var nh *linkrepair.NeedHuman
 		if err := call(); !errors.As(err, &nh) || nh.Action != linkrepair.ActVPSPanel("vps1") {
@@ -119,7 +126,7 @@ func TestRepairSource_Awg3PanelErrorNeedsHuman(t *testing.T) {
 func TestRepairSource_Awg3BadOptionNeedsHuman(t *testing.T) {
 	panels := &fakeAwg3{}
 	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
-	_, err := src.Issue(context.Background(), id, "awg3", "vps1")
+	_, err := src.Issue(adminCtx(), id, "awg3", "vps1")
 	var nh *linkrepair.NeedHuman
 	if !errors.As(err, &nh) || nh.Action != linkrepair.ActNoSource {
 		t.Fatalf("ждали NeedHuman с ActNoSource, получили %v", err)
@@ -194,7 +201,7 @@ func TestLinkRepairSettings_ReadsTable(t *testing.T) {
 		t.Fatalf("SpendRelocation: %v", err)
 	}
 	got, ok := get(id, "awg12")
-	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Дача", RelocateSpent: "de"}
+	want := linkrepair.Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true, TunnelName: "Дача", RelocateSpent: "de", UpdatedBy: 77}
 	if !ok || got != want {
 		t.Fatalf("настройка %+v ok=%v, ждали %+v", got, ok, want)
 	}
@@ -365,7 +372,7 @@ func TestRepairSource_Awg3PanelCauseNotInAction(t *testing.T) {
 	const secret = "пароль панели не принят — пересохраните учётные данные"
 	panels := &fakeAwg3{routerErr: &awg3panel.Error{Kind: awg3panel.KindBadPassword, Msg: secret}}
 	src, id := repairSourceEnv(t, &fakeCabinet{}, panels)
-	_, err := src.Issue(context.Background(), id, "awg3", "main/awg1")
+	_, err := src.Issue(adminCtx(), id, "awg3", "main/awg1")
 	var nh *linkrepair.NeedHuman
 	if !errors.As(err, &nh) {
 		t.Fatalf("ждали NeedHuman, получили %v", err)
@@ -408,5 +415,89 @@ func TestRepairSource_SealedIssueNeedsAdmin(t *testing.T) {
 			_, err := src.Issue(context.Background(), id, prov, "nl")
 			needHumanAction(t, prov+" Issue", err)
 		}
+	}
+}
+
+// BE-02: право выпуска со своего сервера сверяется в момент выпуска, а не
+// только при включении автопочинки. Оператор включил её, пока допуск к
+// панели был; админ допуск снял (или убрал оператора с роутера) -- новый
+// пир на панели больше не заводится, человеку сказано, в чём дело.
+func TestRepairSource_Awg3RevokedIssuerNoPeer(t *testing.T) {
+	d, id := repairDB(t)
+	const operator = 55
+	if err := d.RouterOperators().Add(id, operator, repairAdminTG); err != nil {
+		t.Fatalf("оператор: %v", err)
+	}
+	if err := d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: id, TunnelID: "awg12", Enabled: true,
+		Provider: RepairProviderAwg3, Option: "vps1/wg0", UpdatedBy: operator}); err != nil {
+		t.Fatalf("настройка: %v", err)
+	}
+	set, ok := LinkRepairSettings(d, nil)(id, "awg12")
+	if !ok || set.UpdatedBy != operator {
+		t.Fatalf("движку не передано, кто включил: %+v", set)
+	}
+	panels := &fakeAwg3{routerConf: awg3panel.RouterConfig{Conf: []byte("[Interface]\n"), PeerID: "p1"},
+		issuers: map[string][]int64{"vps1": {operator}}}
+	src := RepairSource(nil, panels, d, repairAdminTG)
+	ctx := linkrepair.WithIssuer(context.Background(), set.UpdatedBy)
+
+	if _, err := src.Fresh(ctx, id, set.Provider, set.Option); err != nil {
+		t.Fatalf("с допуском выпуск обязан идти: %v", err)
+	}
+	if _, err := panels.RemoveIssuer("vps1", operator); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []func() error{
+		func() error { _, err := src.Fresh(ctx, id, set.Provider, set.Option); return err },
+		func() error { _, err := src.Issue(ctx, id, set.Provider, set.Option); return err },
+	} {
+		var nh *linkrepair.NeedHuman
+		if err := call(); !errors.As(err, &nh) || nh.Action != linkrepair.ActNoPanelAccess {
+			t.Fatalf("допуск снят: ждали NeedHuman %q, получили %v", linkrepair.ActNoPanelAccess, err)
+		}
+	}
+	if len(panels.routerCalls) != 1 {
+		t.Fatalf("после снятия допуска панель спрошена: %v", panels.routerCalls)
+	}
+
+	// Допуск вернули, но оператора убрали с роутера -- тоже нельзя.
+	if _, err := panels.AddIssuer("vps1", operator, repairAdminTG); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Remove(id, operator); err != nil {
+		t.Fatal(err)
+	}
+	var nh *linkrepair.NeedHuman
+	if _, err := src.Fresh(ctx, id, set.Provider, set.Option); !errors.As(err, &nh) || nh.Action != linkrepair.ActNoPanelAccess {
+		t.Fatalf("оператор снят с роутера: ждали NeedHuman %q, получили %v", linkrepair.ActNoPanelAccess, err)
+	}
+	if len(panels.routerCalls) != 1 {
+		t.Fatalf("после снятия оператора панель спрошена: %v", panels.routerCalls)
+	}
+}
+
+// Кто включил автопочинку, не записано (старые строки) -- выпуск от имени
+// владельца роутера: у него допуск есть -- выпускается, нет -- отказ.
+func TestRepairSource_Awg3NoIssuerFallsBackToOwner(t *testing.T) {
+	d, id := repairDB(t)
+	const owner = 100
+	if err := d.Users().SetTelegramUserID(id, owner); err != nil {
+		t.Fatal(err)
+	}
+	panels := &fakeAwg3{routerConf: awg3panel.RouterConfig{Conf: []byte("[Interface]\n"), PeerID: "p1"}}
+	src := RepairSource(nil, panels, d, repairAdminTG)
+	var nh *linkrepair.NeedHuman
+	if _, err := src.Issue(context.Background(), id, "awg3", "vps1/wg0"); !errors.As(err, &nh) || nh.Action != linkrepair.ActNoPanelAccess {
+		t.Fatalf("у владельца допуска нет: ждали NeedHuman %q, получили %v", linkrepair.ActNoPanelAccess, err)
+	}
+	if len(panels.routerCalls) != 0 {
+		t.Fatalf("без допуска панель спрошена: %v", panels.routerCalls)
+	}
+	panels.issuers = map[string][]int64{"vps1": {owner}}
+	if _, err := src.Issue(context.Background(), id, "awg3", "vps1/wg0"); err != nil {
+		t.Fatalf("у владельца допуск есть: %v", err)
+	}
+	if len(panels.routerCalls) != 1 {
+		t.Fatalf("панель не спрошена: %v", panels.routerCalls)
 	}
 }

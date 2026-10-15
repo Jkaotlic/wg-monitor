@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/awg3panel"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -639,16 +640,24 @@ func miniappAwg3SendDevice(d Deps, r *http.Request, tgUser int64, panelID string
 // ею пользуются и выпуск, и список вариантов (v0.51). Админ -- всегда;
 // остальные -- роль на роутере И допуск к панели.
 func miniappCanIssueAwg3(d Deps, tg, routerID int64, panel string) bool {
-	if !miniappRouterAllowed(d, tg, routerID) {
-		return false
-	}
-	if miniappIsAdmin(tg, d.TelegramAdminUserID) {
+	return canIssueAwg3(d.DB, d.TelegramAdminUserID, d.Awg3Panels, tg, routerID, panel)
+}
+
+// canIssueAwg3 -- тело miniappCanIssueAwg3 без Deps: та же проверка нужна
+// источнику автопочинки в момент выпуска (BE-02), а Deps у него нет. Ошибка
+// чтения роли или допуска -- «нельзя».
+func canIssueAwg3(database *db.DB, adminTG int64, panels Awg3Panels, tg, routerID int64, panel string) bool {
+	if miniappIsAdmin(tg, adminTG) {
 		return true
 	}
-	if d.Awg3Panels == nil {
+	if tg == 0 || database == nil || panels == nil {
 		return false
 	}
-	ok, err := d.Awg3Panels.IsIssuer(panel, tg)
+	role, err := database.RouterAccessRole(routerID, tg)
+	if err != nil || role == "" {
+		return false
+	}
+	ok, err := panels.IsIssuer(panel, tg)
 	return err == nil && ok
 }
 

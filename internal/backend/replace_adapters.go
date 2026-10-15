@@ -90,7 +90,7 @@ func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int6
 		if !ok {
 			return linkrepair.Setting{}, false
 		}
-		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate, TunnelName: s.TunnelName, RelocateSpent: s.RelocateSpent}, true
+		return linkrepair.Setting{Enabled: s.Enabled, Provider: s.Provider, Option: s.Option, AllowRelocate: s.AllowRelocate, TunnelName: s.TunnelName, RelocateSpent: s.RelocateSpent, UpdatedBy: s.UpdatedBy}, true
 	}
 }
 
