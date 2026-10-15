@@ -610,7 +610,7 @@ func TestOpkgCronScriptWritesPidIntoLock(t *testing.T) {
 // runCronScript прогоняет НАСТОЯЩИЙ cron-скрипт через sh: замок, журнал и
 // PATH -- в песочнице, opkg и df -- подставные. Возвращает журнал и
 // вызывался ли opkg.
-func runCronScript(t *testing.T, lock string) (log string, opkgRan bool) {
+func runCronScript(t *testing.T, lock string, extraShims ...map[string]string) (log string, opkgRan bool) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("needs sh")
@@ -620,10 +620,16 @@ func runCronScript(t *testing.T, lock string) (log string, opkgRan bool) {
 	if err := os.MkdirAll(shims, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{
+	shimSet := map[string]string{
 		"opkg": "#!/bin/sh\ntouch \"$D/opkg-ran\"\nexit 0\n",
 		"df":   "#!/bin/sh\necho 'Filesystem 1K-blocks Used Available Use% Mounted'\necho '/dev/sda1 1000000 1000 900000 1% /opt'\n",
-	} {
+	}
+	for _, m := range extraShims {
+		for k, v := range m {
+			shimSet[k] = v
+		}
+	}
+	for name, body := range shimSet {
 		if err := os.WriteFile(filepath.Join(shims, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -743,6 +749,46 @@ func TestOpkgCron_RefreshScript(t *testing.T) {
 		}
 		if _, err := os.Stat(m.ScriptPath); !os.IsNotExist(err) {
 			t.Fatalf("script installed where it was not: %v", err)
+		}
+	})
+}
+
+// M-6: как у скрипта очистки -- замок старше 2 ч брошен, даже если процесс
+// с его pid жив (busybox переиспользует pid): обновление столько не идёт.
+// Замок моложе -- по-прежнему «занято».
+func TestOpkgCronScript_ReusedPidOldLockTakenOver(t *testing.T) {
+	mk := func(t *testing.T, age time.Duration) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-age)
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	t.Run("live pid, lock 3h old", func(t *testing.T) {
+		log, ran := runCronScript(t, mk(t, 3*time.Hour))
+		if !ran || !strings.Contains(log, "status=stale_lock_removed") || strings.Contains(log, "status=locked") {
+			t.Fatalf("reused pid kept the lock: ran=%v log:\n%s", ran, log)
+		}
+	})
+	t.Run("find without -mmin keeps the lock", func(t *testing.T) {
+		badFind := map[string]string{"find": "#!/bin/sh\necho 'find: unrecognized: -mmin' >&2\nexit 1\n"}
+		log, ran := runCronScript(t, mk(t, 3*time.Hour), badFind)
+		if ran || !strings.Contains(log, "status=locked") {
+			t.Fatalf("lock taken over without a working find: ran=%v log:\n%s", ran, log)
+		}
+	})
+	t.Run("live pid, lock 1h old", func(t *testing.T) {
+		log, ran := runCronScript(t, mk(t, time.Hour))
+		if ran || !strings.Contains(log, "status=locked") {
+			t.Fatalf("young live lock taken over: ran=%v log:\n%s", ran, log)
 		}
 	})
 }

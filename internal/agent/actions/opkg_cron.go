@@ -351,6 +351,12 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     log "status=stale_lock_removed pid=$owner"
     rm -f "$LOCK/pid"
     rmdir "$LOCK" 2>/dev/null || true
+  elif [ -n "$owner" ] && [ -n "$(find "$LOCK" -maxdepth 0 -mmin +120 2>/dev/null)" ]; then
+    # обновление столько не идёт: pid занят чужим процессом (переиспользован).
+    # find без -mmin ничего не напечатает -- замок останется, как раньше.
+    log "status=stale_lock_removed pid=$owner age_min=120+"
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
   fi
   if ! mkdir "$LOCK" 2>/dev/null; then
     log "status=locked another run is active"
