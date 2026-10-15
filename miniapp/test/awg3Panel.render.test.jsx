@@ -554,6 +554,15 @@ describe('экран панели', () => {
     expect(button(root, 'Открыть VPN-туннели «work»')).toBeFalsy()
   })
 
+  it('partial: туннель есть, но не в политике -- предупреждение агента и «Открыть VPN-туннели»', async () => {
+    mocks.waitReply = { status: 'partial', output: '⚠️ VPN-туннель «main_awg1» создан, но за 40 секунд не поднялся, поэтому в политику HydraRoute он не добавлен.\n✅ id=awg50' }
+    const { root, seen } = await mountPanel({ onOpenRouterTunnels: () => {} })
+    await issueToWork(root, seen)
+    expect(root.querySelector('.awg3-outcome-warn').textContent).toContain('в политику HydraRoute он не добавлен')
+    expect(root.querySelector('.awg3-outcome-error')).toBe(null)
+    expect(button(root, 'Открыть VPN-туннели «work»')).toBeTruthy()
+  })
+
   it('QR не переживает уход с экрана', async () => {
     let { root, seen } = await mountPanel()
     await click(button(root, 'Конфиг на устройство'))
