@@ -353,3 +353,17 @@ func TestMiniappActionTellsAlertMemory(t *testing.T) {
 		t.Fatalf("память тревог: %q, ждали [%q]", mem.calls, want)
 	}
 }
+
+// BOT-07: из приложения строка тишины подписана ролью нажавшего.
+func TestMiniappActorRole(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 4242, 999); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{DB: d, TelegramAdminUserID: 999}
+	for tgID, want := range map[int64]string{ownerTG: "owner", 4242: "operator", 999: "admin"} {
+		if got := miniappActorRole(deps, tgID, ownedID); got != want {
+			t.Errorf("tg=%d: роль %q, ждали %q", tgID, got, want)
+		}
+	}
+}

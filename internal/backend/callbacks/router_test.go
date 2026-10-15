@@ -255,3 +255,20 @@ func TestParse_OnlySilence(t *testing.T) {
 		}
 	}
 }
+
+// BOT-07: владелец нажал «Тише на час» -- правка тревоги подписана
+// «(владелец)», оператор -- «(оператор)», админ -- «(админ)».
+func TestSilence_LineNamesWhoPressed(t *testing.T) {
+	for from, want := range map[int64]string{100: "(владелец)", 200: "(оператор)", 42: "(админ)"} {
+		d, uid := newTestDB(t)
+		_ = d.Users().SetTelegramUserID(uid, 100)
+		if err := d.RouterOperators().Add(uid, 200, 42); err != nil {
+			t.Fatal(err)
+		}
+		f := &fakeRouterTG{}
+		NewRouter(d, f, Config{AdminUserID: 42}).HandleCallback(context.Background(), silenceQuery(from, from, uid))
+		if len(f.edits) != 1 || !strings.HasSuffix(f.edits[0], want) {
+			t.Fatalf("from=%d: правка %q, ждали подпись %s", from, f.edits, want)
+		}
+	}
+}
