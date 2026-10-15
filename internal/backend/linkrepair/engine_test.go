@@ -1954,7 +1954,7 @@ func TestLadder_InterruptedAutoRunCounts(t *testing.T) {
 			t.Fatalf("запуск %d: подсказка %q", i, job.Hint)
 		}
 	}
-	ok, why, tooOften := e.d.Attempts.verdict("роутер", "tunnel_awg12")
+	ok, why, tooOften, _ := e.d.Attempts.verdict("роутер", "tunnel_awg12")
 	if ok || !tooOften {
 		t.Fatalf("после %d прерванных запусков автопочинка разрешена: ok=%v why=%q", attemptLimit, ok, why)
 	}
@@ -1965,8 +1965,8 @@ func TestLadder_AutoRunCountsOnce(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true})
 	fixOn(e.cmd, "tunnel_restart", 1, true)
 	_, _ = e.run(t, ladderReq())
-	log := e.d.Attempts.load("роутер", "tunnel_awg12")
-	if len(log.At) != 1 || log.Failed {
+	log, err := e.d.Attempts.load("роутер", "tunnel_awg12")
+	if err != nil || len(log.At) != 1 || log.Failed {
 		t.Fatalf("журнал попыток: %+v", log)
 	}
 }
@@ -2118,5 +2118,29 @@ func TestLadder_RestartSilentStops(t *testing.T) {
 	}
 	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
 		t.Fatalf("молчание роутера поставило стоп: %s", why)
+	}
+}
+
+// BE-03: автозапуск при непрочитанной истории попыток не начинается и говорит
+// почему; роутеру ничего не уходит.
+func TestStart_AttemptsReadErrorRefuses(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true})
+	kv := &brokenKV{}
+	e.d.Attempts = Attempts{KV: kv}
+
+	_, err := e.d.Start(ladderReq())
+
+	if !errors.Is(err, ErrAutoDisabled) {
+		t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
+	}
+	if e.cmd.count() != 0 {
+		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+	}
+	calls := e.rep.waitCalls(t, 1)
+	if len(calls) != 1 || calls[0].Kind != "notstarted" || !strings.Contains(calls[0].Text, "не смог прочитать историю попыток") {
+		t.Fatalf("причина не сказана: %+v", calls)
+	}
+	if kv.sets != 0 {
+		t.Fatalf("история попыток переписана вслепую: %d", kv.sets)
 	}
 }

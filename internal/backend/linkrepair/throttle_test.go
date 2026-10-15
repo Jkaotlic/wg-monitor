@@ -1,6 +1,7 @@
 package linkrepair
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -141,5 +142,58 @@ func TestAttempts_ClearNothing(t *testing.T) {
 	}
 	if ok, _ := a.Allow("роутер", "tunnel_awg12"); !ok {
 		t.Fatal("пустой счётчик обязан пускать")
+	}
+}
+
+// brokenKV -- база, которая не отдаёт историю попыток; записи считает.
+type brokenKV struct {
+	mu   sync.Mutex
+	sets int
+}
+
+func (b *brokenKV) Get(string) (string, error) { return "", errors.New("database is locked") }
+func (b *brokenKV) Set(string, string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sets++
+	return nil
+}
+
+// BE-03: история попыток не прочиталась -- неизвестно, стоит ли стоп «нужен
+// человек» и не исчерпан ли потолок. Автозапуск отказывает (fail-closed),
+// а не начинает с чистого листа.
+func TestAllow_ReadErrorRefuses(t *testing.T) {
+	a := Attempts{KV: &brokenKV{}}
+	ok, why := a.Allow("роутер", "tunnel_awg12")
+	if ok {
+		t.Fatal("история попыток не прочиталась, а автопочинка разрешена")
+	}
+	if !strings.Contains(why, "не смог прочитать историю попыток") {
+		t.Fatalf("причина отказа: %q", why)
+	}
+	if blocked, _ := a.Blocked("роутер", "tunnel_awg12"); !blocked {
+		t.Fatal("экран обязан показать, что автопочинка стоит")
+	}
+}
+
+// Не прочитав историю, её нельзя и переписывать: запись поверх затёрла бы
+// стоп и отметки окна.
+func TestAttempts_ReadErrorNeverOverwrites(t *testing.T) {
+	kv := &brokenKV{}
+	a := Attempts{KV: kv}
+	if err := a.Started("роутер", "tunnel_awg12"); err == nil {
+		t.Error("Started без прочитанной истории обязан вернуть ошибку")
+	}
+	if err := a.Finish("роутер", "tunnel_awg12", true); err == nil {
+		t.Error("Finish без прочитанной истории обязан вернуть ошибку")
+	}
+	if err := a.Record("роутер", "tunnel_awg12", true); err == nil {
+		t.Error("Record без прочитанной истории обязан вернуть ошибку")
+	}
+	if err := a.Clear("роутер", "tunnel_awg12"); err == nil {
+		t.Error("Clear без прочитанной истории обязан вернуть ошибку")
+	}
+	if kv.sets != 0 {
+		t.Fatalf("история переписана %d раз вслепую", kv.sets)
 	}
 }

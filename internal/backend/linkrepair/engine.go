@@ -302,7 +302,11 @@ func (d Deps) Start(req StartReq) (string, error) {
 		if !set.Enabled {
 			return "", ErrAutoDisabled
 		}
-		if allow, why, tooOften := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+			if err != nil {
+				d.logWarn("linkrepair: история попыток не прочиталась — автозапуск отклонён",
+					"nickname", req.Nickname, "check", req.CheckName, "err", err)
+			}
 			// Потолок попыток -- не новый провал: громкого ответа нет, но что
 			// делать, человек читает в той же правке.
 			if tooOften {
@@ -324,8 +328,15 @@ func (d Deps) Start(req StartReq) (string, error) {
 		return "", ErrAlreadyRunning
 	}
 	if req.Auto {
-		// Попытка считается с запуска: прерванная итога не напишет.
-		_ = d.Attempts.Started(req.Nickname, req.CheckName)
+		// Попытка считается с запуска: прерванная итога не напишет. Не
+		// записалась -- не стартуем: потолок попыток без записи не работает.
+		if err := d.Attempts.Started(req.Nickname, req.CheckName); err != nil {
+			d.Store.Unlock(req.Nickname)
+			d.logWarn("linkrepair: попытка не записалась — автозапуск отклонён",
+				"nickname", req.Nickname, "check", req.CheckName, "err", err)
+			notStarted(whyAttemptUnsaved)
+			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, whyAttemptUnsaved)
+		}
 	}
 	job := d.Store.Create(KindLinkRepair, req.Nickname, Steps())
 	d.Store.Update(job.ID, func(j *provision.Job) { j.Target = req.CheckName })
@@ -922,9 +933,9 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 		d.step(jobID, StepFailback, provision.StepDone, "возвращать нечего — запасного VPN-туннеля не было")
 	}
 	if req.Auto {
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
-	} else {
-		_ = d.Attempts.Clear(req.Nickname, req.CheckName)
+		d.finishAttempt(req, true)
+	} else if err := d.Attempts.Clear(req.Nickname, req.CheckName); err != nil {
+		d.logWarn("linkrepair: стоп после провала не снялся", "nickname", req.Nickname, "check", req.CheckName, "err", err)
 	}
 	d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
 	th.Done(context.WithoutCancel(ctx), doneText(names, log))
@@ -936,7 +947,7 @@ func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Threa
 func (d Deps) finishNeedHuman(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, false)
+		d.finishAttempt(req, false)
 	}
 	text := failText(names, log)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -954,7 +965,7 @@ func (d Deps) finishNoAnswer(ctx context.Context, jobID string, req StartReq, th
 	d.skip(jobID, "не начинал — роутер не ответил вовремя", StepRestart, StepReissue, StepRecreate)
 	d.skipFailback(jobID, names)
 	if req.Auto {
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, true)
+		d.finishAttempt(req, true)
 	}
 	d.Store.Update(jobID, func(j *provision.Job) {
 		j.State = provision.StateFailed
@@ -972,7 +983,7 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 	if req.Auto {
 		// Роутер молчит -- это не вердикт автопочинке: попытка считается,
 		// но стоп не ставится, следующая тревога снова может её запустить.
-		_ = d.Attempts.Finish(req.Nickname, req.CheckName, names.noSnapshot)
+		d.finishAttempt(req, names.noSnapshot)
 	}
 	text := failText(names, nil)
 	d.Store.Update(jobID, func(j *provision.Job) {
@@ -981,6 +992,17 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 		j.Hint = action
 	})
 	th.NeedHuman(context.WithoutCancel(ctx), text, action)
+}
+
+// whyAttemptUnsaved -- автозапуск не начат: попытка не записалась в историю.
+const whyAttemptUnsaved = "не смог записать попытку в историю"
+
+// finishAttempt -- итог автозапуска в историю попыток. Не записался --
+// оператору в лог: стоп «нужен человек» тогда не поставлен.
+func (d Deps) finishAttempt(req StartReq, ok bool) {
+	if err := d.Attempts.Finish(req.Nickname, req.CheckName, ok); err != nil {
+		d.logWarn("linkrepair: итог попытки не записался", "nickname", req.Nickname, "check", req.CheckName, "ok", ok, "err", err)
+	}
 }
 
 func (d Deps) skipFailback(jobID string, names lineNames) {
