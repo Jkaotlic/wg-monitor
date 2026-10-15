@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy, tunnelStateLabel } from '../src/labels.js'
+import { commandRefreshesList, commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy, tunnelStateLabel } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -254,5 +254,22 @@ describe('dns_ru говорит о русских сайтах', () => {
     expect(copy.what).toBe('Русские сайты могут не открываться')
     expect(copy.why).toContain('Русские сайты (банки, госуслуги) могут не открываться: не отвечает сервер имён для русских сайтов')
     for (const w of ['dns_ru', 'DNS', 'апстрим', 'DoT']) expect(copy.why).not.toContain(w)
+  })
+})
+
+describe('tunnel_power partial', () => {
+  it('частичный итог -- не «Готово», со словами агента о настоящем состоянии', () => {
+    const t = commandOutcomeLabel('tunnel_power', { status: 'partial', output: 'туннель всё ещё поднимается' })
+    expect(t).toBe('Не подтвердилось: туннель всё ещё поднимается')
+    expect(t).not.toBe('Готово')
+  })
+  it('без output -- всё равно не «Готово»', () => {
+    expect(commandOutcomeLabel('tunnel_power', { status: 'partial', output: '' })).toMatch(/^Не подтвердилось/)
+  })
+  it('список обновляется и на partial у tunnel_power, но не у других', () => {
+    expect(commandRefreshesList('tunnel_power', 'ok')).toBe(true)
+    expect(commandRefreshesList('tunnel_power', 'partial')).toBe(true)
+    expect(commandRefreshesList('tunnel_power', 'err')).toBe(false)
+    expect(commandRefreshesList('dns_reset', 'partial')).toBe(false)
   })
 })
