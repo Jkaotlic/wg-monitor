@@ -2,6 +2,7 @@ package unstick
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
@@ -58,6 +59,27 @@ func (c Check) Run(_ context.Context, _ checks.Deps) wire.Check {
 		}
 		tl = append(tl, item)
 	}
-	return checks.Fail(CheckName, start, "awg-manager tunnel stays stuck after restart and awg-manager restart",
+	return checks.Fail(CheckName, start, failText(s.GaveUp),
 		map[string]any{"reason": DetailReasonGaveUp, "tunnels": tl})
+}
+
+// failText -- по фактическим шагам (AG-07): перезапуск службы называем,
+// только если он был; одни «зависает снова и снова» -- о них.
+func failText(gs []GaveUpTunnel) string {
+	stuck, service := false, false
+	for _, g := range gs {
+		if g.Flapping {
+			continue
+		}
+		stuck = true
+		service = service || slices.Contains(g.Steps, "service_restart")
+	}
+	switch {
+	case !stuck:
+		return "awg-manager tunnel keeps getting stuck again and again"
+	case service:
+		return "awg-manager tunnel stays stuck after restart and awg-manager restart"
+	default:
+		return "awg-manager tunnel stays stuck after restart"
+	}
 }

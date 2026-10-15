@@ -1064,3 +1064,31 @@ func TestTick_FailedServiceRestartStillRecorded(t *testing.T) {
 		t.Fatalf("a failed attempt still counts: %+v", g)
 	}
 }
+
+// AG-07: туннель сдан как «зависает снова и снова»; повтор через
+// RetryAfterGiveUp не помог -- пометка и счёт выводов остаются.
+func TestTick_FailedRetryKeepsFlapping(t *testing.T) {
+	h := newHarness(tun("nwg0", "running", true))
+	h.awg.onAction = healOn("restart")
+	for i := 0; i < 3; i++ {
+		fixCycle(h)
+		h.clk.advance(5 * time.Minute)
+	}
+	fixCycle(h)
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping {
+		t.Fatalf("setup: %+v", s.GaveUp)
+	}
+	h.awg.mu.Lock()
+	h.awg.onAction = nil // повтор не поможет
+	h.awg.mu.Unlock()
+	restarts := countCalls(h, "restart:nwg0")
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != restarts+1 {
+		t.Fatalf("no retry ladder: restarts %d -> %d", restarts, n)
+	}
+	s := h.w.Snapshot()
+	if len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 {
+		t.Fatalf("flapping lost after a failed retry: %+v", s.GaveUp)
+	}
+}

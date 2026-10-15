@@ -387,10 +387,13 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	for _, d := range list {
 		if d.retry {
 			// повтор не помог: запись обновляется, следующий повтор -- через
-			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось
+			// RetryAfterGiveUp; владельцу событие не шлём -- ничего не изменилось.
+			// «Зависает снова и снова» и счёт выводов остаются (AG-07)
+			prev := w.gaveUp[d.t.ID]
 			w.gaveUp[d.t.ID] = giveUp{
 				Name: d.t.Name, Enabled: d.t.Enabled, Status: d.t.Status, Details: clipDetails(d.t.StatusDetails),
-				Steps: mergeSteps(w.gaveUp[d.t.ID].Steps, d.steps), Since: d.since, At: now,
+				Steps: mergeSteps(prev.Steps, d.steps), Since: d.since, At: now,
+				Flapping: prev.Flapping, Fixes: prev.Fixes,
 			}
 			w.log.Warn("unstick: повтор не помог", "tunnel", d.t.ID, "status", d.t.Status, "steps", d.steps)
 			continue
