@@ -699,6 +699,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				if err := r.AwgClient.StopTunnel(ctx, tunnelID); err != nil {
 					return "err", fmt.Sprintf("stop tunnel %s before delete: %v", tunnelID, err), payload
 				}
+				// AG-08: остановка в awg-manager сама ставит enabled=false.
+				// Переключатели ниже -- toggle, поэтому решаются по свежему
+				// чтению: по снимку до остановки toggle-enabled включил бы
+				// туннель обратно. Чтение не вышло -- не переключаем вслепую.
+				fresh, err := getTunnel(ctx, r.AwgClient, tunnelID)
+				if err != nil {
+					return "err", fmt.Sprintf("re-read tunnel %s after stop: %v", tunnelID, err), payload
+				}
+				existing = fresh
 			}
 			if existing.DefaultRoute {
 				if err := r.AwgClient.ToggleDefaultRoute(ctx, tunnelID); err != nil {
