@@ -53,9 +53,19 @@ export async function repeatWhilePending(
 // Итог команды словами. ok/fail/pending -- фразы экрана; сырой вывод агента
 // идёт только хвостом после fail, а «unknown action» -- общими словами про
 // версию агента.
-export function commandOutcome(result, { ok, fail, pending }) {
+// partial -- команда сделала главное, но не всё (tunnel_import: VPN-туннель
+// заведён, но в политику HydraRoute не встал). Первая строка ответа агента --
+// фраза владельцу; экран, не передавший partial, видит это отказом, как раньше.
+export function firstAgentLine(output) {
+  return String(output ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+}
+
+export function commandOutcome(result, { ok, fail, pending, partial }) {
   if (!result) return { tone: 'warn', text: pending, done: false }
   if (result.status === 'ok') return { tone: 'ok', text: ok, done: true }
+  if (result.status === 'partial' && partial !== undefined) {
+    return { tone: 'warn', text: firstAgentLine(result.output) || partial, done: true }
+  }
   const output = String(result.output ?? '').trim()
   if (/^unknown action:/i.test(output)) return { tone: 'error', text: AGENT_OLDER_THAN_APP, done: false }
   return { tone: 'error', text: `${fail}: ${output || result.status}`, done: false }

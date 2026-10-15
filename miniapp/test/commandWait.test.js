@@ -121,3 +121,28 @@ describe('commandOutcome', () => {
     expect(commandOutcome({ status: 'err', output: 'unknown action: tunnel_delete' }, words)).toEqual({ tone: 'error', text: AGENT_OLDER_THAN_APP, done: false })
   })
 })
+
+// Жалоба 15.10 (puzirek): VPN-туннель заведён, но в политику HydraRoute не
+// встал. Агент отвечает partial с фразой владельцу первой строкой -- это не
+// «всё встало» и не «роутер не принял конфиг».
+describe('commandOutcome: partial импорта', () => {
+  const opts = { ok: 'встал', fail: 'Роутер не принял конфиг', pending: 'ждём', partial: 'Туннель заведён, но не в политике' }
+  const res = {
+    status: 'partial',
+    output: '⚠️ VPN-туннель «a3-nl2_awgtop» создан, но за 40 секунд не поднялся, поэтому в политику HydraRoute он не добавлен.\n✅ Туннель "a3-nl2_awgtop" создан (id=awg50)',
+  }
+  it('предупреждение с первой строкой агента, туннель считается заведённым', () => {
+    expect(commandOutcome(res, opts)).toEqual({
+      tone: 'warn',
+      text: '⚠️ VPN-туннель «a3-nl2_awgtop» создан, но за 40 секунд не поднялся, поэтому в политику HydraRoute он не добавлен.',
+      done: true,
+    })
+  })
+  it('пустой ответ -- запасная фраза экрана', () => {
+    expect(commandOutcome({ status: 'partial', output: '' }, opts).text).toBe('Туннель заведён, но не в политике')
+  })
+  it('без partial в опциях -- прежнее поведение (отказ)', () => {
+    const { partial, ...rest } = opts
+    expect(commandOutcome(res, rest).tone).toBe('error')
+  })
+})
