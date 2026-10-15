@@ -522,13 +522,19 @@ func TestTick_RecheckErrorIsNotFixed(t *testing.T) {
 	if n := h.awg.reads - readsBefore; n != 4 {
 		t.Fatalf("reads in the tick = %d; want 4 (poll + recheck with 2 retries)", n)
 	}
-	// awg-manager снова отвечает, туннель всё ещё завис: since прежний --
-	// лесенка сразу, без нового ожидания порога
+	// awg-manager снова отвечает, туннель всё ещё завис: до конца окна
+	// тишины -- ничего, потом since прежний -- лесенка сразу, без нового
+	// ожидания порога
 	h.awg.mu.Lock()
 	h.awg.readErr = nil
 	h.awg.onAction = nil
 	h.awg.mu.Unlock()
 	h.clk.advance(30 * time.Second)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != 1 {
+		t.Fatalf("restarts = %d; want 1 (paused after an unread recheck)", n)
+	}
+	h.clk.advance(10 * time.Minute)
 	h.w.Tick(ctx)
 	if n := countCalls(h, "restart:nwg0"); n != 2 {
 		t.Fatalf("restarts = %d; want 2 (since kept)", n)
@@ -1090,5 +1096,51 @@ func TestTick_FailedRetryKeepsFlapping(t *testing.T) {
 	s := h.w.Snapshot()
 	if len(s.GaveUp) != 1 || !s.GaveUp[0].Flapping || s.GaveUp[0].Fixes != 3 {
 		t.Fatalf("flapping lost after a failed retry: %+v", s.GaveUp)
+	}
+}
+
+// Ревью AG-03: перечитывание стабильно не удаётся (опрос при этом отвечает)
+// -- ступень 1 не чаще раза в GuardWindow.
+func TestTick_PersistentUnreadRecheckBacksOff(t *testing.T) {
+	h := newHarness(tun("nwg0", "broken", true))
+	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.failReads = recheckRetries + 1 }
+	h.w.Tick(ctx)
+	h.clk.advance(61 * time.Second)
+	for i := 0; i < 3; i++ {
+		h.w.Tick(ctx)
+		h.clk.advance(30 * time.Second)
+	}
+	if n := countCalls(h, "restart:nwg0"); n != 1 {
+		t.Fatalf("restarts within GuardWindow = %d; want 1", n)
+	}
+	if h.services != 0 {
+		t.Fatalf("services = %d", h.services)
+	}
+}
+
+// Ревью AG-03: повтор после «сдался», где перечитать не удалось, -- следующий
+// повтор через RetryAfterGiveUp, а не на следующем опросе.
+func TestTick_UnreadRetryWaitsRetryAfterGiveUp(t *testing.T) {
+	h := gaveUpHarness(t)
+	h.awg.mu.Lock()
+	h.awg.onAction = func(string, string, *awgmgr.Tunnel) { h.awg.failReads = recheckRetries + 1 }
+	h.awg.mu.Unlock()
+	h.clk.advance(6 * time.Hour)
+	h.w.Tick(ctx)
+	base := countCalls(h, "restart:nwg0")
+	if s := h.w.Snapshot(); len(s.GaveUp) != 1 {
+		t.Fatalf("gave_up lost after an unread retry: %+v", s)
+	}
+	for _, step := range []time.Duration{30 * time.Second, 11 * time.Minute, time.Hour, 4 * time.Hour} {
+		h.clk.advance(step)
+		h.w.Tick(ctx)
+	}
+	if n := countCalls(h, "restart:nwg0"); n != base {
+		t.Fatalf("retry tunnel restarted before RetryAfterGiveUp: %d -> %d", base, n)
+	}
+	h.clk.advance(time.Hour)
+	h.w.Tick(ctx)
+	if n := countCalls(h, "restart:nwg0"); n != base+1 {
+		t.Fatalf("no retry after RetryAfterGiveUp: %d -> %d", base, n)
 	}
 }

@@ -344,7 +344,8 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 	list, read := w.recheck(ctx, list, start)
 	if !read {
 		// awg-manager так и не ответил: «всё ещё завис» не доказано -- на
-		// ступень 2 не идём; since не тронут, решит следующий опрос
+		// ступень 2 не идём; since не тронут, решит опрос после окна тишины
+		w.holdUnread(list)
 		return
 	}
 	if len(list) == 0 {
@@ -378,6 +379,7 @@ func (w *Watcher) ladder(ctx context.Context, list []*due) {
 			// awg-manager после перезапуска ещё не отвечает: тревогу «сдался»
 			// по туннелю без чтения не шлём, это покажет проверка awg_manager
 			w.log.Warn("unstick: после перезапуска awg-manager не ответил -- без вердикта")
+			w.holdUnread(list)
 			return
 		}
 	}
@@ -457,6 +459,27 @@ func (w *Watcher) recheck(ctx context.Context, list []*due, start time.Time) (re
 		}
 		if err := w.sleep(ctx, recheckPause); err != nil {
 			return list, false
+		}
+	}
+}
+
+// holdUnread -- лесенка кончилась без чтения: следующую не начинаем до
+// конца GuardWindow (иначе ступень 1 на каждом опросе), а повтор после
+// «сдался» снова ждёт RetryAfterGiveUp.
+func (w *Watcher) holdUnread(list []*due) {
+	now := w.now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if until := now.Add(w.cfg.GuardWindow); until.After(w.pausedUntil) {
+		w.pausedUntil = until
+	}
+	for _, d := range list {
+		if !d.retry {
+			continue
+		}
+		if g, ok := w.gaveUp[d.t.ID]; ok {
+			g.At, g.Retrying = now, false
+			w.gaveUp[d.t.ID] = g
 		}
 	}
 }
