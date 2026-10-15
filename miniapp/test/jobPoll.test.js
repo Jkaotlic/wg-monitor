@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { JOB_POLL_MS, JOB_POLL_FAILURE_LIMIT, jobPollStart, jobPollStep, jobPollDone, jobReconnecting, pollJob } from '../src/jobPoll.js'
+import { JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS, JOB_POLL_FAILURE_LIMIT, jobPollStart, jobPollStep, jobPollDone, jobReconnecting, pollJob } from '../src/jobPoll.js'
 
 const running = { id: 'j1', state: 'running', steps: [] }
 const success = { id: 'j1', state: 'success', steps: [] }
@@ -159,5 +159,20 @@ describe('GAP-02: 503 и 429 -- временные, как 502/504', () => {
     const final = await pollJob({ jobId: 'j1', fetchJob, sleep: async () => {}, onState: () => {}, signal: { cancelled: false } })
     expect(final.phase).toBe('live')
     expect(calls.length).toBe(6)
+  })
+})
+
+describe('GAP-02: пауза после 429 длиннее обычной', () => {
+  it('429 -- 5 с, 503 -- обычные 1,5 с', async () => {
+    const sleeps = []
+    const seq = [429, 503, 'ok']
+    const fetchJob = async () => {
+      const x = seq.shift()
+      if (x === 'ok') return success
+      throw Object.assign(new Error('x'), { status: x, code: 'unknown', serverMessage: '' })
+    }
+    await pollJob({ jobId: 'j1', fetchJob, sleep: async (ms) => { sleeps.push(ms) }, onState: () => {}, signal: { cancelled: false } })
+    expect(sleeps).toEqual([JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS])
+    expect(JOB_POLL_RATE_LIMIT_MS).toBe(5000)
   })
 })

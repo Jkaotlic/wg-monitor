@@ -8,6 +8,8 @@
 
 export const JOB_POLL_MS = 1500
 export const JOB_POLL_FAILURE_LIMIT = 40
+// После 429 ограничитель просит не частить: пауза длиннее обычной.
+export const JOB_POLL_RATE_LIMIT_MS = 5000
 
 export function jobPollStart() {
   return { phase: 'loading', job: null, failures: 0 }
@@ -60,7 +62,7 @@ export async function pollJob({ jobId, fetchJob, sleep, onState, signal, interva
     state = jobPollStep(state, event)
     onState(state)
     if (jobPollDone(state)) return state
-    await sleep(intervalMs)
+    await sleep(event.status === 429 ? Math.max(intervalMs, JOB_POLL_RATE_LIMIT_MS) : intervalMs)
   }
   return state
 }
