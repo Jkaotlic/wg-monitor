@@ -155,6 +155,7 @@ func main() {
 		SharedLockDir: actions.OpkgCronSharedLockDir,
 	}
 	refreshOpkgCronScript(logger)
+	refreshEntwareCleanScript(logger)
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
 	runner.ExitProbeNow = signals.prober.ProbeNow
 	if unstickWatcher != nil {
@@ -338,6 +339,22 @@ func refreshOpkgCronScript(log *slog.Logger) {
 	case changed:
 		log.Info("opkg cron: скрипт обновлён до текущей версии")
 	}
+}
+
+// refreshEntwareCleanScript -- то же для скрипта очистки Entware (AG-01):
+// установленная копия без снятия брошенного замка переписывается, а замок
+// без pid, брошенный скриптом до v0.61, снимается -- иначе ночная очистка
+// по расписанию так и писала бы «занято» до перезагрузки.
+func refreshEntwareCleanScript(log *slog.Logger) {
+	m := &actions.EntwareCleanManager{}
+	changed, err := m.RefreshScript()
+	switch {
+	case err != nil:
+		log.Warn("entware cleanup: обновить скрипт не удалось", "err", err)
+	case changed:
+		log.Info("entware cleanup: скрипт обновлён до текущей версии")
+	}
+	m.ClearAbandonedLock()
 }
 
 // awgmServiceRestart -- ступень 2 сторожа: перезапуск службы awg-manager.

@@ -77,6 +77,8 @@ func TestActionTimeoutFor_Overrides(t *testing.T) {
 		{"opkg_feed_disable", 300 * time.Second},
 		{"opkg_cron_install", 300 * time.Second},
 		{"entware_clean_install", 300 * time.Second},
+		// AG-01: find+rm+sync на медленной флешке; раньше 6 минут мини-аппа.
+		{"entware_clean_run", 330 * time.Second},
 		// Long: multi-step network pipelines.
 		{"tunnel_import", 300 * time.Second},
 		{"self_update", 600 * time.Second}, // v0.45: до 5 мин ожидания «прокси занят» плюс запасной путь с GitHub
@@ -93,7 +95,6 @@ func TestActionTimeoutFor_Overrides(t *testing.T) {
 		{"opkg_cron_logs", 45 * time.Second},
 		{"opkg_cron_remove", 45 * time.Second},
 		{"entware_clean_status", 45 * time.Second},
-		{"entware_clean_run", 45 * time.Second},
 		{"entware_clean_logs", 45 * time.Second},
 		{"entware_clean_remove", 45 * time.Second},
 		// Quick: unrelated actions and the unknown-action fallback.

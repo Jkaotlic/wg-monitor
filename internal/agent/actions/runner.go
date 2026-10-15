@@ -136,6 +136,8 @@ type Runner struct {
 	// агента ставит dnswatch.ProbeLine). nil -- сброс без проб, как раньше.
 	DNSProbe DNSLineProbe
 	routeMu  sync.Mutex // serialises concurrent route_rebind calls
+	// entwareClean -- для тестов: свои пути очистки. nil -- пути по умолчанию.
+	entwareClean *EntwareCleanManager
 }
 
 // defaultActionTimeout bounds any dispatched action with no entry in
@@ -163,7 +165,7 @@ const defaultActionTimeout = 45 * time.Second
 //
 // firmware_install additionally kicks off a router reboot. Sibling actions
 // in the same families that only read state or touch local files
-// (opkg_cron_status/logs/remove, entware_clean_status/run/logs/remove) are
+// (opkg_cron_status/logs/remove, entware_clean_status/logs/remove) are
 // deliberately left at the 45s default — they do not run opkg or the network.
 // diag_now additionally gets 75s: DiagFresh runs a full IncludeRestart=false
 // diagnostic pass over SSE (a live run measured 34 checks) plus a possible
@@ -175,10 +177,14 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"hrneo_update":          300 * time.Second,
 	"opkg_cron_install":     300 * time.Second,
 	"entware_clean_install": 300 * time.Second,
-	"tunnel_import":         300 * time.Second,
-	"self_update":           600 * time.Second,
-	"firmware_install":      600 * time.Second,
-	"diag_now":              75 * time.Second,
+	// entware_clean_run: find+rm -rf в /opt/tmp и sync на медленной или
+	// почти полной флешке (AG-01). 330 с -- раньше, чем мини-апп перестаёт
+	// ждать (6 минут, miniapp/src/space.js spaceDeadlineMs).
+	"entware_clean_run": 330 * time.Second,
+	"tunnel_import":     300 * time.Second,
+	"self_update":       600 * time.Second,
+	"firmware_install":  600 * time.Second,
+	"diag_now":          75 * time.Second,
 	// dns_reset: до восьми снятий и восьми постановок через ndmc, сохранение
 	// и два чтения running-config -- на медленном роутере дольше 45 с
 	// (AGENT-03), а обрыв посередине оставил бы DNS наполовину.
@@ -485,7 +491,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		manager := &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
+		manager := r.entwareClean
+		if manager == nil {
+			manager = &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
+		}
 		lines := logLinesArg(cmd.Args)
 		var (
 			status wire.EntwareCleanStatus
@@ -503,6 +512,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			status, err = manager.Logs(ctx, lines)
 		case "entware_clean_remove":
 			status, err = manager.Remove(ctx)
+		}
+		if errors.Is(err, ErrEntwareCleanBusy) {
+			return "locked", err.Error(), payload
 		}
 		if err != nil {
 			return "err", err.Error(), payload

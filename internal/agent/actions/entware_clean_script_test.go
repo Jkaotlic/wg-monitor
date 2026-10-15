@@ -8,7 +8,7 @@ import (
 
 // v0.57: скрипт очистки переехал из fmt.Sprintf в файл routerscripts. Поведение
 // чистки не меняется: подстановка значений даёт прежний текст v0.56 слово в
-// слово, кроме одной добавки -- места на /opt «до» в итоговой строке журнала.
+// слово, кроме места на /opt «до» в итоговой строке журнала и замка с pid (v0.61).
 func TestEntwareCleanScriptMatchesV056ExceptFreeBefore(t *testing.T) {
 	golden, err := os.ReadFile("testdata/entware-cleanup.v056.golden")
 	if err != nil {
@@ -20,6 +20,45 @@ func TestEntwareCleanScriptMatchesV056ExceptFreeBefore(t *testing.T) {
 		t.Fatalf("golden lost its ok line")
 	}
 	want := strings.Replace(string(golden), oldOK, newOK, 1)
+	// v0.61 (AG-01): замок пишет pid владельца и снимает брошенный (kill -0);
+	// путь замка подставляется, как LOG, в кавычках.
+	const oldLockLine = "LOCK=/tmp/wg-monitor-entware-cleanup.lock\n"
+	const newLockLine = "LOCK=\"/tmp/wg-monitor-entware-cleanup.lock\"\n"
+	const oldLock = `if ! mkdir "$LOCK" 2>/dev/null; then
+  log "status=locked another run is active"
+  trim_log
+  exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
+`
+	const newLock = `if ! mkdir "$LOCK" 2>/dev/null; then
+  # владелец замка мёртв (убит по сроку, OOM) -- замок брошен, снимаем
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  case "$owner" in
+    ''|*[!0-9]*) owner="" ;;
+  esac
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    log "status=stale_lock_removed pid=$owner"
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    log "status=locked another run is active"
+    # и в вывод: агент по нему отвечает «уже идёт другая очистка»
+    echo "status=locked another run is active"
+    trim_log
+    exit 0
+  fi
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
+`
+	for _, r := range [][2]string{{oldLockLine, newLockLine}, {oldLock, newLock}} {
+		if strings.Count(want, r[0]) != 1 {
+			t.Fatalf("golden lost %q", r[0])
+		}
+		want = strings.Replace(want, r[0], r[1], 1)
+	}
 
 	got, err := (&EntwareCleanManager{}).scriptText()
 	if err != nil {
