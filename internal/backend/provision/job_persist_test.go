@@ -76,3 +76,41 @@ func TestPersistentStore_NoFileOrGarbageIsEmptyStore(t *testing.T) {
 		t.Fatal("хранилище не работает после битого файла")
 	}
 }
+
+// I-1: задание, которое могло уже потратить платный конфиг или завести
+// туннель (замена, починка), после рестарта не зовёт «запустите ещё раз»:
+// итог неизвестен, сначала посмотреть VPN-туннели.
+func TestPersistentStore_RestartHintByKind(t *testing.T) {
+	cases := []struct {
+		kind      JobKind
+		wantRerun bool
+		wantPart  string
+	}{
+		{KindProvision, true, "во время установки"},
+		{KindRepairReinstall, true, "во время установки"},
+		{KindRepairRepoint, true, "во время установки"},
+		{JobKind("replace_config"), false, "посреди замены конфига"},
+		{JobKind("link_repair"), false, "посреди починки"},
+		{JobKind("something_new"), false, "Проверьте VPN-туннели"},
+	}
+	for _, c := range cases {
+		t.Run(string(c.kind), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "jobs.json")
+			s := NewPersistentStore(path)
+			job := s.Create(c.kind, "r1", []Step{{Name: "a", Status: StepActive}})
+			got, _ := NewPersistentStore(path).Get(job.ID)
+			if got.State != StateFailed {
+				t.Fatalf("State = %q", got.State)
+			}
+			if !strings.Contains(got.Hint, c.wantPart) {
+				t.Fatalf("Hint = %q, want contains %q", got.Hint, c.wantPart)
+			}
+			if rerun := strings.Contains(got.Hint, "запустите ещё раз"); rerun != c.wantRerun {
+				t.Fatalf("Hint = %q: «запустите ещё раз» = %v, want %v", got.Hint, rerun, c.wantRerun)
+			}
+			if !c.wantRerun && !strings.Contains(got.Hint, "Проверьте VPN-туннели") {
+				t.Fatalf("Hint = %q: нет совета проверить туннели", got.Hint)
+			}
+		})
+	}
+}
