@@ -383,10 +383,6 @@ func TestSendOfflineCarriesAppButton(t *testing.T) {
 	}
 }
 
-type errStub string
-
-func (e errStub) Error() string { return string(e) }
-
 // TestDispatcherSurfacesNonHealableTGError: a TG error that is NOT a
 // stale-topic signal (e.g. 403 forbidden, 429 rate-limit, malformed) must
 // propagate untouched — no retry, no thread_id reset.
