@@ -1000,23 +1000,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "tunnel_power: tunnel_id is required", payload
 		}
 		on, _ := cmd.Args["on"].(bool)
-		var err error
-		if on {
-			err = r.AwgClient.StartTunnel(ctx, tunnelID)
-		} else {
-			err = r.AwgClient.StopTunnel(ctx, tunnelID)
-		}
-		if err != nil {
-			return "err", fmt.Sprintf("tunnel_power %s: %v", tunnelID, err), payload
-		}
-		if r.ForceRecheck != nil {
+		status, out := r.tunnelPower(ctx, tunnelID, on)
+		if status != "err" && r.ForceRecheck != nil {
 			r.ForceRecheck(ctx)
 		}
-		state := "остановлен"
-		if on {
-			state = "запущен"
-		}
-		return "ok", fmt.Sprintf("туннель %s %s", tunnelID, state), payload
+		return status, out, payload
 	case "tunnel_traffic":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
