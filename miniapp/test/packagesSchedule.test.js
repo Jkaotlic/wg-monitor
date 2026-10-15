@@ -152,3 +152,16 @@ describe('итог действия словами', () => {
     expect(packagesDeadlineMs('status', true)).toBe(90_000 + 5 * 60_000)
   })
 })
+
+describe('AG-01: «занято» у очистки и у обновления пакетов', () => {
+  const CLEAN_BUSY = 'Уже идёт другая очистка — повторите через несколько минут.'
+  it('очистка, новый агент: locked -- про очистку', () => {
+    expect(packagesOutcomeText('clean', 'run', { status: 'locked', output: '' })).toBe(CLEAN_BUSY)
+  })
+  it('очистка, старый агент: ok и last_status locked -- про очистку, не «выполнена»', () => {
+    expect(packagesOutcomeText('clean', 'run', ok({ ...CLEAN, last_status: 'locked' }))).toBe(CLEAN_BUSY)
+  })
+  it('обновление пакетов (opkg): locked -- прежний текст', () => {
+    expect(packagesOutcomeText('opkg', 'run', { status: 'locked', output: '' })).toContain('обновление пакетов')
+  })
+})

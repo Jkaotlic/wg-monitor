@@ -11,7 +11,7 @@
 import { agentAtLeast } from './agentConfig.js'
 import { AGENT_OLDER_THAN_APP } from './labels.js'
 import { MAINT_TEXTS } from './maintenance.js'
-import { formatKB, parsePackagesStatus } from './packagesSchedule.js'
+import { formatKB, parsePackagesStatus, CLEAN_BUSY_TEXT } from './packagesSchedule.js'
 
 export const SPACE_MIN_VERSION = 'v0.57.0'
 
@@ -27,7 +27,7 @@ export const SPACE_TEXTS = {
   tooOld: 'Отчёт о месте и очистка по кнопке появятся после обновления агента на роутере до v0.57.',
   adminOnly: 'Место на роутере смотрит админ бота.',
   unknown: 'Место ещё не проверено.',
-  cleanBusy: 'Уже идёт другая очистка — повторите через несколько минут.',
+  cleanBusy: CLEAN_BUSY_TEXT,
 }
 
 const TIMEOUT = 'Роутер не ответил вовремя — проверьте место ещё раз.'
