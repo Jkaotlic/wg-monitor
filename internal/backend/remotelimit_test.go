@@ -124,7 +124,7 @@ func TestRemoteRateLimiterForgetsFullBucketsAndStillLetsNewcomersIn(t *testing.T
 //
 // Публичный RemoteAddr: X-Forwarded-For подделывается одной строкой, ему
 // не верим (BOT-04: верим только за частным/loopback прокси).
-func TestRemoteRateLimiterIgnoresForwardedForBehindRelay(t *testing.T) {
+func TestRemoteRateLimiterIgnoresForwardedForFromPublicRemote(t *testing.T) {
 	l := newRemoteRateLimiter(0.01, 1)
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	l.now = func() time.Time { return now }
@@ -255,14 +255,58 @@ func TestRemoteRateLimitTakesRightmostUntrustedForwarded(t *testing.T) {
 	if got := clientRateKey(r); got != "198.51.100.4" {
 		t.Fatalf("key = %q, want 198.51.100.4", got)
 	}
-	r.Header.Del("X-Forwarded-For")
-	r.Header.Set("X-Real-IP", "203.0.113.7")
-	if got := clientRateKey(r); got != "203.0.113.7" {
-		t.Fatalf("X-Real-IP key = %q", got)
+}
+
+// X-Real-IP целиком в руках клиента при проброске заголовков: не читается.
+func TestRemoteRateLimitRotatingRealIPHasNoEffect(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusUnauthorized)
+	hitFrom(h, "198.51.100.9:1", map[string]string{"X-Real-IP": "203.0.113.1"})
+	if c := hitFrom(h, "198.51.100.9:2", map[string]string{"X-Real-IP": "203.0.113.2"}); c != http.StatusTooManyRequests {
+		t.Fatalf("X-Real-IP обошёл лимит (публичный): %d", c)
 	}
-	r.Header.Set("X-Real-IP", "мусор")
-	if got := clientRateKey(r); got != "127.0.0.1" {
-		t.Fatalf("мусор: key = %q, want RemoteAddr", got)
+	proxy := "192.168.1.1:5"
+	n429 := 0
+	for i := 0; i < 40; i++ {
+		if hitFrom(h, proxy, map[string]string{"X-Real-IP": fmt.Sprintf("203.0.113.%d", i+1)}) == http.StatusTooManyRequests {
+			n429++
+		}
+	}
+	if n429 == 0 {
+		t.Fatal("перебор X-Real-IP за прокси не остановлен")
+	}
+}
+
+// Прокси пропускает XFF клиента как есть: перебор заголовка упирается в потолок по RemoteAddr.
+func TestRemoteRateLimitBackstopStopsRotatingForwardedFor(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1) // потолок: burst 10
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusUnauthorized)
+	pass := 0
+	for i := 0; i < 50; i++ {
+		if hitFrom(h, "192.168.1.1:5", map[string]string{"X-Forwarded-For": fmt.Sprintf("203.0.113.%d", i+1)}) == http.StatusUnauthorized {
+			pass++
+		}
+	}
+	if pass != 10 {
+		t.Fatalf("пропущено %d запросов, want 10 (потолок по RemoteAddr)", pass)
+	}
+}
+
+// Потолок считает и удачные входы.
+func TestRemoteRateLimitBackstopCountsSuccesses(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	h := limitedHandler(l, http.StatusOK)
+	got429 := false
+	for i := 0; i < 30; i++ {
+		if hitFrom(h, "198.51.100.1:1", nil) == http.StatusTooManyRequests {
+			got429 = true
+		}
+	}
+	if !got429 {
+		t.Fatal("залив удачными входами не упёрся в потолок")
 	}
 }
 

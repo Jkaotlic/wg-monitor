@@ -38,18 +38,29 @@ type remoteRateLimiter struct {
 	rate    float64 // токенов в секунду
 	burst   float64 // ёмкость ведёрка
 	now     func() time.Time
+	// backstop -- потолок по RemoteAddr, не зависящий от заголовков: если
+	// прокси пропускает X-Forwarded-For клиента как есть, перебором заголовка
+	// ведёрко клиента не обойти. Десятикратный запас, считает каждый запрос.
+	backstop *remoteRateLimiter
 }
 
 func newRemoteRateLimiter(perSec float64, burst int) *remoteRateLimiter {
 	if perSec <= 0 || burst <= 0 {
 		return nil
 	}
-	return &remoteRateLimiter{
+	l := &remoteRateLimiter{
 		buckets: make(map[string]*tokenBucket),
 		rate:    perSec,
 		burst:   float64(burst),
 		now:     time.Now,
 	}
+	l.backstop = &remoteRateLimiter{
+		buckets: make(map[string]*tokenBucket),
+		rate:    perSec * 10,
+		burst:   float64(burst) * 10,
+		now:     func() time.Time { return l.now() },
+	}
+	return l
 }
 
 // Allow тратит один токен адреса. nil-лимитер пропускает всё: это
@@ -160,10 +171,11 @@ func trustedHop(ip net.IP) bool {
 }
 
 // clientRateKey -- ключ лимита: настоящий клиент, а не прокси перед нами.
-// X-Forwarded-For / X-Real-IP читаются ТОЛЬКО если RemoteAddr -- доверенный
+// X-Forwarded-For читается ТОЛЬКО если RemoteAddr -- доверенный
 // прокси (иначе заголовок подделывается одной строкой). В XFF идём справа
 // налево и берём первый недоверенный адрес: клиент может дописать свои
-// адреса слева, но справа ставит запись только наш прокси. Нет годного
+// адреса слева, но справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при проброске заголовков прокси он целиком
+// в руках клиента. Нет годного
 // заголовка -- RemoteAddr.
 func clientRateKey(r *http.Request) string {
 	remote := remoteRateKey(r.RemoteAddr)
@@ -180,9 +192,6 @@ func clientRateKey(r *http.Request) string {
 		if !trustedHop(ip) {
 			return ip.String()
 		}
-	}
-	if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
-		return ip.String()
 	}
 	return remote
 }
@@ -243,7 +252,10 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := clientRateKey(r)
-			ok, retry := l.Allow(key)
+			ok, retry := l.backstop.Allow(r.RemoteAddr)
+			if ok {
+				ok, retry = l.Allow(key)
+			}
 			if !ok {
 				secs := int(retry.Round(time.Second).Seconds())
 				if secs < 1 {
