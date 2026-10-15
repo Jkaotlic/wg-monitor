@@ -164,3 +164,91 @@ func TestRunner_TunnelPower_RequiresTunnelID(t *testing.T) {
 		t.Fatal("роутер не должен был получить ни одного запроса")
 	}
 }
+
+// AG-05: действия с туннелем просят внеплановый отчёт (ReportNow), а не
+// «вернулся после отвала» (ForceRecheck → Resumed=true): у мобильного роутера
+// бэкенд выбросил бы из такого отчёта упавшие проверки туннелей.
+func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tunnels/get" {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg11","status":"running","enabled":true}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	for _, cmd := range []wire.Command{
+		{ID: "a", Action: "tunnel_restart", Args: map[string]any{"tunnel_id": "awg11"}},
+		{ID: "b", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": true}},
+		{ID: "c", Action: "tunnel_enable", Args: map[string]any{"ndms_name": "Wireguard3"}},
+	} {
+		var now, resumed int
+		r := Runner{
+			AwgClient:    awgmgrFake(t, ok),
+			Exec:         func(ctx context.Context, name string, args ...string) ([]byte, error) { return nil, nil },
+			Now:          mockNow(),
+			ForceRecheck: func(ctx context.Context) { resumed++ },
+			ReportNow:    func(ctx context.Context) { now++ },
+		}
+		res := r.Execute(context.Background(), cmd)
+		if res.Status != "ok" {
+			t.Fatalf("%s: status=%q output=%q", cmd.Action, res.Status, res.Output)
+		}
+		if now != 1 || resumed != 0 {
+			t.Fatalf("%s: ReportNow=%d ForceRecheck=%d, want 1/0", cmd.Action, now, resumed)
+		}
+	}
+}
+
+// Ревью Task 7: ожидание состояния ограничено часами, а не числом чтений --
+// медленный awg-manager (5 с на чтение) не растягивает его за срок действия.
+func TestRunner_TunnelPower_SettleBoundedByWallClock(t *testing.T) {
+	oldSettle, oldStep := tunnelPowerSettle, tunnelPowerStep
+	tunnelPowerSettle, tunnelPowerStep = 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { tunnelPowerSettle, tunnelPowerStep = oldSettle, oldStep })
+
+	f := &powerFake{enabled: true, status: "stopped", startTo: "starting"}
+	slow := f.handler(t)
+	r := powerRunner(t, f)
+	r.AwgClient = awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api/tunnels/get" {
+			time.Sleep(100 * time.Millisecond)
+		}
+		slow.ServeHTTP(w, req)
+	}))
+	start := time.Now()
+	res := runPower(r, true)
+	if el := time.Since(start); el > 900*time.Millisecond {
+		t.Fatalf("settle took %v with a 300ms budget (reads: %d)", el, f.gets)
+	}
+	if res.Status != "partial" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+// Ревью Task 7: внеплановый отчёт после действия идёт со своим сроком, а не
+// с почти истёкшим сроком действия: обрезанные проверки дали бы ложные
+// тревоги (отчёт больше не Resumed).
+func TestRunner_ReportNowGetsOwnContext(t *testing.T) {
+	f := &powerFake{enabled: true, status: "running"}
+	r := powerRunner(t, f)
+	r.ActionTimeout = func(string) time.Duration { return time.Second }
+	var (
+		gotErr      error
+		gotDeadline time.Time
+		hasDeadline bool
+	)
+	r.ReportNow = func(ctx context.Context) {
+		gotErr = ctx.Err()
+		gotDeadline, hasDeadline = ctx.Deadline()
+	}
+	res := runPower(r, true)
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if gotErr != nil || !hasDeadline {
+		t.Fatalf("report ctx err=%v deadline=%v", gotErr, hasDeadline)
+	}
+	if left := time.Until(gotDeadline); left < 10*time.Second {
+		t.Fatalf("report ctx has only %v left: bound to the action deadline", left)
+	}
+}

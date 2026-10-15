@@ -60,37 +60,3 @@ func TestRunner_TunnelDelete_NoReEnableAfterStop(t *testing.T) {
 		t.Fatalf("calls:\n%s", got)
 	}
 }
-
-// AG-05: действия с туннелем просят внеплановый отчёт (ReportNow), а не
-// «вернулся после отвала» (ForceRecheck → Resumed=true): у мобильного роутера
-// бэкенд выбросил бы из такого отчёта упавшие проверки туннелей.
-func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
-	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/tunnels/get" {
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg11","status":"running","enabled":true}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"success":true}`))
-	})
-	for _, cmd := range []wire.Command{
-		{ID: "a", Action: "tunnel_restart", Args: map[string]any{"tunnel_id": "awg11"}},
-		{ID: "b", Action: "tunnel_power", Args: map[string]any{"tunnel_id": "awg11", "on": true}},
-		{ID: "c", Action: "tunnel_enable", Args: map[string]any{"ndms_name": "Wireguard3"}},
-	} {
-		var now, resumed int
-		r := Runner{
-			AwgClient:    awgmgrFake(t, ok),
-			Exec:         func(ctx context.Context, name string, args ...string) ([]byte, error) { return nil, nil },
-			Now:          mockNow(),
-			ForceRecheck: func(ctx context.Context) { resumed++ },
-			ReportNow:    func(ctx context.Context) { now++ },
-		}
-		res := r.Execute(context.Background(), cmd)
-		if res.Status != "ok" {
-			t.Fatalf("%s: status=%q output=%q", cmd.Action, res.Status, res.Output)
-		}
-		if now != 1 || resumed != 0 {
-			t.Fatalf("%s: ReportNow=%d ForceRecheck=%d, want 1/0", cmd.Action, now, resumed)
-		}
-	}
-}

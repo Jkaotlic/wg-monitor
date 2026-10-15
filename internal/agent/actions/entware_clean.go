@@ -52,6 +52,12 @@ var ErrEntwareCleanBusy = errors.New("уже идёт другая очистк�
 // срока действия (330 с), так что полчаса -- с большим запасом.
 const entwareCleanLockStaleAfter = 30 * time.Minute
 
+// entwareCleanLockMaxAge -- замок старше этого брошен, даже если процесс с
+// его pid жив: очистка столько не идёт (срок действия 330 с), а на busybox
+// pid переиспользуются -- чужой процесс с тем же номером держал бы очистку
+// до перезагрузки. Скрипт проверяет то же через find -mmin +120.
+const entwareCleanLockMaxAge = 2 * time.Hour
+
 // entwareCleanLockedMarker -- строка, которую скрипт пишет в вывод, когда
 // замок занят живым владельцем.
 const entwareCleanLockedMarker = "status=locked"
@@ -81,12 +87,19 @@ func (m *EntwareCleanManager) RefreshScript() (changed bool, err error) {
 	return true, nil
 }
 
-// ClearAbandonedLock снимает замок, который скрипт сам не распознает: без
-// pid (старый скрипт) и старше entwareCleanLockStaleAfter. Замок с pid
-// скрипт проверяет сам (kill -0); живой и свежий не трогаем.
+// ClearAbandonedLock снимает брошенный замок очистки: pid мёртв; pid нет
+// (старый скрипт) и замок старше entwareCleanLockStaleAfter; pid жив, но замок
+// старше entwareCleanLockMaxAge. Живой и свежий не трогаем.
 func (m *EntwareCleanManager) ClearAbandonedLock() {
 	dir := m.lockDir()
-	if MkdirLockState(dir, m.now(), entwareCleanLockStaleAfter) != LockAbandoned {
+	switch MkdirLockState(dir, m.now(), entwareCleanLockStaleAfter) {
+	case LockAbandoned:
+	case LockHeld:
+		st, err := os.Stat(dir)
+		if err != nil || m.now().Sub(st.ModTime()) <= entwareCleanLockMaxAge {
+			return
+		}
+	default:
 		return
 	}
 	_ = os.Remove(filepath.Join(dir, "pid"))

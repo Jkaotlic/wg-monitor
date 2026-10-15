@@ -241,3 +241,44 @@ func TestEntwareClean_RefreshScript(t *testing.T) {
 		t.Fatal("Run ran an outdated script")
 	}
 }
+
+// Ревью Task 7: очистка столько не идёт -- замок старше 2 ч брошен, даже если
+// его pid жив (на busybox pid переиспользуются): иначе чужой процесс с тем же
+// номером держал бы очистку до перезагрузки.
+func TestEntwareCleanScript_OldLockWithLivePidTakenOver(t *testing.T) {
+	lock := entwareLockWithPid(t, os.Getpid())
+	old := time.Now().Add(-3 * time.Hour)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	log, out := runEntwareCleanScript(t, lock)
+	if strings.Contains(out, "status=locked") || !strings.Contains(log, "status=ok") {
+		t.Fatalf("2h-old lock blocked the cleanup: out=%q log:\n%s", out, log)
+	}
+}
+
+func TestEntwareCleanRun_ClearsOldLockWithLivePid(t *testing.T) {
+	m := newTestEntwareCleanManager(t)
+	if err := os.MkdirAll(m.LockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.LockDir, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set := func(age time.Duration) {
+		ts := m.Now().Add(-age)
+		if err := os.Chtimes(m.LockDir, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(time.Hour) // живой и моложе 2 ч -- занят
+	m.ClearAbandonedLock()
+	if _, err := os.Stat(m.LockDir); err != nil {
+		t.Fatalf("live 1h lock removed: %v", err)
+	}
+	set(entwareCleanLockMaxAge + time.Minute)
+	m.ClearAbandonedLock()
+	if _, err := os.Stat(m.LockDir); !os.IsNotExist(err) {
+		t.Fatalf("live lock older than %v not removed: %v", entwareCleanLockMaxAge, err)
+	}
+}

@@ -342,11 +342,19 @@ func (r *Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string
 	return nil
 }
 
+// reportNowTimeout -- срок внепланового отчёта после действия. Свой, а не
+// остаток срока действия: почти истёкший ctx обрезал бы проверки, и отчёт
+// без Resumed принёс бы бэкенду ложные провалы.
+const reportNowTimeout = 30 * time.Second
+
 // reportNow -- внеплановый отчёт после действия с туннелем (AG-05).
 func (r *Runner) reportNow(ctx context.Context) {
-	if r.ReportNow != nil {
-		r.ReportNow(ctx)
+	if r.ReportNow == nil {
+		return
 	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reportNowTimeout)
+	defer cancel()
+	r.ReportNow(rctx)
 }
 
 func (r *Runner) now() time.Time {

@@ -11,7 +11,8 @@ import (
 // tunnelPowerSettle -- сколько tunnel_power ждёт, пока туннель дойдёт до
 // нужного состояния (AG-02), и шаг перечитывания. Внутри срока действия по
 // умолчанию (45 с): два-три вызова awg-manager по 5 с и 15 с ожидания.
-const (
+// Переменные -- для теста.
+var (
 	tunnelPowerSettle = 15 * time.Second
 	tunnelPowerStep   = time.Second
 )
@@ -54,8 +55,14 @@ func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (sta
 		last    *awgmgr.Tunnel
 		lastErr error
 	)
-	for waited := time.Duration(0); ; waited += tunnelPowerStep {
-		t, err := getTunnel(ctx, r.AwgClient, tunnelID)
+	// Срок ожидания -- по часам: чтение у awg-manager до 5 с, и счёт
+	// попыток растянул бы ожидание за срок действия (45 с), а итог стал бы
+	// timeout вместо настоящего состояния. Счёт шагов -- страховка для
+	// подменённого Sleep.
+	sctx, cancel := context.WithTimeout(ctx, tunnelPowerSettle)
+	defer cancel()
+	for waited := time.Duration(0); sctx.Err() == nil; waited += tunnelPowerStep {
+		t, err := getTunnel(sctx, r.AwgClient, tunnelID)
 		if err == nil {
 			last, lastErr = t, nil
 			if reached(t) {
@@ -70,7 +77,7 @@ func (r *Runner) tunnelPower(ctx context.Context, tunnelID string, on bool) (sta
 		if waited+tunnelPowerStep > tunnelPowerSettle {
 			break
 		}
-		if err := r.sleep(ctx, tunnelPowerStep); err != nil {
+		if err := r.sleep(sctx, tunnelPowerStep); err != nil {
 			break
 		}
 	}
