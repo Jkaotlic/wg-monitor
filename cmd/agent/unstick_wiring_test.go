@@ -5,7 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -85,6 +87,39 @@ func TestUpgradeInProgress(t *testing.T) {
 	}
 	if f() {
 		t.Error("lock dir older than 2h is abandoned")
+	}
+}
+
+// AG-06: замок с pid мёртвого владельца (агента убили посреди opkg) --
+// брошен сразу, а не через 2 ч; с pid живого -- обновление идёт, даже если
+// каталог старше 2 ч.
+func TestUpgradeInProgress_OwnerPid(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "opkg.lock")
+	now := time.Now()
+	f := upgradeInProgress(dir, func() time.Time { return now })
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	writePid := func(pid int) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, now.Add(-time.Minute), now.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePid(cmd.Process.Pid)
+	if f() {
+		t.Error("fresh lock of a dead owner must be abandoned")
+	}
+	writePid(os.Getpid())
+	if !f() {
+		t.Error("lock of a live owner must mean an upgrade is running")
 	}
 }
 

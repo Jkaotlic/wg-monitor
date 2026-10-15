@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -604,4 +605,91 @@ func TestOpkgCronScriptWritesPidIntoLock(t *testing.T) {
 			t.Fatalf("cron script missing %q", want)
 		}
 	}
+}
+
+// runCronScript прогоняет НАСТОЯЩИЙ cron-скрипт через sh: замок, журнал и
+// PATH -- в песочнице, opkg и df -- подставные. Возвращает журнал и
+// вызывался ли opkg.
+func runCronScript(t *testing.T, lock string) (log string, opkgRan bool) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sh")
+	}
+	d := t.TempDir()
+	shims := filepath.Join(d, "shims")
+	if err := os.MkdirAll(shims, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"opkg": "#!/bin/sh\ntouch \"$D/opkg-ran\"\nexit 0\n",
+		"df":   "#!/bin/sh\necho 'Filesystem 1K-blocks Used Available Use% Mounted'\necho '/dev/sda1 1000000 1000 900000 1% /opt'\n",
+	} {
+		if err := os.WriteFile(filepath.Join(shims, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logPath := filepath.Join(d, "cron.log")
+	s := (&OpkgCronManager{LogPath: logPath}).scriptText()
+	for old, repl := range map[string]string{
+		"LOCK=" + OpkgCronSharedLockDir + "\n":                    "LOCK=" + lock + "\n",
+		"PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin\n": "PATH=" + shims + ":/usr/bin:/bin\n",
+	} {
+		if !strings.Contains(s, old) {
+			t.Fatalf("script has no %q", old)
+		}
+		s = strings.Replace(s, old, repl, 1)
+	}
+	script := filepath.Join(d, "cron.sh")
+	if err := os.WriteFile(script, []byte(s), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script)
+	cmd.Env = append(os.Environ(), "D="+d)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(logPath)
+	_, statErr := os.Stat(filepath.Join(d, "opkg-ran"))
+	return string(b), statErr == nil
+}
+
+// AG-06: cron-скрипт сам снимает замок мёртвого владельца (kill -0) и
+// обновляет; замок живого -- «занято», opkg не трогает.
+func TestOpkgCronScript_AbandonedLockTakenOver(t *testing.T) {
+	lockWithPid := func(t *testing.T, pid int) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "wg-monitor-opkg-auto-upgrade.lock")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	t.Run("owner dead", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		lock := lockWithPid(t, cmd.Process.Pid)
+		log, ran := runCronScript(t, lock)
+		if !ran || !strings.Contains(log, "status=ok") || strings.Contains(log, "status=locked") {
+			t.Fatalf("abandoned lock blocked the upgrade: ran=%v log:\n%s", ran, log)
+		}
+		if _, err := os.Stat(lock); !os.IsNotExist(err) {
+			t.Fatalf("lock not released after the run: %v", err)
+		}
+	})
+	t.Run("owner alive", func(t *testing.T) {
+		lock := lockWithPid(t, os.Getpid())
+		log, ran := runCronScript(t, lock)
+		if ran || !strings.Contains(log, "status=locked") {
+			t.Fatalf("live owner's lock ignored: ran=%v log:\n%s", ran, log)
+		}
+		if b, err := os.ReadFile(filepath.Join(lock, "pid")); err != nil || strings.TrimSpace(string(b)) != strconv.Itoa(os.Getpid()) {
+			t.Fatalf("live owner's lock touched: %q %v", b, err)
+		}
+	})
 }

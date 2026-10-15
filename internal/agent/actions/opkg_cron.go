@@ -341,9 +341,21 @@ free_kb() {
 }
 
 if ! mkdir "$LOCK" 2>/dev/null; then
-  log "status=locked another run is active"
-  trim_log
-  exit 0
+  # владелец замка мёртв (kill -9, OOM) -- замок брошен, снимаем
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  case "$owner" in
+    ''|*[!0-9]*) owner="" ;;
+  esac
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    log "status=stale_lock_removed pid=$owner"
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    log "status=locked another run is active"
+    trim_log
+    exit 0
+  fi
 fi
 echo $$ > "$LOCK/pid"
 trap 'rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM

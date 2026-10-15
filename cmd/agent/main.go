@@ -310,16 +310,13 @@ func unstickThreshold(n int) time.Duration {
 // (как opkgSharedLockStale в actions).
 const opkgLockAbandonedAfter = 2 * time.Hour
 
-// upgradeInProgress -- идёт ли автообновление пакетов по cron: каталог-замок
-// есть и моложе 2 ч. Само обновление перезапускает awg-manager -- сторожу
-// в это время лечить нечего.
+// upgradeInProgress -- идёт ли автообновление пакетов по cron: замок занят
+// живым владельцем (pid из замка), а без pid -- каталог моложе 2 ч. Замок
+// мёртвого владельца брошен сразу (AG-06). Само обновление перезапускает
+// awg-manager -- сторожу в это время лечить нечего.
 func upgradeInProgress(dir string, now func() time.Time) func() bool {
 	return func() bool {
-		fi, err := os.Stat(dir)
-		if err != nil {
-			return false
-		}
-		return now().Sub(fi.ModTime()) < opkgLockAbandonedAfter
+		return actions.MkdirLockState(dir, now(), opkgLockAbandonedAfter).Held()
 	}
 }
 
