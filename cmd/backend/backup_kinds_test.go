@@ -761,3 +761,23 @@ func TestWriteEncryptedArchiveRefusesExistingFileAndCancel(t *testing.T) {
 		t.Fatalf("отмена: %v", err)
 	}
 }
+
+// M-4: полный архив не везёт owed_replies -- как и малый. Иначе после
+// восстановления архива нескольких часов давности обход напоминаний прислал
+// бы старое «восстановилось» на тревогу, тоже поднятую из архива. Сама
+// таблица (схема) в архиве есть.
+func TestBackupFullArchiveDropsOwedReplies(t *testing.T) {
+	f := newBackupFixture(t)
+	f.exec(t, `INSERT INTO owed_replies (user_id, check_name, text, created_at) VALUES (1, 'tunnel_awg0', 'снова работает', '2026-10-07 01:00:00')`)
+	if err := runBackup(context.Background(), f.opts("full")); err != nil {
+		t.Fatal(err)
+	}
+	plain := f.decryptArchive(t, fixtureFullName)
+	if n := archivedCount(t, plain, "owed_replies"); n != 0 {
+		t.Fatalf("в полном архиве долгов «восстановилось»: %d", n)
+	}
+	var live int
+	if err := f.live.SQL().QueryRow(`SELECT count(*) FROM owed_replies`).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("живая база тронута: %d %v", live, err)
+	}
+}
