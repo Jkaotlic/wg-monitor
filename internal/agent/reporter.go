@@ -192,6 +192,12 @@ func (r *Reporter) ForceResumed(ctx context.Context) {
 	r.sendOnce(ctx)
 }
 
+// SendNow -- внеплановый отчёт без принудительного Resumed (AG-05): после
+// действия с туннелем экран и тревоги должны увидеть свежее состояние, но
+// роутер никуда не пропадал. Resumed ставится только по-честному -- если с
+// прошлого отчёта прошло больше ResumedThreshold.
+func (r *Reporter) SendNow(ctx context.Context) { r.sendOnce(ctx) }
+
 // RequestWake -- хук KeenOS увидел смену интерфейса (v0.47). Не блокирует:
 // второй запрос, пока первый не взят, ничего не добавляет.
 func (r *Reporter) RequestWake() {

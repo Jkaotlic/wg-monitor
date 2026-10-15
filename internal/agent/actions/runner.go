@@ -74,11 +74,18 @@ type Runner struct {
 	// OnCommand -- наблюдатель команд (сторож зависаний, v0.59): зовётся
 	// до и после действия, чтобы окно тишины считалось от конца долгой
 	// команды. nil -- никто не слушает.
-	OnCommand    func(cmd wire.Command)
-	AwgClient    *awgmgr.Client
-	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
-	Opkg         OpkgExecutor
-	Exec         ExecFunc // for tunnel_enable/disable via ndmc
+	OnCommand func(cmd wire.Command)
+	AwgClient *awgmgr.Client
+	// ForceRecheck -- отчёт с Resumed=true (reporter.ForceResumed); только
+	// для force_recheck: «роутер вернулся, проверь всё заново».
+	ForceRecheck func(ctx context.Context)
+	// ReportNow -- внеплановый отчёт без Resumed (reporter.SendNow, AG-05):
+	// после действий с туннелем, чтобы экран и тревоги увидели свежее
+	// состояние. Resumed=true здесь соврал бы бэкенду, и у мобильного
+	// роутера упавшие проверки туннелей выпали бы из тревог. nil -- не шлём.
+	ReportNow func(ctx context.Context)
+	Opkg      OpkgExecutor
+	Exec      ExecFunc // for tunnel_enable/disable via ndmc
 	// RCI -- локальный REST-интерфейс KeenOS для команд прошивки: `ndmc -c`
 	// обрывает «продолжаемые» команды (components commit/list). nil --
 	// команды прошивки идут старым путём через Exec.
@@ -333,6 +340,13 @@ func (r *Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string
 		return fmt.Errorf("verify legacy cleanup %s: %v", tunnelID, err)
 	}
 	return nil
+}
+
+// reportNow -- внеплановый отчёт после действия с туннелем (AG-05).
+func (r *Runner) reportNow(ctx context.Context) {
+	if r.ReportNow != nil {
+		r.ReportNow(ctx)
+	}
 }
 
 func (r *Runner) now() time.Time {
@@ -625,9 +639,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s %s: %v\n%s", ndms, state, err, string(out)), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
 	case "tunnel_restart":
 		tunnelID, _ := cmd.Args["tunnel_id"].(string)
@@ -646,9 +658,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if tunnelID != "" && r.AwgClient != nil {
 			err := r.AwgClient.RestartTunnel(ctx, tunnelID)
 			if err == nil {
-				if r.ForceRecheck != nil {
-					r.ForceRecheck(ctx)
-				}
+				r.reportNow(ctx)
 				return "ok", fmt.Sprintf("restarted %s via awg-manager", tunnelID), payload
 			}
 			if !awgmgr.IsEndpointMissing(err) {
@@ -677,9 +687,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s up: %v\n%s", ndms, err, string(outUp)), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("restarted %s\n-- down --\n%s\n-- up --\n%s", ndms, string(outDown), string(outUp)), payload
 	case "tunnel_delete":
 		if r.AwgClient == nil {
@@ -726,9 +734,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				if cleanupErr := r.forceForgetLegacyAWGTunnel(ctx, tunnelID); cleanupErr != nil {
 					return "err", fmt.Sprintf("legacy cleanup %s after delete error %v: %v", tunnelID, err, cleanupErr), payload
 				}
-				if r.ForceRecheck != nil {
-					r.ForceRecheck(ctx)
-				}
+				r.reportNow(ctx)
 				return "ok", fmt.Sprintf("tunnel %s deleted with legacy cleanup after awgmgr delete error: %v", tunnelID, err), payload
 			}
 			return "err", err.Error(), payload
@@ -743,9 +749,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		} else if !tunnelNotFoundError(err) {
 			return "err", fmt.Sprintf("verify delete %s: %v", tunnelID, err), payload
 		}
-		if r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
-		}
+		r.reportNow(ctx)
 		return "ok", fmt.Sprintf("tunnel %s deleted", tunnelID), payload
 	case "tunnel_analyze":
 		// Проверка конфига до импорта (awg-manager 2.18.x). Старая панель
@@ -1010,8 +1014,8 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		on, _ := cmd.Args["on"].(bool)
 		status, out := r.tunnelPower(ctx, tunnelID, on)
-		if status != "err" && r.ForceRecheck != nil {
-			r.ForceRecheck(ctx)
+		if status != "err" {
+			r.reportNow(ctx)
 		}
 		return status, out, payload
 	case "tunnel_traffic":
