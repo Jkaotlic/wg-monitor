@@ -110,6 +110,28 @@ func (w *Watcher) sendTimeout() time.Duration {
 	return defaultSendTimeout
 }
 
+// offlineRetryState -- сколько раз подряд тревога не ушла и когда пробовать
+// снова.
+type offlineRetryState struct {
+	fails int
+	next  time.Time
+}
+
+// offlineRetryPause -- пауза после fails-й неудачи подряд: 1 мин, 5 мин,
+// дальше раз в 30 мин. Таймаут ответа Telegram бывает и тогда, когда
+// сообщение уже принято, -- повтор на каждом обходе (30 с) дал бы по дублю
+// карточки каждые 30 с.
+func offlineRetryPause(fails int) time.Duration {
+	switch fails {
+	case 1:
+		return time.Minute
+	case 2:
+		return 5 * time.Minute
+	default:
+		return 30 * time.Minute
+	}
+}
+
 type Watcher struct {
 	d             *db.DB
 	off           OfflineSender
@@ -117,6 +139,9 @@ type Watcher struct {
 	cfg           Config
 	sleepNotified map[int64]time.Time
 	resumed       map[int64]time.Time
+	// offlineRetry -- пауза перед повтором тревоги «не на связи», упавшей
+	// целиком (под mu). Только память: после рестарта первая попытка сразу.
+	offlineRetry map[int64]offlineRetryState
 	// Последняя неудачная отправка «роутер не на связи» -- под mu.
 	lastOfflineErrRouter string
 	lastOfflineErrText   string
@@ -141,6 +166,7 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 		d: d, off: off, cfg: cfg,
 		sleepNotified: map[int64]time.Time{},
 		resumed:       map[int64]time.Time{},
+		offlineRetry:  map[int64]offlineRetryState{},
 		now:           time.Now,
 	}
 }
@@ -299,6 +325,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		if stale < threshold {
 			w.mu.Lock()
 			delete(w.sleepNotified, u.ID)
+			delete(w.offlineRetry, u.ID)
 			// Eager-expire resumed entries for fresh users too. Previously
 			// only the stale branch could evict, so a router that boots
 			// (MarkResumed), reports normally, then stays online forever
@@ -385,23 +412,35 @@ func (w *Watcher) scan(ctx context.Context) {
 				"user_id", u.ID, "nickname", u.Nickname, "stale", stale)
 			continue
 		}
+		w.mu.Lock()
+		retry, failedBefore := w.offlineRetry[u.ID]
+		w.mu.Unlock()
+		if failedBefore && now.Before(retry.next) {
+			continue // прошлая попытка упала -- ждём паузу
+		}
 		sendCtx, cancelSend := context.WithTimeout(ctx, w.sendTimeout())
 		err = w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
 		cancelSend()
 		if err != nil {
 			metricOfflineErrors.Add(1)
 			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)
-			// Отметку не пишем -- следующий обход повторит тревогу.
+			// Отметку не пишем -- тревогу повторит обход после паузы.
 			//
 			// Причину запоминаем для сводки панели: счётчик ошибок говорит «что-то
 			// падает», но не что именно, а docker-лог Pi удалённо недоступен.
 			w.mu.Lock()
+			retry.fails++
+			retry.next = now.Add(offlineRetryPause(retry.fails))
+			w.offlineRetry[u.ID] = retry
 			w.lastOfflineErrRouter = u.Nickname
 			w.lastOfflineErrText = redactSecrets(err.Error())
 			w.lastOfflineErrAt = now
 			w.mu.Unlock()
 			continue
 		}
+		w.mu.Lock()
+		delete(w.offlineRetry, u.ID)
+		w.mu.Unlock()
 		// Точечная запись: тишину и «понятно», нажатые за время отправки, не
 		// трогает.
 		if err := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); err != nil {

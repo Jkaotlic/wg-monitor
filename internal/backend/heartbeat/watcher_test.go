@@ -375,7 +375,10 @@ func TestWatcherDoesNotRefireItself(t *testing.T) {
 	}
 }
 
-func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
+// Тишина на agent_heartbeat без тревоги (строка ok, «Тише на час» от
+// прошлого молчания) не глушит новую тревогу: сторож её шлёт (диспетчер --
+// без звука) и записывает hard, а тишину не трогает.
+func TestWatcherSendsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "2121212121212121212121212121212121212121212121212121212121212121"
@@ -386,9 +389,7 @@ func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
 		UserID:        uid,
 		CheckName:     "agent_heartbeat",
-		CurrentStatus: "hard",
-		HardSince:     &t0,
-		LastAlertAt:   &t0,
+		CurrentStatus: "ok",
 		SilencedUntil: &silencedUntil,
 	}); err != nil {
 		t.Fatal(err)
@@ -396,11 +397,17 @@ func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
 
 	off := &fakeOffline{}
 	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, t0)
 
-	driveScan(w, t0.Add(7*time.Hour))
-
-	if got := len(off.snapshot()); got != 0 {
-		t.Fatalf("silenced agent_heartbeat must not send offline notice, got %d", got)
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("под тишиной тревога должна уйти (тихо), вызовов %d", got)
+	}
+	if got := metricSuppressed.Value(); got != 0 {
+		t.Fatalf("тишина посчитана как заглушка: %d", got)
+	}
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	if st.CurrentStatus != "hard" || st.SilencedUntil == nil || !st.SilencedUntil.Equal(silencedUntil) {
+		t.Fatalf("строка после тревоги: %+v", st)
 	}
 }
 
@@ -700,5 +707,63 @@ func TestWatcherPersistsOfflineAlertAsHard(t *testing.T) {
 	driveScan(w2, now.Add(time.Minute))
 	if got := len(off.snapshot()); got != 1 {
 		t.Fatalf("новый сторож повторил тревогу: %d", got)
+	}
+}
+
+// countingFailOffline -- отправка, которая всегда падает, и счётчик попыток.
+type countingFailOffline struct{ n int }
+
+func (c *countingFailOffline) SendOffline(context.Context, int64, string, time.Duration) error {
+	c.n++
+	return errors.New("telegram: timeout awaiting response")
+}
+
+func (c *countingFailOffline) SendBackOnline(context.Context, int64, string, time.Time) error {
+	return nil
+}
+
+// Тревога «не на связи», упавшая целиком, повторяется не на каждом обходе
+// (30 с): таймаут ответа бывает и тогда, когда Telegram сообщение принял, и
+// частый повтор дал бы по дублю карточки каждые 30 с. Паузы: 1 мин, 5 мин,
+// дальше раз в 30 мин.
+func TestWatcherBacksOffFailedOfflineAlert(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2525252525252525252525252525252525252525252525252525252525252525"
+	uid, _ := d.Users().Insert("flaky", tok, "198.51.100.32", "awg0")
+	t0 := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", t0.Add(-10*time.Minute))
+
+	off := &countingFailOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: 30 * time.Second})
+	steps := []struct {
+		at   time.Duration
+		want int
+	}{
+		{0, 1},
+		{30 * time.Second, 1},
+		{time.Minute, 2},
+		{90 * time.Second, 2},
+		{5 * time.Minute, 2},
+		{6 * time.Minute, 3},
+		{20 * time.Minute, 3},
+		{36 * time.Minute, 4},
+		{50 * time.Minute, 4},
+		{66 * time.Minute, 5},
+	}
+	for _, s := range steps {
+		driveScan(w, t0.Add(s.at))
+		if off.n != s.want {
+			t.Fatalf("в %s попыток %d, ждали %d", s.at, off.n, s.want)
+		}
+	}
+
+	// Роутер вернулся -- пауза сброшена: следующее молчание шлёт сразу.
+	back := t0.Add(70 * time.Minute)
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", back)
+	driveScan(w, back.Add(time.Second))
+	driveScan(w, back.Add(10*time.Minute))
+	if off.n != 6 {
+		t.Fatalf("после возвращения пауза не сброшена: попыток %d, ждали 6", off.n)
 	}
 }

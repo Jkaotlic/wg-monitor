@@ -257,3 +257,38 @@ func TestOwedReplyClearKeepsNewerAlertMessages(t *testing.T) {
 		t.Fatalf("стёрто сообщение новой тревоги: %v", msgs)
 	}
 }
+
+// countingDeliverer -- HardDeliverer, который только считает вызовы.
+type countingDeliverer struct{ n int }
+
+func (c *countingDeliverer) DeliverHard(context.Context, int64, string, string, db.IncidentState, wire.Check) (int, error) {
+	c.n++
+	return 1, nil
+}
+
+// Единственный владелец тревоги «не на связи» -- сторож молчания (BOT-05):
+// даже если строка agent_heartbeat = hard оказалась без отметки отправки
+// (старые данные), realert не шлёт полную карточку FormatHard, а только
+// короткое напоминание.
+func TestRealertNeverDeliversHardCardForHeartbeat(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{}
+	now := time.Now().UTC().Truncate(time.Second)
+	hs := now.Add(-time.Hour)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID: uid, CheckName: "agent_heartbeat", CurrentStatus: "hard", ConsecutiveFails: 1, HardSince: &hs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cd := &countingDeliverer{}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetNow(func() time.Time { return now })
+	p.SetHardDeliverer(cd)
+	p.tick(context.Background())
+	if cd.n != 0 {
+		t.Fatalf("realert отправил карточку тревоги по agent_heartbeat: %d", cd.n)
+	}
+	if f.count() != 1 || !strings.Contains(f.sent[0], "Всё ещё") {
+		t.Fatalf("ждали одно короткое напоминание, ушло %q", f.sent)
+	}
+}

@@ -187,3 +187,35 @@ func TestOfflineRouterBackSilencedIsQuietSound(t *testing.T) {
 		}
 	}
 }
+
+// Под «Тише на час», оставшейся от прошлого молчания, новая тревога
+// «Роутер не на связи» уходит без звука (BOT-02/BOT-05).
+func TestSendOfflineSilencedGoesSilent(t *testing.T) {
+	stg := &silentTG{}
+	d := newDB(t)
+	uid, err := d.Users().Insert("router-s", "acac000000000000000000000000000000000000000000000000000000000000", "198.51.100.21", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 1202); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	until := now.Add(time.Hour)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID: uid, CheckName: "agent_heartbeat", CurrentStatus: "ok", SilencedUntil: &until,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disp := NewDispatcher(d, stg, Config{FailThreshold: 3, RecoveryThreshold: 2})
+	disp.SetNow(func() time.Time { return now })
+	if err := disp.SendOffline(context.Background(), uid, "router-s", 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if len(stg.silent) != 1 || !strings.Contains(stg.silent[0].text, "Роутер не на связи") {
+		t.Fatalf("тихих: %+v", stg.silent)
+	}
+	if len(stg.sentWithKeyboard) != 0 {
+		t.Fatalf("под тишиной ушло со звуком: %+v", stg.sentWithKeyboard)
+	}
+}

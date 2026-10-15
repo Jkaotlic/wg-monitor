@@ -255,6 +255,10 @@ func (p *Poller) WaitForExit() { p.wg.Wait() }
 // пакет стоит ниже backend, поэтому строка продублирована).
 const resolverGuardCheck = "resolver_guard"
 
+// heartbeatCheck -- проверка молчания роутера; её первую тревогу шлёт
+// heartbeat.Watcher.
+const heartbeatCheck = "agent_heartbeat"
+
 // notReadyLookback -- сколько последних строк просматривается в поисках
 // строки сторожа с настоящим ответом.
 const notReadyLookback = 50
@@ -394,7 +398,12 @@ func (p *Poller) tick(ctx context.Context) {
 			continue
 		}
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
-		if st.LastAlertAt == nil && p.hard != nil {
+		// agent_heartbeat -- исключение: первую тревогу «Роутер не на связи»
+		// шлёт только сторож молчания (свой текст, свои повторы после
+		// сбоя), realert по ней -- только напоминания (BOT-05). Строка без
+		// отметки (старые данные) получает напоминание, а не карточку
+		// FormatHard -- иначе у тревоги было бы два владельца.
+		if st.LastAlertAt == nil && p.hard != nil && sh.CheckName != heartbeatCheck {
 			// Первая тревога не дошла никому: шлём её саму, с записью в
 			// alert_messages и памятью для нити починки (BOT-01).
 			if _, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check); err != nil {
