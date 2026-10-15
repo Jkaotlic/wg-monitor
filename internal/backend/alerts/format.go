@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -31,7 +32,8 @@ type HardArgs struct {
 }
 
 // AutoRepairLine -- последняя строка тревоги, когда автопочинка включена.
-const AutoRepairLine = "Автопочинка включена — начинаю чинить, допишу сюда."
+// Сам текст -- в notify: нить починки вырезает его из тревоги.
+const AutoRepairLine = notify.AutoRepairLine
 
 type NeighborSummary struct {
 	CheckName    string // e.g. "tunnel_awg11"
@@ -80,7 +82,7 @@ func FormatHard(a HardArgs) string {
 	}
 
 	if adv := suggestAction(a.CheckName, a.Check.Details, a.Neighbors); adv != "" {
-		sections = append(sections, CardSection{Title: "Что делать", Lines: []string{adv}})
+		sections = append(sections, CardSection{Title: notify.AdviceTitle, Lines: []string{adv}})
 	}
 	if a.AutoRepair {
 		sections = append(sections, CardSection{Lines: []string{AutoRepairLine}})

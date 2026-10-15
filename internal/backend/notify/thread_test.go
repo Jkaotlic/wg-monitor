@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -137,7 +138,7 @@ func TestThread_ProgressEditsEveryRecipient(t *testing.T) {
 	if len(tgc.edits) != 2 {
 		t.Fatalf("правок=%d, ждали две -- каждому получателю", len(tgc.edits))
 	}
-	want := threadAlert + "\n\n" + "Чиню: перезапускаю VPN-туннель «Франкфурт»…"
+	want := "🛠 Чиню: перезапускаю VPN-туннель «Франкфурт»…" + "\n\n" + threadAlert
 	got := map[int64]int64{}
 	for _, e := range tgc.edits {
 		got[e.chatID] = e.messageID
@@ -309,7 +310,7 @@ func TestThread_NotStartedEdit(t *testing.T) {
 	if len(tgc.edits) != 2 {
 		t.Fatalf("правок=%d, ждали две", len(tgc.edits))
 	}
-	if !strings.HasSuffix(tgc.edits[0].text, "\n\nАвтопочинка не запускалась: уже идёт починка или замена конфига.") {
+	if !strings.HasPrefix(tgc.edits[0].text, "⚠️ Автопочинка не запускалась: уже идёт починка или замена конфига.\n\n") {
 		t.Fatalf("текст правки:\n%s", tgc.edits[0].text)
 	}
 }
@@ -331,10 +332,16 @@ func TestThread_NoAlertTextDegradesToSend(t *testing.T) {
 	if len(tgc.sends) != 2 || len(tgc.edits) != 0 {
 		t.Fatalf("итог: отправок=%d правок=%d, ждали два новых сообщения", len(tgc.sends), len(tgc.edits))
 	}
+	if !strings.HasPrefix(tgc.sends[0].text, "✅ ") {
+		t.Fatalf("итог без значка «починил»:\n%s", tgc.sends[0].text)
+	}
 	tgc.sends = nil
 	th.NeedHuman(context.Background(), "Починить VPN-туннель «Франкфурт» сам не смог.", "обновите агента во вкладке «Управление»")
 	if len(tgc.sends) != 2 {
 		t.Fatalf("«нужно участие» без тревоги: отправок=%d, ждали два", len(tgc.sends))
+	}
+	if !strings.HasPrefix(tgc.sends[0].text, "❌ ") {
+		t.Fatalf("«сам не смог» без значка:\n%s", tgc.sends[0].text)
 	}
 	if !strings.Contains(tgc.sends[0].text, "Нужно ваше участие: обновите агента во вкладке «Управление».") {
 		t.Fatalf("действие потерялось:\n%s", tgc.sends[0].text)
@@ -530,9 +537,9 @@ func TestThread_FallbackSkipsMuted(t *testing.T) {
 	}
 }
 
-// Telegram не примет текст длиннее 4096 знаков: длинная тревога плюс блок
-// починки ужимаются за счёт тревоги, блок остаётся целым -- он и есть
-// новость.
+// Telegram не примет текст длиннее 4096 знаков: блок починки плюс длинная
+// тревога под ним ужимаются за счёт хвоста тревоги, блок остаётся целым --
+// он и есть новость.
 func TestThread_EditFitsTelegramLimit(t *testing.T) {
 	d, router := threadSetup(t)
 	tgc := &threadTG{}
@@ -549,21 +556,21 @@ func TestThread_EditFitsTelegramLimit(t *testing.T) {
 		if n := len([]rune(e.text)); n > 4000 {
 			t.Fatalf("правка длиной %d знаков", n)
 		}
-		if !strings.HasSuffix(e.text, "\n\n"+block) {
-			t.Fatalf("блок починки обрезан:\n%s", e.text[len(e.text)-200:])
+		if !strings.HasPrefix(e.text, "🛠 "+block+"\n\n"+threadAlert) {
+			t.Fatalf("блок починки обрезан или голова тревоги потерялась:\n%s", e.text[:300])
 		}
-		if !strings.HasPrefix(e.text, threadAlert) {
-			t.Fatalf("голова тревоги потерялась")
+		if !strings.HasSuffix(e.text, "…") {
+			t.Fatalf("ужатая тревога без отметки среза")
 		}
 	}
 }
 
 // Блок починки длиной 3997-3998 знаков: места под тревогу нет, а резать блок
 // по maxEditRunes-1 нельзя -- он короче: срез за длину (паника или мусор).
-func TestWithRepairBlock_LongBlockNoPanic(t *testing.T) {
+func TestFitRepair_LongBlockNoPanic(t *testing.T) {
 	for _, n := range []int{3996, 3997, 3998, 3999, 4000, 4100} {
 		block := strings.Repeat("ж", n)
-		got := withRepairBlock("тревога", block)
+		got := fitRepair(block, "тревога")
 		if l := len([]rune(got)); l > maxEditRunes {
 			t.Fatalf("блок %d: правка длиной %d знаков", n, l)
 		}
@@ -810,5 +817,135 @@ func TestThread_EditRetryCeilingCountsRealTime(t *testing.T) {
 	}
 	if spent := clock.now().Sub(start); spent > 30*time.Second+2*15*time.Second {
 		t.Fatalf("правка заняла %v", spent)
+	}
+}
+
+// realAlert -- тревога 13.10 целиком, как её собрал alerts.FormatHard с
+// включённой автопочинкой.
+const realAlert = "🔴 [del]: VPN-туннель «NetherlandsKerkradeS21» не отвечает\n" +
+	"проверка: VPN-туннель · проверок подряд без ответа: 2 · с 13.10 10:33 МСК\n\n" +
+	"Что не работает:\n  • Сервер VPN-туннеля: 198.51.100.7:31089 (выход провайдера: eth3)\n  • VPN-туннель ни разу не установил связь\n\n" +
+	"Что это ломает:\n  • Через этот VPN-туннель идут правила: 19 по именам сайтов — они не работают, пока VPN-туннель не поднимется.\n\n" +
+	"Что я думаю:\n  • Обмена ключами не было ни разу с момента запуска.\n\n" +
+	"Что делать:\n  • Нажмите «Починить» в приложении — оно перевыпустит настройки VPN-туннеля заново.\n\n" +
+	"  • " + AutoRepairLine
+
+// 13.10: итог «Починил» приклеивался под красную тревогу -- сверху «не
+// отвечает», в середине «Нажмите «Починить»» и «начинаю чинить», внизу
+// «снова работает». Человек не понимал, всё в порядке или нет. Теперь
+// итог -- первой строкой со своим значком, а устаревшее убрано.
+func TestThread_RepairOutcomeReadsAtAGlance(t *testing.T) {
+	const (
+		progress = "Чиню: увёл трафик на запасной VPN-туннель «a3-nl2_awgtop» · сейчас: перезапускаю VPN-туннель «NetherlandsKerkradeS21»…"
+		done     = "Починил сам — VPN-туннель «NetherlandsKerkradeS21» снова работает, трафик вернул на него. Что сделал: увёл трафик на запасной VPN-туннель «a3-nl2_awgtop» · перезапустил."
+		failed   = "Починить VPN-туннель «NetherlandsKerkradeS21» сам не смог (перезапуск не помог). Обход блокировок работает через запасной VPN-туннель «a3-nl2_awgtop»."
+	)
+	edit := func(do func(th linkrepair.Thread)) string {
+		d, router := threadSetup(t)
+		tgc := &threadTG{}
+		r := newTestRepairs(d, tgc, fakeTexts{realAlert, alertKB(), true}, nil)
+		do(r.Begin(context.Background(), router, threadCheck))
+		if len(tgc.edits) == 0 {
+			t.Fatal("правки не было")
+		}
+		got := tgc.edits[len(tgc.edits)-1].text
+		t.Logf("\n%s", got)
+		return got
+	}
+	ctx := context.Background()
+
+	t.Run("ход", func(t *testing.T) {
+		got := edit(func(th linkrepair.Thread) {
+			th.Progress(ctx, progress)
+		})
+		if !strings.HasPrefix(got, "🛠 "+progress+"\n\n🔴 [del]") {
+			t.Fatalf("ход починки обязан стоять первым, тревога -- под ним:\n%s", got)
+		}
+		for _, stale := range []string{AutoRepairLine, "Что делать:", "Нажмите «Починить»"} {
+			if strings.Contains(got, stale) {
+				t.Errorf("пока чиню сам, %q -- неправда", stale)
+			}
+		}
+		if !strings.Contains(got, "Что не работает:") {
+			t.Error("пока чиню, что сломано -- всё ещё новость")
+		}
+	})
+
+	t.Run("починил", func(t *testing.T) {
+		got := edit(func(th linkrepair.Thread) {
+			th.Progress(ctx, progress)
+			th.Done(ctx, done)
+		})
+		want := "✅ " + done + "\n\n" +
+			"Было: [del]: VPN-туннель «NetherlandsKerkradeS21» не отвечает\n" +
+			"проверка: VPN-туннель · проверок подряд без ответа: 2 · с 13.10 10:33 МСК"
+		if got != want {
+			t.Fatalf("итог:\n%s\nждали:\n%s", got, want)
+		}
+		if strings.Contains(got, "🔴") {
+			t.Fatal("починено, а красный значок остался")
+		}
+	})
+
+	t.Run("не смог", func(t *testing.T) {
+		got := edit(func(th linkrepair.Thread) {
+			th.NeedHuman(ctx, failed, "")
+		})
+		if !strings.HasPrefix(got, "❌ "+failed+"\n\n🔴 [del]") {
+			t.Fatalf("провал обязан стоять первым:\n%s", got)
+		}
+		if strings.Contains(got, AutoRepairLine) {
+			t.Error("починка кончилась, а «начинаю чинить» осталось")
+		}
+		if !strings.Contains(got, "Что делать:") {
+			t.Error("сам не смог -- совет человеку снова нужен")
+		}
+	})
+
+	t.Run("не запускалась", func(t *testing.T) {
+		got := edit(func(th linkrepair.Thread) {
+			th.NotStarted(ctx, "уже идёт починка или замена конфига")
+		})
+		if !strings.HasPrefix(got, "⚠️ Автопочинка не запускалась: уже идёт починка или замена конфига.\n\n🔴 [del]") {
+			t.Fatalf("«не запускалась» обязано стоять первым:\n%s", got)
+		}
+		if strings.Contains(got, AutoRepairLine) || !strings.Contains(got, "Что делать:") {
+			t.Fatalf("обещание убрать, совет оставить:\n%s", got)
+		}
+	})
+}
+
+// После «Починил» глушить нечего: «⏸ Тише на час» под исправленным
+// VPN-туннелем сбивает с толку. Остаётся дорога в приложение; пока чиню и
+// когда не смог -- кнопки тревоги целиком.
+func TestThread_DoneDropsSilenceButton(t *testing.T) {
+	hasSilence := func(kb *tg.InlineKeyboardMarkup) bool {
+		for _, row := range kb.InlineKeyboard {
+			for _, b := range row {
+				if strings.HasPrefix(b.CallbackData, "silence:") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	d, router := threadSetup(t)
+	tgc := &threadTG{}
+	r := newTestRepairs(d, tgc, fakeTexts{threadAlert, alertKB(), true}, nil)
+	th := r.Begin(context.Background(), router, threadCheck)
+
+	th.Progress(context.Background(), "Чиню: перезапускаю…")
+	if !hasSilence(tgc.edits[0].kb) {
+		t.Fatal("пока чиню, «Тише на час» нужна")
+	}
+	tgc.edits = nil
+	th.Done(context.Background(), "Починил сам — VPN-туннель «Франкфурт» снова работает.")
+	for _, e := range tgc.edits {
+		if hasSilence(e.kb) {
+			t.Fatalf("после «Починил» осталась «Тише на час»: %+v", e.kb)
+		}
+		if e.kb == nil || len(e.kb.InlineKeyboard) != 1 || e.kb.InlineKeyboard[0][0].WebApp == nil {
+			t.Fatalf("после «Починил» -- одна кнопка в приложение: %+v", e.kb)
+		}
 	}
 }

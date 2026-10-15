@@ -68,3 +68,29 @@ func TestReport_TextsSpeakOwnerVocabulary(t *testing.T) {
 		t.Errorf("кабинеты называются в ёлочках: %q %q", sourceLabel("amnezia"), sourceLabel("hidemyname"))
 	}
 }
+
+// 13.10: «Починил: увёл трафик на запасной … · перезапустил. … снова
+// работает, трафик вернул на него» -- главное в конце, а «увёл трафик»
+// первым читается как то, что сейчас. Итог начинается с результата, шаги --
+// после «Что сделал:».
+func TestDoneText_OutcomeFirst(t *testing.T) {
+	log := []string{textMovedTo("a3-nl2_awgtop"), textRestarted}
+	for name, c := range map[string]struct {
+		n    lineNames
+		log  []string
+		want string
+	}{
+		"трафик вернул": {lineNames{broken: "NetherlandsKerkradeS21", backup: "a3-nl2_awgtop"}, log,
+			"Починил сам — VPN-туннель «NetherlandsKerkradeS21» снова работает, трафик вернул на него. Что сделал: увёл трафик на запасной VPN-туннель «a3-nl2_awgtop» · перезапустил."},
+		"не вернул": {lineNames{broken: "Дача", backup: "Работа", failbackFailed: true}, []string{textRestarted},
+			"Починил сам — VPN-туннель «Дача» снова работает, но вернуть на него трафик не вышло — он идёт через запасной VPN-туннель «Работа». Что сделал: перезапустил."},
+		"без резерва": {lineNames{broken: "Дача"}, []string{textRestarted},
+			"Починил сам — VPN-туннель «Дача» снова работает. Что сделал: перезапустил."},
+		"пустой лог": {lineNames{broken: "Дача"}, nil,
+			"Починил сам — VPN-туннель «Дача» снова работает."},
+	} {
+		if got := doneText(c.n, c.log); got != c.want {
+			t.Errorf("%s:\n%s\nждали:\n%s", name, got, c.want)
+		}
+	}
+}
