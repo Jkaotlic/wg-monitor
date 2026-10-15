@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -403,5 +405,157 @@ func TestImportTunnel_TargetIDMismatchFails(t *testing.T) {
 	_, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "amnezia_nl", true, "", "awg12")
 	if err == nil || !strings.Contains(err.Error(), "awg77") {
 		t.Fatalf("err = %v, ждали ошибку про чужой id", err)
+	}
+}
+
+// hrImportFake -- awg-manager с установленным HydraRoute Neo и политикой
+// «HydraRoute», в цепочке которой уже стоит прежний туннель. newStatus --
+// что отдаёт список про только что импортированный туннель.
+func hrImportFake(t *testing.T, statuses []string, permits *[]string) *httptest.Server {
+	t.Helper()
+	calls := 0
+	newCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg11","name":"old","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"status":"running","backend":"nativewg"}
+			]}}`))
+			return
+		}
+		st := statuses[len(statuses)-1]
+		if newCalls < len(statuses) {
+			st = statuses[newCalls]
+		}
+		newCalls++
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg11","name":"old","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"status":"running","backend":"nativewg"},
+			{"id":"awg50","name":"a3-nl2_awgtop","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"status":"` + st + `","backend":"nativewg"}
+		]}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg50","name":"a3-nl2_awgtop","interfaceName":"nwg0"}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	chain := `{"name":"Wireguard1","order":0}`
+	policies := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"HydraRoute","description":"HydraRoute","interfaces":[` + chain + `]}]}`))
+	}
+	mux.HandleFunc("/api/routing/access-policies", policies)
+	mux.HandleFunc("/api/access-policies", policies)
+	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"Wireguard1","label":"old"},{"name":"Wireguard0","label":"a3-nl2_awgtop"}]}`))
+	})
+	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*permits = append(*permits, fmt.Sprint(body["name"], "/", body["interface"]))
+		chain += fmt.Sprintf(`,{"name":%q,"order":1}`, body["interface"])
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func importHR(t *testing.T, statuses []string) (string, []string, error) {
+	t.Helper()
+	var permits []string
+	srv := hrImportFake(t, statuses, &permits)
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil }
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "a3-nl2_awgtop", true, "nativewg", "")
+	return out, permits, err
+}
+
+// Здоровый путь модели политик: поднявшийся туннель встаёт в «HydraRoute».
+func TestImportTunnel_LiveTunnelPermittedIntoHydraRoutePolicy(t *testing.T) {
+	out, permits, err := importHR(t, []string{"running"})
+	if err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	if strings.Join(permits, ",") != "HydraRoute/Wireguard0" {
+		t.Fatalf("permits = %v, want HydraRoute/Wireguard0", permits)
+	}
+}
+
+// nativeWG на puzirek поднимался 26 с, а проверка запуска -- 10 с. Туннель,
+// поднявшийся позже короткой проверки, всё равно должен попасть в политику.
+func TestImportTunnel_SlowStartStillPermitted(t *testing.T) {
+	slow := []string{"starting", "starting", "starting", "starting", "starting", "running"}
+	out, permits, err := importHR(t, slow)
+	if err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	if strings.Join(permits, ",") != "HydraRoute/Wireguard0" {
+		t.Fatalf("permits = %v, want HydraRoute/Wireguard0\n%s", permits, out)
+	}
+}
+
+// Жалоба оператора 15.10 (роутер puzirek): новый VPN-туннель не попал в
+// политику HydraRoute, а экран написал, что конфиг встал. Агент молча
+// пропускал политику, если туннель не успел подняться за короткую проверку,
+// и отвечал ok.
+func TestImportTunnel_NotUpYetIsPartialNotOK(t *testing.T) {
+	out, permits, err := importHR(t, []string{"starting"})
+	if len(permits) != 0 {
+		t.Fatalf("незапущенный туннель не должен вставать в политику: %v", permits)
+	}
+	if !errors.Is(err, ErrImportPartial) {
+		t.Fatalf("err = %v, want ErrImportPartial (туннель не в политике HydraRoute)\n%s", err, out)
+	}
+	first := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(first, "HydraRoute") || !strings.Contains(first, "a3-nl2_awgtop") {
+		t.Fatalf("первая строка должна сказать владельцу про HydraRoute и туннель: %q", first)
+	}
+}
+
+// Туннель заведён, но не в политике: раннер отвечает partial с фразой
+// владельцу первой строкой, а не err («роутер не принял») и не ok.
+func TestImportCommandStatus(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{nil, "ok"},
+		{ErrImportPartial, "partial"},
+		{fmt.Errorf("create tunnel: boom"), "err"},
+	}
+	for _, c := range cases {
+		if got := importCommandStatus(c.err); got != c.want {
+			t.Fatalf("importCommandStatus(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+}
+
+// Сборка awg-manager без /api/system/hydraroute-status -- HydraRoute нет, и
+// импорт без политики -- обычный ok, а не partial на каждом роутере.
+func TestImportTunnel_NoHydraRouteEndpointIsOK(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"awg50","name":"x","interfaceName":"nwg0","enabled":true,"status":"running","backend":"nativewg"}]}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg50","name":"x"}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"success":true}`)) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil }
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "x", false, "nativewg", "")
+	if err != nil {
+		t.Fatalf("без HydraRoute импорт должен быть ok: %v\n%s", err, out)
 	}
 }

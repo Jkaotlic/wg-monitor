@@ -810,10 +810,12 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "tunnel_import: conf and name are required", payload
 		}
 		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, r.sleep, confB64, name, replace, backend, targetID)
-		if err != nil {
-			return "err", err.Error(), payload
+		switch st := importCommandStatus(err); st {
+		case "err":
+			return st, err.Error(), payload
+		default:
+			return st, out, payload
 		}
-		return "ok", out, payload
 	case "service_restart":
 		name, _ := cmd.Args["name"].(string)
 		if r.Exec == nil {
