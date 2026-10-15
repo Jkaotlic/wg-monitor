@@ -11,6 +11,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -150,5 +151,38 @@ func TestOwedReplyDroppedWhenHardAgain(t *testing.T) {
 	}
 	if owed, _ := d.OwedReplies().List(); len(owed) != 0 {
 		t.Fatalf("долг не снят: %+v", owed)
+	}
+}
+
+// silentFakeTG -- fakeTG, умеющий тихие сообщения; считает их отдельно.
+type silentFakeTG struct {
+	*fakeTG
+	silent int
+}
+
+func (f *silentFakeTG) SendSilentMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, _ *tg.InlineKeyboardMarkup) (int64, error) {
+	f.silent++
+	return f.SendMessage(ctx, chatID, threadID, text, parseMode, replyTo)
+}
+
+// BOT-02: повтор «восстановилось» внутри «Тише на час» тоже без звука.
+func TestOwedReplyRetrySilentWhileSilenced(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &silentFakeTG{fakeTG: &fakeTG{}}
+	now := time.Now().UTC().Truncate(time.Second)
+	until := now.Add(time.Hour)
+	if err := d.State().Save(uid, "awg_handshake", db.IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "ok", ConsecutiveOKs: 2, SilencedUntil: &until,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.OwedReplies().Put(uid, "awg_handshake", "🟢 восстановилось", now.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetNow(func() time.Time { return now })
+	p.tick(context.Background())
+	if f.count() != 1 || f.silent != 1 {
+		t.Fatalf("сообщений %d, из них тихих %d; ждали одно тихое", f.count(), f.silent)
 	}
 }

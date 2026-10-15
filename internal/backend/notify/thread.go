@@ -311,7 +311,7 @@ func (t *repairThread) NeedHuman(ctx context.Context, text, action string) {
 		if cur != nil && !cur[chatID] {
 			continue
 		}
-		if _, err := t.r.fanout.sendOne(ctx, chatID, t.key.routerID, reply, "", &mid, kb); err != nil {
+		if _, err := t.r.fanout.sendOne(ctx, chatID, t.key.routerID, reply, "", &mid, kb, false); err != nil {
 			t.r.fanout.noteFailure(chatID, t.key.routerID, err)
 			continue
 		}
@@ -383,7 +383,7 @@ func (t *repairThread) edit(ctx context.Context, ph repairPhase, block string, c
 		t.r.warn("починка: тревога не правится, шлём новым сообщением",
 			"telegram_user_id", tgt.chatID, "message_id", tgt.messageID, "check", t.key.checkName, "err", err)
 		// sendOne сам добавит админу ряд выключения -- передаём исходные кнопки.
-		mid, sendErr := f.sendOne(ctx, tgt.chatID, t.key.routerID, full, "", nil, base)
+		mid, sendErr := f.sendOne(ctx, tgt.chatID, t.key.routerID, full, "", nil, base, false)
 		if sendErr != nil {
 			f.noteFailure(tgt.chatID, t.key.routerID, sendErr)
 			continue

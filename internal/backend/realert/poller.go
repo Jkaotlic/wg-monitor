@@ -94,7 +94,7 @@ type Poller struct {
 // отвечать на корневую тревогу, а не на последнее напоминание.
 type realertSink interface {
 	SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
-	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
+	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string, silent bool) error
 }
 
 // owedReplyMaxAge -- сколько повторять недоставленное «восстановилось». Сутки
@@ -114,6 +114,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 	}
 	for _, o := range owed {
 		drop := now.Sub(o.CreatedAt) > owedReplyMaxAge
+		silent := false
 		if !drop {
 			st, err := p.d.State().Get(o.UserID, o.CheckName)
 			if err != nil {
@@ -121,6 +122,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 				continue
 			}
 			drop = st.CurrentStatus == "hard"
+			silent = alerts.Silenced(st, now)
 		}
 		if drop {
 			if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
@@ -128,7 +130,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 			}
 			continue
 		}
-		if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, ""); err != nil {
+		if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
 			slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
 			if delay, ok := tg.RateLimitDelay(err); ok {
 				p.markRateLimited(now, delay)

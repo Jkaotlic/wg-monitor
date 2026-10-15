@@ -27,8 +27,8 @@ type TGSender interface {
 // поднимают ради этого настоящую рассылку.
 type notifySink interface {
 	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
-	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
-	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
+	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup, silent bool) (int, error)
+	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string, silent bool) error
 }
 
 type Config struct {
@@ -222,7 +222,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// приложение; обработчики в callbacks/ остаются для старых сообщений.
 		appURL := tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID)
 		kb := tg.AlertKeyboard(userID, checkName, appURL)
-		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)
+		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb, Silenced(next, di.now()))
 		if err != nil {
 			next.LastAlertAt = nil
 			if saveErr := di.d.State().Save(userID, checkName, next); saveErr != nil {
@@ -291,7 +291,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if di.covered != nil && di.covered(userID, checkName) {
 			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
 				"user_id", userID, "check", checkName)
-		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
+		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
 			// Не дошло никому: автомат уже в ok, напоминаний не будет.
 			// Долг повторит обход напоминаний (realert) ответом на ту же
 			// тревогу -- поэтому переписку не забываем.
@@ -310,6 +310,14 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		return nil
 	}
 	return nil
+}
+
+// Silenced -- действует ли «Тише на час» по проверке: тревога и
+// «восстановилось» тогда уходят без звука (BOT-02). Тишину ставит кнопка под
+// тревогой; автомат тревог переносит её через «восстановилось», так что
+// флап внутри часа тоже приходит тихо.
+func Silenced(st db.IncidentState, now time.Time) bool {
+	return st.SilencedUntil != nil && st.SilencedUntil.After(now)
 }
 
 // collectNeighbors returns short summaries of the user's other tunnel checks.
@@ -390,7 +398,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
 	kb := tg.AlertKeyboard(userID, "agent_heartbeat", tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID))
-	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb)
+	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb, false)
 	if err != nil {
 		return err
 	}

@@ -615,6 +615,9 @@ type recordingSink struct {
 	replies  []int64 // routerUserID для каждого «починилось»
 	checks   []string
 	delivers int
+	// trackedSilent / repliesSilent -- шла ли каждая отправка без звука.
+	trackedSilent []bool
+	repliesSilent []bool
 }
 
 func (r *recordingSink) Send(_ context.Context, routerUserID int64, _, _ string) (int, error) {
@@ -622,14 +625,16 @@ func (r *recordingSink) Send(_ context.Context, routerUserID int64, _, _ string)
 	return r.delivers, nil
 }
 
-func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup) (int, error) {
+func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup, silent bool) (int, error) {
 	r.tracked = append(r.tracked, routerUserID)
+	r.trackedSilent = append(r.trackedSilent, silent)
 	r.checks = append(r.checks, checkName)
 	return r.delivers, nil
 }
 
-func (r *recordingSink) ReplyToEach(_ context.Context, routerUserID int64, checkName, _, _ string) error {
+func (r *recordingSink) ReplyToEach(_ context.Context, routerUserID int64, checkName, _, _ string, silent bool) error {
 	r.replies = append(r.replies, routerUserID)
+	r.repliesSilent = append(r.repliesSilent, silent)
 	r.checks = append(r.checks, checkName)
 	return nil
 }

@@ -147,7 +147,7 @@ func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
 	}
 
 	s := &fakeKeyboardSender{}
-	n, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{})
+	n, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestFanout_ReplyToEachUsesOwnMessage(t *testing.T) {
 	// «починилось» обычным сообщением, а не остаться без него.
 
 	s := &replyCapturingSender{replies: map[int64]*int64{}}
-	if err := NewFanout(d, s, quietLogger(), 0).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
+	if err := NewFanout(d, s, quietLogger(), 0).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.replies) != 2 {
@@ -300,7 +300,7 @@ func TestFanout_OnlyUnreachableRecipientsIsNobodyToNotify(t *testing.T) {
 			if n != 0 || err != nil {
 				t.Fatalf("Send: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
 			}
-			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{})
+			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{}, false)
 			if n != 0 || err != nil {
 				t.Fatalf("SendTracked: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
 			}
@@ -429,5 +429,25 @@ func TestFanout_SendSilentKeyboardErrors(t *testing.T) {
 	plain := &fakeSender{}
 	if _, err := NewFanout(d, plain, quietLogger(), 0).SendSilentKeyboard(context.Background(), router, "тихо", "HTML", nil); err == nil || len(plain.sent) != 0 {
 		t.Fatalf("отправитель без тихой отправки: err=%v отправлено %v", err, plain.sent)
+	}
+}
+
+// BOT-02: тихая тревога и тихий ответ уходят вызовом без звука (с ответом на
+// исходное сообщение у «восстановилось»), а не обычным.
+func TestFanout_SilentTrackedAndReply(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &silentSender{}
+	f := NewFanout(d, s, quietLogger(), 0)
+	if _, err := f.SendTracked(context.Background(), router, "tunnel_awg0", "упал", "", &tg.InlineKeyboardMarkup{}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.silent) != 2 || len(s.loud) != 0 || len(s.sent) != 0 {
+		t.Fatalf("тихо %v, громко %v, без кнопок %v; ждали две тихих", s.silent, s.loud, s.sent)
 	}
 }
