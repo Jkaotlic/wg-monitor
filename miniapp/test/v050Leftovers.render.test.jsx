@@ -84,3 +84,18 @@ describe('«Сравнить адреса»: подробность пробы',
     render(null, root)
   })
 })
+
+// 15.10 (puzirek): туннель заведён, но в политику HydraRoute не встал. Экран
+// не пишет «не принял» и не зовёт выпускать заново -- это второй платный конфиг.
+describe('CabinetIssue: partial импорта', () => {
+  it('фраза агента предупреждением, без отказа и без повторного выпуска', async () => {
+    mocks.result = { status: 'partial', output: '⚠️ VPN-туннель «vpn-x» создан, но за 40 секунд не поднялся, поэтому в политику HydraRoute он не добавлен.\n✅ Туннель "vpn-x" создан (id=awg50)' }
+    const root = await issue()
+    const text = root.querySelector('.cabinet-outcome').textContent
+    expect(text).toContain('в политику HydraRoute он не добавлен')
+    expect(text).not.toContain(PHRASE)
+    expect(text).not.toContain('id=awg50')
+    expect(root.querySelector('.cabinet-outcome').classList.contains('state-error')).toBe(false)
+    render(null, root)
+  })
+})

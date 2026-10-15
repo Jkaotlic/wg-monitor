@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +19,22 @@ import (
 var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
 const defaultImportBackend = "nativewg"
+
+// ErrImportPartial: VPN-туннель заведён, но в политику HydraRoute не встал.
+// Раннер отвечает partial: туннель есть, маршрутизация -- нет.
+var ErrImportPartial = errors.New("tunnel import: not in HydraRoute policy")
+
+// importCommandStatus -- статус команды tunnel_import по итогу ImportTunnel.
+func importCommandStatus(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, ErrImportPartial):
+		return "partial"
+	default:
+		return "err"
+	}
+}
 
 var importVerifyDelays = []time.Duration{
 	1 * time.Second,
@@ -298,6 +315,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 
 	var result strings.Builder
 	var newID string
+	verb := "создан" // для фразы владельцу: что стало с туннелем
 	if targetID != "" {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -333,6 +351,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 			return "", fmt.Errorf("tunnel_import: replace of %s returned another tunnel id %s", target.ID, newTun.ID)
 		}
 		fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", target.Name, newID)
+		verb = "заменён"
 	} else if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -359,6 +378,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 				return "", fmt.Errorf("recreate tunnel as nativeWG (old tunnel %s kept): %w", oldTunnel.ID, err)
 			}
 			newID = newTun.ID
+			verb = "пересоздан"
 			fmt.Fprintf(&result, "✅ Туннель %q пересоздан в nativeWG (id=%s)", name, newTun.ID)
 			if err := client.DeleteTunnel(ctx, oldTunnel.ID); err != nil {
 				slog.Warn("tunnel import: old tunnel not deleted", "name", name, "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
@@ -371,6 +391,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 				return "", fmt.Errorf("replace tunnel: %w", err)
 			}
 			newID = newTun.ID
+			verb = "заменён"
 			fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", name, newTun.ID)
 		} else {
 			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
@@ -400,16 +421,39 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 		fmt.Fprintf(&result, "\n%s", line)
 	}
 
-	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {
+	// Свежий туннель, не вставший в политику HydraRoute, -- не «всё встало»
+	// (жалоба оператора 15.10, puzirek): каждый пропуск ниже раньше был молчаливым
+	// и заканчивался ok. Первой строкой ответа идёт фраза владельцу.
+	var notInPolicy string
+	hs, hsErr := client.HydraRouteStatus(ctx)
+	// Нет адреса статуса -- сборка без HydraRoute: политики нет, и это не
+	// partial. Не прочитался существующий адрес -- статус неизвестен.
+	if hsErr != nil && targetID == "" && !awgmgr.IsEndpointMissing(hsErr) {
+		slog.Warn("tunnel import: hydraroute status unknown", "name", name, "id", newID, "err", hsErr)
+		notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но проверить HydraRoute не вышло — убедитесь, что туннель есть в политике HydraRoute.", name, verb)
+	}
+	if hsErr == nil && hs.Installed {
 		// Замена по target_id наборов правил не трогает: членство в них -- по
 		// id туннеля, а он тот же. Дописать туннель во все политики HydraRoute
 		// Neo значило бы вернуть его туда, откуда человек его убрал. Перезапуск
 		// ниже подхватит новый конфиг.
 		if targetID == "" {
-			if imported, ferr := findTunnelByID(ctx, client, newID); ferr == nil && tunnelLooksStarted(*imported) {
+			imported, ferr := waitImportedStarted(ctx, client, sleep, newID)
+			switch {
+			case ferr != nil:
+				slog.Warn("tunnel import: tunnel not re-read for hydraroute policy", "name", name, "id", newID, "err", ferr)
+				notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но перечитать его не вышло — проверьте, что он есть в политике HydraRoute.", name, verb)
+			case !tunnelLooksStarted(*imported):
+				// Замена по имени оставляет туннель в политике, где он уже был:
+				// «не добавлен» тогда неправда.
+				if !tunnelInHydraRoutePolicy(ctx, client, *imported) {
+					notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но за %d секунд не поднялся, поэтому в политику HydraRoute он не добавлен. Когда он заработает, добавьте его в политику HydraRoute вручную.", name, verb, int(importStartBudget().Seconds()))
+				}
+			default:
 				if changed, perr := addTunnelToHydraRoutePolicies(ctx, client, *imported); perr != nil {
 					slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
 					fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
+					notInPolicy = fmt.Sprintf("⚠️ VPN-туннель «%s» %s, но добавить его в политику HydraRoute не вышло — добавьте его туда вручную.", name, verb)
 				} else if changed > 0 {
 					fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s targets=%d", imported.InterfaceName, changed)
 				}
@@ -424,8 +468,46 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 		}
 	}
 
+	if notInPolicy != "" {
+		slog.Warn("tunnel import partial", "name", name, "id", newID, "reason", notInPolicy)
+		return notInPolicy + "\n" + result.String(), ErrImportPartial
+	}
 	slog.Info("tunnel import ok", "name", name, "id", newID, "replace", replace)
 	return result.String(), nil
+}
+
+// importPolicyWaitDelays -- дополнительное ожидание подъёма перед политикой
+// HydraRoute. Короткая проверка запуска (importVerifyDelays, 10 с) не
+// дожидается nativeWG: на puzirek 15.10 интерфейс поднялся за 26 с. Мини-апп
+// ждёт ответ 90 с, бюджет действия -- 300 с.
+var importPolicyWaitDelays = []time.Duration{5 * time.Second, 5 * time.Second, 10 * time.Second, 10 * time.Second}
+
+func importStartBudget() time.Duration {
+	var total time.Duration
+	for _, d := range append(append([]time.Duration{}, importVerifyDelays...), importPolicyWaitDelays...) {
+		total += d
+	}
+	return total
+}
+
+// waitImportedStarted перечитывает туннель, пока он не поднимется или не
+// кончится importPolicyWaitDelays. Последнее прочитанное состояние -- итог.
+func waitImportedStarted(ctx context.Context, client *awgmgr.Client, sleep func(context.Context, time.Duration) error, tunnelID string) (*awgmgr.Tunnel, error) {
+	tu, err := findTunnelByID(ctx, client, tunnelID)
+	for _, d := range importPolicyWaitDelays {
+		if err == nil && tunnelLooksStarted(*tu) {
+			return tu, nil
+		}
+		if serr := sleepForImportVerify(ctx, sleep, d); serr != nil {
+			break
+		}
+		if next, nerr := findTunnelByID(ctx, client, tunnelID); nerr == nil {
+			tu, err = next, nil
+		} else if tu == nil {
+			err = nerr
+		}
+	}
+	return tu, err
 }
 
 func verifyImportedTunnel(ctx context.Context, client *awgmgr.Client, sleep func(context.Context, time.Duration) error, tunnelID string) string {

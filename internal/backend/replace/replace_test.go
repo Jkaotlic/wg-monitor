@@ -677,3 +677,27 @@ func TestReplace_RollbackPartialPowerOffNotConfirmed(t *testing.T) {
 	}
 	assertOwnerVocabulary(t, ownerReads(job, notes.wait(t, 1)))
 }
+
+// Агент v0.61.1+ отвечает на tunnel_import partial, когда туннель заведён, но
+// в политику HydraRoute сам не встал. У мастера политика -- свой шаг дальше,
+// так что partial здесь -- «туннель есть», а не отказ роутера с откатом.
+func TestReplace_ImportPartialStillImported(t *testing.T) {
+	cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+		"tunnel_import":    {Status: "partial", Output: "⚠️ VPN-туннель «amnezia_nl» создан, но за 40 секунд не поднялся, поэтому в политику HydraRoute он не добавлен.\n✅ Туннель \"amnezia_nl\" создан (id=awg21)"},
+		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+	}}
+	origin := &fakeOrigin{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, origin, &noteLog{})
+	id, err := d.Start(startReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := waitJob(t, d, id)
+	if job.State != provision.StateSuccess {
+		t.Fatalf("state=%s hint=%s steps=%+v", job.State, job.Hint, job.Steps)
+	}
+	if len(origin.rows) != 1 || !strings.HasPrefix(origin.rows[0], "awg21/") {
+		t.Fatalf("новый туннель awg21 не опознан из ответа partial: %+v", origin.rows)
+	}
+}

@@ -501,7 +501,10 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 		d.logCommandFailure(action, "no answer", "")
 		return nil, errors.New(RouterFailure(false, ""))
 	}
-	if res.Status != "ok" {
+	// partial у tunnel_import -- туннель заведён, но сам в политику HydraRoute
+	// не встал; политику мастер ставит своим шагом дальше.
+	importedAnyway := action == "tunnel_import" && res.Status == "partial"
+	if res.Status != "ok" && !importedAnyway {
 		d.logCommandFailure(action, res.Status, res.Output)
 		return nil, &routerError{status: res.Status, text: RouterFailure(true, res.Status)}
 	}

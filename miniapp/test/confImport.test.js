@@ -196,3 +196,12 @@ describe('ревью: опрос и повторный выбор файла', (
     expect(withPickAgain('')).toBe('Выберите файл заново.')
   })
 })
+
+describe('importOutcome: partial (туннель есть, политики нет)', () => {
+  it('предупреждение словами агента, а не «добавлен» и не отказ', () => {
+    const out = importOutcome({ status: 'partial', output: '⚠️ VPN-туннель «amsterdam» создан, но добавить его в политику HydraRoute не вышло — добавьте его туда вручную.\n✅ ok' }, 'amsterdam')
+    expect(out.tone).toBe('warn')
+    expect(out.done).toBe(true)
+    expect(out.text).toBe('⚠️ VPN-туннель «amsterdam» создан, но добавить его в политику HydraRoute не вышло — добавьте его туда вручную.')
+  })
+})

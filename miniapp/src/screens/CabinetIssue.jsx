@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { issueVPNConfig, issueAwg3ToRouter, fetchCommandResult, sendVPNConf } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { agentReplyText } from '../errorText.js'
+import { firstAgentLine } from '../commandWait.js'
 import {
   CABINET_TEXTS,
   issueExplain,
@@ -56,12 +57,17 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
         if (!alive.current) return
         if (res) {
           setPhase('done')
+          // partial: туннель заведён, но не в политике HydraRoute. Это не
+          // отказ -- повторный выпуск потратил бы ещё один конфиг.
+          const imported = res.status === 'ok' || res.status === 'partial'
           setOutcome(
             res.status === 'ok'
               ? `Конфиг выпущен и импортирован как «${name}». Он появится в списке VPN-туннелей.`
-              : agentReplyText(res, 'Роутер не принял конфиг — попробуйте ещё раз через минуту.'),
+              : res.status === 'partial'
+                ? firstAgentLine(res.output) || `Конфиг импортирован как «${name}», но в политику HydraRoute сам не встал — проверьте «Маршруты».`
+                : agentReplyText(res, 'Роутер не принял конфиг — попробуйте ещё раз через минуту.'),
           )
-          if (res.status === 'ok') onIssued?.()
+          if (imported) onIssued?.()
           else setFailed(true)
           return
         }

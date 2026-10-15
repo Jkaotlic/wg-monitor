@@ -299,3 +299,28 @@ func cleanRoutePolicyInterfaces(values []string) []string {
 	}
 	return out
 }
+
+// tunnelInHydraRoutePolicy: туннель уже стоит в цепочке одной из политик
+// HydraRoute Neo. Ошибка любого чтения -- false: фраза «проверьте политику»
+// безопаснее молчаливого ok.
+func tunnelInHydraRoutePolicy(ctx context.Context, c *awgmgr.Client, t awgmgr.Tunnel) bool {
+	policies, err := c.AccessPolicies(ctx)
+	if err != nil || len(policies) == 0 {
+		return false
+	}
+	polIfaces, err := c.PolicyInterfaces(ctx)
+	if err != nil {
+		return false
+	}
+	permitName, ok := newPolicyIfaceResolver(nil, polIfaces).permitName(t.NDMSName, t.InterfaceName, t.Name, t.ID)
+	if !ok {
+		return false
+	}
+	targets := hydraRoutePolicyTargets(ctx, c, policies)
+	for _, p := range policies {
+		if targets[strings.ToLower(strings.TrimSpace(p.Name))] && policyChainHasInterface(p, permitName) {
+			return true
+		}
+	}
+	return false
+}

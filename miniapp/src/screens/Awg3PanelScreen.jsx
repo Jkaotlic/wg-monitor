@@ -190,11 +190,13 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панел
     const outcome = commandOutcome(res, {
       ok: `Конфиг встал на «${row.title}» VPN-туннелем «${resp.tunnel_name}».`,
       fail: 'Роутер не принял конфиг',
+      partial: `Конфиг встал на «${row.title}» VPN-туннелем «${resp.tunnel_name}», но в политику HydraRoute сам не встал — проверьте «Маршруты».`,
       pending: 'Конфиг выпущен, но роутер пока не подтвердил импорт. Загляните в его VPN-туннели позже.',
     })
-    // «Открыть VPN-туннели» -- только после успеха: при отказе или ожидании
-    // открывать пока нечего.
-    setRouterOutcome(outcome.tone === 'ok' ? { ...outcome, routerID: row.id, routerName: row.title } : outcome)
+    // «Открыть VPN-туннели» -- когда туннель на роутере есть (успех или
+    // partial: заведён, но не в политике); при отказе или ожидании открывать
+    // пока нечего.
+    setRouterOutcome(outcome.done ? { ...outcome, routerID: row.id, routerName: row.title } : outcome)
     load(iface)
   }
 
