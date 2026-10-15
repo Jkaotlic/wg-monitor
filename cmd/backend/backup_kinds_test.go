@@ -258,7 +258,7 @@ func TestBackupBothWritesSmallAndFullWithStores(t *testing.T) {
 		if got := archivedCount(t, plain, "events"); got != wantEvents {
 			t.Errorf("%s: событий в архиве %d, ждали %d", kind, got, wantEvents)
 		}
-		if kind == "small" && !strings.Contains(manifest, "skipped_tables=events,daily_soft_flaps,awgm_ping_runs,alert_messages\n") {
+		if kind == "small" && !strings.Contains(manifest, "skipped_tables=events,daily_soft_flaps,awgm_ping_runs,alert_messages,owed_replies\n") {
 			t.Errorf("small: манифест не называет пропущенные таблицы:\n%s", manifest)
 		}
 		if !strings.Contains(string(tarMember(t, plain, "agents.csv")), "alpha") {

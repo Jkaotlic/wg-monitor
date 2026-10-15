@@ -49,6 +49,7 @@ func liveDB(t *testing.T) (*db.DB, string) {
 	exec(`INSERT INTO daily_soft_flaps (user_id, check_name, flap_count, date) VALUES (1, 'ping', 3, '2026-10-01')`)
 	exec(`INSERT INTO awgm_ping_runs (user_id, tunnel_id, from_ts, to_ts, fails) VALUES (1, 't1', 'a', 'b', 4)`)
 	exec(`INSERT INTO alert_messages (user_id, check_name, telegram_user_id, message_id) VALUES (1, 'ping', 1000, 77)`)
+	exec(`INSERT INTO owed_replies (user_id, check_name, text, created_at) VALUES (1, 'ping', '🟢 восстановилось', '2026-10-15T08:00:00Z')`)
 	return d, path
 }
 
@@ -139,7 +140,7 @@ func TestEveryTableIsClassified(t *testing.T) {
 			t.Errorf("в списках малого архива таблица %q, которой нет в схеме", name)
 		}
 	}
-	if want := []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages"}; !slices.Equal(SkipTables, want) {
+	if want := []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies"}; !slices.Equal(SkipTables, want) {
 		t.Errorf("SkipTables = %v, по спеке %v", SkipTables, want)
 	}
 }

@@ -1,5 +1,7 @@
 package db
 
+import "time"
+
 // AlertMessagesRepo помнит, кому какое сообщение о поломке ушло: на него
 // отвечает «восстановилось» и в него дописывает статус мини-апп.
 type AlertMessagesRepo struct{ d *DB }
@@ -44,5 +46,19 @@ func (r *AlertMessagesRepo) List(userID int64, checkName string) (map[int64]int6
 func (r *AlertMessagesRepo) Clear(userID int64, checkName string) error {
 	_, err := r.d.db.Exec(
 		`DELETE FROM alert_messages WHERE user_id = ? AND check_name = ?`, userID, checkName)
+	return err
+}
+
+// sqliteTimestamp -- формат CURRENT_TIMESTAMP, которым пишется sent_at.
+// Сравнение в SQLite строковое: параметр обязан быть в том же виде.
+const sqliteTimestamp = "2006-01-02 15:04:05"
+
+// ClearSentBefore забывает переписку по проверке, отправленную не позже t:
+// повтор «восстановилось» закрывает старую поломку и не должен стереть
+// сообщения новой тревоги, ушедшие после долга.
+func (r *AlertMessagesRepo) ClearSentBefore(userID int64, checkName string, t time.Time) error {
+	_, err := r.d.db.Exec(
+		`DELETE FROM alert_messages WHERE user_id = ? AND check_name = ? AND sent_at <= ?`,
+		userID, checkName, t.UTC().Format(sqliteTimestamp))
 	return err
 }

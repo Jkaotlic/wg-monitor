@@ -87,7 +87,21 @@ type Poller struct {
 	// notify -- рассылка напоминаний по личкам получателей. Заменила
 	// адресацию в тему группы.
 	notify realertSink
+	// hard -- доставка самой карточки HARD-тревоги (alerts.Dispatcher), когда
+	// первая не дошла никому (last_alert_at NULL); nil -- напоминание.
+	hard HardDeliverer
 }
+
+// HardDeliverer -- отправка карточки HARD-тревоги так же, как при первом
+// пересечении порога: текст тревоги, запись в alert_messages, память для
+// нити починки, отметка last_alert_at. Реализует alerts.Dispatcher.
+type HardDeliverer interface {
+	DeliverHard(ctx context.Context, userID int64, nickname, checkName string, st db.IncidentState, check wire.Check) (int, error)
+}
+
+// SetHardDeliverer -- кто шлёт карточку недоставленной тревоги (BOT-01).
+// Вызывается до Run.
+func (p *Poller) SetHardDeliverer(h HardDeliverer) { p.hard = h }
 
 // realertSink -- та часть веера, которой пользуются напоминания. Кнопки
 // прикладываются, но сообщения НЕ запоминаются: «починилось» обязано
@@ -141,7 +155,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 		if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
 			slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 		}
-		if err := p.d.AlertMessages().Clear(o.UserID, o.CheckName); err != nil {
+		if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
 			slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 		}
 	}
@@ -380,6 +394,22 @@ func (p *Poller) tick(ctx context.Context) {
 			continue
 		}
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
+		if st.LastAlertAt == nil && p.hard != nil {
+			// Первая тревога не дошла никому: шлём её саму, с записью в
+			// alert_messages и памятью для нити починки (BOT-01).
+			if _, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check); err != nil {
+				if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
+					slog.Error("realert: повтор тревоги не дошёл", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
+				}
+				if delay, ok := tg.RateLimitDelay(err); ok {
+					p.markRateLimited(now, delay)
+					return
+				}
+				continue
+			}
+			p.recordSendOutcome(sh.UserID, sh.CheckName, true)
+			continue
+		}
 		neighbors := p.neighborsFor(sh.UserID, sh.CheckName, check.Details)
 		text := alerts.FormatRealert(alerts.RealertArgs{
 			Nickname:     u.Nickname,

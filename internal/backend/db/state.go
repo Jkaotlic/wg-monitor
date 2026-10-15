@@ -122,18 +122,15 @@ func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time
 	return err
 }
 
-// SetLastAlert is a small targeted UPDATE used by the Hard dispatch path as a
-// fallback when the full Save fails (DB momentarily locked, etc.). It writes
-// only the two fields that matter for realert correctness — without it a
-// successful TG send followed by a failed Save leaves last_alert_at=NULL and
-// the realert poller re-fires every tick until the next FSM transition.
-// Only touches rows whose current_status is 'hard' to mirror BumpLastAlertAt
-// safety against a concurrent Recovery.
-func (s *StateRepo) SetLastAlert(userID int64, checkName string, msgID int64, ts time.Time) error {
+// ClearLastAlertAt снимает отметку отправки с HARD-строки: тревога не дошла
+// никому, и realert (StaleHards: last_alert_at IS NULL) доставит её на
+// ближайшем обходе. Точечный UPDATE, а не Save: остальные поля (тишину,
+// «понятно») за время отправки мог поменять человек.
+func (s *StateRepo) ClearLastAlertAt(userID int64, checkName string) error {
 	_, err := s.d.db.Exec(
-		`UPDATE incident_state SET last_alert_msg_id = ?, last_alert_at = ?
+		`UPDATE incident_state SET last_alert_at = NULL
 		 WHERE user_id = ? AND check_name = ? AND current_status = 'hard'`,
-		msgID, ts.UTC(), userID, checkName)
+		userID, checkName)
 	return err
 }
 

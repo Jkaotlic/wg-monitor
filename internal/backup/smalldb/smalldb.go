@@ -17,7 +17,9 @@ import (
 
 // SkipTables -- тяжёлые исторические таблицы: схема в малую базу едет,
 // строки -- нет. После восстановления экран пуст до первого отчёта агентов.
-var SkipTables = []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages"}
+// owed_replies -- недоставленные «восстановилось»: после восстановления из
+// архива они устарели бы, повторять их нельзя.
+var SkipTables = []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies"}
 
 // CopyTables -- таблицы, чьи строки переносятся целиком. Сборка переносит
 // любую таблицу не из SkipTables; этот список нужен сторожу
