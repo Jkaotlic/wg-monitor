@@ -128,7 +128,6 @@ func main() {
 		MobileLifecycle:  mobileLifecycle,
 		ResumeGrace:      time.Duration(cfg.Heartbeat.ResumeGraceSec) * time.Second,
 		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
-		RenotifyEvery:    time.Duration(cfg.State.RealertEverySec) * time.Second,
 	})
 
 	// Mobile-lifecycle notifiers: wake-card on Resumed=true, one-shot sleep-info

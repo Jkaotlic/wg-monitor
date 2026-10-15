@@ -516,10 +516,14 @@ func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
 	// SetNow(nil) restores the real wall clock (mirrors Watcher/Poller.SetNow).
 	disp.SetNow(nil)
 	before := time.Now()
-	if err := disp.SendOffline(context.Background(), uid, "clockuser", time.Minute); err != nil {
-		t.Fatalf("SendOffline: %v", err)
+	tr2 := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(before), LastAlertAt: ptrT(before.Add(-time.Hour))},
 	}
-	afterState, err := d.State().Get(uid, "agent_heartbeat")
+	if err := disp.Handle(context.Background(), uid, "clockuser", "dns", tr2, chk("dns", "fail", nil)); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	afterState, err := d.State().Get(uid, "dns")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -418,13 +418,20 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 	return out
 }
 
-// SendOffline sends a ROUTER OFFLINE notice (used by the heartbeat watcher).
+// SendOffline -- первая тревога «Роутер не на связи» (зовёт сторож молчания).
+// Состояние agent_heartbeat пишет сторож (MarkHard) после удачной отправки;
+// повторяет realert коротким напоминанием (BOT-05). Под «Тише на час»,
+// оставшейся от прошлого раза, -- без звука (как HARD, BOT-02).
 func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error {
-	now := di.now()
-	hardSince := now.Add(-since)
+	silent := false
+	if st, err := di.d.State().Get(userID, "agent_heartbeat"); err != nil {
+		slog.Warn("«не на связи»: состояние не прочитано, шлём со звуком", "user_id", userID, "err", err)
+	} else {
+		silent = Silenced(st, di.now())
+	}
 	text := FormatRouterOffline(nickname, since)
 	kb := tg.AlertKeyboard(userID, "agent_heartbeat", tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID))
-	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb, false)
+	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb, silent)
 	if err != nil {
 		return err
 	}
@@ -435,16 +442,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		slog.Warn("«роутер не на связи» некому доставить",
 			"user_id", userID, "nickname", nickname)
 	}
-	return di.d.State().Save(userID, "agent_heartbeat", db.IncidentState{
-		UserID:           userID,
-		CheckName:        "agent_heartbeat",
-		ConsecutiveFails: 1,
-		CurrentStatus:    "hard",
-		HardSince:        &hardSince,
-		// LastAlertMsgID не заполняем: получателей несколько, и кому какое
-		// сообщение ушло, помнит таблица alert_messages.
-		LastAlertAt: &now,
-	})
+	return nil
 }
 
 // SendBackOnline -- «Роутер снова на связи» ответом на тревогу «Роутер не на

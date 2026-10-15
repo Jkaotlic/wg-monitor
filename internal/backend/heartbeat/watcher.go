@@ -39,10 +39,11 @@ type SleepNotifier interface {
 // the FSM to ingest its checks and emit accurate signals — not race a
 // premature OFFLINE.
 //
-// RenotifyEvery controls how often a sustained ROUTER-OFFLINE re-fires per
-// user. Defaults to defaultRenotifyEvery when zero so it stays consistent
-// with the realert poller's HARD re-alert cadence (operators tuning the
-// realert knob expect both surfaces to follow).
+// Повтора у сторожа нет (BOT-05): он шлёт только первую тревогу и пишет
+// строку agent_heartbeat = hard с отметкой отправки. Дальше напоминает
+// realert -- коротко и с затуханием (раз в 6 ч, после недели раз в сутки).
+// «Уже предупредил» читается из базы, поэтому рестарт бэкенда не даёт
+// новой тревоги по роутеру, который молчал и до рестарта.
 //
 // StaleAfter is the legacy single-threshold knob. If non-zero and the new
 // kind-aware fields are zero, it's used as both static and mobile threshold
@@ -55,7 +56,6 @@ type Config struct {
 	MobileLifecycle  bool          // NEW: true = wake/sleep flow, false = legacy HARD-OFFLINE
 	ResumeGrace      time.Duration
 	ScanEvery        time.Duration
-	RenotifyEvery    time.Duration
 	// SendTimeout ограничивает одну отправку уведомления. Верхний ctx живёт
 	// столько же, сколько backend, поэтому без собственного дедлайна один
 	// подвисший запрос к Telegram останавливал бы обход всего парка -- и
@@ -69,7 +69,6 @@ const (
 	defaultMobileSleepAfter = 5 * time.Minute // NEW
 	defaultResumeGrace      = 90 * time.Second
 	defaultScanEvery        = 30 * time.Second
-	defaultRenotifyEvery    = 6 * time.Hour
 	defaultSendTimeout      = 60 * time.Second
 )
 
@@ -116,7 +115,6 @@ type Watcher struct {
 	off           OfflineSender
 	sleep         SleepNotifier
 	cfg           Config
-	notified      map[int64]time.Time
 	sleepNotified map[int64]time.Time
 	resumed       map[int64]time.Time
 	// Последняя неудачная отправка «роутер не на связи» -- под mu.
@@ -139,12 +137,8 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 	if cfg.ScanEvery <= 0 {
 		cfg.ScanEvery = defaultScanEvery
 	}
-	if cfg.RenotifyEvery <= 0 {
-		cfg.RenotifyEvery = defaultRenotifyEvery
-	}
 	return &Watcher{
 		d: d, off: off, cfg: cfg,
-		notified:      map[int64]time.Time{},
 		sleepNotified: map[int64]time.Time{},
 		resumed:       map[int64]time.Time{},
 		now:           time.Now,
@@ -190,7 +184,6 @@ func (w *Watcher) Run(ctx context.Context) {
 	slog.Info("heartbeat: watcher started",
 		"scan_every", w.cfg.ScanEvery,
 		"stale_static", w.cfg.staleFor(db.User{Kind: db.KindStatic}),
-		"renotify_every", w.cfg.RenotifyEvery,
 		"send_timeout", w.sendTimeout())
 	// Выход из цикла возможен только по отмене корневого контекста, то есть
 	// при остановке backend'а. Если строка появится в логе в другой момент --
@@ -305,7 +298,6 @@ func (w *Watcher) scan(ctx context.Context) {
 		threshold := w.cfg.staleFor(u)
 		if stale < threshold {
 			w.mu.Lock()
-			delete(w.notified, u.ID)
 			delete(w.sleepNotified, u.ID)
 			// Eager-expire resumed entries for fresh users too. Previously
 			// only the stale branch could evict, so a router that boots
@@ -374,57 +366,50 @@ func (w *Watcher) scan(ctx context.Context) {
 		}
 
 		// Legacy HARD-OFFLINE path (static + mobile with MobileLifecycle=false).
-		if w.offlineNotificationsSuppressed(u.ID, now) {
+		// «Уже предупредил» -- строка agent_heartbeat в базе, не память
+		// сторожа: после рестарта карта пуста, а тревога давно ушла (BOT-05).
+		st, err := w.d.State().Get(u.ID, "agent_heartbeat")
+		if err != nil {
+			// Не знаем, предупреждали ли: повторная полная тревога хуже
+			// паузы в 30 с до следующего обхода.
+			slog.Warn("heartbeat: read offline state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+			continue
+		}
+		if st.CurrentStatus == "hard" {
+			// Тревога уже ушла. Напоминания -- дело realert, с затуханием.
+			continue
+		}
+		if st.Acked {
 			suppressed++
 			slog.Info("heartbeat: offline notice suppressed by operator",
 				"user_id", u.ID, "nickname", u.Nickname, "stale", stale)
 			continue
 		}
-		w.mu.Lock()
-		last, sent := w.notified[u.ID]
-		notify := !sent || now.Sub(last) > w.cfg.RenotifyEvery
-		if notify {
-			w.notified[u.ID] = now
-		}
-		w.mu.Unlock()
-		if !notify {
-			continue
-		}
 		sendCtx, cancelSend := context.WithTimeout(ctx, w.sendTimeout())
-		err := w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
+		err = w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
 		cancelSend()
 		if err != nil {
 			metricOfflineErrors.Add(1)
 			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)
-			// Отправка не состоялась -- снимаем отметку, иначе следующий обход
-			// решит, что человек уже предупреждён, и роутер останется тихим до
-			// самого RenotifyEvery.
+			// Отметку не пишем -- следующий обход повторит тревогу.
 			//
 			// Причину запоминаем для сводки панели: счётчик ошибок говорит «что-то
 			// падает», но не что именно, а docker-лог Pi удалённо недоступен.
 			w.mu.Lock()
-			delete(w.notified, u.ID)
 			w.lastOfflineErrRouter = u.Nickname
 			w.lastOfflineErrText = redactSecrets(err.Error())
 			w.lastOfflineErrAt = now
 			w.mu.Unlock()
 			continue
 		}
+		// Точечная запись: тишину и «понятно», нажатые за время отправки, не
+		// трогает.
+		if err := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); err != nil {
+			slog.Error("heartbeat: offline notice sent but not recorded", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+		}
 		metricOfflineSent.Add(1)
 		slog.Info("heartbeat: router offline notice sent", "user_id", u.ID, "nickname", u.Nickname, "stale", stale)
 	}
-}
-
-func (w *Watcher) offlineNotificationsSuppressed(userID int64, now time.Time) bool {
-	st, err := w.d.State().Get(userID, "agent_heartbeat")
-	if err != nil {
-		slog.Warn("heartbeat: read offline silence state failed", "user_id", userID, "err", err)
-		return false
-	}
-	if st.Acked {
-		return true
-	}
-	return st.SilencedUntil != nil && st.SilencedUntil.After(now.UTC())
 }
 
 // clearOfflineStateIfHard гасит след прошлого молчания, когда роутер снова на

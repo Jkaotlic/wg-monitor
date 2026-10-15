@@ -122,6 +122,26 @@ func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time
 	return err
 }
 
+// MarkHard -- строка проверки стала hard и тревога по ней ушла: hard_since,
+// last_alert_at, счётчики. Тишину и «понятно» не трогает -- человек мог
+// нажать кнопку под тревогой, пока шла рассылка. Зовёт сторож молчания
+// после «Роутер не на связи» (BOT-05).
+func (s *StateRepo) MarkHard(userID int64, checkName string, hardSince, alertAt time.Time) error {
+	_, err := s.d.db.Exec(
+		`INSERT INTO incident_state(user_id, check_name, consecutive_fails, consecutive_oks, current_status,
+		    hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until, acked)
+		 VALUES(?,?,1,0,'hard',?,NULL,?,NULL,NULL,0)
+		 ON CONFLICT(user_id, check_name) DO UPDATE SET
+		    consecutive_fails = 1,
+		    consecutive_oks   = 0,
+		    current_status    = 'hard',
+		    hard_since        = excluded.hard_since,
+		    last_alert_msg_id = NULL,
+		    last_alert_at     = excluded.last_alert_at`,
+		userID, checkName, hardSince.UTC(), alertAt.UTC())
+	return err
+}
+
 // ClearLastAlertAt снимает отметку отправки с HARD-строки: тревога не дошла
 // никому, и realert (StaleHards: last_alert_at IS NULL) доставит её на
 // ближайшем обходе. Точечный UPDATE, а не Save: остальные поля (тишину,
