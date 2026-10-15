@@ -343,6 +343,12 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		// Не провал операции: новый туннель уже несёт трафик. Прежний
 		// остался включённым -- это видно на экране туннелей, и выключить
 		// его можно там же.
+		if routerStatus(err) == "partial" {
+			// Выключение роутер принял, но остановки за срок не увидел
+			// (tunnel_power v0.61): «остался включённым» было бы неправдой.
+			d.step(jobID, StepRetire, provision.StepFailed, "выключение прежнего VPN-туннеля не подтвердилось: роутер команду принял, но остановку пока не видно — проверьте на экране туннелей")
+			return nil
+		}
 		d.step(jobID, StepRetire, provision.StepFailed, "прежний VPN-туннель остался включённым: "+err.Error())
 		return nil
 	}
@@ -473,9 +479,25 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	}
 	if res.Status != "ok" {
 		d.logCommandFailure(action, res.Status, res.Output)
-		return nil, errors.New(RouterFailure(true, res.Status))
+		return nil, &routerError{status: res.Status, text: RouterFailure(true, res.Status)}
 	}
 	return res, nil
+}
+
+// routerError -- отказ роутера с его статусом: вызывающему иногда важно,
+// чем именно ответил роутер (partial у tunnel_power -- «команду принял, но
+// состояния не увидел»), а текст для владельца остаётся тем же.
+type routerError struct{ status, text string }
+
+func (e *routerError) Error() string { return e.text }
+
+// routerStatus -- статус ответа роутера в ошибке command; "" -- не ответ.
+func routerStatus(err error) string {
+	var re *routerError
+	if errors.As(err, &re) {
+		return re.status
+	}
+	return ""
 }
 
 // Тексты отказа роутера для владельца. Общие для мастера замены и починки:

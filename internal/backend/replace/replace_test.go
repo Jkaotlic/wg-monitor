@@ -584,3 +584,34 @@ func TestReplace_RetireDropsOldTunnel(t *testing.T) {
 		t.Fatalf("списание прежнего VPN-туннеля: %v", retired)
 	}
 }
+
+// Ревью Task 7 (AG-02): выключение прежнего VPN-туннеля роутер принял, но
+// остановку за срок не увидел (partial). Это не «остался включённым»:
+// команда ушла, туннель, скорее всего, ещё останавливается.
+func TestReplace_RetirePartialSaysNotConfirmed(t *testing.T) {
+	cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+		"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+		"tunnel_power":     {Status: "partial", Output: "туннель awg11 не остановился за 15 с: сейчас останавливается"},
+	}}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &noteLog{})
+	id, err := d.Start(startReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := waitJob(t, d, id)
+	var detail string
+	for _, s := range job.Steps {
+		if s.Name == StepRetire {
+			if s.Status != provision.StepFailed {
+				t.Fatalf("retire step = %s (%s)", s.Status, s.Detail)
+			}
+			detail = s.Detail
+		}
+	}
+	if strings.Contains(detail, "остался включённым") || !strings.Contains(detail, "выключение прежнего VPN-туннеля не подтвердилось") {
+		t.Fatalf("retire detail = %q", detail)
+	}
+	assertOwnerVocabulary(t, []string{detail})
+}
