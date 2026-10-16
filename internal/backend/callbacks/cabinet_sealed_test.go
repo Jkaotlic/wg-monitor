@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 )
@@ -98,7 +99,12 @@ func TestMiniappCabinet_SealedWithoutKeySpeaksAboutKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	sealedfile.SetKey(nil)
-	for _, provider := range []string{providerAmnezia, providerHideMy} {
+	// Amnezia Premium отключён (v0.61.3): экран говорит об этом, а не о ключе
+	// шифрования -- выпускать оттуда всё равно нечего.
+	if acc, _ := r.Account(t.Context(), 7, providerAmnezia); acc.Note != backend.AmneziaDisabledText {
+		t.Fatalf("amnezia: note = %q", acc.Note)
+	}
+	for _, provider := range []string{providerHideMy} {
 		acc, err := r.Account(t.Context(), 7, provider)
 		if err != nil {
 			t.Fatal(err)
@@ -131,7 +137,7 @@ func TestMiniappCabinet_SealedWrongKeyCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	sealKeyForTest(t) // другой случайный ключ поверх прежнего
-	for _, provider := range []string{providerAmnezia, providerHideMy} {
+	for _, provider := range []string{providerHideMy} {
 		acc, err := r.Account(t.Context(), 7, provider)
 		if err != nil {
 			t.Fatal(err)

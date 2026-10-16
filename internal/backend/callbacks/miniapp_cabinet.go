@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
@@ -41,19 +40,8 @@ func (r *Router) Account(ctx context.Context, routerID int64, provider string) (
 func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, optionID string) (backend.VPNIssuedConfig, error) {
 	switch provider {
 	case providerAmnezia:
-		key, err := r.getAmneziaKeyByID(routerID, "")
-		if isSealedStoreError(err) {
-			return backend.VPNIssuedConfig{}, err
-		}
-		if err != nil || key == "" {
-			return backend.VPNIssuedConfig{}, fmt.Errorf("ключ Amnezia Premium не сохранён для этого роутера")
-		}
-		country := strings.ToLower(strings.TrimSpace(optionID))
-		conf, err := r.issueAmneziaConfig(ctx, key, country)
-		if err != nil {
-			return backend.VPNIssuedConfig{}, redactCabinetError(err, key)
-		}
-		return backend.VPNIssuedConfig{TunnelName: "amnezia_" + country, Conf: conf, Backend: "nativewg"}, nil
+		// Кабинет отключён (v0.61.3): ни ключа, ни кабинета не спрашиваем.
+		return backend.VPNIssuedConfig{}, backend.ErrAmneziaDisabled
 	case providerHideMy:
 		if _, err := r.listHideMyCodes(routerID); isSealedStoreError(err) {
 			return backend.VPNIssuedConfig{}, err
@@ -80,54 +68,12 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 	}
 }
 
-func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
-	acc := backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium"}
-	key, err := r.getAmneziaKeyByID(routerID, "")
-	if note := sealedStoreNote(err); note != "" {
-		acc.Note, acc.KeyProblem = note, sealedKeyProblem(err)
-		return acc, nil
-	}
-	if err != nil || key == "" {
-		acc.Note = "Ключ кабинета не сохранён — добавьте ключ vpn:// кнопкой «Добавить ключ»."
-		return acc, nil
-	}
-	info, err := r.fetchAmneziaAccount(ctx, key)
-	if err != nil {
-		acc.Note = "Кабинет не ответил: " + redactSecret(err.Error(), key)
-		return acc, nil
-	}
-	acc.Connected = true
-	acc.Status = info.SubscriptionStatus
-	acc.EndsAt = info.SubscriptionEndDate
-	acc.DevicesUsed = info.ActiveDeviceCount
-	acc.DevicesMax = info.MaxDeviceCount
-	// Слот подписки занимает только country_config -- тот же набор, по
-	// которому считается «слот занят» и который умеет отзывать кабинет.
-	issued := amneziaIssuedCountrySet(info)
-	listed := make(map[string]bool, len(info.AvailableCountries))
-	for _, c := range info.AvailableCountries {
-		code := strings.ToLower(c.Code)
-		listed[code] = true
-		acc.Options = append(acc.Options, backend.VPNOption{ID: code, Label: c.Name, Issued: issued[code]})
-	}
-	// Выпущенная страна, которую кабинет больше не предлагает, всё равно
-	// показывается: иначе её нельзя отозвать, и при полной подписке тупик.
-	for _, c := range info.IssuedConfigs {
-		code := strings.ToLower(strings.TrimSpace(c.CountryCode))
-		if c.SourceType != "country_config" || code == "" || listed[code] {
-			continue
-		}
-		listed[code] = true
-		label := strings.TrimSpace(c.CountryName)
-		if label == "" {
-			label = strings.ToUpper(code)
-		}
-		acc.Options = append(acc.Options, backend.VPNOption{ID: code, Label: label, Issued: true})
-	}
-	if len(acc.Options) == 0 {
-		acc.Note = "Кабинет не назвал ни одной доступной страны."
-	}
-	return acc, nil
+// amneziaAccountForMiniapp -- экран подписки Amnezia Premium. Кабинет
+// отключён (v0.61.3): подписка не читается, стран нет, на экране -- почему и
+// где брать конфиги. Сохранённые ключи по-прежнему видны и удаляются (это
+// файл на сервере, не кабинет).
+func (r *Router) amneziaAccountForMiniapp(_ context.Context, _ int64) (backend.VPNAccount, error) {
+	return backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium", Note: backend.AmneziaDisabledText}, nil
 }
 
 func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
