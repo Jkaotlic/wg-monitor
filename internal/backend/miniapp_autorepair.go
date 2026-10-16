@@ -32,6 +32,10 @@ type miniappAutorepairResp struct {
 	// переименовали: перезапуск идёт, а выпуск конфига ждёт, пока человек
 	// подтвердит автопочинку (PUT включения перепишет имя). Пусто -- имя то же.
 	RenamePending string `json:"rename_pending,omitempty"`
+	// SourceOff -- источник настройки выключен целиком (v0.61.3: «Amnezia
+	// Premium»): что сделать человеку; автозапуск с ним не начинается. Пусто
+	// -- источник работает.
+	SourceOff string `json:"source_off,omitempty"`
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
 	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
 	RelocateSpent string `json:"relocate_spent"`
@@ -79,6 +83,9 @@ const (
 	autorepairStateOn      = "on"
 	autorepairStateLimited = "limited"
 	autorepairStateBlocked = "blocked"
+	// autorepairStateSourceOff -- источник настройки выключен целиком
+	// (v0.61.3: «Amnezia Premium»): автопочинка не работает, нужен другой.
+	autorepairStateSourceOff = "source_off"
 )
 
 // miniappAutorepairCabinets -- кабинеты-источники и их имена на случай, если
@@ -335,6 +342,7 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 	if found {
 		resp.Enabled, resp.Provider, resp.Option, resp.AllowRelocate = s.Enabled, s.Provider, s.Option, s.AllowRelocate
 		resp.RelocateSpent = s.RelocateSpent
+		resp.SourceOff = RepairSourceOff(s.Provider)
 		// Вариант своего сервера (панель и интерфейс) -- только тому, кому
 		// с этой панели разрешена выдача: остальным -- что источник «свой
 		// сервер», без подробностей чужой панели.
@@ -567,6 +575,10 @@ func miniappAutorepairListHandler(d Deps) http.HandlerFunc {
 			}
 			state := autorepairStateOn
 			switch {
+			case RepairSourceOff(s.Provider) != "":
+				// Источник выключен -- главнее переименования: подтверждать
+				// настройку, которая всё равно не работает, незачем.
+				state = autorepairStateSourceOff
 			case miniappAutorepairRenamed(s.TunnelName, names[miniappTunnelPrefix+s.TunnelID]):
 				state = autorepairStateBlocked
 				resp.Reasons[s.TunnelID] = miniappAutorepairRenameReason

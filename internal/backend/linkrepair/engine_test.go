@@ -2305,3 +2305,34 @@ func TestStart_StartedWriteFailureRefuses(t *testing.T) {
 		t.Fatalf("причина не сказана: %+v", calls)
 	}
 }
+
+// v0.61.3: источник выключен целиком (кабинет «Amnezia Premium») -- автозапуск
+// не начинается: ни команд роутеру, ни засчитанной попытки, а в правке тревоги
+// -- что сделать. Сколько бы раз VPN-туннель ни падал, стопа «нужен человек»
+// и потолка попыток не появляется. Ручной запуск идёт как прежде.
+func TestStart_SourceOffRefusesAutoWithoutAttempt(t *testing.T) {
+	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
+	e.d.SourceOff = func(provider string) string {
+		if provider == "amnezia" {
+			return ActAmneziaDisabled
+		}
+		return ""
+	}
+	for i := 0; i < attemptLimit+1; i++ {
+		if _, err := e.d.Start(ladderReq()); !errors.Is(err, ErrAutoDisabled) {
+			t.Fatalf("запуск %d: ждали ErrAutoDisabled, получили %v", i, err)
+		}
+	}
+	if e.cmd.count() != 0 {
+		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+	}
+	if raw, _ := e.d.Attempts.KV.Get(attemptKey("роутер", "tunnel_awg12")); raw != "" {
+		t.Fatalf("попытка засчитана: %s", raw)
+	}
+	calls := e.rep.waitCalls(t, attemptLimit+1)
+	for _, c := range calls {
+		if c.Kind != "notstarted" || !strings.Contains(c.Text, ActAmneziaDisabled) || strings.Contains(c.Text, ActTooOften) {
+			t.Fatalf("правка: %+v", c)
+		}
+	}
+}

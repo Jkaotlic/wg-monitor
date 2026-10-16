@@ -38,6 +38,16 @@ func RepairSource(cab VPNCabinet, panels Awg3Panels, database *db.DB, adminTG in
 	return repairSource{cab: cab, panels: panels, db: database, adminTG: adminTG}
 }
 
+// RepairSourceOff -- источник выключен целиком: что сделать человеку; ""
+// -- работает. Движок по нему не начинает автозапуск (linkrepair.Deps.
+// SourceOff), экран автопочинки показывает настройку неработающей.
+func RepairSourceOff(provider string) string {
+	if provider == RepairProviderAmnezia {
+		return linkrepair.ActAmneziaDisabled
+	}
+	return ""
+}
+
 // amneziaOff -- кабинет «Amnezia Premium» отключён (v0.61.3): любой шаг
 // лесенки с этим источником -- «нужен человек» с причиной, до кабинета. Так
 // лесенка останавливается на проверке «страна ещё выпущена» и до смены

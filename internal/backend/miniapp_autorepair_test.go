@@ -259,10 +259,12 @@ func TestAutorepair_ListStates(t *testing.T) {
 	env := autorepairEnv(t)
 	repo := env.d.TunnelRepairSettings()
 	for _, s := range []db.TunnelRepairSetting{
-		{UserID: env.ownedID, TunnelID: "awg12", Enabled: true, Provider: "amnezia", Option: "nl"},
+		{UserID: env.ownedID, TunnelID: "awg12", Enabled: true, Provider: "hidemyname", Option: "nl"},
 		{UserID: env.ownedID, TunnelID: "awg13", Enabled: true},
-		{UserID: env.ownedID, TunnelID: "awg14", Enabled: true, Provider: "amnezia", Option: "de"},
-		{UserID: env.ownedID, TunnelID: "awg15", Enabled: false, Provider: "amnezia", Option: "de"},
+		{UserID: env.ownedID, TunnelID: "awg14", Enabled: true, Provider: "hidemyname", Option: "de"},
+		{UserID: env.ownedID, TunnelID: "awg15", Enabled: false, Provider: "hidemyname", Option: "de"},
+		// Источник выключен (v0.61.3) -- своя метка, главнее стопа попыток.
+		{UserID: env.ownedID, TunnelID: "awg16", Enabled: true, Provider: "amnezia", Option: "nl"},
 	} {
 		if err := repo.Put(s); err != nil {
 			t.Fatal(err)
@@ -281,7 +283,7 @@ func TestAutorepair_ListStates(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"awg12": "on", "awg13": "limited", "awg14": "blocked"}
+	want := map[string]string{"awg12": "on", "awg13": "limited", "awg14": "blocked", "awg16": "source_off"}
 	if len(resp.Tunnels) != len(want) {
 		t.Fatalf("метки: %v, хотим %v", resp.Tunnels, want)
 	}

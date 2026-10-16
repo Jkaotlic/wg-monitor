@@ -115,6 +115,11 @@ type Deps struct {
 	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
 	SpendRelocation func(routerID int64, tunnelID, option string) error
+	// SourceOff -- источник выключен целиком (v0.61.3: кабинет «Amnezia
+	// Premium»): что сделать человеку; "" -- источник работает. Автозапуск с
+	// таким источником не начинается и попытку не засчитывает: иначе каждое
+	// падение кончалось бы тем же «нужен человек». nil -- выключенных нет.
+	SourceOff func(provider string) string
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
 	Commands replace.Commander
@@ -307,6 +312,15 @@ func (d Deps) Start(req StartReq) (string, error) {
 		// выключенное -- шум.
 		if !set.Enabled {
 			return "", ErrAutoDisabled
+		}
+		// Источник выключен целиком: повторять «нужен человек» на каждом
+		// падении незачем -- одна правка тревоги с тем, что сделать, и
+		// попытка не засчитывается.
+		if d.SourceOff != nil {
+			if why := d.SourceOff(set.Provider); why != "" {
+				notStarted(why)
+				return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
+			}
 		}
 		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
 			if err != nil {

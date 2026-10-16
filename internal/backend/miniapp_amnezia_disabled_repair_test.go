@@ -158,3 +158,31 @@ func TestAmneziaDisabled_SavedAutorepairEndsNeedHumanWithoutSpend(t *testing.T) 
 		t.Fatalf("RelocateSpent=%q err=%v", s.RelocateSpent, err)
 	}
 }
+
+// Сохранённая настройка с Amnezia на экране -- не «включена», а «не работает»
+// с причиной; в списке меток -- своё состояние source_off.
+func TestAmneziaDisabled_SavedSettingShownNotWorking(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "amnezia_nl")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{UserID: env.ownedID, TunnelID: "awg12", TunnelName: "amnezia_nl",
+		Enabled: true, Provider: RepairProviderAmnezia, Option: "nl"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", "")
+	if resp := decodeAutorepair(t, rec.Body.Bytes()); !resp.Enabled || resp.SourceOff != linkrepair.ActAmneziaDisabled {
+		t.Fatalf("экран: %+v", resp)
+	}
+	var list struct {
+		Tunnels map[string]string `json:"tunnels"`
+	}
+	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/autorepair", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Tunnels["awg12"] != autorepairStateSourceOff {
+		t.Fatalf("список: %+v", list)
+	}
+	if RepairSourceOff(RepairProviderHideMy) != "" || RepairSourceOff(RepairProviderAwg3) != "" || RepairSourceOff("") != "" {
+		t.Fatal("выключен только «Amnezia Premium»")
+	}
+}
