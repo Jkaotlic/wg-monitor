@@ -2306,11 +2306,12 @@ func TestStart_StartedWriteFailureRefuses(t *testing.T) {
 	}
 }
 
-// v0.61.3: источник выключен целиком (кабинет «Amnezia Premium») -- автозапуск
-// не начинается: ни команд роутеру, ни засчитанной попытки, а в правке тревоги
-// -- что сделать. Сколько бы раз VPN-туннель ни падал, стопа «нужен человек»
-// и потолка попыток не появляется. Ручной запуск идёт как прежде.
-func TestStart_SourceOffRefusesAutoWithoutAttempt(t *testing.T) {
+// v0.61.3: источник выключен целиком (кабинет «Amnezia Premium»). Перезапуск
+// идёт как обычно; не помог -- ни выпуска, ни импорта, ни отметки о смене
+// страны, итог -- «что сделать» с причиной, и стопа «нужен человек» нет:
+// следующее падение снова получит перезапуск.
+func amneziaOffLadder(t *testing.T) (*ladderEnv, *[]string) {
+	t.Helper()
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl", AllowRelocate: true})
 	e.d.SourceOff = func(provider string) string {
 		if provider == "amnezia" {
@@ -2318,21 +2319,40 @@ func TestStart_SourceOffRefusesAutoWithoutAttempt(t *testing.T) {
 		}
 		return ""
 	}
-	for i := 0; i < attemptLimit+1; i++ {
-		if _, err := e.d.Start(ladderReq()); !errors.Is(err, ErrAutoDisabled) {
-			t.Fatalf("запуск %d: ждали ErrAutoDisabled, получили %v", i, err)
-		}
+	var spent []string
+	e.d.SpendRelocation = func(_ int64, _, option string) error {
+		spent = append(spent, option)
+		return nil
 	}
-	if e.cmd.count() != 0 {
-		t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+	return e, &spent
+}
+
+func TestLadder_SourceOffRestartsThenStopsBeforeIssue(t *testing.T) {
+	e, spent := amneziaOffLadder(t)
+	job, final := e.run(t, ladderReq())
+	if len(e.cmd.actions("tunnel_restart")) == 0 {
+		t.Fatal("перезапуск не отправлен")
 	}
-	if raw, _ := e.d.Attempts.KV.Get(attemptKey("роутер", "tunnel_awg12")); raw != "" {
-		t.Fatalf("попытка засчитана: %s", raw)
+	if n := len(e.cmd.actions("tunnel_import")); n != 0 {
+		t.Fatalf("импорт конфига: %d", n)
 	}
-	calls := e.rep.waitCalls(t, attemptLimit+1)
-	for _, c := range calls {
-		if c.Kind != "notstarted" || !strings.Contains(c.Text, ActAmneziaDisabled) || strings.Contains(c.Text, ActTooOften) {
-			t.Fatalf("правка: %+v", c)
-		}
+	if len(*spent) != 0 {
+		t.Fatalf("отметка о смене страны: %v", *spent)
+	}
+	if job.State != provision.StateFailed || job.Hint != ActAmneziaDisabled || final.Kind != "need" || final.Action != ActAmneziaDisabled {
+		t.Fatalf("state=%s hint=%q final=%+v", job.State, job.Hint, final)
+	}
+	// Стопа нет: следующее падение снова запустит автопочинку (перезапуск).
+	if ok, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !ok {
+		t.Fatalf("автопочинка встала: %s", why)
+	}
+}
+
+func TestLadder_SourceOffRestartHelps(t *testing.T) {
+	e, _ := amneziaOffLadder(t)
+	fixOn(e.cmd, "tunnel_restart", 1, true)
+	job, final := e.run(t, ladderReq())
+	if job.State != provision.StateSuccess || final.Kind != "done" {
+		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
 }

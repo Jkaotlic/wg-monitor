@@ -39,8 +39,9 @@ func RepairSource(cab VPNCabinet, panels Awg3Panels, database *db.DB, adminTG in
 }
 
 // RepairSourceOff -- источник выключен целиком: что сделать человеку; ""
-// -- работает. Движок по нему не начинает автозапуск (linkrepair.Deps.
-// SourceOff), экран автопочинки показывает настройку неработающей.
+// -- работает. Движок по нему после перезапуска не выпускает конфиг
+// (linkrepair.Deps.SourceOff), экран автопочинки показывает «только
+// перезапуск» с причиной.
 func RepairSourceOff(provider string) string {
 	if provider == RepairProviderAmnezia {
 		return linkrepair.ActAmneziaDisabled

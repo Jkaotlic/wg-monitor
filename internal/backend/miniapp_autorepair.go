@@ -33,8 +33,8 @@ type miniappAutorepairResp struct {
 	// подтвердит автопочинку (PUT включения перепишет имя). Пусто -- имя то же.
 	RenamePending string `json:"rename_pending,omitempty"`
 	// SourceOff -- источник настройки выключен целиком (v0.61.3: «Amnezia
-	// Premium»): что сделать человеку; автозапуск с ним не начинается. Пусто
-	// -- источник работает.
+	// Premium»): что сделать человеку; автопочинка только перезапускает,
+	// конфиг не выпускает. Пусто -- источник работает.
 	SourceOff string `json:"source_off,omitempty"`
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
 	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
@@ -84,7 +84,7 @@ const (
 	autorepairStateLimited = "limited"
 	autorepairStateBlocked = "blocked"
 	// autorepairStateSourceOff -- источник настройки выключен целиком
-	// (v0.61.3: «Amnezia Premium»): автопочинка не работает, нужен другой.
+	// (v0.61.3: «Amnezia Premium»): только перезапуск, нужен другой источник.
 	autorepairStateSourceOff = "source_off"
 )
 
@@ -577,7 +577,7 @@ func miniappAutorepairListHandler(d Deps) http.HandlerFunc {
 			switch {
 			case RepairSourceOff(s.Provider) != "":
 				// Источник выключен -- главнее переименования: подтверждать
-				// настройку, которая всё равно не работает, незачем.
+				// настройку, выпуск по которой всё равно не идёт, незачем.
 				state = autorepairStateSourceOff
 			case miniappAutorepairRenamed(s.TunnelName, names[miniappTunnelPrefix+s.TunnelID]):
 				state = autorepairStateBlocked

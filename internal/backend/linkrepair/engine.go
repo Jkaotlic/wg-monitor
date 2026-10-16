@@ -116,9 +116,10 @@ type Deps struct {
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
 	SpendRelocation func(routerID int64, tunnelID, option string) error
 	// SourceOff -- источник выключен целиком (v0.61.3: кабинет «Amnezia
-	// Premium»): что сделать человеку; "" -- источник работает. Автозапуск с
-	// таким источником не начинается и попытку не засчитывает: иначе каждое
-	// падение кончалось бы тем же «нужен человек». nil -- выключенных нет.
+	// Premium»): что сделать человеку; "" -- источник работает. Перезапуск
+	// (ступень 1) идёт как обычно -- он источника не касается; выпуск
+	// (ступени 2-3) не начинается: итог -- эта фраза, без стопа «нужен
+	// человек». nil -- выключенных нет.
 	SourceOff func(provider string) string
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
@@ -313,15 +314,6 @@ func (d Deps) Start(req StartReq) (string, error) {
 		if !set.Enabled {
 			return "", ErrAutoDisabled
 		}
-		// Источник выключен целиком: повторять «нужен человек» на каждом
-		// падении незачем -- одна правка тревоги с тем, что сделать, и
-		// попытка не засчитывается.
-		if d.SourceOff != nil {
-			if why := d.SourceOff(set.Provider); why != "" {
-				notStarted(why)
-				return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
-			}
-		}
 		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
 			if err != nil {
 				d.logWarn("linkrepair: история попыток не прочиталась — автозапуск отклонён",
@@ -421,6 +413,15 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	}
 	log = append(log, textRestartNoHelp)
 	if d.aborted(ctx, jobID, req, th, names, log) {
+		return
+	}
+
+	// Источник выключен целиком: выпускать не из чего, и это не провал
+	// автопочинки -- стоп «нужен человек» не ставится, следующее падение
+	// снова получит перезапуск.
+	if why := d.sourceOff(set.Provider); why != "" {
+		d.skip(jobID, "источник отключён — "+why, StepReissue, StepRecreate)
+		d.finishSourceOff(ctx, jobID, req, th, names, log, why)
 		return
 	}
 
@@ -1027,6 +1028,29 @@ const whyAttemptUnsaved = "не смог записать попытку в ис
 
 // finishAttempt -- итог автозапуска в историю попыток. Не записался --
 // оператору в лог: стоп «нужен человек» тогда не поставлен.
+func (d Deps) sourceOff(provider string) string {
+	if d.SourceOff == nil || provider == "" {
+		return ""
+	}
+	return d.SourceOff(provider)
+}
+
+// finishSourceOff -- перезапуск не помог, а источник выключен целиком:
+// выпуска нет. Как у finishNoAnswer, стопа нет (попытка -- без провала):
+// иначе VPN-туннель с таким источником лишился бы и перезапуска до
+// вмешательства человека.
+func (d Deps) finishSourceOff(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		d.finishAttempt(req, true)
+	}
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = action
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), action)
+}
+
 func (d Deps) finishAttempt(req StartReq, ok bool) {
 	if err := d.Attempts.Finish(req.Nickname, req.CheckName, ok); err != nil {
 		d.logWarn("linkrepair: итог попытки не записался", "nickname", req.Nickname, "check", req.CheckName, "ok", ok, "err", err)

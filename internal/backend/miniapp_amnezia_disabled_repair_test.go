@@ -109,6 +109,14 @@ func (c *countingCabinet) count() int {
 // лесенка кончается «нужен человек» с причиной, кабинет не спрошен, отметка о
 // смене страны не записана.
 func TestAmneziaDisabled_SavedAutorepairEndsNeedHumanWithoutSpend(t *testing.T) {
+	// С движком, знающим выключенный источник (как в бою), и без него --
+	// тогда отказывает сам источник: выпуска нет в обоих случаях.
+	for _, wired := range []bool{true, false} {
+		t.Run(fmt.Sprintf("SourceOff=%v", wired), func(t *testing.T) { savedAmneziaRepair(t, wired) })
+	}
+}
+
+func savedAmneziaRepair(t *testing.T, wired bool) {
 	d, routerID, owner := linkRepairDeps(t)
 	if err := d.DB.Users().UpdateDeployInfo("router-owned", db.DeployInfo{LastDeployedVersion: "v0.60.0"}); err != nil {
 		t.Fatal(err)
@@ -126,6 +134,9 @@ func TestAmneziaDisabled_SavedAutorepairEndsNeedHumanWithoutSpend(t *testing.T) 
 	d.LinkRepair.Source = RepairSource(cab, nil, d.DB, 999)
 	d.LinkRepair.Commands = agent
 	d.LinkRepair.Probe.Commands = agent
+	if wired {
+		d.LinkRepair.SourceOff = RepairSourceOff
+	}
 	d.LinkRepair.SpendRelocation = func(routerID int64, tunnelID, option string) error {
 		spentMu.Lock()
 		spent = append(spent, option)
@@ -145,6 +156,9 @@ func TestAmneziaDisabled_SavedAutorepairEndsNeedHumanWithoutSpend(t *testing.T) 
 	if job.State != provision.StateFailed || job.Hint != linkrepair.ActAmneziaDisabled {
 		t.Fatalf("ждали «нужен человек» с %q, получили state=%s hint=%q", linkrepair.ActAmneziaDisabled, job.State, job.Hint)
 	}
+	if acts := agent.actions(); !acts["tunnel_restart"] || acts["tunnel_import"] {
+		t.Fatalf("команды роутеру: %v", acts)
+	}
 	if n := cab.count(); n != 0 {
 		t.Fatalf("кабинет спрошен %d раз", n)
 	}
@@ -159,8 +173,19 @@ func TestAmneziaDisabled_SavedAutorepairEndsNeedHumanWithoutSpend(t *testing.T) 
 	}
 }
 
-// Сохранённая настройка с Amnezia на экране -- не «включена», а «не работает»
-// с причиной; в списке меток -- своё состояние source_off.
+// actions -- какие команды получил агент.
+func (a *repairAgent) actions() map[string]bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := map[string]bool{}
+	for _, act := range a.byID {
+		out[act] = true
+	}
+	return out
+}
+
+// Сохранённая настройка с Amnezia на экране -- не «включена», а «только
+// перезапуск» с причиной; в списке меток -- своё состояние source_off.
 func TestAmneziaDisabled_SavedSettingShownNotWorking(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg12", "amnezia_nl")
