@@ -99,7 +99,7 @@ func TestMiniappVPNIssueKeepsConfigServerSide(t *testing.T) {
 	deps, ownedID, tgUser := cabinetDeps(t, cab, sink)
 	h := NewMux(deps)
 
-	body := `{"provider":"amnezia","option_id":"nl"}`
+	body := `{"provider":"hidemyname","option_id":"nl"}`
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/vpn/issue", ownedID), bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", tgUser))
@@ -118,7 +118,7 @@ func TestMiniappVPNIssueKeepsConfigServerSide(t *testing.T) {
 	if got != base64.StdEncoding.EncodeToString(conf) {
 		t.Fatalf("агенту обязан уехать тот же конфиг: %q", got)
 	}
-	if sink.enqueued[0].Args["name"] != "amnezia_nl" || sink.enqueued[0].Args["replace"] != true {
+	if sink.enqueued[0].Args["name"] != "hidemyname_nl" || sink.enqueued[0].Args["replace"] != true {
 		t.Fatalf("args = %+v", sink.enqueued[0].Args)
 	}
 }
@@ -136,7 +136,7 @@ func TestMiniappVPNIssueAllowedForOperator(t *testing.T) {
 	}
 	h := NewMux(deps)
 
-	body := `{"provider":"amnezia","option_id":"nl"}`
+	body := `{"provider":"hidemyname","option_id":"nl"}`
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/vpn/issue", ownedID), bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 555))
@@ -189,7 +189,7 @@ func TestMiniappTunnelImportStillDeniedFromClient(t *testing.T) {
 func TestMiniappVPNIssueSlotBusy(t *testing.T) {
 	env := newCabinetEnv(t)
 	env.cab.err = ErrVPNSlotBusy
-	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"fi"}`)
+	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"hidemyname","option_id":"fi"}`)
 	code, msg, _ := cabinetErrorBody(t, rec)
 	if rec.Code != http.StatusConflict || code != "slot_busy" || !strings.Contains(msg, "отзовите") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
@@ -204,13 +204,13 @@ func TestMiniappVPNIssueSlotBusy(t *testing.T) {
 func TestMiniappVPNIssueCabinetFailedHidesCabinetText(t *testing.T) {
 	env := newCabinetEnv(t)
 	env.cab.err = errors.New("amnezia login: HTTP 401: RAW-CABINET-TEXT-MUST-NOT-LEAK")
-	rec := env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"nl"}`)
+	rec := env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"hidemyname","option_id":"nl"}`)
 	code, msg, _ := cabinetErrorBody(t, rec)
 	if rec.Code != http.StatusBadGateway || code != "cabinet_failed" || msg != miniappCabinetErrorText("cabinet_failed") || strings.Contains(rec.Body.String(), "RAW-CABINET") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	env.cab.err, env.cab.conf = nil, nil
-	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"nl"}`)
+	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "cabinet_failed" || msg != miniappCabinetErrorText("cabinet_failed") {
 		t.Fatalf("пустой конфиг: %d %s", rec.Code, rec.Body.String())
 	}

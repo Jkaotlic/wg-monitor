@@ -465,22 +465,25 @@ func TestMiniappCabinetsListShape(t *testing.T) {
 	}
 }
 
+// Секрет не утекает ни в ответ, ни в журнал. Ключи Amnezia больше не
+// принимаются (v0.61.3), поэтому проверка -- на коде HideMy.name: путь
+// обработчика у них общий.
 func TestMiniappCabinetAddKeyNeverLeaksSecret(t *testing.T) {
 	env := newCabinetEnv(t)
 	const key = "vpn://SECRET-KEY-MUST-NOT-LEAK-abcd1234"
-	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"`+key+`","label":"Дом"}`)
+	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"`+key+`","label":"Дом"}`)
 	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "••••1234") {
 		t.Fatalf("добавление: %d %s", rec.Code, rec.Body.String())
 	}
 
-	env.keys.addErr = &CabinetRejectedError{Reason: "Кабинет Amnezia Premium не принял ключ"}
-	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"`+key+`"}`)
-	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusUnprocessableEntity || code != "cabinet_rejected" || msg != "Кабинет Amnezia Premium не принял ключ" {
+	env.keys.addErr = &CabinetRejectedError{Reason: "Кабинет HideMy.name не принял код"}
+	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"`+key+`"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusUnprocessableEntity || code != "cabinet_rejected" || msg != "Кабинет HideMy.name не принял код" {
 		t.Fatalf("отказ кабинета: %d %s", rec.Code, rec.Body.String())
 	}
 
 	env.keys.addErr = errors.New("write /var/lib/wg-monitor/x.tmp: no space left on device")
-	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"`+key+`"}`)
+	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"`+key+`"}`)
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusInternalServerError || code != "internal" || strings.Contains(msg, "space") {
 		t.Fatalf("сбой хранилища: %d %s", rec.Code, rec.Body.String())
 	}
@@ -505,10 +508,9 @@ func TestMiniappCabinetAddRefusals(t *testing.T) {
 		name, path, body, code string
 		addErr                 error
 	}{
-		{"битый json", "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":`, "bad_json", nil},
-		{"ключ неверного вида", "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"abc"}`, "invalid_key", ErrCabinetSecretInvalid},
+		{"битый json", "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":`, "bad_json", nil},
 		{"код неверного вида", "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"12"}`, "invalid_code", ErrCabinetSecretInvalid},
-		{"длинная подпись", "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"vpn://k","label":"` + strings.Repeat("я", 41) + `"}`, "invalid_label", nil},
+		{"длинная подпись", "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"123456789012345","label":"` + strings.Repeat("я", 41) + `"}`, "invalid_label", nil},
 		{"подпись с переводом строки", "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"123456789012345","label":"a\nb"}`, "invalid_label", nil},
 	}
 	for _, tc := range cases {
@@ -561,47 +563,25 @@ func TestMiniappCabinetTextsAreRussian(t *testing.T) {
 	}
 }
 
+// Отзыв страны Amnezia: кабинет отключён (v0.61.3). Чужому -- 404 на
+// входе, остальным -- 410 amnezia_disabled до подтверждения и без кабинета.
 func TestMiniappCabinetRevoke(t *testing.T) {
 	env := newCabinetEnv(t)
 	const path = "/v1/miniapp/routers/{id}/cabinets/amnezia/revoke"
 	rec := env.do(t, cabStranger, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" || len(env.keys.revoked) != 0 {
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
 		t.Fatalf("чужому отзыв закрыт: %d %s", rec.Code, rec.Body.String())
 	}
-	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"de","confirm":"другой"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || len(env.keys.revoked) != 0 {
-		t.Fatalf("неверное подтверждение: %d %s", rec.Code, rec.Body.String())
+	for _, who := range []int64{cabOwner, cabOperator, cabAdmin} {
+		for _, body := range []string{`{"country":"de","confirm":"router-owned"}`, `{"country":"de","confirm":"другой"}`} {
+			rec = env.do(t, who, http.MethodPost, path, body)
+			if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusGone || code != "amnezia_disabled" || msg != AmneziaDisabledText {
+				t.Fatalf("%d: %d %s", who, rec.Code, rec.Body.String())
+			}
+		}
 	}
-	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"d e","confirm":"router-owned"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "invalid_country" {
-		t.Fatalf("страна: %d %s", rec.Code, rec.Body.String())
-	}
-	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"DE","confirm":" Router-Owned "}`)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"country":"de"`) || len(env.keys.revoked) != 1 || env.keys.revoked[0] != "de" {
-		t.Fatalf("отзыв: %d %s %v", rec.Code, rec.Body.String(), env.keys.revoked)
-	}
-	// v0.52 (спека §7): оператор отзывает, как владелец -- отзыв обратим перевыпуском.
-	rec = env.do(t, cabOperator, http.MethodPost, path, `{"country":"nl","confirm":"router-owned"}`)
-	if rec.Code != http.StatusOK || len(env.keys.revoked) != 2 || env.keys.revoked[1] != "nl" {
-		t.Fatalf("оператор: %d %s %v", rec.Code, rec.Body.String(), env.keys.revoked)
-	}
-	// Роль снята -- запрет на входе, до тела.
-	if err := env.d.RouterOperators().Remove(env.ownedID, cabOperator); err != nil {
-		t.Fatal(err)
-	}
-	rec = env.do(t, cabOperator, http.MethodPost, path, `{"country":"fi","confirm":"router-owned"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" || len(env.keys.revoked) != 2 {
-		t.Fatalf("бывший оператор: %d %s", rec.Code, rec.Body.String())
-	}
-	env.keys.revokeErr = ErrCabinetSecretNotFound
-	rec = env.do(t, cabAdmin, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
-	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "cabinet_not_connected" {
-		t.Fatalf("без ключа: %d %s", rec.Code, rec.Body.String())
-	}
-	env.keys.revokeErr = errors.New("amnezia revoke-country-config: HTTP 500: boom")
-	rec = env.do(t, cabAdmin, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
-	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "cabinet_failed" || strings.Contains(msg, "boom") {
-		t.Fatalf("сбой кабинета: %d %s", rec.Code, rec.Body.String())
+	if len(env.keys.revoked) != 0 {
+		t.Fatalf("отзыв дошёл до кабинета: %v", env.keys.revoked)
 	}
 }
 
@@ -611,10 +591,9 @@ func TestMiniappCabinetBodiesRequireJSON(t *testing.T) {
 	env := newCabinetEnv(t)
 	env.vps.instances = []selfhostedamnezia.Instance{{ID: "dacha", Label: "Дом", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 1}}
 	routes := []struct{ method, path, body string }{
-		{http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"vpn://SECRET-KEY-abcd1234"}`},
+		{http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"123456789012345"}`},
 		{http.MethodPut, "/v1/miniapp/routers/{id}/cabinets/hidemy/active", `{"id":"c1"}`},
-		{http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/revoke", `{"country":"de","confirm":"router-owned"}`},
-		{http.MethodPost, "/v1/miniapp/routers/{id}/vpn/send-conf", `{"provider":"amnezia","option_id":"nl"}`},
+		{http.MethodPost, "/v1/miniapp/routers/{id}/vpn/send-conf", `{"provider":"hidemyname","option_id":"nl"}`},
 		{http.MethodPost, "/v1/miniapp/selfhosted", `{"id":"work","endpoint_host":"vpn2.example.com","endpoint_port":1}`},
 		{http.MethodPut, "/v1/miniapp/selfhosted/dacha", `{"endpoint_host":"vpn.example.com","endpoint_port":2}`},
 		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/toggle", `{"enabled":false}`},

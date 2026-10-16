@@ -53,6 +53,9 @@ func miniappSendConfHandler(d Deps) http.HandlerFunc {
 		option := strings.TrimSpace(req.OptionID)
 		switch provider {
 		case "amnezia", "hidemyname":
+			if miniappAmneziaOff(w, provider, nil) {
+				return
+			}
 			if d.VPNCabinet == nil {
 				writeMiniappCabinetError(w, http.StatusServiceUnavailable, "cabinets_not_configured")
 				return
@@ -62,6 +65,9 @@ func miniappSendConfHandler(d Deps) http.HandlerFunc {
 				return
 			}
 			issued, err := d.VPNCabinet.IssueConfig(r.Context(), u.ID, provider, option)
+			if miniappAmneziaOff(w, "", err) {
+				return
+			}
 			if errors.Is(err, ErrVPNSlotBusy) {
 				writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 				return

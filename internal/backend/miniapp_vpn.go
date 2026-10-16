@@ -181,6 +181,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "unknown_provider", "provider is not one this app knows")
 			return
 		}
+		if miniappAmneziaOff(w, provider, nil) {
+			return
+		}
 		optionID := strings.TrimSpace(req.OptionID)
 		if optionID == "" {
 			writeJSONError(w, http.StatusBadRequest, "missing_option", "option_id is required")
@@ -196,6 +199,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		issued, err := d.VPNCabinet.IssueConfig(r.Context(), routerID, provider, optionID)
+		if miniappAmneziaOff(w, "", err) {
+			return
+		}
 		if errors.Is(err, ErrVPNSlotBusy) {
 			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 			return

@@ -47,6 +47,7 @@ var miniappCabinetTexts = map[string]string{
 	"cabinet_key_missing":       "Ключи кабинетов на сервере не прочитать: ключ шифрования не найден — напишите администратору",
 	"cabinet_key_wrong":         "Ключи кабинетов на сервере не расшифровываются: ключ шифрования не тот — напишите администратору",
 	"slot_busy":                 "Все слоты подписки заняты — отзовите страну, которая больше не нужна, и повторите",
+	"amnezia_disabled":          AmneziaDisabledText,
 	"code_rejected":             "HideMy.name не принял код доступа: он неверный, просрочен или куплен не для VPN — проверьте код в кабинете HideMy.name",
 	"unknown_provider":          "Такого кабинета приложение не знает",
 	"missing_option":            "Не выбрана страна или сервер",
@@ -99,6 +100,18 @@ func miniappCabinetErrorText(code string) string {
 
 func writeMiniappCabinetError(w http.ResponseWriter, status int, code string) {
 	writeMiniappDeployError(w, status, code, miniappCabinetErrorText(code))
+}
+
+// miniappAmneziaOff -- кабинет Amnezia Premium отключён (v0.61.3): запрос
+// к нему -- 410 amnezia_disabled с причиной, до кабинета и без команды
+// агенту. true -- ответ написан. Срабатывает и на провайдера в запросе, и на
+// ErrAmneziaDisabled от кабинета (если провайдер дошёл до него другим путём).
+func miniappAmneziaOff(w http.ResponseWriter, provider string, err error) bool {
+	if provider != RepairProviderAmnezia && !errors.Is(err, ErrAmneziaDisabled) {
+		return false
+	}
+	writeMiniappCabinetError(w, http.StatusGone, "amnezia_disabled")
+	return true
 }
 
 // writeMiniappCabinetKeyError -- сбой хранилища кабинетов из-за ключа
@@ -278,6 +291,9 @@ func miniappCabinetAddHandler(d Deps, provider string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		if miniappAmneziaOff(w, provider, nil) {
+			return
+		}
 		if d.VPNCabinetKeys == nil {
 			writeMiniappCabinetError(w, http.StatusServiceUnavailable, "cabinets_not_configured")
 			return
@@ -299,6 +315,8 @@ func miniappCabinetAddHandler(d Deps, provider string) http.HandlerFunc {
 		var rejected *CabinetRejectedError
 		switch {
 		case err == nil:
+		case miniappAmneziaOff(w, "", err):
+			return
 		case errors.Is(err, ErrCabinetSecretInvalid):
 			writeMiniappCabinetError(w, http.StatusBadRequest, invalidCode)
 			return
@@ -377,13 +395,18 @@ func miniappCabinetSecretResult(d Deps, w http.ResponseWriter, routerID int64, p
 // (callbackCodeRe), в нижнем регистре.
 var miniappCountryRe = regexp.MustCompile(`^[a-z0-9_-]{2,16}$`)
 
-// miniappCabinetRevokeHandler освобождает слот подписки Amnezia: админ,
-// владелец и оператор (v0.52, спека §7: оператору всё, кроме админского;
-// отзыв обратим перевыпуском), подтверждение набором имени роутера.
+// miniappCabinetRevokeHandler освобождал слот подписки Amnezia: админ,
+// владелец и оператор (v0.52, спека §7), подтверждение набором имени роутера.
+// Кабинет Amnezia отключён (v0.61.3): маршрут отвечает 410 amnezia_disabled
+// сразу после проверки доступа, в кабинет не ходит. Код ниже остаётся до
+// отдельного шага удаления кабинета.
 func miniappCabinetRevokeHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetAnyAccess)
 		if !ok {
+			return
+		}
+		if miniappAmneziaOff(w, RepairProviderAmnezia, nil) {
 			return
 		}
 		if d.VPNCabinetKeys == nil {
@@ -415,6 +438,7 @@ func miniappCabinetRevokeHandler(d Deps) http.HandlerFunc {
 			}{Country: country})
 		case errors.Is(err, ErrCabinetSecretNotFound):
 			writeMiniappCabinetError(w, http.StatusConflict, "cabinet_not_connected")
+		case miniappAmneziaOff(w, "", err):
 		default:
 			miniappCabinetLogger(d).Warn("кабинет: отзыв слота не прошёл", "router_id", u.ID, "country", country, "err", err)
 			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")

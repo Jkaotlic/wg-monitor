@@ -73,7 +73,7 @@ func TestMiniappReplaceStartsAndReportsProgress(t *testing.T) {
 	h := NewMux(deps)
 
 	rec := postReplace(t, h, ownedID, tgUser,
-		`{"provider":"amnezia","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
+		`{"provider":"hidemyname","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -112,10 +112,10 @@ func TestMiniappReplaceRefusesSecondRun(t *testing.T) {
 	deps, ownedID, tgUser := replaceDeps(t)
 	h := NewMux(deps)
 
-	if rec := postReplace(t, h, ownedID, tgUser, `{"provider":"amnezia","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`); rec.Code != http.StatusAccepted {
+	if rec := postReplace(t, h, ownedID, tgUser, `{"provider":"hidemyname","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`); rec.Code != http.StatusAccepted {
 		t.Fatalf("первая замена: %d", rec.Code)
 	}
-	rec := postReplace(t, h, ownedID, tgUser, `{"provider":"amnezia","option_id":"se","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
+	rec := postReplace(t, h, ownedID, tgUser, `{"provider":"hidemyname","option_id":"se","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -127,7 +127,7 @@ func TestMiniappReplaceRejectsUnknownTunnel(t *testing.T) {
 	deps, ownedID, tgUser := replaceDeps(t)
 	h := NewMux(deps)
 
-	rec := postReplace(t, h, ownedID, tgUser, `{"provider":"amnezia","option_id":"nl","old_tunnel_id":"awg99","policy_name":"HydraRoute"}`)
+	rec := postReplace(t, h, ownedID, tgUser, `{"provider":"hidemyname","option_id":"nl","old_tunnel_id":"awg99","policy_name":"HydraRoute"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -148,7 +148,7 @@ func TestMiniappReplaceStrangerGets404(t *testing.T) {
 	deps, ownedID, _ := replaceDeps(t)
 	h := NewMux(deps)
 
-	rec := postReplace(t, h, ownedID, 777, `{"provider":"amnezia","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
+	rec := postReplace(t, h, ownedID, 777, `{"provider":"hidemyname","option_id":"nl","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
 	}

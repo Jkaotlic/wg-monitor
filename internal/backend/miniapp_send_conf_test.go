@@ -13,13 +13,13 @@ const sendConfPath = "/v1/miniapp/routers/{id}/vpn/send-conf"
 
 func TestMiniappSendConfGoesToPresserDM(t *testing.T) {
 	env := newCabinetEnv(t)
-	rec := env.do(t, cabStranger, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec := env.do(t, cabStranger, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
 		t.Fatalf("чужому: %d %s", rec.Code, rec.Body.String())
 	}
 	// v0.52 (спека §7): оператору тоже -- файл уходит лично нажавшему.
 	for _, who := range []int64{cabOperator, cabOwner, cabAdmin} {
-		rec := env.do(t, who, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+		rec := env.do(t, who, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 		if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"sent_to":"dm"`) {
 			t.Fatalf("от %d: %d %s", who, rec.Code, rec.Body.String())
 		}
@@ -28,7 +28,7 @@ func TestMiniappSendConfGoesToPresserDM(t *testing.T) {
 		t.Fatalf("документ не в личку нажавшему: %+v", env.docs.sent)
 	}
 	doc := env.docs.sent[0]
-	if doc.filename != "amnezia_nl.conf" || !strings.Contains(string(doc.data), "CONF-SECRET-MUST-NOT-LEAK") || !strings.Contains(doc.caption, "приватный ключ") {
+	if doc.filename != "hidemyname_nl.conf" || !strings.Contains(string(doc.data), "CONF-SECRET-MUST-NOT-LEAK") || !strings.Contains(doc.caption, "приватный ключ") {
 		t.Fatalf("документ: %+v", doc)
 	}
 	if len(env.sink.enqueued) != 0 {
@@ -57,12 +57,12 @@ func TestMiniappSendConfKeepsConfigOutOfResponseAndLog(t *testing.T) {
 func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 	env := newCabinetEnv(t)
 	env.docs.err = &tg.APIError{Method: "sendDocument", Code: 403, Description: "Forbidden: bot can't initiate conversation with a user"}
-	rec := env.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec := env.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "dm_unreachable" || !strings.Contains(msg, "/start") {
 		t.Fatalf("личка закрыта: %d %s", rec.Code, rec.Body.String())
 	}
 	env.docs.err = errors.New("tg sendDocument: transport error")
-	rec = env.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec = env.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "dm_failed" {
 		t.Fatalf("сбой Telegram: %d %s", rec.Code, rec.Body.String())
 	}
@@ -73,11 +73,11 @@ func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 		status           int
 		cabErr           error
 	}{
-		{"занятый слот", `{"provider":"amnezia","option_id":"fi"}`, "slot_busy", http.StatusConflict, ErrVPNSlotBusy},
-		{"кабинет не ответил", `{"provider":"amnezia","option_id":"fi"}`, "cabinet_failed", http.StatusBadGateway, errors.New("amnezia login: HTTP 502")},
+		{"занятый слот", `{"provider":"hidemyname","option_id":"fi"}`, "slot_busy", http.StatusConflict, ErrVPNSlotBusy},
+		{"кабинет не ответил", `{"provider":"hidemyname","option_id":"fi"}`, "cabinet_failed", http.StatusBadGateway, errors.New("amnezia login: HTTP 502")},
 		{"код не принят", `{"provider":"hidemyname","option_id":"abc"}`, "code_rejected", http.StatusUnprocessableEntity, ErrCabinetCodeRejected},
 		{"неизвестный провайдер", `{"provider":"someone","option_id":"x"}`, "unknown_provider", http.StatusBadRequest, nil},
-		{"нет выбора", `{"provider":"amnezia"}`, "missing_option", http.StatusBadRequest, nil},
+		{"нет выбора", `{"provider":"hidemyname"}`, "missing_option", http.StatusBadRequest, nil},
 		{"битый json", `{"provider":`, "bad_json", http.StatusBadRequest, nil},
 	}
 	for _, tc := range cases {
@@ -91,7 +91,7 @@ func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 	}
 
 	noDM := newCabinetEnv(t, func(d *Deps) { d.MiniappDocs = nil })
-	rec = noDM.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec = noDM.do(t, cabOwner, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusServiceUnavailable || code != "dm_not_configured" {
 		t.Fatalf("без Telegram: %d %s", rec.Code, rec.Body.String())
 	}
@@ -101,7 +101,7 @@ func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 // никуда не уходит. Роль проверяется на каждом запросе, не при входе в сессию.
 func TestMiniappSendConfFormerOperatorGets404(t *testing.T) {
 	env := newCabinetEnv(t)
-	rec := env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec := env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("действующему оператору: %d %s", rec.Code, rec.Body.String())
 	}
@@ -109,7 +109,7 @@ func TestMiniappSendConfFormerOperatorGets404(t *testing.T) {
 	if err := env.d.RouterOperators().Remove(env.ownedID, cabOperator); err != nil {
 		t.Fatal(err)
 	}
-	rec = env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"amnezia","option_id":"nl"}`)
+	rec = env.do(t, cabOperator, http.MethodPost, sendConfPath, `{"provider":"hidemyname","option_id":"nl"}`)
 	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
 		t.Fatalf("бывший оператор: %d %s", rec.Code, rec.Body.String())
 	}
