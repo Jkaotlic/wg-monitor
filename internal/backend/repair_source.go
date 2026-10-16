@@ -38,7 +38,18 @@ func RepairSource(cab VPNCabinet, panels Awg3Panels, database *db.DB, adminTG in
 	return repairSource{cab: cab, panels: panels, db: database, adminTG: adminTG}
 }
 
+// amneziaOff -- кабинет «Amnezia Premium» отключён (v0.61.3): любой шаг
+// лесенки с этим источником -- «нужен человек» с причиной, до кабинета. Так
+// лесенка останавливается на проверке «страна ещё выпущена» и до смены
+// страны (и её отметки) не доходит.
+func amneziaOff() error {
+	return &linkrepair.NeedHuman{Cause: ErrAmneziaDisabled, Action: linkrepair.ActAmneziaDisabled}
+}
+
 func (s repairSource) Issue(ctx context.Context, routerID int64, provider, option string) (replace.Issued, error) {
+	if provider == RepairProviderAmnezia {
+		return replace.Issued{}, amneziaOff()
+	}
 	if provider == RepairProviderAwg3 {
 		return s.awg3(ctx, routerID, option, false)
 	}
@@ -46,6 +57,9 @@ func (s repairSource) Issue(ctx context.Context, routerID int64, provider, optio
 }
 
 func (s repairSource) Fresh(ctx context.Context, routerID int64, provider, option string) (replace.Issued, error) {
+	if provider == RepairProviderAmnezia {
+		return replace.Issued{}, amneziaOff()
+	}
 	if provider == RepairProviderAwg3 {
 		return s.awg3(ctx, routerID, option, true)
 	}
@@ -59,6 +73,9 @@ func (s repairSource) Fresh(ctx context.Context, routerID int64, provider, optio
 // выпущенной уже стоит в другом месте) и одну на настройку -- это место в
 // подписке; человеку локация называется подписью кабинета.
 func (s repairSource) Options(ctx context.Context, routerID int64, provider string) ([]linkrepair.Option, error) {
+	if provider == RepairProviderAmnezia {
+		return nil, amneziaOff()
+	}
 	if provider == RepairProviderAwg3 {
 		return nil, nil
 	}
@@ -93,6 +110,9 @@ func (s repairSource) Options(ctx context.Context, routerID int64, provider stri
 // Предела нет (0) -- место есть. Кабинет не подключён или не ответил --
 // NeedHuman: «места нет» и «не знаем» одинаково не повод тратить попытку.
 func (s repairSource) HasRoom(ctx context.Context, routerID int64, provider string) (bool, error) {
+	if provider == RepairProviderAmnezia {
+		return false, amneziaOff()
+	}
 	if provider == RepairProviderAwg3 {
 		return true, nil
 	}

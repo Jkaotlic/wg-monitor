@@ -20,9 +20,11 @@ func autorepairEnv(t *testing.T) *cabinetEnv {
 	env := newCabinetEnv(t, func(d *Deps) {
 		d.LinkRepair = &linkrepair.Deps{Attempts: linkrepair.Attempts{KV: d.DB.KV()}}
 	})
+	// Кабинет «Amnezia Premium» отключён (v0.61.3) и источником не бывает;
+	// подключённый кабинет в этих тестах -- «HideMy.name».
 	env.cab.accounts = map[string]VPNAccount{
-		"amnezia": {Provider: "amnezia", Label: "Amnezia Premium", Connected: true,
-			Options: []VPNOption{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия", Issued: true}, {ID: "fi", Label: "Финляндия"}}},
+		"hidemyname": {Provider: "hidemyname", Label: "HideMy.name", Connected: true,
+			Options: []VPNOption{{ID: "nl", Label: "Нидерланды"}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия"}}},
 	}
 	env.awg3.issuable = []awg3panel.IssuablePanel{{ID: "main", Label: "Main (Амстердам)",
 		Ifaces: []awg3panel.Iface{{ID: "awg1", Title: "main"}, {ID: "awg2", Title: "reserve"}}}}
@@ -77,13 +79,12 @@ func TestAutorepair_GetDefaultsOff(t *testing.T) {
 	for _, s := range resp.Sources {
 		byProv[s.Provider] = s
 	}
-	am, ok := byProv["amnezia"]
-	if !ok || !am.OK || len(am.Options) != 2 || am.Options[0].ID != "nl" || am.Options[0].Label != "Нидерланды" {
-		t.Fatalf("подключённый кабинет обязан быть с вариантами: %+v", resp.Sources)
+	if _, ok := byProv["amnezia"]; ok {
+		t.Fatalf("«Amnezia Premium» отключён и источником не предлагается: %+v", resp.Sources)
 	}
 	hm, ok := byProv["hidemyname"]
-	if !ok || hm.OK || hm.Note == "" {
-		t.Fatalf("неподключённый кабинет -- ok=false с объяснением: %+v", hm)
+	if !ok || !hm.OK || len(hm.Options) != 3 || hm.Options[0].ID != "nl" || hm.Options[0].Label != "Нидерланды" {
+		t.Fatalf("подключённый кабинет обязан быть с вариантами: %+v", resp.Sources)
 	}
 	// Владелец не выдаёт с панели -- своего сервера в списке нет.
 	if _, ok := byProv["awg3"]; ok {
@@ -109,17 +110,26 @@ func TestAutorepair_GetDefaultsOff(t *testing.T) {
 			}
 		}
 	}
+
+	// Неподключённый кабинет -- ok=false с объяснением.
+	delete(env.cab.accounts, "hidemyname")
+	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", "")
+	for _, s := range decodeAutorepair(t, rec.Body.Bytes()).Sources {
+		if s.Provider == "hidemyname" && (s.OK || s.Note == "") {
+			t.Fatalf("неподключённый кабинет -- ok=false с объяснением: %+v", s)
+		}
+	}
 }
 
 func TestAutorepair_SuggestFromOrigin(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg12", "Дача")
-	if err := env.d.TunnelOrigins().Record(env.ownedID, "awg12", "Дача", "amnezia", "nl", time.Now(), 0); err != nil {
+	if err := env.d.TunnelOrigins().Record(env.ownedID, "awg12", "Дача", "hidemyname", "nl", time.Now(), 0); err != nil {
 		t.Fatal(err)
 	}
 	rec := env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", "")
 	resp := decodeAutorepair(t, rec.Body.Bytes())
-	if resp.Suggested == nil || resp.Suggested.Provider != "amnezia" || resp.Suggested.Option != "nl" ||
+	if resp.Suggested == nil || resp.Suggested.Provider != "hidemyname" || resp.Suggested.Option != "nl" ||
 		resp.Suggested.Why != "так он был выпущен" {
 		t.Fatalf("подсказка из происхождения: %+v", resp.Suggested)
 	}
@@ -146,30 +156,32 @@ func TestAutorepair_SuggestFromAwg3Name(t *testing.T) {
 	}
 }
 
-func TestAutorepair_SuggestFromAmneziaName(t *testing.T) {
+func TestAutorepair_SuggestFromCabinetName(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg14", "amnezia_de")
 	seedAutorepairTunnel(t, env, "awg15", "hidemy_a1b2c3")
+	// «Amnezia Premium» отключён (v0.61.3): по имени amnezia_ не подсказывается
+	// и при сохранённом ключе.
 	rec := env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg14/autorepair", "")
-	resp := decodeAutorepair(t, rec.Body.Bytes())
-	if resp.Suggested == nil || resp.Suggested.Provider != "amnezia" || resp.Suggested.Option != "de" {
+	if resp := decodeAutorepair(t, rec.Body.Bytes()); resp.Suggested != nil {
 		t.Fatalf("подсказка по имени amnezia_: %+v", resp.Suggested)
 	}
+	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg15/autorepair", "")
+	resp := decodeAutorepair(t, rec.Body.Bytes())
+	if resp.Suggested == nil || resp.Suggested.Provider != "hidemyname" || resp.Suggested.Option != "a1b2c3" {
+		t.Fatalf("подсказка по имени hidemy_: %+v", resp.Suggested)
+	}
 	// Кабинет HideMy.name не подключён -- подсказывать его нельзя.
+	delete(env.cab.accounts, "hidemyname")
 	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg15/autorepair", "")
 	if resp := decodeAutorepair(t, rec.Body.Bytes()); resp.Suggested != nil {
 		t.Fatalf("неподключённый кабинет в подсказке: %+v", resp.Suggested)
-	}
-	env.cab.accounts["hidemyname"] = VPNAccount{Provider: "hidemyname", Label: "HideMy.name", Connected: true}
-	rec = env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg15/autorepair", "")
-	resp = decodeAutorepair(t, rec.Body.Bytes())
-	if resp.Suggested == nil || resp.Suggested.Provider != "hidemyname" || resp.Suggested.Option != "a1b2c3" {
-		t.Fatalf("подсказка по имени hidemy_: %+v", resp.Suggested)
 	}
 }
 
 func TestAutorepair_PutRejectsUnconnectedSource(t *testing.T) {
 	env := autorepairEnv(t)
+	delete(env.cab.accounts, "hidemyname")
 	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
 		`{"enabled":true,"provider":"hidemyname","option":"a1b2c3"}`)
@@ -220,7 +232,7 @@ func TestAutorepair_PutEnableClearsBlock(t *testing.T) {
 		t.Fatal("после провала автопочинка обязана стоять")
 	}
 	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
-		`{"enabled":true,"provider":"amnezia","option":"nl","allow_relocate":true}`)
+		`{"enabled":true,"provider":"hidemyname","option":"nl","allow_relocate":true}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
 	}
@@ -238,7 +250,7 @@ func TestAutorepair_PutEnableClearsBlock(t *testing.T) {
 		t.Fatalf("выключение: код %d: %s", rec.Code, rec.Body.String())
 	}
 	s, ok, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12")
-	if !ok || s.Enabled || s.Provider != "amnezia" || s.Option != "nl" {
+	if !ok || s.Enabled || s.Provider != "hidemyname" || s.Option != "nl" {
 		t.Fatalf("выключение не трогает источник: %+v", s)
 	}
 }
@@ -319,7 +331,7 @@ func TestAutorepair_PutStoresTunnelName(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
-		`{"enabled":true,"provider":"amnezia","option":"nl"}`)
+		`{"enabled":true,"provider":"hidemyname","option":"nl"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
 	}
@@ -339,7 +351,7 @@ func TestAutorepair_RenamePendingUntilConfirmed(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg12", "Дача")
 	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
-		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Старый", Enabled: true, Provider: "amnezia", Option: "nl",
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Старый", Enabled: true, Provider: "hidemyname", Option: "nl",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +376,7 @@ func TestAutorepair_RenamePendingUntilConfirmed(t *testing.T) {
 		t.Fatalf("латиница в причине: %v", words)
 	}
 
-	rec = env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"nl"}`)
+	rec = env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"hidemyname","option":"nl"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
 	}
@@ -381,55 +393,6 @@ func TestAutorepair_RenamePendingUntilConfirmed(t *testing.T) {
 	}
 	if list.Tunnels["awg12"] != "on" || list.Reasons["awg12"] != "" {
 		t.Fatalf("список после подтверждения: %+v", list)
-	}
-}
-
-// «Amnezia Premium»: источник автопочинки -- только уже выпущенная страна.
-// Это конфиг самого VPN-туннеля; невыпущенная страна при «выпустить заново»
-// заняла бы новое место в подписке.
-func TestAutorepair_AmneziaOnlyIssuedCountries(t *testing.T) {
-	env := autorepairEnv(t)
-	seedAutorepairTunnel(t, env, "awg12", "amnezia_fi")
-	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
-	resp := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
-	for _, src := range resp.Sources {
-		if src.Provider != "amnezia" {
-			continue
-		}
-		if len(src.Options) != 2 || src.Options[0].ID != "nl" || src.Options[1].ID != "de" {
-			t.Fatalf("варианты «Amnezia Premium»: %+v", src.Options)
-		}
-	}
-	if resp.Suggested != nil {
-		t.Fatalf("подсказана невыпущенная страна по имени: %+v", resp.Suggested)
-	}
-	if err := env.d.TunnelOrigins().Record(env.ownedID, "awg12", "amnezia_fi", "amnezia", "fi", time.Now(), 0); err != nil {
-		t.Fatal(err)
-	}
-	resp = decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
-	if resp.Suggested != nil && resp.Suggested.Option == "fi" {
-		t.Fatalf("подсказана невыпущенная страна из происхождения: %+v", resp.Suggested)
-	}
-
-	rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"fi"}`)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "эта страна ещё не выпущена в кабинете — выберите выпущенную") {
-		t.Fatalf("PUT невыпущенной страны: код %d: %s", rec.Code, rec.Body.String())
-	}
-	if _, ok, _ := env.d.TunnelRepairSettings().Get(env.ownedID, "awg12"); ok {
-		t.Fatal("настройка с невыпущенной страной записана")
-	}
-	if rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"provider":"amnezia","option":"nl"}`); rec.Code != http.StatusOK {
-		t.Fatalf("PUT выпущенной страны: код %d: %s", rec.Code, rec.Body.String())
-	}
-
-	// Ни одной выпущенной -- источник недоступен, с объяснением.
-	env.cab.accounts["amnezia"] = VPNAccount{Provider: "amnezia", Label: "Amnezia Premium", Connected: true,
-		Options: []VPNOption{{ID: "fi", Label: "Финляндия"}}}
-	resp = decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes())
-	for _, src := range resp.Sources {
-		if src.Provider == "amnezia" && (src.OK || len(src.Options) != 0 || src.Note == "") {
-			t.Fatalf("кабинет без выпущенных стран: %+v", src)
-		}
 	}
 }
 
@@ -562,13 +525,13 @@ func TestAutorepair_GetOptionUnconfirmed(t *testing.T) {
 func TestAutorepair_SealedCabinetSpeaksAboutKey(t *testing.T) {
 	env := autorepairEnv(t)
 	seedAutorepairTunnel(t, env, "awg12", "Дача")
-	env.cab.accounts["amnezia"] = VPNAccount{Provider: "amnezia", Label: "Amnezia Premium",
+	env.cab.accounts["hidemyname"] = VPNAccount{Provider: "hidemyname", Label: "HideMy.name",
 		KeyProblem: "cabinet_key_missing", Note: "что-то своё"}
 	rec := env.do(t, cabOwner, http.MethodGet, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", "")
 	resp := decodeAutorepair(t, rec.Body.Bytes())
 	var found bool
 	for _, s := range resp.Sources {
-		if s.Provider != "amnezia" {
+		if s.Provider != "hidemyname" {
 			continue
 		}
 		found = true
@@ -577,10 +540,10 @@ func TestAutorepair_SealedCabinetSpeaksAboutKey(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("источника «Amnezia Premium» нет в ответе")
+		t.Fatal("источника «HideMy.name» нет в ответе")
 	}
 	rec = env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair",
-		`{"enabled":true,"provider":"amnezia","option":"nl"}`)
+		`{"enabled":true,"provider":"hidemyname","option":"nl"}`)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "cabinet_key_missing") {
 		t.Fatalf("код %d, хотим 503 cabinet_key_missing: %s", rec.Code, rec.Body.String())
 	}
