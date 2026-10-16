@@ -215,3 +215,17 @@ func TestMiniappVPNIssueCabinetFailedHidesCabinetText(t *testing.T) {
 		t.Fatalf("пустой конфиг: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// HideMy.name не принял код -- отказ про код, а не «кабинет не ответил».
+func TestMiniappVPNIssueCodeRejected(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.cab.err = ErrCabinetCodeRejected
+	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"hidemyname","option_id":"abc"}`)
+	code, msg, _ := cabinetErrorBody(t, rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "code_rejected" || !strings.Contains(msg, "код") || strings.Contains(msg, "повторите позже") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if len(env.sink.enqueued) != 0 {
+		t.Fatalf("команда ушла агенту: %+v", env.sink.enqueued)
+	}
+}

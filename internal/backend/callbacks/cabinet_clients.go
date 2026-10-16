@@ -59,6 +59,9 @@ func (r *Router) hideMyServerByID(ctx context.Context, accessCode, serverID stri
 func (r *Router) downloadHideMyConfig(ctx context.Context, accessCode, serverIP string) ([]byte, error) {
 	client := hidemy.New(r.cfg.HideMyBaseURL)
 	conf, err := client.DownloadAmneziaWG20Config(ctx, accessCode, serverIP)
+	if errors.Is(err, hidemy.ErrCodeRejected) {
+		return nil, backend.ErrCabinetCodeRejected
+	}
 	if err != nil {
 		return nil, err
 	}

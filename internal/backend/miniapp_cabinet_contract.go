@@ -23,7 +23,10 @@ var (
 	// ErrVPNSlotBusy -- выпуск новой страны Amnezia при занятых слотах
 	// подписки. Текст читает человек в шаге мастера замены (replace.go:251),
 	// поэтому он по-русски и говорит, что делать.
-	ErrVPNSlotBusy = errors.New("все слоты подписки Amnezia Premium заняты — отзовите страну, которая больше не нужна")
+	// ErrCabinetCodeRejected -- кабинет не принял сохранённый код доступа
+	// (HideMy.name: неверный, просрочен или куплен не для VPN).
+	ErrCabinetCodeRejected = errors.New("кабинет не принял код доступа")
+	ErrVPNSlotBusy         = errors.New("все слоты подписки Amnezia Premium заняты — отзовите страну, которая больше не нужна")
 )
 
 // CabinetRejectedError -- кабинет не принял ключ или код при добавлении.

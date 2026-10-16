@@ -66,6 +66,10 @@ func miniappSendConfHandler(d Deps) http.HandlerFunc {
 				writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 				return
 			}
+			if errors.Is(err, ErrCabinetCodeRejected) {
+				writeMiniappCabinetError(w, http.StatusUnprocessableEntity, "code_rejected")
+				return
+			}
 			if err != nil || len(issued.Conf) == 0 {
 				miniappCabinetLogger(d).Warn("файл в личку: кабинет не выдал конфиг", "router_id", u.ID, "provider", provider, "option", option, "err", err)
 				writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")

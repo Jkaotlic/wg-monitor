@@ -75,6 +75,7 @@ func TestMiniappSendConfDMUnreachableAndFailures(t *testing.T) {
 	}{
 		{"занятый слот", `{"provider":"amnezia","option_id":"fi"}`, "slot_busy", http.StatusConflict, ErrVPNSlotBusy},
 		{"кабинет не ответил", `{"provider":"amnezia","option_id":"fi"}`, "cabinet_failed", http.StatusBadGateway, errors.New("amnezia login: HTTP 502")},
+		{"код не принят", `{"provider":"hidemyname","option_id":"abc"}`, "code_rejected", http.StatusUnprocessableEntity, ErrCabinetCodeRejected},
 		{"неизвестный провайдер", `{"provider":"someone","option_id":"x"}`, "unknown_provider", http.StatusBadRequest, nil},
 		{"нет выбора", `{"provider":"amnezia"}`, "missing_option", http.StatusBadRequest, nil},
 		{"битый json", `{"provider":`, "bad_json", http.StatusBadRequest, nil},

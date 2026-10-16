@@ -200,6 +200,10 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 			return
 		}
+		if errors.Is(err, ErrCabinetCodeRejected) {
+			writeMiniappCabinetError(w, http.StatusUnprocessableEntity, "code_rejected")
+			return
+		}
 		if writeMiniappCabinetKeyError(d, w, err) {
 			return
 		}

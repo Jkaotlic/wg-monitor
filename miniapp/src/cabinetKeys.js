@@ -208,7 +208,7 @@ export function issueArgs(pending) {
 // по-русски (таблица miniappCabinetTexts). Общие отказы (not_found, internal,
 // request_too_large…) приходят из старых обработчиков по-английски --
 // им своя фраза.
-const ISSUE_RU_CODES = new Set(['slot_busy', 'cabinet_failed', 'dm_unreachable', 'missing_instance', 'invalid_field'])
+const ISSUE_RU_CODES = new Set(['slot_busy', 'cabinet_failed', 'code_rejected', 'dm_unreachable', 'missing_instance', 'invalid_field'])
 
 function issueCodeSpeaksRussian(code) {
   return typeof code === 'string' && (ISSUE_RU_CODES.has(code) || code.startsWith('selfhosted_') || code.startsWith('instance_'))

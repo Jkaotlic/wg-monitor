@@ -209,6 +209,11 @@ describe('выпуск', () => {
     })
   })
 
+  it('code_rejected: фраза сервера про код HideMy.name, без «повторите»', () => {
+    const msg = 'HideMy.name не принял код доступа: он неверный, просрочен или куплен не для VPN — проверьте код в кабинете HideMy.name'
+    expect(issueFailure(new ApiError(422, 'code_rejected', 'x', msg), { revoke: true }, 'hidemyname')).toEqual({ text: msg, offerRevoke: false })
+  })
+
   it('прочие отказы: фраза сервера или общая', () => {
     expect(issueFailure(new ApiError(502, 'cabinet_failed', 'x', 'Кабинет не ответил — повторите позже'), { revoke: true })).toEqual({ text: 'Кабинет не ответил — повторите позже', offerRevoke: false })
     expect(issueFailure(new Error('/routers/7/vpn/issue failed: 502'), {})).toEqual({ text: 'Не получилось выпустить конфиг. Попробуйте ещё раз.', offerRevoke: false })

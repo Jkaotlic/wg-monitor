@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 	"io"
 	"log/slog"
 	"net/http"
@@ -330,5 +331,27 @@ func TestIssueConfigAmneziaCabinetLimitIsSlotBusy(t *testing.T) {
 	}
 	if _, err := r.IssueConfig(context.Background(), 7, providerAmnezia, "nl"); !errors.Is(err, backend.ErrVPNSlotBusy) {
 		t.Fatalf("409 кабинета: %v, want ErrVPNSlotBusy", err)
+	}
+}
+
+// HideMy.name не принял код (страница /vpn/fail/): человеку -- что дело в
+// коде, а не «кабинет не ответил, повторите позже».
+func TestIssueConfigHideMyRejectedCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/serverlist.php":
+			_, _ = w.Write([]byte(`{"21":{"name_en":"Netherlands, Amsterdam DEMO","services":{"wg":{"ip":"198.51.100.21","port":38690}}}}`))
+		case "/api/vpn_get_config_wg.php":
+			_, _ = w.Write([]byte(`<html><head><meta http-equiv="refresh" content="0; url=/vpn/fail/"></head><body>Your code was not found or you have purchased a non-VPN code</body></html>`))
+		}
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{HideMyBaseURL: srv.URL, HideMySecretsPath: filepath.Join(t.TempDir(), "hidemyname.json")}}
+	if _, err := r.addHideMyCodeLabeled(7, "12345678901234", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.IssueConfig(context.Background(), 7, providerHideMy, hidemy.ServerID("198.51.100.21"))
+	if !errors.Is(err, backend.ErrCabinetCodeRejected) {
+		t.Fatalf("err = %v, want ErrCabinetCodeRejected", err)
 	}
 }
