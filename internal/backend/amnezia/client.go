@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -106,8 +107,17 @@ func (c *Client) AccountInfo(ctx context.Context) (*AccountInfo, error) {
 	return &env.Data, nil
 }
 
+// declaredCountry -- ответ на вопрос кабинета «где вы находитесь» (ru --
+// Россия, ag -- другие страны). С 10.2026 поле обязательно: без него
+// download-config отвечает HTTP 400 Bad request на любую страну. Роутеры
+// сервиса стоят в России.
+const declaredCountry = "ru"
+
 func (c *Client) DownloadConfig(ctx context.Context, countryCode string) ([]byte, error) {
-	body, err := json.Marshal(map[string]string{"countryCode": strings.ToLower(strings.TrimSpace(countryCode))})
+	body, err := json.Marshal(map[string]string{
+		"countryCode":         strings.ToLower(strings.TrimSpace(countryCode)),
+		"declaredCountryCode": declaredCountry,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +129,9 @@ func (c *Client) DownloadConfig(ctx context.Context, countryCode string) ([]byte
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("amnezia download-config read: %w", err)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return nil, fmt.Errorf("%w: HTTP 409: %s", ErrConfigLimit, snippet(rb))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("amnezia download-config: HTTP %d: %s", resp.StatusCode, snippet(rb))
@@ -220,3 +233,6 @@ func snippet(b []byte) string {
 	}
 	return s
 }
+
+// ErrConfigLimit -- кабинет отказал по лимиту конфигов подписки (HTTP 409).
+var ErrConfigLimit = errors.New("amnezia: subscription config limit")

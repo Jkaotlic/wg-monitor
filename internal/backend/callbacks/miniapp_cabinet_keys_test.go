@@ -308,3 +308,27 @@ func TestAmneziaAccountListsIssuedCountryMissingFromAvailable(t *testing.T) {
 		t.Fatalf("gateway-конфиг -- не страна подписки: %+v", acc.Options)
 	}
 }
+
+// Кабинет сам отказал по лимиту (HTTP 409, своя проверка счёта мест). Это
+// «места заняты» -- человеку та же фраза, а не «кабинет не ответил».
+func TestIssueConfigAmneziaCabinetLimitIsSlotBusy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"active_device_count":6,"max_device_count":7,"available_countries":[{"server_country_code":"nl"}],"issued_configs":[]}}`))
+		case "/api/download-config":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"Conflict"}`))
+		}
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{AmneziaBaseURL: srv.URL, AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
+	if _, err := r.addAmneziaKeyLabeled(7, "vpn://slot-key-0002", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.IssueConfig(context.Background(), 7, providerAmnezia, "nl"); !errors.Is(err, backend.ErrVPNSlotBusy) {
+		t.Fatalf("409 кабинета: %v, want ErrVPNSlotBusy", err)
+	}
+}

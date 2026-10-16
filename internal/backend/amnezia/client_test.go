@@ -2,6 +2,7 @@ package amnezia
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -77,7 +78,9 @@ func TestDownloadAndRevokePayloads(t *testing.T) {
 	if !strings.Contains(string(data), "PrivateKey") {
 		t.Fatalf("download body = %q", string(data))
 	}
-	if gotDownloadBody != `{"countryCode":"de"}` {
+	// С 10.2026 кабинет требует declaredCountryCode («где вы»: ru | ag) -- без
+	// него HTTP 400 Bad request на любую страну (puzirek 14-16.10).
+	if gotDownloadBody != `{"countryCode":"de","declaredCountryCode":"ru"}` {
 		t.Fatalf("download payload = %q", gotDownloadBody)
 	}
 	if err := c.RevokeCountryConfig(context.Background(), "DE"); err != nil {
@@ -100,5 +103,19 @@ func TestResolveMirrorTarget(t *testing.T) {
 	}
 	if got != "https://m-example.run.app" {
 		t.Fatalf("target = %q", got)
+	}
+}
+
+// 409 -- кабинет так говорит «лимит конфигов подписки» (errors.configLimit в
+// его веб-интерфейсе); это не общий сбой.
+func TestDownloadConfigLimitIsTyped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"Conflict","errorCode":"CONFIG_LIMIT"}`))
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL).DownloadConfig(context.Background(), "nl")
+	if !errors.Is(err, ErrConfigLimit) {
+		t.Fatalf("err = %v, want ErrConfigLimit", err)
 	}
 }
