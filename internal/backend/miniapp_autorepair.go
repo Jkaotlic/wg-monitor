@@ -575,6 +575,11 @@ func miniappAutorepairListHandler(d Deps) http.HandlerFunc {
 			}
 			state := autorepairStateOn
 			switch {
+			case miniappAutorepairBlocked(d, u.Nickname, s.TunnelID) != "" && RepairSourceOff(s.Provider) != "":
+				// Стоп попыток (потолок или провал до обновления) главнее
+				// выключенного источника: автопочинка стоит вовсе, и «только
+				// перезапуск» был бы неправдой.
+				state = autorepairStateBlocked
 			case RepairSourceOff(s.Provider) != "":
 				// Источник выключен -- главнее переименования: подтверждать
 				// настройку, выпуск по которой всё равно не идёт, незачем.

@@ -263,15 +263,19 @@ func TestAutorepair_ListStates(t *testing.T) {
 		{UserID: env.ownedID, TunnelID: "awg13", Enabled: true},
 		{UserID: env.ownedID, TunnelID: "awg14", Enabled: true, Provider: "hidemyname", Option: "de"},
 		{UserID: env.ownedID, TunnelID: "awg15", Enabled: false, Provider: "hidemyname", Option: "de"},
-		// Источник выключен (v0.61.3) -- своя метка, главнее стопа попыток.
+		// Источник выключен (v0.61.3) -- своя метка; но стоп попыток главнее:
+		// автопочинка тогда стоит вовсе, и «только перезапуск» был бы неправдой.
 		{UserID: env.ownedID, TunnelID: "awg16", Enabled: true, Provider: "amnezia", Option: "nl"},
+		{UserID: env.ownedID, TunnelID: "awg17", Enabled: true, Provider: "amnezia", Option: "nl"},
 	} {
 		if err := repo.Put(s); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := (linkrepair.Attempts{KV: env.d.KV()}).Record(env.nickname(t), "tunnel_awg14", false); err != nil {
-		t.Fatal(err)
+	for _, tid := range []string{"awg14", "awg17"} {
+		if err := (linkrepair.Attempts{KV: env.d.KV()}).Record(env.nickname(t), "tunnel_"+tid, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rec := env.do(t, cabOperator, http.MethodGet, "/v1/miniapp/routers/{id}/autorepair", "")
 	if rec.Code != http.StatusOK {
@@ -283,7 +287,7 @@ func TestAutorepair_ListStates(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"awg12": "on", "awg13": "limited", "awg14": "blocked", "awg16": "source_off"}
+	want := map[string]string{"awg12": "on", "awg13": "limited", "awg14": "blocked", "awg16": "source_off", "awg17": "blocked"}
 	if len(resp.Tunnels) != len(want) {
 		t.Fatalf("метки: %v, хотим %v", resp.Tunnels, want)
 	}

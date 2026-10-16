@@ -1026,8 +1026,8 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 // whyAttemptUnsaved -- автозапуск не начат: попытка не записалась в историю.
 const whyAttemptUnsaved = "не смог записать попытку в историю"
 
-// finishAttempt -- итог автозапуска в историю попыток. Не записался --
-// оператору в лог: стоп «нужен человек» тогда не поставлен.
+// sourceOff -- что сделать человеку, если источник настройки выключен
+// целиком (Deps.SourceOff); "" -- работает или источника нет.
 func (d Deps) sourceOff(provider string) string {
 	if d.SourceOff == nil || provider == "" {
 		return ""
@@ -1051,6 +1051,8 @@ func (d Deps) finishSourceOff(ctx context.Context, jobID string, req StartReq, t
 	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), action)
 }
 
+// finishAttempt -- итог автозапуска в историю попыток. Не записался --
+// оператору в лог: стоп «нужен человек» тогда не поставлен.
 func (d Deps) finishAttempt(req StartReq, ok bool) {
 	if err := d.Attempts.Finish(req.Nickname, req.CheckName, ok); err != nil {
 		d.logWarn("linkrepair: итог попытки не записался", "nickname", req.Nickname, "check", req.CheckName, "ok", ok, "err", err)
