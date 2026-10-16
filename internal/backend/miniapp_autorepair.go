@@ -32,6 +32,10 @@ type miniappAutorepairResp struct {
 	// переименовали: перезапуск идёт, а выпуск конфига ждёт, пока человек
 	// подтвердит автопочинку (PUT включения перепишет имя). Пусто -- имя то же.
 	RenamePending string `json:"rename_pending,omitempty"`
+	// SourceOff -- источник настройки выключен целиком (v0.61.3: «Amnezia
+	// Premium»): что сделать человеку; автопочинка только перезапускает,
+	// конфиг не выпускает. Пусто -- источник работает.
+	SourceOff string `json:"source_off,omitempty"`
 	// RelocateSpent -- страна «Amnezia Premium», которую автопочинка уже
 	// выпустила при смене локации (одна на настройку); "" -- не выпускала.
 	RelocateSpent string `json:"relocate_spent"`
@@ -79,12 +83,15 @@ const (
 	autorepairStateOn      = "on"
 	autorepairStateLimited = "limited"
 	autorepairStateBlocked = "blocked"
+	// autorepairStateSourceOff -- источник настройки выключен целиком
+	// (v0.61.3: «Amnezia Premium»): только перезапуск, нужен другой источник.
+	autorepairStateSourceOff = "source_off"
 )
 
 // miniappAutorepairCabinets -- кабинеты-источники и их имена на случай, если
-// кабинет не ответил и подписи от него нет.
+// кабинет не ответил и подписи от него нет. «Amnezia Premium» здесь нет:
+// кабинет отключён (v0.61.3), выпускать из него автопочинке нечем.
 var miniappAutorepairCabinets = []struct{ provider, label string }{
-	{RepairProviderAmnezia, "Amnezia Premium"},
 	{RepairProviderHideMy, "HideMy.name"},
 }
 
@@ -200,19 +207,9 @@ func miniappAutorepairSources(ctx context.Context, d Deps, tg, routerID int64, p
 					src.Label = l
 				}
 				for _, o := range acc.Options {
-					// «Amnezia Premium»: только выпущенные страны -- это конфиг
-					// самого VPN-туннеля. Невыпущенная при «выпустить заново»
-					// заняла бы новое место в подписке.
-					if c.provider == RepairProviderAmnezia && !o.Issued {
-						continue
-					}
 					if id := strings.TrimSpace(o.ID); id != "" {
 						src.Options = append(src.Options, miniappAutorepairOpt{ID: id, Label: o.Label})
 					}
-				}
-				if c.provider == RepairProviderAmnezia && len(src.Options) == 0 {
-					src.OK = false
-					src.Note = "в кабинете нет выпущенных стран — выпустите конфиг во вкладке «Управление»"
 				}
 			}
 		}
@@ -345,6 +342,7 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 	if found {
 		resp.Enabled, resp.Provider, resp.Option, resp.AllowRelocate = s.Enabled, s.Provider, s.Option, s.AllowRelocate
 		resp.RelocateSpent = s.RelocateSpent
+		resp.SourceOff = RepairSourceOff(s.Provider)
 		// Вариант своего сервера (панель и интерфейс) -- только тому, кому
 		// с этой панели разрешена выдача: остальным -- что источник «свой
 		// сервер», без подробностей чужой панели.
@@ -509,6 +507,10 @@ func miniappAutorepairCheckSource(ctx context.Context, d Deps, w http.ResponseWr
 	switch req.Provider {
 	case "":
 		return true
+	case RepairProviderAmnezia:
+		// Кабинет отключён (v0.61.3): с ним автопочинка не включается.
+		miniappAmneziaOff(w, req.Provider, nil)
+		return false
 	case RepairProviderAwg3:
 		panel, iface, ok := strings.Cut(req.Option, "/")
 		panel, iface = strings.ToLower(strings.TrimSpace(panel)), strings.TrimSpace(iface)
@@ -538,20 +540,6 @@ func miniappAutorepairCheckSource(ctx context.Context, d Deps, w http.ResponseWr
 		if err != nil || !acc.Connected {
 			writeJSONError(w, http.StatusConflict, "source_not_connected", "кабинет не подключён")
 			return false
-		}
-		// «Amnezia Premium»: источник -- только выпущенная страна, иначе уже
-		// ступень «выпустить заново» займёт новое место в подписке.
-		if req.Provider == RepairProviderAmnezia {
-			issued := false
-			for _, o := range acc.Options {
-				if strings.TrimSpace(o.ID) == req.Option && o.Issued {
-					issued = true
-				}
-			}
-			if !issued {
-				writeJSONError(w, http.StatusConflict, "option_not_issued", "эта страна ещё не выпущена в кабинете — выберите выпущенную")
-				return false
-			}
 		}
 		return true
 	}
@@ -587,6 +575,15 @@ func miniappAutorepairListHandler(d Deps) http.HandlerFunc {
 			}
 			state := autorepairStateOn
 			switch {
+			case miniappAutorepairBlocked(d, u.Nickname, s.TunnelID) != "" && RepairSourceOff(s.Provider) != "":
+				// Стоп попыток (потолок или провал до обновления) главнее
+				// выключенного источника: автопочинка стоит вовсе, и «только
+				// перезапуск» был бы неправдой.
+				state = autorepairStateBlocked
+			case RepairSourceOff(s.Provider) != "":
+				// Источник выключен -- главнее переименования: подтверждать
+				// настройку, выпуск по которой всё равно не идёт, незачем.
+				state = autorepairStateSourceOff
 			case miniappAutorepairRenamed(s.TunnelName, names[miniappTunnelPrefix+s.TunnelID]):
 				state = autorepairStateBlocked
 				resp.Reasons[s.TunnelID] = miniappAutorepairRenameReason

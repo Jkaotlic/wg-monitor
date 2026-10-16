@@ -268,6 +268,7 @@ func main() {
 		SaveOption:      backend.LinkRepairSaveOption(d, logger.With("component", "linkrepair")),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, logger.With("component", "linkrepair")),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		SourceOff:       backend.RepairSourceOff,
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        cmdQueue,
 		Report:          repairs,

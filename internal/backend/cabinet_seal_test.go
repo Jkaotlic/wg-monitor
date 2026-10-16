@@ -191,7 +191,7 @@ func TestMiniappCabinetStoreKeyErrorsSpeakWords(t *testing.T) {
 
 	env = newCabinetEnv(t)
 	env.keys.addErr = wrong
-	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"vpn://seal-key-0001"}`)
+	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/hidemy/codes", `{"access_code":"123456789012345"}`)
 	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusServiceUnavailable || code != "cabinet_key_wrong" || !strings.Contains(msg, "не тот") {
 		t.Fatalf("добавление с чужим ключом: %d %s", rec.Code, rec.Body.String())
 	}

@@ -336,6 +336,50 @@ describe('кабинет роутера: вкладки и ключи', () => {
   })
 })
 
+describe('кабинет роутера: Amnezia отключён (v0.61.3)', () => {
+  const NOTE = 'Выпуск через кабинет Amnezia Premium отключён: автор awg-manager предупреждает, что получение конфигов через кабинет может заблокировать подписку. Конфиги берите в приложении или личном кабинете Amnezia.'
+  beforeEach(() => {
+    mocks.accounts[0] = { provider: 'amnezia', label: 'Amnezia Premium', connected: false, disabled: true, note: NOTE }
+  })
+
+  it('владелец: причина вместо «добавьте ключ», у ключей только «Удалить», стран нет', async () => {
+    const { root } = await mount()
+    expect(root.textContent).toContain(NOTE)
+    expect(root.textContent).not.toContain('Ключ кабинета Amnezia Premium ещё не добавлен')
+    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    expect(buttons(root, 'Сделать активным')).toHaveLength(0)
+    expect(buttons(root, 'Удалить')).toHaveLength(2)
+    expect(buttons(root, 'Отозвать')).toHaveLength(0)
+    expect(root.querySelector('.cabinet-options')).toBe(null)
+    expect(root.textContent.split(NOTE).length - 1).toBe(1)
+    cleanup(root)
+  })
+
+  it('оператор: ни одной кнопки у ключей', async () => {
+    mocks.role = 'operator'
+    const { root } = await mount()
+    expect(root.querySelectorAll('.cabinet-secret button').length).toBe(0)
+    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    cleanup(root)
+  })
+
+  it('ключей нет -- только причина', async () => {
+    mocks.cabinets.amnezia.keys = []
+    const { root } = await mount()
+    expect(root.textContent).toContain(NOTE)
+    expect(root.textContent).not.toContain('ещё не добавлен')
+    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    cleanup(root)
+  })
+
+  it('HideMy не тронут: «Добавить код» на месте', async () => {
+    const { root } = await mount()
+    await tab(root, 'HideMy')
+    expect(button(root, 'Добавить код')).toBeTruthy()
+    cleanup(root)
+  })
+})
+
 describe('кабинет роутера: страны и отзыв', () => {
   it('отозвать выпущенную страну -- набор имени роутера', async () => {
     const { root, sheets } = await mount()

@@ -197,8 +197,19 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           <CabinetSelfhosted instances={instances} error={instancesError} onPick={pick} />
         ) : (
           <>
-            <CabinetSecrets key={current} routerID={routerID} kind={current} rows={rows} perms={perms} openSheet={openSheet} onChanged={changed} />
-            {rows.length > 0 && (
+            <CabinetSecrets
+              key={current}
+              routerID={routerID}
+              kind={current}
+              rows={rows}
+              perms={perms}
+              openSheet={openSheet}
+              onChanged={changed}
+              disabledNote={accountFor(current)?.disabled === true ? accountFor(current)?.note || CABINET_TEXTS.disabled : ''}
+            />
+            {/* Кабинет выключен целиком (v0.61.3: «Amnezia Premium») -- выпускать
+                нечего, причина уже сказана над ключами. */}
+            {rows.length > 0 && accountFor(current)?.disabled !== true && (
               <CabinetOptions
                 routerID={routerID}
                 routerName={routerName}

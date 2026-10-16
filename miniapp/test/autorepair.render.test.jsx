@@ -240,3 +240,45 @@ describe('автопочинка: метка во вкладке', () => {
     root.remove()
   })
 })
+
+// v0.61.3: сохранённая настройка с выключенным источником («Amnezia Premium»)
+// -- не «включена», а «только перезапуск» с причиной сервера; кнопка
+// открывает тот же лист, где выбирается другой источник.
+const SOURCE_OFF = 'выпуск через кабинет «Amnezia Premium» отключён: автор «awg-manager» предупреждает, что получение конфигов через кабинет может заблокировать подписку — конфиг берите в приложении или личном кабинете «Amnezia» и выберите для автопочинки другой источник'
+
+describe('автопочинка: источник выключен', () => {
+  it('строка «не работает», причина, кнопка «Выбрать другой источник» -- лист с другим источником', async () => {
+    mocks.get = {
+      ...BASE, enabled: true, provider: 'amnezia', option: 'nl', source_off: SOURCE_OFF,
+      sources: [{ provider: 'hidemyname', label: 'HideMy.name', ok: true, options: [{ id: 'srv', label: 'Нидерланды' }] }],
+      suggested: null,
+    }
+    const { root, sheets } = await mount()
+    expect(root.textContent).toContain('только перезапуск — источник отключён')
+    expect(root.textContent).not.toContain('включена · из')
+    expect(root.textContent).toContain('Выпуск через кабинет «Amnezia Premium» отключён')
+    const pick = root.querySelector('.tunnel-autorepair-source')
+    expect(pick.textContent).toBe('Выбрать другой источник')
+    expect(root.querySelector('.tunnel-autorepair').textContent).toBe('Выключить автопочинку')
+    await act(async () => pick.click())
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].title).toBe('Другой источник для автопочинки «vpn-nl»')
+    expect(sheets[0].buttonLabel).toBe('Сохранить')
+    await sheets[0].perform('', { source: 'hidemyname|srv', allow_relocate: false })
+    expect(mocks.put).toEqual([[4, 'awg12', { enabled: true, provider: 'hidemyname', option: 'srv', allow_relocate: false }]])
+    render(null, root)
+    root.remove()
+  })
+
+  it('метка во вкладке: только перезапуск, а не «нужен человек»', async () => {
+    mocks.list = { awg12: 'source_off' }
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => render(<TunnelsTab routerID={4} asleep={false} openSheet={() => {}} />, root))
+    await flush()
+    expect(root.textContent).toContain('Автопочинка: только перезапуск — источник отключён')
+    expect(root.textContent).not.toContain('нужен человек')
+    render(null, root)
+    root.remove()
+  })
+})

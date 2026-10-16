@@ -253,6 +253,7 @@ func main() {
 		SaveOption:      backend.LinkRepairSaveOption(d, nil),
 		SaveUnconfirmed: backend.LinkRepairSaveUnconfirmed(d, nil),
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
+		SourceOff:       backend.RepairSourceOff,
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		Commands:        sink,
 		Report:          repairs,

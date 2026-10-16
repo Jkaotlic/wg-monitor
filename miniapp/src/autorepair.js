@@ -29,6 +29,8 @@ const quote = (s) => {
 export function autorepairBadge(state, reason = '') {
   if (state === 'on') return { tone: 'ok', text: 'Автопочинка' }
   if (state === 'limited') return { tone: 'neutral', text: 'Автопочинка: только перезапуск' }
+  // Источник настройки выключен целиком (v0.61.3: «Amnezia Premium»).
+  if (state === 'source_off') return { tone: 'warn', text: 'Автопочинка: только перезапуск — источник отключён' }
   if (state === 'blocked' && reason) return { tone: 'warn', text: 'Автопочинка ждёт подтверждения' }
   if (state === 'blocked') return { tone: 'warn', text: 'Автопочинка стоит — нужен человек' }
   return null
@@ -54,7 +56,16 @@ export function autorepairRow(resp) {
   let hint = 'Включите, и если VPN-туннель упадёт, я починю его сам.'
   if (r.enabled) {
     hint = 'Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.'
-    if (r.rename_pending) {
+    // Источник выключен целиком (v0.61.3): перезапуск идёт, конфиг не
+    // выпускается -- нужен другой источник. Фраза сервера -- с именами в
+    // «ёлочках»; пустая -- как будто её нет.
+    const off = String(r.source_off ?? '').trim()
+    if (off) hint = `${off[0].toUpperCase()}${off.slice(1)}.`
+    // Стоп (потолок попыток, провал) главнее выключенного источника:
+    // автопочинка стоит вовсе, и «только перезапуск» был бы неправдой.
+    if (off && r.blocked) value = `стоит: ${r.blocked}`
+    else if (off) value = 'только перезапуск — источник отключён'
+    else if (r.rename_pending) {
       // Переименовали после включения: перезапуск идёт, выпуск ждёт человека.
       value = 'ждёт подтверждения'
       hint = `VPN-туннель переименован (был ${quote(r.rename_pending)}): пока вы не подтвердите автопочинку, я только перезапускаю его, конфиг не выпускаю.`
@@ -164,7 +175,11 @@ export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve 
   }
   return {
     // Переименованный VPN-туннель: тот же лист, но это подтверждение.
-    title: resp?.rename_pending ? `Подтвердить автопочинку «${tunnelName}»?` : `Включить автопочинку «${tunnelName}»?`,
+    title: resp?.enabled && resp?.source_off
+      ? `Другой источник для автопочинки «${tunnelName}»`
+      : resp?.rename_pending
+        ? `Подтвердить автопочинку «${tunnelName}»?`
+        : `Включить автопочинку «${tunnelName}»?`,
     sections: [
       { h: 'Что будет делать', text: what },
       // Цена своя у каждого источника, а источник человек меняет в поле:

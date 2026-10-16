@@ -13,13 +13,13 @@ import (
 // Ключи и коды кабинетов для мини-аппа (backend.VPNCabinetKeys). Раньше их
 // принимал бот текстом в теме роутера; теперь -- только полем приложения по
 // HTTPS (цикл 3, решение 2). Проверка перед сохранением -- та же, что была у
-// бота: вход в кабинет Amnezia с чтением аккаунта, список серверов HideMy.
+// бота: список серверов HideMy. Ключ Amnezia не принимается вовсе: кабинет
+// Amnezia отключён (v0.61.3).
 
 var _ backend.VPNCabinetKeys = (*Router)(nil)
 
 const (
-	amneziaRejectedText = "Кабинет Amnezia Premium не принял ключ или не ответил — проверьте ключ и повторите"
-	hideMyRejectedText  = "Кабинет HideMy.name не принял код или не ответил — проверьте код и повторите"
+	hideMyRejectedText = "Кабинет HideMy.name не принял код или не ответил — проверьте код и повторите"
 )
 
 func (r *Router) Secrets(routerID int64, provider string) ([]backend.CabinetSecret, error) {
@@ -52,18 +52,9 @@ func (r *Router) AddSecret(ctx context.Context, routerID int64, provider, secret
 	secret = strings.TrimSpace(secret)
 	switch provider {
 	case providerAmnezia:
-		if !strings.HasPrefix(secret, "vpn://") {
-			return backend.CabinetSecret{}, backend.ErrCabinetSecretInvalid
-		}
-		if _, err := r.fetchAmneziaAccount(ctx, secret); err != nil {
-			slog.Warn("кабинет Amnezia не принял ключ", "router_id", routerID, "err", redactSecret(err.Error(), secret))
-			return backend.CabinetSecret{}, &backend.CabinetRejectedError{Reason: amneziaRejectedText}
-		}
-		stored, err := r.addAmneziaKeyLabeled(routerID, secret, label)
-		if err != nil {
-			return backend.CabinetSecret{}, err
-		}
-		return backend.CabinetSecret{ID: stored.ID, Label: stored.Label, Mask: cabinetSecretMask(stored.VPNKey), Active: true}, nil
+		// Кабинет отключён (v0.61.3): ключ не проверяется в кабинете и не
+		// сохраняется -- выпускать им всё равно нечего.
+		return backend.CabinetSecret{}, backend.ErrAmneziaDisabled
 	case providerHideMy:
 		if !hidemy.ValidAccessCode(secret) {
 			return backend.CabinetSecret{}, backend.ErrCabinetSecretInvalid
@@ -101,18 +92,8 @@ func (r *Router) DeleteSecret(routerID int64, provider, id string) error {
 	return fmt.Errorf("unknown provider %q", provider)
 }
 
-// RevokeSlot освобождает слот подписки: отзывает выпущенную страну активным
-// ключом. Premium-ключ при этом не перевыпускается.
-func (r *Router) RevokeSlot(ctx context.Context, routerID int64, country string) error {
-	key, err := r.getAmneziaKeyByID(routerID, "")
-	if err != nil {
-		return err
-	}
-	if key == "" {
-		return backend.ErrCabinetSecretNotFound
-	}
-	if err := r.revokeAmneziaCountryConfig(ctx, key, country); err != nil {
-		return fmt.Errorf("amnezia revoke: %s", redactSecret(err.Error(), key))
-	}
-	return nil
+// RevokeSlot -- отзыв страны в кабинете Amnezia Premium. Кабинет отключён
+// (v0.61.3): отказ до чтения ключа и без обращения к кабинету.
+func (r *Router) RevokeSlot(_ context.Context, _ int64, _ string) error {
+	return backend.ErrAmneziaDisabled
 }

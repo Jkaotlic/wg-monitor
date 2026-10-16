@@ -47,6 +47,10 @@ type VPNAccount struct {
 	// Note — почему список пуст, если он пуст. Пустой список без объяснения
 	// читается как поломка приложения.
 	Note string `json:"note,omitempty"`
+	// Disabled -- кабинет выключен целиком (v0.61.3: «Amnezia Premium»):
+	// ни выпуска, ни новых ключей; Note -- почему. Экран прячет «Добавить
+	// ключ» и оставляет у сохранённых ключей только «Удалить».
+	Disabled bool `json:"disabled,omitempty"`
 	// KeyProblem -- код сбоя хранилища кабинета из-за ключа шифрования
 	// (cabinet_key_missing / cabinet_key_wrong); пусто -- причина другая.
 	// Нужен фоновым путям (автопочинка): они не должны выдавать такой сбой
@@ -181,6 +185,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "unknown_provider", "provider is not one this app knows")
 			return
 		}
+		if miniappAmneziaOff(w, provider, nil) {
+			return
+		}
 		optionID := strings.TrimSpace(req.OptionID)
 		if optionID == "" {
 			writeJSONError(w, http.StatusBadRequest, "missing_option", "option_id is required")
@@ -196,6 +203,9 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		issued, err := d.VPNCabinet.IssueConfig(r.Context(), routerID, provider, optionID)
+		if miniappAmneziaOff(w, "", err) {
+			return
+		}
 		if errors.Is(err, ErrVPNSlotBusy) {
 			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
 			return

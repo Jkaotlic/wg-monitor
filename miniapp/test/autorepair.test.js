@@ -283,7 +283,7 @@ describe('латиница только в ёлочках', () => {
     })
   }
   it('метки и строка', () => {
-    for (const s of ['on', 'limited', 'blocked']) expect(latinOutside(autorepairBadge(s).text)).toEqual([])
+    for (const s of ['on', 'limited', 'blocked', 'source_off']) expect(latinOutside(autorepairBadge(s).text)).toEqual([])
     expect(latinOutside(autorepairBadge('blocked', 'x').text)).toEqual([])
     for (const resp of [
       RESP(),
@@ -293,6 +293,7 @@ describe('латиница только в ёлочках', () => {
       RESP({ enabled: true, provider: 'awg3', option: 'main/awg1' }),
       RESP({ enabled: true, provider: 'amnezia', option: 'nl', blocked: 'лимит попыток' }),
       RESP({ enabled: true, provider: 'amnezia', option: 'nl', rename_pending: 'Old' }),
+      RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: 'выпуск через кабинет «Amnezia Premium» отключён: автор «awg-manager» предупреждает, что получение конфигов через кабинет может заблокировать подписку — конфиг берите в приложении или личном кабинете «Amnezia» и выберите для автопочинки другой источник' }),
     ]) {
       const r = autorepairRow(resp)
       expect(latinOutside(`${r.title} ${r.value} ${r.hint}`)).toEqual([])
@@ -312,5 +313,27 @@ describe('autorepairRow: локация не подтверждена', () => {
   it('без отметки -- прежняя подсказка', () => {
     const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl' }))
     expect(r.hint).not.toContain('не подтверждена')
+  })
+})
+
+// v0.61.3: источник выключен, но автопочинка ещё и стоит (потолок попыток или
+// стоп до обновления) -- главное «стоит»: «только перезапуск» был бы неправдой.
+describe('autorepairRow: источник выключен', () => {
+  const OFF = 'выпуск через кабинет «Amnezia Premium» отключён'
+  it('стоп главнее выключенного источника, причина источника -- в подсказке', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: OFF, blocked: 'прошлая попытка починить не помогла — нужен человек' }))
+    expect(r.value).toBe('стоит: прошлая попытка починить не помогла — нужен человек')
+    expect(r.hint).toBe('Выпуск через кабинет «Amnezia Premium» отключён.')
+  })
+  it('без стопа -- «только перезапуск — источник отключён»', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: OFF }))
+    expect(r.value).toBe('только перезапуск — источник отключён')
+  })
+  it('пустая или пробельная фраза сервера не роняет экран', () => {
+    for (const off of ['   ', '\n']) {
+      const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: off }))
+      expect(r.hint).toBe('Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.')
+      expect(r.value).not.toContain('источник отключён')
+    }
   })
 })

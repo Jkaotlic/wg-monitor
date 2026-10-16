@@ -115,6 +115,12 @@ type Deps struct {
 	// «Amnezia Premium» (option), -- ДО выпуска: упади бэкенд посреди, отметка
 	// уже стоит. Ошибка (или nil) -- страна не выпускается.
 	SpendRelocation func(routerID int64, tunnelID, option string) error
+	// SourceOff -- источник выключен целиком (v0.61.3: кабинет «Amnezia
+	// Premium»): что сделать человеку; "" -- источник работает. Перезапуск
+	// (ступень 1) идёт как обычно -- он источника не касается; выпуск
+	// (ступени 2-3) не начинается: итог -- эта фраза, без стопа «нужен
+	// человек». nil -- выключенных нет.
+	SourceOff func(provider string) string
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
 	Commands replace.Commander
@@ -407,6 +413,15 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	}
 	log = append(log, textRestartNoHelp)
 	if d.aborted(ctx, jobID, req, th, names, log) {
+		return
+	}
+
+	// Источник выключен целиком: выпускать не из чего, и это не провал
+	// автопочинки -- стоп «нужен человек» не ставится, следующее падение
+	// снова получит перезапуск.
+	if why := d.sourceOff(set.Provider); why != "" {
+		d.skip(jobID, "источник отключён — "+why, StepReissue, StepRecreate)
+		d.finishSourceOff(ctx, jobID, req, th, names, log, why)
 		return
 	}
 
@@ -1010,6 +1025,31 @@ func (d Deps) finishFail(ctx context.Context, jobID string, req StartReq, th Thr
 
 // whyAttemptUnsaved -- автозапуск не начат: попытка не записалась в историю.
 const whyAttemptUnsaved = "не смог записать попытку в историю"
+
+// sourceOff -- что сделать человеку, если источник настройки выключен
+// целиком (Deps.SourceOff); "" -- работает или источника нет.
+func (d Deps) sourceOff(provider string) string {
+	if d.SourceOff == nil || provider == "" {
+		return ""
+	}
+	return d.SourceOff(provider)
+}
+
+// finishSourceOff -- перезапуск не помог, а источник выключен целиком:
+// выпуска нет. Как у finishNoAnswer, стопа нет (попытка -- без провала):
+// иначе VPN-туннель с таким источником лишился бы и перезапуска до
+// вмешательства человека.
+func (d Deps) finishSourceOff(ctx context.Context, jobID string, req StartReq, th Thread, names lineNames, log []string, action string) {
+	d.skipFailback(jobID, names)
+	if req.Auto {
+		d.finishAttempt(req, true)
+	}
+	d.Store.Update(jobID, func(j *provision.Job) {
+		j.State = provision.StateFailed
+		j.Hint = action
+	})
+	th.NeedHuman(context.WithoutCancel(ctx), failText(names, log), action)
+}
 
 // finishAttempt -- итог автозапуска в историю попыток. Не записался --
 // оператору в лог: стоп «нужен человек» тогда не поставлен.

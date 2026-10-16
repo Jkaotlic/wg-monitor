@@ -88,8 +88,13 @@ const START_ERRORS = {
   missing_fields: 'Не хватает выбора: нужны кабинет, вариант и VPN-туннель, который меняем.',
 }
 
+// Коды, у которых фраза сервера точнее нашей: amnezia_disabled (v0.61.3) --
+// кабинет Amnezia Premium отключён, сервер говорит почему и где брать конфиги.
+const START_SERVER_SAYS = new Set(['amnezia_disabled'])
+
 export function startErrorText(err) {
   const code = err?.code
+  if (code && START_SERVER_SAYS.has(code) && err?.serverMessage) return err.serverMessage
   if (code && START_ERRORS[code]) return START_ERRORS[code]
   if (!err?.status) return 'Не удалось связаться с сервером — замена не началась.'
   return `Замена не началась: сервер ответил ${err.status}.`

@@ -44,19 +44,6 @@ func repairSourceEnv(t *testing.T, cab VPNCabinet, panels Awg3Panels) (linkrepai
 	return RepairSource(cab, panels, d, repairAdminTG), id
 }
 
-func TestRepairSource_AmneziaNoKeyNeedsHuman(t *testing.T) {
-	cab := &fakeCabinet{err: errors.New("ключ Amnezia Premium не сохранён для этого роутера")}
-	src, id := repairSourceEnv(t, cab, &fakeAwg3{})
-	_, err := src.Issue(context.Background(), id, "amnezia", "nl")
-	var nh *linkrepair.NeedHuman
-	if !errors.As(err, &nh) {
-		t.Fatalf("ждали NeedHuman, получили %v", err)
-	}
-	if nh.Action != linkrepair.ActAmneziaKey {
-		t.Fatalf("действие %q, ждали %q", nh.Action, linkrepair.ActAmneziaKey)
-	}
-}
-
 func TestRepairSource_HideMyRefusalNeedsHuman(t *testing.T) {
 	cab := &fakeCabinet{err: errors.New("код HideMy.name не сохранён для этого роутера")}
 	src, id := repairSourceEnv(t, cab, &fakeAwg3{})
@@ -67,17 +54,17 @@ func TestRepairSource_HideMyRefusalNeedsHuman(t *testing.T) {
 	}
 }
 
-func TestRepairSource_AmneziaIssuePassesConfig(t *testing.T) {
+func TestRepairSource_CabinetIssuePassesConfig(t *testing.T) {
 	cab := &fakeCabinet{conf: []byte("[Interface]\n")}
 	src, id := repairSourceEnv(t, cab, &fakeAwg3{})
-	got, err := src.Issue(context.Background(), id, "amnezia", "nl")
+	got, err := src.Issue(context.Background(), id, "hidemyname", "nl")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	if got.TunnelName != "amnezia_nl" || string(got.Conf) != "[Interface]\n" {
+	if got.TunnelName != "hidemyname_nl" || string(got.Conf) != "[Interface]\n" {
 		t.Fatalf("выпуск: %+v", got)
 	}
-	if len(cab.issued) != 1 || cab.issued[0] != "amnezia:nl" {
+	if len(cab.issued) != 1 || cab.issued[0] != "hidemyname:nl" {
 		t.Fatalf("кабинет спрошен не тем: %v", cab.issued)
 	}
 }
@@ -138,10 +125,10 @@ func TestRepairSource_Awg3BadOptionNeedsHuman(t *testing.T) {
 
 func TestRepairSource_OptionsOrder(t *testing.T) {
 	cab := &fakeCabinet{accounts: map[string]VPNAccount{
-		"amnezia": {Provider: "amnezia", Connected: true, Options: []VPNOption{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия", Issued: true}}},
+		"hidemyname": {Provider: "hidemyname", Connected: true, Options: []VPNOption{{ID: "nl", Label: "Нидерланды", Issued: true}, {ID: "de", Label: "Германия"}, {ID: "fi", Label: "Финляндия", Issued: true}}},
 	}}
 	src, id := repairSourceEnv(t, cab, &fakeAwg3{})
-	got, err := src.Options(context.Background(), id, "amnezia")
+	got, err := src.Options(context.Background(), id, "hidemyname")
 	if err != nil {
 		t.Fatalf("Options: %v", err)
 	}
@@ -303,7 +290,9 @@ func TestLinkRepairSpendRelocation(t *testing.T) {
 	}
 }
 
-// A4.6: место в подписке «Amnezia Premium» -- по счёту устройств кабинета.
+// A4.6: место в подписке -- по счёту устройств кабинета. Кабинет «Amnezia
+// Premium», ради которого счёт заводился, отключён (v0.61.3); счёт общий и
+// проверяется на «HideMy.name».
 func TestRepairSource_HasRoom(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -317,10 +306,10 @@ func TestRepairSource_HasRoom(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cab := &fakeCabinet{accounts: map[string]VPNAccount{
-				"amnezia": {Provider: "amnezia", Connected: true, DevicesUsed: c.used, DevicesMax: c.max},
+				"hidemyname": {Provider: "hidemyname", Connected: true, DevicesUsed: c.used, DevicesMax: c.max},
 			}}
 			src, id := repairSourceEnv(t, cab, &fakeAwg3{})
-			got, err := src.HasRoom(context.Background(), id, "amnezia")
+			got, err := src.HasRoom(context.Background(), id, "hidemyname")
 			if err != nil || got != c.want {
 				t.Fatalf("HasRoom=%v err=%v, ждали %v", got, err, c.want)
 			}
@@ -329,11 +318,11 @@ func TestRepairSource_HasRoom(t *testing.T) {
 	// Кабинет не подключён или не ответил -- не «место есть», а человек.
 	src, id := repairSourceEnv(t, &fakeCabinet{accounts: map[string]VPNAccount{}}, &fakeAwg3{})
 	var nh *linkrepair.NeedHuman
-	if _, err := src.HasRoom(context.Background(), id, "amnezia"); !errors.As(err, &nh) || nh.Action != linkrepair.ActAmneziaKey {
+	if _, err := src.HasRoom(context.Background(), id, "hidemyname"); !errors.As(err, &nh) || nh.Action != linkrepair.ActHideMyCode {
 		t.Fatalf("неподключённый кабинет: %v", err)
 	}
 	src, id = repairSourceEnv(t, &fakeCabinet{err: errors.New("таймаут")}, &fakeAwg3{})
-	if _, err := src.HasRoom(context.Background(), id, "amnezia"); !errors.As(err, &nh) {
+	if _, err := src.HasRoom(context.Background(), id, "hidemyname"); !errors.As(err, &nh) {
 		t.Fatalf("кабинет не ответил: %v", err)
 	}
 }
@@ -398,7 +387,7 @@ func needHumanAction(t *testing.T, label string, err error) {
 }
 
 func TestRepairSource_SealedAccountNeedsAdmin(t *testing.T) {
-	for _, prov := range []string{"amnezia", "hidemyname"} {
+	for _, prov := range []string{"hidemyname"} {
 		cab := &fakeCabinet{accounts: map[string]VPNAccount{prov: {Provider: prov, KeyProblem: "cabinet_key_wrong", Note: "x"}}}
 		src, id := repairSourceEnv(t, cab, &fakeAwg3{})
 		_, err := src.Options(context.Background(), id, prov)
@@ -410,7 +399,7 @@ func TestRepairSource_SealedAccountNeedsAdmin(t *testing.T) {
 
 func TestRepairSource_SealedIssueNeedsAdmin(t *testing.T) {
 	for _, cause := range []error{sealedfile.ErrKeyMissing, sealedfile.ErrUnreadable} {
-		for _, prov := range []string{"amnezia", "hidemyname"} {
+		for _, prov := range []string{"hidemyname"} {
 			src, id := repairSourceEnv(t, &fakeCabinet{err: cause}, &fakeAwg3{})
 			_, err := src.Issue(context.Background(), id, prov, "nl")
 			needHumanAction(t, prov+" Issue", err)

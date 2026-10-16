@@ -92,6 +92,11 @@ func miniappReplaceStartHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "unknown_provider", "provider is not one this app knows")
 			return
 		}
+		// Кабинет Amnezia отключён (v0.61.3): отказ до выпуска, задание не
+		// заводится, на роутере ничего не меняется.
+		if miniappAmneziaOff(w, provider, nil) {
+			return
+		}
 		if strings.TrimSpace(req.OptionID) == "" || strings.TrimSpace(req.OldTunnelID) == "" || strings.TrimSpace(req.PolicyName) == "" {
 			writeJSONError(w, http.StatusBadRequest, "missing_fields", "option_id, old_tunnel_id and policy_name are required")
 			return
