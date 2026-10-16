@@ -315,3 +315,25 @@ describe('autorepairRow: локация не подтверждена', () => {
     expect(r.hint).not.toContain('не подтверждена')
   })
 })
+
+// v0.61.3: источник выключен, но автопочинка ещё и стоит (потолок попыток или
+// стоп до обновления) -- главное «стоит»: «только перезапуск» был бы неправдой.
+describe('autorepairRow: источник выключен', () => {
+  const OFF = 'выпуск через кабинет «Amnezia Premium» отключён'
+  it('стоп главнее выключенного источника, причина источника -- в подсказке', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: OFF, blocked: 'прошлая попытка починить не помогла — нужен человек' }))
+    expect(r.value).toBe('стоит: прошлая попытка починить не помогла — нужен человек')
+    expect(r.hint).toBe('Выпуск через кабинет «Amnezia Premium» отключён.')
+  })
+  it('без стопа -- «только перезапуск — источник отключён»', () => {
+    const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: OFF }))
+    expect(r.value).toBe('только перезапуск — источник отключён')
+  })
+  it('пустая или пробельная фраза сервера не роняет экран', () => {
+    for (const off of ['   ', '\n']) {
+      const r = autorepairRow(RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: off }))
+      expect(r.hint).toBe('Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.')
+      expect(r.value).not.toContain('источник отключён')
+    }
+  })
+})
