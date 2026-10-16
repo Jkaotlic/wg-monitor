@@ -14,6 +14,7 @@ package timeline
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -28,6 +29,10 @@ const resolverGuardCheck = "resolver_guard"
 // heartbeatCheck -- сердцебиение агента: каждый полный отчёт несёт его, как бы
 // ни кончились остальные проверки.
 const heartbeatCheck = "agent_heartbeat"
+
+// tunnelsInventoryCheck -- строка «список туннелей прочитан» в каждом полном
+// отчёте (тот же признак, что у экрана призраков, GHOST-01).
+const tunnelsInventoryCheck = "tunnels"
 
 // FlapGap -- тишина, после которой новое падение считается новой новостью, а
 // не продолжением прежней. Короче -- один вечер разваливается на десяток
@@ -72,6 +77,16 @@ func Fold(rows []db.EventRow, now time.Time) []Incident {
 		heartbeats = append(heartbeats, r.TS)
 	}
 	sort.Slice(heartbeats, func(i, j int) bool { return heartbeats[i].Before(heartbeats[j]) })
+	// Прочитанный инвентарь туннелей: туннель, которого в таком отчёте нет,
+	// удалён (puzirek 15.10). Непрочитанный (tunnels не ok) ничего не значит --
+	// агент без awg-manager строк туннелей не шлёт, а авария идёт.
+	var inventories []time.Time
+	for _, r := range byCheck[tunnelsInventoryCheck] {
+		if r.Status == "ok" {
+			inventories = append(inventories, r.TS)
+		}
+	}
+	sort.Slice(inventories, func(i, j int) bool { return inventories[i].Before(inventories[j]) })
 
 	var out []Incident
 	for check, list := range byCheck {
@@ -79,8 +94,11 @@ func Fold(rows []db.EventRow, now time.Time) []Incident {
 		copy(sorted, list)
 		sort.Slice(sorted, func(i, j int) bool { return sorted[i].TS.Before(sorted[j].TS) })
 		var goneAt time.Time
-		if check == resolverGuardCheck {
+		switch {
+		case check == resolverGuardCheck:
 			goneAt = watchdogGoneAt(sorted, heartbeats)
+		case strings.HasPrefix(check, tunnelCheckPrefix):
+			goneAt = watchdogGoneAt(sorted, inventories)
 		}
 		out = append(out, foldCheck(check, sorted, now, goneAt)...)
 	}
