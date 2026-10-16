@@ -46,7 +46,7 @@ func TestAmneziaDisabled_NoCabinetRequestOnAnyPath(t *testing.T) {
 	if err != nil {
 		t.Errorf("экран подписки: %v", err)
 	}
-	if acc.Connected || len(acc.Options) != 0 || acc.Note != backend.AmneziaDisabledText {
+	if acc.Connected || !acc.Disabled || len(acc.Options) != 0 || acc.Note != backend.AmneziaDisabledText {
 		t.Errorf("экран подписки: %+v", acc)
 	}
 

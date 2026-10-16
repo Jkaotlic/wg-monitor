@@ -73,7 +73,7 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 // где брать конфиги. Сохранённые ключи по-прежнему видны и удаляются (это
 // файл на сервере, не кабинет).
 func (r *Router) amneziaAccountForMiniapp(_ context.Context, _ int64) (backend.VPNAccount, error) {
-	return backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium", Note: backend.AmneziaDisabledText}, nil
+	return backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium", Note: backend.AmneziaDisabledText, Disabled: true}, nil
 }
 
 func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (backend.VPNAccount, error) {
