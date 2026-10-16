@@ -2,6 +2,7 @@ package hidemy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -102,5 +103,19 @@ func TestClientRejectsBadAccessCodeShape(t *testing.T) {
 	c := New("https://example.invalid")
 	if _, err := c.ServerList(context.Background(), "abc"); err == nil {
 		t.Fatal("expected bad code error")
+	}
+}
+
+// Неверный, просроченный или «не VPN» код: сервис отвечает HTTP 200 со
+// страницей-редиректом на /vpn/fail/ (сверено с боя 16.10). Это не конфиг и не
+// «сервис не ответил» -- отказ по коду.
+func TestDownloadConfigCodeRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><head><meta http-equiv="refresh" content="0; url=/vpn/fail/"></head><body>Your code was not found or you have purchased a non-VPN code</body></html>`))
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL).DownloadAmneziaWG20Config(context.Background(), "1234567890", "198.51.100.1")
+	if !errors.Is(err, ErrCodeRejected) {
+		t.Fatalf("err = %v, want ErrCodeRejected", err)
 	}
 }

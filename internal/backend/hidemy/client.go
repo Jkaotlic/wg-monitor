@@ -3,6 +3,7 @@ package hidemy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,6 +98,9 @@ func (c *Client) DownloadAmneziaWG20Config(ctx context.Context, code, serverIP s
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hidemy config: HTTP %d: %s", resp.StatusCode, snippet(rb))
 	}
+	if codeRejected(rb) {
+		return nil, ErrCodeRejected
+	}
 	return rb, nil
 }
 
@@ -189,4 +193,13 @@ func snippet(b []byte) string {
 		return s[:n] + "..."
 	}
 	return s
+}
+
+// ErrCodeRejected -- сервис не принял код доступа (неверный, просрочен или не
+// для VPN): отвечает HTTP 200 со страницей отказа вместо конфига.
+var ErrCodeRejected = errors.New("hidemy: access code rejected")
+
+func codeRejected(body []byte) bool {
+	s := strings.ToLower(string(body))
+	return strings.Contains(s, "/vpn/fail/") || strings.Contains(s, "code was not found")
 }

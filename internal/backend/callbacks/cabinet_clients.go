@@ -59,6 +59,9 @@ func (r *Router) hideMyServerByID(ctx context.Context, accessCode, serverID stri
 func (r *Router) downloadHideMyConfig(ctx context.Context, accessCode, serverIP string) ([]byte, error) {
 	client := hidemy.New(r.cfg.HideMyBaseURL)
 	conf, err := client.DownloadAmneziaWG20Config(ctx, accessCode, serverIP)
+	if errors.Is(err, hidemy.ErrCodeRejected) {
+		return nil, backend.ErrCabinetCodeRejected
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +87,11 @@ func (r *Router) issueAmneziaConfig(ctx context.Context, key, country string) ([
 		return nil, backend.ErrVPNSlotBusy
 	}
 	conf, err := client.DownloadConfig(ctx, country)
+	if errors.Is(err, amnezia.ErrConfigLimit) {
+		// Кабинет считает места сам и строже нас (6 из 7 у нас -- «полно»
+		// у него): человеку та же фраза, что и при нашей проверке.
+		return nil, backend.ErrVPNSlotBusy
+	}
 	if err != nil {
 		return nil, err
 	}

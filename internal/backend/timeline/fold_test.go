@@ -246,3 +246,43 @@ func TestFoldResolverGuardStillReportedStaysOngoing(t *testing.T) {
 		}
 	}
 }
+
+// Жалоба 15.10 (puzirek): VPN-туннель awg11 удалили, пока он лежал, и в ленте
+// он «идёт» сутками -- закрывающей строки tunnel_awg11 уже не будет. Свежий
+// инвентарь (tunnels=ok) без строки туннеля -- его больше нет; происшествие
+// кончается на этом отчёте.
+func TestFoldClosesTunnelGoneFromInventory(t *testing.T) {
+	got := Fold([]db.EventRow{
+		row("tunnel_awg11", "fail", 0),
+		row("tunnels", "ok", 0),
+		row("tunnel_awg11", "fail", time.Minute),
+		row("tunnels", "ok", time.Minute),
+		row("tunnels", "ok", 2*time.Minute), // туннеля в отчёте уже нет
+		row("tunnels", "ok", 3*time.Minute),
+	}, base.Add(30*time.Hour))
+	if len(got) != 1 {
+		t.Fatalf("хотим одно происшествие, получили %+v", got)
+	}
+	if got[0].Ongoing || !got[0].To.Equal(base.Add(2*time.Minute)) {
+		t.Fatalf("пропавший из инвентаря туннель не «идёт»: конец %v, ongoing=%v", got[0].To, got[0].Ongoing)
+	}
+}
+
+// awg-manager не ответил -- агент не прислал строк туннелей, а tunnels не ok.
+// Это не «туннель удалён»: авария продолжается.
+func TestFoldKeepsTunnelOutageWhileInventoryUnread(t *testing.T) {
+	got := Fold([]db.EventRow{
+		row("tunnel_awg11", "fail", 0),
+		row("tunnels", "ok", 0),
+		row("tunnels", "fail", time.Minute),
+		row("agent_heartbeat", "ok", time.Minute),
+	}, base.Add(time.Hour))
+	if len(got) != 2 {
+		t.Fatalf("хотим туннель и инвентарь отдельно, получили %+v", got)
+	}
+	for _, inc := range got {
+		if inc.CheckName == "tunnel_awg11" && !inc.Ongoing {
+			t.Fatalf("непрочитанный инвентарь не закрывает аварию туннеля: %+v", inc)
+		}
+	}
+}

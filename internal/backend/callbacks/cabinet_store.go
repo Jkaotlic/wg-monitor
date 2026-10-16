@@ -109,7 +109,7 @@ var (
 // выпуска и в журналы мастера замены. Отказ по слотам сохраняется как есть --
 // по нему обработчики выбирают код ответа.
 func redactCabinetError(err error, secret string) error {
-	if err == nil || errors.Is(err, backend.ErrVPNSlotBusy) {
+	if err == nil || errors.Is(err, backend.ErrVPNSlotBusy) || errors.Is(err, backend.ErrCabinetCodeRejected) {
 		return err
 	}
 	return errors.New(redactSecret(err.Error(), secret))
