@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 )
 
 const (
