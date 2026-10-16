@@ -242,8 +242,8 @@ describe('автопочинка: метка во вкладке', () => {
 })
 
 // v0.61.3: сохранённая настройка с выключенным источником («Amnezia Premium»)
-// -- не «включена», а «не работает» с причиной сервера; кнопка открывает тот
-// же лист, где выбирается другой источник.
+// -- не «включена», а «только перезапуск» с причиной сервера; кнопка
+// открывает тот же лист, где выбирается другой источник.
 const SOURCE_OFF = 'выпуск через кабинет «Amnezia Premium» отключён: автор «awg-manager» предупреждает, что получение конфигов через кабинет может заблокировать подписку — конфиг берите в приложении или личном кабинете «Amnezia» и выберите для автопочинки другой источник'
 
 describe('автопочинка: источник выключен', () => {
@@ -254,7 +254,7 @@ describe('автопочинка: источник выключен', () => {
       suggested: null,
     }
     const { root, sheets } = await mount()
-    expect(root.textContent).toContain('не работает')
+    expect(root.textContent).toContain('только перезапуск — источник отключён')
     expect(root.textContent).not.toContain('включена · из')
     expect(root.textContent).toContain('Выпуск через кабинет «Amnezia Premium» отключён')
     const pick = root.querySelector('.tunnel-autorepair-source')
@@ -270,13 +270,13 @@ describe('автопочинка: источник выключен', () => {
     root.remove()
   })
 
-  it('метка во вкладке: не работает, а не «нужен человек»', async () => {
+  it('метка во вкладке: только перезапуск, а не «нужен человек»', async () => {
     mocks.list = { awg12: 'source_off' }
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => render(<TunnelsTab routerID={4} asleep={false} openSheet={() => {}} />, root))
     await flush()
-    expect(root.textContent).toContain('Автопочинка не работает — выберите другой источник')
+    expect(root.textContent).toContain('Автопочинка: только перезапуск — источник отключён')
     expect(root.textContent).not.toContain('нужен человек')
     render(null, root)
     root.remove()

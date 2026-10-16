@@ -30,7 +30,7 @@ export function autorepairBadge(state, reason = '') {
   if (state === 'on') return { tone: 'ok', text: 'Автопочинка' }
   if (state === 'limited') return { tone: 'neutral', text: 'Автопочинка: только перезапуск' }
   // Источник настройки выключен целиком (v0.61.3: «Amnezia Premium»).
-  if (state === 'source_off') return { tone: 'warn', text: 'Автопочинка не работает — выберите другой источник' }
+  if (state === 'source_off') return { tone: 'warn', text: 'Автопочинка: только перезапуск — источник отключён' }
   if (state === 'blocked' && reason) return { tone: 'warn', text: 'Автопочинка ждёт подтверждения' }
   if (state === 'blocked') return { tone: 'warn', text: 'Автопочинка стоит — нужен человек' }
   return null
@@ -57,9 +57,10 @@ export function autorepairRow(resp) {
   if (r.enabled) {
     hint = 'Выключить можно кнопкой «Выключить автопочинку» ниже, в любой момент.'
     if (r.source_off) {
-      // Источник выключен целиком (v0.61.3): сама не запускается, нужен
-      // другой источник. Фраза сервера -- с именами в «ёлочках».
-      value = 'не работает'
+      // Источник выключен целиком (v0.61.3): перезапуск идёт, конфиг не
+      // выпускается -- нужен другой источник. Фраза сервера -- с именами в
+      // «ёлочках».
+      value = 'только перезапуск — источник отключён'
       const said = String(r.source_off).trim()
       hint = `${said[0].toUpperCase()}${said.slice(1)}.`
     } else if (r.rename_pending) {
