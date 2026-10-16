@@ -87,8 +87,8 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
           </>
         ),
         note: text.note,
-        buttonLabel: ar?.rename_pending ? 'Подтвердить' : 'Включить',
-        busyLabel: ar?.rename_pending ? 'Подтверждаем…' : 'Включаем…',
+        buttonLabel: ar?.enabled && ar?.source_off ? 'Сохранить' : ar?.rename_pending ? 'Подтвердить' : 'Включить',
+        busyLabel: ar?.enabled && ar?.source_off ? 'Сохраняем…' : ar?.rename_pending ? 'Подтверждаем…' : 'Включаем…',
         fields: enableFields(ar),
         fieldsReady: enableReady,
         errorText: (err) => errorText(err),
@@ -273,7 +273,14 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
               <p class="hint">{row.hint}</p>
               {/* Переименованный VPN-туннель: выпуск ждёт подтверждения -- тот же
                   лист включения перепишет имя на сервере. */}
-              {ar.enabled && ar.rename_pending && (
+              {/* Источник выключен (v0.61.3): тот же лист включения, где его
+                  нет среди источников, -- выбрать другой. */}
+              {ar.enabled && ar.source_off && (
+                <button type="button" class="btn btn-primary btn-wide tunnel-autorepair-source" disabled={arBusy} onClick={askAutorepair}>
+                  Выбрать другой источник
+                </button>
+              )}
+              {ar.enabled && !ar.source_off && ar.rename_pending && (
                 <button type="button" class="btn btn-primary btn-wide tunnel-autorepair-confirm" disabled={arBusy} onClick={askAutorepair}>
                   Подтвердить автопочинку
                 </button>

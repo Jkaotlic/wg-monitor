@@ -283,7 +283,7 @@ describe('латиница только в ёлочках', () => {
     })
   }
   it('метки и строка', () => {
-    for (const s of ['on', 'limited', 'blocked']) expect(latinOutside(autorepairBadge(s).text)).toEqual([])
+    for (const s of ['on', 'limited', 'blocked', 'source_off']) expect(latinOutside(autorepairBadge(s).text)).toEqual([])
     expect(latinOutside(autorepairBadge('blocked', 'x').text)).toEqual([])
     for (const resp of [
       RESP(),
@@ -293,6 +293,7 @@ describe('латиница только в ёлочках', () => {
       RESP({ enabled: true, provider: 'awg3', option: 'main/awg1' }),
       RESP({ enabled: true, provider: 'amnezia', option: 'nl', blocked: 'лимит попыток' }),
       RESP({ enabled: true, provider: 'amnezia', option: 'nl', rename_pending: 'Old' }),
+      RESP({ enabled: true, provider: 'amnezia', option: 'nl', source_off: 'выпуск через кабинет «Amnezia Premium» отключён: автор «awg-manager» предупреждает, что получение конфигов через кабинет может заблокировать подписку — конфиг берите в приложении или личном кабинете «Amnezia» и выберите для автопочинки другой источник' }),
     ]) {
       const r = autorepairRow(resp)
       expect(latinOutside(`${r.title} ${r.value} ${r.hint}`)).toEqual([])

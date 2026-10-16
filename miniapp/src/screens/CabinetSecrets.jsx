@@ -19,7 +19,13 @@ import { Quoted } from '../ui/Q.jsx'
 // листе (Sheet.jsx держит значение поля и стирает его при отправке); этот
 // экран видит только маску. Кнопки -- по правам: добавить и выбрать
 // активный могут все трое, удалить -- админ и владелец.
-export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, onChanged }) {
+//
+// disabledNote -- кабинет выключен целиком (v0.61.3: «Amnezia Premium»,
+// сервер прислал disabled и причину): вместо «добавьте ключ» -- причина,
+// «Добавить» и «Сделать активным» нет, у сохранённых ключей -- только
+// «Удалить».
+export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, onChanged, disabledNote = '' }) {
+  const off = Boolean(disabledNote)
   const k = kindText(kind)
   const [busyID, setBusyID] = useState('')
   const [error, setError] = useState('')
@@ -84,8 +90,9 @@ export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, on
 
   return (
     <Section title={k.sectionTitle}>
+      {off && <p class="state cabinet-disabled">{disabledNote}</p>}
       {rows.length === 0 ? (
-        <p class="state">{k.empty}</p>
+        !off && <p class="state">{k.empty}</p>
       ) : (
         <ul class="card list-reset cabinet-secrets">
           {rows.map((row) => (
@@ -96,9 +103,9 @@ export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, on
                 </span>
                 {row.sub && <span class="list-row-sub">{row.sub}</span>}
               </span>
-              {((!row.active && perms.manage) || perms.remove) && (
+              {((!off && !row.active && perms.manage) || perms.remove) && (
                 <span class="cabinet-secret-actions">
-                  {!row.active && perms.manage && (
+                  {!off && !row.active && perms.manage && (
                     <button type="button" class="btn btn-ghost btn-row" disabled={busyID === row.id} onClick={() => makeActive(row)}>
                       {busyID === row.id ? 'Сохраняем…' : 'Сделать активным'}
                     </button>
@@ -119,7 +126,7 @@ export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, on
           {error}
         </p>
       )}
-      {perms.manage && (
+      {perms.manage && !off && (
         <button type="button" class="btn btn-ghost btn-wide cabinet-add" onClick={add}>
           {k.addButton}
         </button>
