@@ -52,7 +52,6 @@ func newCabinetKeysRouter(t *testing.T) (*Router, *int32) {
 	srv, calls := fakeCabinets(t)
 	dir := t.TempDir()
 	return &Router{cfg: Config{
-		AmneziaBaseURL:     srv.URL,
 		AmneziaSecretsPath: filepath.Join(dir, "amnezia-premium.json"),
 		HideMyBaseURL:      srv.URL,
 		HideMySecretsPath:  filepath.Join(dir, "hidemyname.json"),
@@ -129,7 +128,7 @@ func TestIssueConfigErrorNeverCarriesKey(t *testing.T) {
 		_, _ = w.Write([]byte(`{"message":"bad ` + string(body) + `"}`))
 	}))
 	defer srv.Close()
-	r := &Router{cfg: Config{AmneziaBaseURL: srv.URL, AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
+	r := &Router{cfg: Config{AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
 	if _, err := r.addAmneziaKeyLabeled(7, key, ""); err != nil {
 		t.Fatal(err)
 	}

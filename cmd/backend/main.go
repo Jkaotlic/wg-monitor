@@ -166,7 +166,6 @@ func main() {
 	cb := callbacks.NewRouter(d, tgClient, callbacks.Config{
 		AdminUserID:        cfg.Telegram.AdminUserID,
 		PublicBaseURL:      cfg.PublicBaseURL,
-		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
 		HideMyBaseURL:      cfg.HideMy.BaseURL,
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,

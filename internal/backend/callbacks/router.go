@@ -28,7 +28,6 @@ type TGClient interface {
 type Config struct {
 	AdminUserID        int64
 	PublicBaseURL      string
-	AmneziaBaseURL     string
 	AmneziaSecretsPath string
 	HideMyBaseURL      string
 	HideMySecretsPath  string

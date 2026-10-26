@@ -102,11 +102,12 @@ type DigestConfig struct {
 	OnlineWindowSec int  `yaml:"online_window_sec"` // router counts as online if its last report is fresher; default 600
 }
 
-// AmneziaConfig wires the optional Amnezia Premium cabinet helper.
+// AmneziaConfig -- хранилище ключей Amnezia Premium. В кабинет бот не ходит
+// (решение оператора 16.10); старый ключ base_url в config.yaml читается и
+// игнорируется.
 // SecretsPath lives outside state.db; when unset it defaults to the directory
 // of db_path (see ApplyStoreDefaults) and rides in the encrypted full backup.
 type AmneziaConfig struct {
-	BaseURL     string `yaml:"base_url"`
 	SecretsPath string `yaml:"secrets_path"`
 }
 
