@@ -257,12 +257,20 @@ cd ~/wg-monitor
 docker compose stop            # или: docker stop <имя контейнера>
 
 # 2. распаковать архив во временный каталог и проверить базу
+#    (архивы обычно лежат в data/backups/; extract не перезаписывает файлы,
+#    поэтому остаток прошлой попытки убираем заранее)
+rm -rf data/restore-tmp
 bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
   --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
 sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # ждём: ok
 
 # 3. сохранить текущее и положить файлы в /data тома (на хосте — data/)
-[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$(date +%Y%m%d)
+# -wal/-shm -- часть текущей базы: копируем их рядом с .bak ДО удаления
+B=$(date +%Y%m%d)
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$B
+for x in wal shm; do
+  [ -f data/state.db-$x ] && cp -p data/state.db-$x data/state.db.bak.$B-$x
+done
 rm -f data/state.db-wal data/state.db-shm
 install -m 600 data/restore-tmp/state.db data/state.db
 for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
@@ -280,13 +288,20 @@ sudo chown --reference=secrets/bot-token.txt secrets/revive.key
 # 6. запустить и проверить
 rm -rf data/restore-tmp
 docker compose start
-curl -fsS http://<адрес бэкенда в контейнере, например 127.0.0.1:<порт>>/healthz
+curl -fsS http://127.0.0.1:8080/healthz
 ```
+
+Адрес для `curl` — ключ `listen:` в `config/backend.yaml` (по умолчанию
+`127.0.0.1:8080`). Если контейнер не в сети хоста, порт на хосте — тот, что
+опубликован в `ports:` вашего `docker-compose.yml`.
 
 На пустой машине сначала верните `backend.yaml` в `config/`, токены
 (`bot-token.txt`, `wizard-token.txt`, `dashboard-token.txt`) в `secrets/`, а в
-`backend.yaml` оставьте пути хранилищ в `/data/...`. Если `/healthz` не отвечает —
-смотрите `docker logs wg-monitor-backend`, а прежнюю базу верните из `state.db.bak.<дата>`.
+`backend.yaml` оставьте пути хранилищ в `/data/...`. Хранилище секретов
+оператора `operator-secrets.tgz.enc` (его кладёт `backup push-secrets`) — тоже в
+`secrets/`; сами архивы бэкапа — в `data/backups/`, там их кладёт ночной бэкап.
+Если `/healthz` не отвечает —
+смотрите `docker logs wg-monitor-backend`, а прежнюю базу верните из `state.db.bak.<дата>` вместе с `-wal`/`-shm` рядом (как `state.db-wal`, `state.db-shm`).
 После восстановления сохранённые пароли роутеров вводятся заново.
 
 `--to-new-vps` bootstraps the new host first: `wgmonitor` user, systemd units,
@@ -486,12 +501,18 @@ wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --
 
 ```bash
 cd ~/wg-monitor
+rm -rf data/restore-tmp        # extract не перезаписывает остаток прошлой попытки
 bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
   --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
 sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # должно ответить ok
 
 # остановить контейнер бэкенда
-[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$(date +%Y%m%d)
+# -wal/-shm -- часть текущей базы: копируем их рядом с .bak ДО удаления
+B=$(date +%Y%m%d)
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$B
+for x in wal shm; do
+  [ -f data/state.db-$x ] && cp -p data/state.db-$x data/state.db.bak.$B-$x
+done
 rm -f data/state.db-wal data/state.db-shm
 install -m 600 data/restore-tmp/state.db data/state.db
 for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
@@ -499,6 +520,7 @@ for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemynam
 done
 # на пустой машине -- ещё конфиг и токены из того же каталога:
 #   backend.yaml -> config/; bot-token.txt, wizard-token.txt, dashboard-token.txt -> secrets/
+#   operator-secrets.tgz.enc -> secrets/; архивы бэкапа -> data/backups/
 # запустить контейнер бэкенда
 rm -rf data/restore-tmp
 ```
