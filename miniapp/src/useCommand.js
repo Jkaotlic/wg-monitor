@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { sendCommand, fetchCommandResult } from './api.js'
-import { asleepNote } from './maintenance.js'
+import { sendCommand, fetchCommandResult, isTransient } from './api.js'
+import { asleepNote, SENT_NO_RESULT_TEXT } from './maintenance.js'
 import { errorText } from './errorText.js'
+import { JOB_POLL_MS } from './jobPoll.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -31,6 +32,9 @@ export function useCommand(routerID) {
   // sleepNote -- «роутер спит, команда подождёт N минут»: сервер говорит это
   // в ответе на постановку, и экран обязан пересказать, а не обещать ответ.
   const [sleepNote, setSleepNote] = useState('')
+  // sent -- команда поставлена (получен cmd_id). После этого сбой опроса уже
+  // не «команда не отправлена»: роутер её мог получить (MINI-01).
+  const [sent, setSent] = useState(false)
 
   // A sleeping-router deadline can run minutes long; if the screen is closed
   // (component unmounted) before it resolves, the in-flight poll must not
@@ -51,11 +55,16 @@ export function useCommand(routerID) {
     setErrorCode(null)
     setResult(null)
     setSleepNote('')
+    setSent(false)
     try {
-      const sent = await sendCommand(routerID, action, args, confirm)
-      const id = sent.cmd_id
-      if (aliveRef.current) setSleepNote(asleepNote(sent))
+      const posted = await sendCommand(routerID, action, args, confirm)
+      const id = posted.cmd_id
+      if (aliveRef.current) {
+        setSent(true)
+        setSleepNote(asleepNote(posted))
+      }
       const until = Date.now() + deadlineMs
+      let lostPoll = false
       while (Date.now() < until) {
         // Bounded hop: the backend caps wait_sec at 12 anyway
         // (miniappMaxCommandWaitSec, miniapp_commands.go) -- релей KeenDNS
@@ -64,7 +73,18 @@ export function useCommand(routerID) {
         // LAST hop to whatever time remains keeps the loop from overshooting
         // the deadline by a near-full hop when the deadline is close.
         const remainingSec = Math.max(1, Math.ceil((until - Date.now()) / 1000))
-        const res = await fetchCommandResult(routerID, id, Math.min(waitSec, remainingSec))
+        let res
+        try {
+          res = await fetchCommandResult(routerID, id, Math.min(waitSec, remainingSec))
+        } catch (err) {
+          // Временный сбой релея на опросе: команда уже у роутера, ждём
+          // дальше до дедлайна, с паузой, чтобы не молотить мёртвый релей.
+          if (!isTransient(err)) throw err
+          lostPoll = true
+          if (!aliveRef.current) return null
+          await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS))
+          continue
+        }
         if (!aliveRef.current) return null
         if (res) {
           // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
@@ -74,7 +94,7 @@ export function useCommand(routerID) {
         }
       }
       if (aliveRef.current) {
-        setError('Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.')
+        setError(lostPoll ? SENT_NO_RESULT_TEXT : 'Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.')
       }
     } catch (err) {
       if (aliveRef.current) {
@@ -88,5 +108,5 @@ export function useCommand(routerID) {
     return null
   }
 
-  return { busy, result, error, errorCode, sleepNote, run }
+  return { busy, result, error, errorCode, sleepNote, sent, run }
 }

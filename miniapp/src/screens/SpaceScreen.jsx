@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterSettings } from '../api.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
-import { commandErrorText } from '../maintenance.js'
+import { commandFailText } from '../maintenance.js'
 import { parsePackagesStatus } from '../packagesSchedule.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -21,7 +21,7 @@ import {
 
 function CommandError({ cmd }) {
   if (!cmd.error) return null
-  return <p class="state state-error">{commandErrorText(cmd.errorCode) || (cmd.errorCode ? 'Команда не отправлена.' : cmd.error)}</p>
+  return <p class="state state-error">{commandFailText(cmd)}</p>
 }
 
 // «Свободное место» (v0.57) -- экран «Обслуживания», только админ (сервер

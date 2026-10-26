@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterSettings } from '../api.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
-import { commandErrorText } from '../maintenance.js'
+import { commandFailText } from '../maintenance.js'
 import { parseRouteSnapshot, recentRouteSnapshot, rememberCommandSnapshot } from '../routes.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -139,7 +139,7 @@ export function PorthopScreen({ routerID, routerName, asleep, onClose }) {
               {cmd.sleepNote && <p class="hint">{cmd.sleepNote}</p>}
               {outcome && <p class={`result-note${failed ? ' result-note-error' : ''}`}>{outcome}</p>}
               {cmd.error && (
-                <p class="state state-error">{commandErrorText(cmd.errorCode) || (cmd.errorCode ? 'Команда не отправлена.' : cmd.error)}</p>
+                <p class="state state-error">{commandFailText(cmd)}</p>
               )}
               {failed && !legacyFail && cmd.result.output && (
                 <details class="packages-details">

@@ -400,6 +400,17 @@ export function commandErrorText(code) {
   return ERROR_CODES[code] ?? ''
 }
 
+// Команда поставлена (есть cmd_id), а итог узнать не вышло: роутер мог её
+// выполнить, повторное нажатие выполнило бы её дважды.
+export const SENT_NO_RESULT_TEXT = 'Команда ушла на роутер, но ответ не получен — откройте экран позже, чтобы увидеть итог.'
+
+// Одна фраза отказа для листа и экранов (MINI-01). sent -- команда уже
+// поставлена: «Команда не отправлена» тут было бы неправдой.
+export function commandFailText({ sent, errorCode, error }) {
+  if (sent) return commandErrorText(errorCode) || error || SENT_NO_RESULT_TEXT
+  return commandErrorText(errorCode) || (errorCode ? 'Команда не отправлена' : error)
+}
+
 // asleepNote -- сервер сообщает признак сна вместе с router_status
 // (miniappWakeWindow, internal/backend/miniapp_maintenance.go): «спит» и
 // «не на связи» -- разные тексты владельцу («проснётся» против «появится»),

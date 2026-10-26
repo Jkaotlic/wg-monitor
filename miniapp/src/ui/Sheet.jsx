@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
 import { commandOutcomeLabel, commandRefreshesList } from '../labels.js'
-import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs, commandName } from '../maintenance.js'
+import { maintenanceOutcomeLabel, commandFailText, commandDeadlineMs, commandName } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
 import { plainHyphens } from '../text.js'
 import { Chip } from './Chip.jsx'
@@ -17,7 +17,7 @@ import { Chip } from './Chip.jsx'
 // onBusy(locked) -- лист занят или освободился: оболочка не даёт «назад»
 // Telegram закрыть его, пока ответ в пути.
 export function Sheet({ sheet, asleep, onClose, onBusy }) {
-  const { busy, result, error, errorCode, sleepNote, run } = useCommand(sheet.routerID)
+  const { busy, result, error, errorCode, sleepNote, sent, run } = useCommand(sheet.routerID)
   // Локальное действие (sheet.perform) выполняет сам бэкенд, а не роутер:
   // ходу выполнения там неоткуда взяться, поэтому фаза остаётся «спросить»,
   // а кнопка на время запроса гаснет.
@@ -318,7 +318,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
                 `${path} failed: ${status}`, инженерный текст для сети, не для
                 человека. Без кода (например таймаут ожидания) error уже несёт
                 готовую русскую фразу -- её и показываем. */}
-            <p class="state state-error">{commandErrorText(errorCode) || (errorCode ? 'Команда не отправлена' : error)}</p>
+            <p class="state state-error">{commandFailText({ sent, errorCode, error })}</p>
             <button type="button" class="btn btn-primary" onClick={onClose}>Закрыть</button>
           </div>
         )}
