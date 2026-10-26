@@ -116,18 +116,14 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 		return err
 	}
 
-	PrintStep(3, 6, "Остановка бэкенда и выгрузка архива")
-	if _, err := s.MustRun("docker stop " + piBackendContainer); err != nil {
-		// Мог остановиться наполовину -- запускаем обратно.
-		return piStartBack(s, fmt.Errorf("остановить контейнер не удалось, база не тронута: %w", err))
-	}
+	// Выгрузка и проверка архива -- пока бэкенд работает: битый архив или
+	// оборванная связь не стоят ни секунды простоя.
+	PrintStep(3, 6, "Выгрузка архива и проверка целостности базы")
 	tmp := base + "/" + piRestoreTmp
 	if err := piStageArchive(s, tmp, backup, stores); err != nil {
 		piRemoveTmp(s, tmp)
-		return piStartBack(s, fmt.Errorf("выгрузка архива на Pi не удалась, база не тронута: %w", err))
+		return fmt.Errorf("выгрузка архива на Pi не удалась -- замены не было, бэкенд не останавливался: %w", err)
 	}
-
-	PrintStep(4, 6, "Проверка целостности базы из архива")
 	out, err := s.MustRun("sqlite3 " + shellSingleQuote(tmp+"/state.db") + " 'PRAGMA integrity_check;'")
 	if err != nil || strings.TrimSpace(out) != "ok" {
 		piRemoveTmp(s, tmp)
@@ -135,9 +131,16 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 		if err != nil {
 			why = err.Error()
 		}
-		return piStartBack(s, fmt.Errorf("база из архива не прошла integrity_check (%s): замены не было, прежняя база на месте", why))
+		return fmt.Errorf("архив повреждён: база не прошла integrity_check (%s) -- замены не было, бэкенд не останавливался", why)
 	}
 	PrintOK("integrity_check: ok")
+
+	PrintStep(4, 6, "Остановка бэкенда")
+	if _, err := s.MustRun("docker stop " + piBackendContainer); err != nil {
+		piRemoveTmp(s, tmp)
+		// Мог остановиться наполовину -- запускаем обратно.
+		return piStartBack(s, fmt.Errorf("остановить контейнер не удалось, замены не было: %w", err))
+	}
 
 	PrintStep(5, 6, "Замена базы и хранилищ")
 	names := make([]string, 0, len(stores))
