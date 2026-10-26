@@ -408,7 +408,18 @@ func (p *Poller) tick(ctx context.Context) {
 		if st.LastAlertAt == nil && p.hard != nil && sh.CheckName != heartbeatCheck {
 			// Первая тревога не дошла никому: шлём её саму, с записью в
 			// alert_messages и памятью для нити починки (BOT-01).
-			if _, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check); err != nil {
+			// Очередь доставок проверки общая с отчётом (карточка,
+			// «восстановилось»): впереди доставка -- карточку не шлём, обход
+			// не ждёт, повтор на следующем; состояние перечитается заново.
+			release, ok := alerts.TryEnqueueDelivery(sh.UserID, sh.CheckName)
+			if !ok {
+				slog.Info("realert: доставка по проверке уже идёт, карточка -- на следующем обходе",
+					"user_id", sh.UserID, "check", sh.CheckName)
+				continue
+			}
+			_, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check)
+			release()
+			if err != nil {
 				if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 					slog.Error("realert: повтор тревоги не дошёл", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
 				}

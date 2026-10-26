@@ -251,10 +251,10 @@ func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx 
 // через 6 часов. Пул занят -- доставка идёт на месте, как до v0.62: отчёт
 // подождёт, тревога дойдёт.
 func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
-	key := alertQueueKey{userID: userID, check: checkName}
-	prev, done := enqueueAlert(key)
+	// Очередь общая с обходом напоминаний (alerts.EnqueueDelivery).
+	prev, release := alerts.EnqueueDelivery(userID, checkName)
 	run := func() {
-		defer releaseAlert(key, done)
+		defer release()
 		// Очередь по проверке: эта доставка ждёт предыдущую той же пары
 		// (роутер, проверка). Свой срок (30 с) отсчитывается после ожидания:
 		// зависший Telegram держит каждый шаг не дольше его собственного
@@ -285,51 +285,8 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 	}()
 }
 
-// alertQueueKey -- очередь доставок одной проверки одного роутера.
-type alertQueueKey struct {
-	userID int64
-	check  string
-}
-
-// alertQueue -- хвосты очередей доставки тревог по проверке. Без очереди
-// «восстановилось» могло уйти раньше карточки тревоги, которая ещё висит на
-// Telegram (ответить не на что), или стереть alert_messages новой тревоги,
-// ушедшей следом. Запись живёт, пока в цепочке есть незаконченная доставка.
-var alertQueue = struct {
-	mu    sync.Mutex
-	tails map[alertQueueKey]chan struct{}
-}{tails: map[alertQueueKey]chan struct{}{}}
-
-// enqueueAlert ставит доставку в хвост очереди проверки: prev -- канал
-// предыдущей (nil, если очередь пуста), done закрывается по её завершении.
-func enqueueAlert(key alertQueueKey) (prev <-chan struct{}, done chan struct{}) {
-	done = make(chan struct{})
-	alertQueue.mu.Lock()
-	if p, ok := alertQueue.tails[key]; ok {
-		prev = p
-	}
-	alertQueue.tails[key] = done
-	alertQueue.mu.Unlock()
-	return prev, done
-}
-
-// releaseAlert -- доставка закончилась: следующая в очереди может идти, а
-// если она была хвостом, запись очереди удаляется.
-func releaseAlert(key alertQueueKey, done chan struct{}) {
-	alertQueue.mu.Lock()
-	if alertQueue.tails[key] == done {
-		delete(alertQueue.tails, key)
-	}
-	alertQueue.mu.Unlock()
-	close(done)
-}
-
 // alertQueueLen -- сколько очередей доставки не закончено (для тестов).
-func alertQueueLen() int {
-	alertQueue.mu.Lock()
-	defer alertQueue.mu.Unlock()
-	return len(alertQueue.tails)
-}
+func alertQueueLen() int { return alerts.DeliveryQueueLen() }
 
 // WaitRelayDrain ждёт конца всех фоновых уведомлений и доставок тревог,
 // включая ушедшие на месте при полном пуле: они пишут в базу (отметки

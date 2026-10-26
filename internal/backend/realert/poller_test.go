@@ -24,6 +24,9 @@ type fakeTG struct {
 	keyboards []*tg.InlineKeyboardMarkup
 	replyTos  []*int64
 	sendErr   error
+	// onSend -- зовётся под mu на каждой отправке (тест очереди доставки).
+	onSend              func()
+	queueFreeDuringSend bool
 }
 
 func (f *fakeTG) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
@@ -44,6 +47,9 @@ func (f *fakeTG) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 	f.threads = append(f.threads, threadID)
 	f.keyboards = append(f.keyboards, kb)
 	f.replyTos = append(f.replyTos, replyTo)
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return 99, f.sendErr
 }
 
