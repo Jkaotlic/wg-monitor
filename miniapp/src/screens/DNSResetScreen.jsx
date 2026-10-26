@@ -1,4 +1,4 @@
-import { agentReplyText } from '../errorText.js'
+import { agentReplyText, errorText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { placeText } from '../places.js'
@@ -99,12 +99,22 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   function loadAfter() {
-    recheck.run('force_recheck', {}, deadline).then(() =>
-      fetchRouterChecks(routerID)
+    recheck.run('force_recheck', {}, deadline).then((res) => {
+      // Отказ роутера (MINI-05): отчёт не обновился, перечитывать нечего.
+      if (res?.status !== 'ok') return
+      return fetchRouterChecks(routerID)
         .then((c) => setAfter(c?.checks ?? []))
-        .catch(() => {}),
-    )
+        .catch(() => {})
+    })
   }
+
+  const recheckProblem = recheck.busy
+    ? ''
+    : recheck.error
+      ? errorText(recheck.error)
+      : recheck.result && recheck.result.status !== 'ok'
+        ? agentReplyText(recheck.result, 'Роутер не выполнил повторную проверку — отчёт не обновлён.')
+        : ''
 
   function askReset() {
     if (!routerName) return
@@ -213,6 +223,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                     {recheck.busy ? 'Спрашиваем роутер…' : T.checkAgain}
                   </button>
                 )}
+                {recheckProblem && <p class="state state-error">{recheckProblem}</p>}
               </Section>
             )}
           </>
