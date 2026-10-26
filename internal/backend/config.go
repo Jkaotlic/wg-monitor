@@ -325,7 +325,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	// Rate-limit defaults: 0.2 r/s × burst 5 = "1 every 5s sustained, burst
 	// of 5". Reporter interval is 60s so legitimate traffic uses ~1/60 r/s
-	// per agent — room for transient ForceResumed spikes without limiting.
+	// per agent — room for transient force_recheck/hook spikes without limiting.
 	if cfg.RateLimit.ReportPerSec == 0 {
 		cfg.RateLimit.ReportPerSec = 0.2
 	}

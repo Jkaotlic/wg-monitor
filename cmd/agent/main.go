@@ -142,9 +142,10 @@ func main() {
 	defer stop()
 
 	// Command channel: long-poll /v1/cmd, dispatch to actions.Runner.
-	// force_recheck wires straight into reporter.ForceResumed so an admin
-	// taps "🔁 Force recheck" in TG and the agent emits a fresh report
-	// with Resumed=true within seconds. Tunnel actions use rep.SendNow.
+	// force_recheck («Проверить ещё раз» на экранах диагностики и сброса
+	// DNS в мини-аппе) идёт в reporter.ForceReport: свежий пингчек и
+	// внеплановый отчёт без принудительного Resumed (AG-05); не дошёл отчёт --
+	// команда отвечает err, а не ok. Tunnel actions use rep.SendNow.
 	opkg := &actions.OpkgRunner{
 		LockPath: "/opt/var/wg-monitor/opkg.lock",
 		// Установка отвязана от срока команды и может идти до 20 минут
@@ -158,7 +159,7 @@ func main() {
 	refreshEntwareCleanScript(logger)
 	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceReport, singleChecks, multiChecks)
 	// Действия с туннелем шлют внеплановый отчёт без Resumed (AG-05);
-	// ForceResumed -- только force_recheck.
+	// ForceReport -- только force_recheck.
 	runner.ReportNow = rep.SendNow
 	runner.ExitProbeNow = signals.prober.ProbeNow
 	if unstickWatcher != nil {
