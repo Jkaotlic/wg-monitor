@@ -65,6 +65,8 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const [after, setAfter] = useState(null)
   const [previewFresh, setPreviewFresh] = useState(false)
   const [reset, setReset] = useState(null)
+  // Когда пришёл ответ сброса (время клиента): отчёты старше него -- про состояние до сброса.
+  const [resetAt, setResetAt] = useState(null)
   // '' -- ещё не копировали, 'ok' / 'fail' -- итог последнего нажатия.
   const [copyState, setCopyState] = useState('')
 
@@ -124,6 +126,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         confirmPhrase: routerName || '',
         onResult: (res) => {
           setReset(parseReset(res))
+          setResetAt(Date.now())
           setAfter(null)
           if (res?.status !== 'err') loadAfter()
         },
@@ -194,7 +197,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                 {(reset.status !== 'err' || reset.unreachable) && <ProbeList probes={reset.probes} />}
                 {reset.status !== 'err' && (
                   <div class="card card-rows">
-                    {postconditionRows({ before, after: after ?? before }).map((r) => (
+                    {postconditionRows({ before, after: after ?? before, resetAt }).map((r) => (
                       <DataRow
                         key={r.key}
                         dot={r.tone === 'muted' ? undefined : r.tone}

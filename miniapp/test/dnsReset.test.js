@@ -133,6 +133,17 @@ describe('три постусловия', () => {
     expect(rows.map((r) => r.value)).toEqual(['ждём отчёта', 'ждём отчёта', 'ждём отчёта'])
   })
 
+  it('MINI-06: отчёт новее прежнего, но старше ответа сброса -- ещё ждём', () => {
+    const after = [
+      { check_name: 'dns_split', ts: '2026-09-14T10:05:00Z', details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot' }, resolves: 'ok' } },
+      { check_name: 'resolver_guard', status: 'ok', ts: '2026-09-14T10:05:00Z', details: {} },
+    ]
+    const resetAt = Date.parse('2026-09-14T10:06:00Z')
+    expect(postconditionRows({ before, after, resetAt }).map((r) => r.value)).toEqual(['ждём отчёта', 'ждём отчёта', 'ждём отчёта'])
+    const later = Date.parse('2026-09-14T10:04:00Z')
+    expect(postconditionRows({ before, after, resetAt: later }).map((r) => r.value)).toEqual(['да', 'да', '1 из 1'])
+  })
+
   it('свежий отчёт: имена резолвятся, сторож на месте, зоны у Яндекса', () => {
     const after = [
       {

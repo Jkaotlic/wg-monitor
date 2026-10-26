@@ -201,19 +201,27 @@ function find(checks, name) {
 // Свежесть -- по меткам самого роутера до и после, а не по часам телефона:
 // часы роутера и телефона вправе расходиться, а сравнение двух меток одного
 // источника от этого не зависит.
-function fresh(beforeCheck, afterCheck, stamp) {
+//
+// MINI-06: сверх этого проверка свежая, только если её метка позже ответа
+// сброса (resetAt, мс): отчёт, пришедший между «до» и сбросом, отличается от
+// прежнего, но про состояние ДО сброса.
+function fresh(beforeCheck, afterCheck, stamp, resetAt) {
   if (!afterCheck) return false
+  if (resetAt != null) {
+    const at = Date.parse(stamp(afterCheck))
+    if (!Number.isFinite(at) || at <= resetAt) return false
+  }
   if (!beforeCheck) return true
   return stamp(afterCheck) !== stamp(beforeCheck)
 }
 
 // postconditionRows -- три вопроса после сброса: резолвит ли роутер, остался
 // ли свой DNS-сервер у сторожа, у Яндекса ли русские зоны.
-export function postconditionRows({ before, after }) {
+export function postconditionRows({ before, after, resetAt = null }) {
   const splitStamp = (c) => c.details?.checked_at ?? c.ts
   const splitBefore = find(before, 'dns_split')
   const split = find(after, 'dns_split')
-  const splitFresh = fresh(splitBefore, split, splitStamp)
+  const splitFresh = fresh(splitBefore, split, splitStamp, resetAt)
 
   const rows = []
   const d = split?.details ?? {}
@@ -235,7 +243,7 @@ export function postconditionRows({ before, after }) {
   // остановленного сторожа» у выключенного сторожа строки просто не будет,
   // и это тот же самый «выключен», а не поломка.
   if (!guard) guardRow = { value: 'сторож выключен', tone: 'muted' }
-  else if (!fresh(guardBefore, guard, (c) => c.ts)) guardRow = { value: TEXTS.waiting, tone: 'muted' }
+  else if (!fresh(guardBefore, guard, (c) => c.ts, resetAt)) guardRow = { value: TEXTS.waiting, tone: 'muted' }
   else {
     // Один словарь исходов сторожа на всё приложение (guardVerdict,
     // labels.js) -- раньше idle/ready читались здесь отдельной копией
