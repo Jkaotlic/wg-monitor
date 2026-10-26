@@ -19,6 +19,7 @@ import {
   parsePreview,
   parseProbes,
   parseReset,
+  snapshotResetAt,
   probeRows,
   referenceUnreachable,
   skippedServersText,
@@ -65,7 +66,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const [after, setAfter] = useState(null)
   const [previewFresh, setPreviewFresh] = useState(false)
   const [reset, setReset] = useState(null)
-  // Когда пришёл ответ сброса (время клиента): отчёты старше него -- про состояние до сброса.
+  // Момент сброса по часам роутера (из имени снимка): отчёты не новее него -- про состояние до сброса.
   const [resetAt, setResetAt] = useState(null)
   // '' -- ещё не копировали, 'ok' / 'fail' -- итог последнего нажатия.
   const [copyState, setCopyState] = useState('')
@@ -135,8 +136,9 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         asleep,
         confirmPhrase: routerName || '',
         onResult: (res) => {
-          setReset(parseReset(res))
-          setResetAt(Date.now())
+          const parsedReset = parseReset(res)
+          setReset(parsedReset)
+          setResetAt(snapshotResetAt(parsedReset.snapshot))
           setAfter(null)
           if (res?.status !== 'err') loadAfter()
         },

@@ -95,7 +95,7 @@ export function AccessSection({ routerID, openSheet }) {
     openSheet(
       localSheet({
         title: `Убрать ${nameOf(id, byID)} из операторов?`,
-        body: 'Ему перестанут приходить тревоги этого роутера.',
+        body: 'Этот человек перестанет видеть роутер в приложении и получать тревоги о нём.',
         buttonLabel: 'Убрать',
         danger: true,
         perform: apply,

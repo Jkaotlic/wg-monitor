@@ -7,6 +7,7 @@ import {
   parseReset,
   doneText,
   postconditionRows,
+  snapshotResetAt,
   dnsResetConfirmBody,
   dnsResetScreenTexts,
 } from '../src/dnsReset.js'
@@ -119,6 +120,14 @@ describe('после сброса', () => {
 
   it('обещания «вернём одним нажатием» на экране нет', () => {
     expect(JSON.stringify(dnsResetScreenTexts())).not.toMatch(/одним нажатием|откатить автоматически|вернём/)
+  })
+})
+
+describe('MINI-06: момент сброса по часам роутера', () => {
+  it('из имени снимка «до»; нет снимка -- null', () => {
+    expect(snapshotResetAt('/opt/etc/wg-monitor/dns-before-1757600000.txt')).toBe(1757600000000)
+    expect(snapshotResetAt('')).toBe(null)
+    expect(snapshotResetAt('/tmp/other.txt')).toBe(null)
   })
 })
 

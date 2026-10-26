@@ -78,6 +78,7 @@ describe('MINI-05: повторная проверка после сброса D
     mocks.errors.force_recheck = 'Сервер не ответил — проверьте связь и повторите.'
     const root = await afterReset()
     expect(root.textContent).toContain('Сервер не ответил — проверьте связь и повторите.')
+    expect(mocks.checksCalls).toBe(1)
     render(null, root)
   })
 

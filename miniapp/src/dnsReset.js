@@ -123,6 +123,14 @@ export function previewText(p) {
 const SNAPSHOT = /снимок «до»: (\S+)/
 const SNAPSHOT_FAILED = /снимок «до» не записан/
 
+// Момент сброса по часам роутера: агент пишет снимок «до» в
+// dns-before-<unix>.txt ровно перед применением. Нет снимка -- null, и
+// отсечки по времени нет (часы телефона с метками роутера не сравниваем).
+export function snapshotResetAt(snapshotPath) {
+  const m = /dns-before-(\d+)\.txt/.exec(String(snapshotPath ?? ''))
+  return m ? Number(m[1]) * 1000 : null
+}
+
 export function parseReset(result) {
   const output = String(result?.output ?? '')
   const m = SNAPSHOT.exec(output)
@@ -198,13 +206,14 @@ function find(checks, name) {
   return (checks ?? []).find((c) => c.check_name === name) ?? null
 }
 
-// Свежесть -- по меткам самого роутера до и после, а не по часам телефона:
-// часы роутера и телефона вправе расходиться, а сравнение двух меток одного
-// источника от этого не зависит.
+// Свежесть -- по меткам самого роутера до и после: часы роутера и телефона
+// вправе расходиться, а сравнение двух меток одного источника от этого не
+// зависит.
 //
-// MINI-06: сверх этого проверка свежая, только если её метка позже ответа
-// сброса (resetAt, мс): отчёт, пришедший между «до» и сбросом, отличается от
-// прежнего, но про состояние ДО сброса.
+// MINI-06: сверх этого проверка свежая, только если её метка позже момента
+// сброса (resetAt, мс, ЧАСЫ РОУТЕРА -- см. snapshotResetAt): отчёт, пришедший
+// между «до» и сбросом, отличается от прежнего, но про состояние ДО сброса.
+// resetAt == null -- момента нет, остаётся только сравнение «до» и «после».
 function fresh(beforeCheck, afterCheck, stamp, resetAt) {
   if (!afterCheck) return false
   if (resetAt != null) {
