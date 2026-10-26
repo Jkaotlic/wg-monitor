@@ -51,4 +51,18 @@ describe('автопочинка: ошибка загрузки', () => {
     render(null, root)
     root.remove()
   })
+
+  // Тому, кому править нельзя (роль известна и не owner/admin), строка про сбой
+  // бесполезна: повторить и включить он всё равно не сможет.
+  it('зритель без прав правки сбоя не видит; неизвестная роль -- как раньше', async () => {
+    for (const [role, shown] of [['viewer', false], [undefined, true], ['admin', true]]) {
+      const root = document.createElement('div')
+      document.body.appendChild(root)
+      await act(async () => render(<TunnelScreen routerID={4} asleep={false} snapshot={SNAP} tunnelID="awg12" role={role} openSheet={() => {}} onClose={() => {}} />, root))
+      await flush()
+      expect(!!root.querySelector('.tunnel-autorepair-error')).toBe(shown)
+      render(null, root)
+      root.remove()
+    }
+  })
 })
