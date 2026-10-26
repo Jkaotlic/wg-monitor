@@ -79,7 +79,9 @@ type verifyCounts struct {
 type sealedCheck struct {
 	Open       bool
 	KeyMissing bool
-	Note       string
+	// Damaged -- ключ ни при чём: хранилище не читается или не JSON.
+	Damaged bool
+	Note    string
 }
 
 // runBackupVerify разворачивает последний малый архив во временный каталог
@@ -123,9 +125,14 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 		s.Verify = backup.VerifyStatus{LastRunAt: at, OK: verr == nil, Routers: counts.Routers}
 		s.ReviveKeyInBackup = includeReviveKey
 		if c := counts.Sealed; c != nil {
-			open := c.Open
-			s.Verify.SealedStoresOpen = &open
-			s.Verify.SealedKeyMissing = c.KeyMissing
+			if c.Damaged {
+				// Хранилище повреждено -- про ключ это ничего не говорит.
+				s.Verify.SealedStoreDamaged = true
+			} else {
+				open := c.Open
+				s.Verify.SealedStoresOpen = &open
+				s.Verify.SealedKeyMissing = c.KeyMissing
+			}
 			s.Verify.SealedStoresNote = backup.StatusErrorText(c.Note)
 		}
 		if verr != nil {
@@ -287,7 +294,7 @@ func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (stri
 	for _, name := range names {
 		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста, присутствие в архиве проверено
 		if err != nil {
-			return "", closed("хранилище " + name + " из архива не читается"), fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
+			return "", sealedCheck{Damaged: true, Note: "хранилище " + name + " из архива не читается"}, fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
 		}
 		plain, err := sealedfile.DecodeWith(box, name, body)
 		if err != nil {
@@ -297,7 +304,7 @@ func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (stri
 		ok := json.Valid(plain)
 		clear(plain)
 		if !ok {
-			return "", closed("хранилище " + name + " из архива -- не JSON после расшифровки"), fmt.Errorf("хранилище %s из архива -- не JSON после расшифровки", name)
+			return "", sealedCheck{Damaged: true, Note: "хранилище " + name + " из архива -- не JSON после расшифровки"}, fmt.Errorf("хранилище %s из архива -- не JSON после расшифровки", name)
 		}
 	}
 	return "хранилища кабинетов в архиве зашифрованы (" + list + ") и расшифровываются ключом шифрования этой машины; самого ключа в архиве нет -- храните revive.key отдельно: без него ключи кабинетов не прочитать",

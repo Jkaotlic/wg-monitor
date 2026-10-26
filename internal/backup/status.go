@@ -79,6 +79,10 @@ type VerifyStatus struct {
 	// SealedKeyMissing -- зашифрованные есть, а ключа на сервере нет вовсе
 	// (отдельное состояние: «ключа нет на сервере», а не «ключ не тот»).
 	SealedKeyMissing bool `json:"sealed_key_missing,omitempty"`
+	// SealedStoreDamaged -- ключ подошёл, но хранилище из архива не
+	// читается или внутри не JSON: беда хранилища, а не ключа
+	// (SealedStoresOpen тогда не ставится).
+	SealedStoreDamaged bool `json:"sealed_store_damaged,omitempty"`
 	// SealedStoresNote -- итог словами: имена хранилищ, без путей и
 	// содержимого.
 	SealedStoresNote string `json:"sealed_stores_note,omitempty"`

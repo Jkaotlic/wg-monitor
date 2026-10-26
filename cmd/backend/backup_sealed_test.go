@@ -251,3 +251,19 @@ func writeBackupStatusFixture(t *testing.T, f *backupFixture, keyIn bool) {
 		t.Fatal(err)
 	}
 }
+
+// v0.62 (ревью): хранилище повреждено (ключ подходит, внутри не JSON) --
+// это не беда ключа: sealed_stores_open не ставится, ставится
+// sealed_store_damaged; провал проверки говорит «не JSON».
+func TestBackupVerifyDamagedSealedStoreIsNotKeyProblem(t *testing.T) {
+	setIncludeReviveKey(t, false)
+	f := newBackupFixture(t)
+	mustWrite(t, filepath.Join(f.dir, "data", "awg3-panels.json"), `{"panels":[`)
+	f.sealFixtureStores(t)
+	f.backupSmall(t)
+	f.verifyFails(t, "хранилище awg3-panels.json из архива -- не JSON после расшифровки")
+	v := f.status(t).Verify
+	if v.SealedStoresOpen != nil || v.SealedKeyMissing || !v.SealedStoreDamaged {
+		t.Fatalf("состояние: %+v", v)
+	}
+}
