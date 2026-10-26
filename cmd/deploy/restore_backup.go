@@ -207,7 +207,7 @@ const (
 
 // InspectRestoreBackup читает нешифрованный архив .tgz (старый формат).
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAML, true)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAML, resolveRestoreExtras)
 }
 
 // InspectRestoreBackupWithPassphrase читает архив любого вида: нешифрованный
@@ -215,16 +215,21 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 // Шифрованный расшифровывается потоком прямо в распаковку -- открытого
 // архива целиком на диске не появляется.
 func InspectRestoreBackupWithPassphrase(archivePath, passphrase string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAML, true)
+	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAML, resolveRestoreExtras)
 }
 
 func InspectRestoreBackupForImport(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAMLForImport, false)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAMLForImport, nil)
 }
 
-// inspectRestoreBackup: withExtras=false -- хранилища и ключ не извлекаются
+// restoreExtrasResolver сопоставляет извлечённым хранилищам и ключу их места
+// на сервере по backend.yaml архива.
+type restoreExtrasResolver func(backendYAMLPath string, extracted map[string]string) ([]RestoreExtraFile, []string, error)
+
+// inspectRestoreBackup: resolveExtras=nil -- хранилища и ключ не извлекаются
 // (импорт секретов оператора: на сервер ничего не кладётся).
-func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML func(string) error, withExtras bool) (*RestoreBackup, func(), error) {
+func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML func(string) error, resolveExtras restoreExtrasResolver) (*RestoreBackup, func(), error) {
+	withExtras := resolveExtras != nil
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("temp dir: %w", err)
@@ -384,7 +389,7 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 		warnings []string
 	)
 	if withExtras {
-		extras, warnings, err = resolveRestoreExtras(seen["backend.yaml"], extracted)
+		extras, warnings, err = resolveExtras(seen["backend.yaml"], extracted)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -603,7 +608,12 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 			return fmt.Errorf("backup archive is encrypted: the backup recovery password is required")
 		}
 	}
-	backup, cleanup, err := InspectRestoreBackupWithPassphrase(path, passphrase)
+	inspect := InspectRestoreBackupWithPassphrase
+	if isDockerBackend(state) {
+		// Pi: в backend.yaml архива пути контейнера (/data/...), а не VPS.
+		inspect = InspectRestoreBackupForDocker
+	}
+	backup, cleanup, err := inspect(path, passphrase)
 	if err != nil {
 		return err
 	}
@@ -643,13 +653,6 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 	}
 }
 
-// errRestoreDockerLayout: мастер знает только раскладку VPS с systemd; на докере
-// (Pi) заменять базу без проверки на живом стенде опаснее, чем сделать руками.
-// Текст целиком показывается оператору как фраза, а не оборачивается.
-//
-//lint:ignore ST1005 законченная фраза для человека: с заглавной и с точкой.
-var errRestoreDockerLayout = errors.New("Этот бэкенд работает в докере (Raspberry Pi): мастер восстанавливает только раскладку VPS с systemd. Как восстановить вручную — DEPLOY.md, раздел «Восстановление бэкапа на Pi».")
-
 // connectRestoreBackend -- SSH к текущему бэкенду для восстановления. Тесты
 // подменяют его фейком и считают, было ли подключение вообще.
 var connectRestoreBackend = func(state *State, secrets *SecretStore) (remoteSession, error) {
@@ -661,8 +664,8 @@ var connectRestoreBackend = func(state *State, secrets *SecretStore) (remoteSess
 }
 
 func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
-	if strings.TrimSpace(state.Backend.SourceBind) != "" {
-		return errRestoreDockerLayout
+	if isDockerBackend(state) {
+		return restoreBackupToPi(state, secrets, backup)
 	}
 	if state.Backend.Host == "" {
 		return fmt.Errorf("backend VPS is not configured in wizard.toml")
