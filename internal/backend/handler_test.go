@@ -2109,6 +2109,35 @@ func TestHardTransition_NoAutoRepairAfterShutdown(t *testing.T) {
 	}
 }
 
+// Идёт слив доставок (останов): тревога доставляется, а автопочинку не
+// начинаем -- её движок никто не дождётся.
+func TestHardTransition_NoAutoRepairWhileDraining(t *testing.T) {
+	var mu sync.Mutex
+	started := false
+	srv, tok := hardReportEnv(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		started = true
+		return "job-1", nil
+	})
+	relayDrain.mu.Lock()
+	relayDrain.draining = true
+	relayDrain.mu.Unlock()
+	t.Cleanup(func() {
+		relayDrain.mu.Lock()
+		relayDrain.draining = false
+		relayDrain.mu.Unlock()
+	})
+	postFailingCheck(t, srv, tok, "tunnel_awg12")
+	waitRelayPoolEmpty(t)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if started {
+		t.Fatal("автопочинка запущена во время слива доставок")
+	}
+}
+
 // Автозапуск держит в руках саму проверку, а в ней -- имя VPN-туннеля.
 // Починке оно нужно, когда снимок от роутера не придёт: иначе владелец
 // прочтёт в личке идентификатор «awg12».

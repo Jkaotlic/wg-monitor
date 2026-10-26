@@ -218,6 +218,37 @@ var relaySem = make(chan struct{}, relayConcurrencyLimit)
 // и остановка бэкенда ждёт их до d.Close() (WaitRelayDrain).
 var relayWG sync.WaitGroup
 
+// relayDrain -- идёт ли слив (WaitRelayDrain). Add у WaitGroup параллельно с
+// Wait запрещён (паника «Add called concurrently with Wait»), а обработчик,
+// переживший srv.Shutdown (5 с), может запустить доставку посреди слива.
+// Поэтому учёт (relayTrack) и подъём флага -- под одним мьютексом: после
+// подъёма Add не вызывается. Во время слива тревога доставляется без учёта
+// (её всё равно ждать некому, а бросить -- потерять), прочие уведомления и
+// старт автопочинки бросаются.
+var relayDrain struct {
+	mu       sync.Mutex
+	draining bool
+}
+
+// relayTrack учитывает фоновую задачу в relayWG; false -- идёт слив, задача
+// не учтена (relayWG.Done для неё звать нельзя).
+func relayTrack() bool {
+	relayDrain.mu.Lock()
+	defer relayDrain.mu.Unlock()
+	if relayDrain.draining {
+		return false
+	}
+	relayWG.Add(1)
+	return true
+}
+
+// relayDraining -- идёт слив: новые уведомления и автопочинку не начинаем.
+func relayDraining() bool {
+	relayDrain.mu.Lock()
+	defer relayDrain.mu.Unlock()
+	return relayDrain.draining
+}
+
 // spawnRelay runs fn in a bounded background goroutine parented to the relay
 // (shutdown) context with a 10s timeout. When the relay pool is saturated the
 // notification is dropped (and logged) instead of spawning an unbounded
@@ -235,9 +266,14 @@ func spawnRelay(d Deps, label string, fn func(ctx context.Context)) {
 // through the one shared pool, so a fleet-wide resume/bulk-result storm
 // can't spawn unbounded TG-calling goroutines (BE-02/C4).
 func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx context.Context)) {
+	if !relayTrack() {
+		d.Logger.Warn("backend stopping; dropping background notify", "label", label)
+		return
+	}
 	select {
 	case relaySem <- struct{}{}:
 	default:
+		relayWG.Done()
 		d.Logger.Warn("relay pool saturated; dropping background notify", "label", label, "limit", relayConcurrencyLimit)
 		return
 	}
@@ -269,11 +305,16 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 		defer cancel()
 		fn(ctx)
 	}
-	relayWG.Add(1)
+	tracked := relayTrack() // слив уже идёт -- доставка без учёта
+	untrack := func() {
+		if tracked {
+			relayWG.Done()
+		}
+	}
 	select {
 	case relaySem <- struct{}{}:
 		go func() {
-			defer relayWG.Done()
+			defer untrack()
 			defer func() { <-relaySem }()
 			background()
 		}()
@@ -286,7 +327,7 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 		// пуле -- таких горутин не больше, чем доставок в цепочке.
 		d.Logger.Warn("relay pool saturated; alert queued behind same check, delivering in background", "label", label, "limit", relayConcurrencyLimit)
 		go func() {
-			defer relayWG.Done()
+			defer untrack()
 			background()
 		}()
 		return
@@ -295,7 +336,7 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 	// отчёт подождёт, тревога дойдёт. Ожидание и доставка -- под одним
 	// сроком, чтобы ответ на отчёт не держался дольше alertDeliveryTimeout.
 	d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
-	defer relayWG.Done()
+	defer untrack()
 	defer release()
 	ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
 	defer cancel()
@@ -310,8 +351,18 @@ func alertQueueLen() int { return alerts.DeliveryQueueLen() }
 // доставки), поэтому остановка бэкенда ждёт их до d.Close(). Без
 // ограничения по времени -- его ставит вызывающий; контекст доставок к
 // этому моменту уже отменён, так что они заканчиваются быстро.
+//
+// На время ожидания поднят флаг слива (relayDrain): поздние задачи в
+// relayWG не попадают, и Add не идёт параллельно с Wait. После Wait флаг
+// снимается -- WaitGroup снова можно использовать (тесты зовут слив не раз).
 func WaitRelayDrain() {
+	relayDrain.mu.Lock()
+	relayDrain.draining = true
+	relayDrain.mu.Unlock()
 	relayWG.Wait()
+	relayDrain.mu.Lock()
+	relayDrain.draining = false
+	relayDrain.mu.Unlock()
 }
 
 // alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
@@ -319,8 +370,8 @@ func WaitRelayDrain() {
 const alertDeliveryTimeout = 30 * time.Second
 
 // goRelay запускает fn с местом в relaySem, уже занятым вызывающим.
+// Учёт в relayWG (relayTrack) уже сделан вызывающим.
 func goRelay(d Deps, timeout time.Duration, fn func(ctx context.Context)) {
-	relayWG.Add(1)
 	go func() {
 		defer relayWG.Done()
 		defer func() { <-relaySem }()
@@ -1289,7 +1340,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 						// Доставку оборвала остановка бэкенда: движок починки
 						// в окне слива никто не дождётся, он стартует при
 						// следующем отчёте после перезапуска.
-						if ctx.Err() != nil {
+						if ctx.Err() != nil || relayDraining() {
 							d.Logger.Info("автопочинка не начата: бэкенд останавливается",
 								"nickname", nick, "check", checkName)
 							return

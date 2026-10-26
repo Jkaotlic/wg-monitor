@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -82,5 +83,58 @@ func TestWaitRelayDrain_EmptyPoolReturnsAtOnce(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("пустой пул: WaitRelayDrain должен вернуться сразу")
+	}
+}
+
+// waitDraining ждёт, пока WaitRelayDrain поднимет флаг слива.
+func waitDraining(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !relayDraining() {
+		if time.Now().After(deadline) {
+			t.Fatal("слив не начался")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Обработчик, переживший srv.Shutdown, запускает доставку, когда слив уже
+// ждёт: relayWG.Add параллельно с Wait -- запрещённое использование
+// WaitGroup (паника «Add called concurrently with Wait» / гонка). Во время
+// слива тревога доставляется без учёта, прочие уведомления бросаются, и слив
+// поздних не ждёт. Прогонять с -race.
+func TestWaitRelayDrain_LateSpawnDuringDrain(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	first := make(chan struct{})
+	spawnAlertDelivery(d, "dispatch", 1, "drain-first", func(ctx context.Context) { <-first })
+	drained := make(chan struct{})
+	go func() { WaitRelayDrain(); close(drained) }()
+	waitDraining(t)
+
+	lateStarted := make(chan struct{})
+	lateRelease := make(chan struct{})
+	defer close(lateRelease)
+	spawnAlertDelivery(d, "dispatch", 1, "drain-late", func(ctx context.Context) {
+		close(lateStarted)
+		<-lateRelease
+	})
+	select {
+	case <-lateStarted:
+	case <-time.After(2 * time.Second):
+		close(first)
+		t.Fatal("поздняя тревога во время слива не доставлена")
+	}
+	var noticeRan atomic.Bool
+	spawnRelay(d, "late-notice", func(ctx context.Context) { noticeRan.Store(true) })
+
+	close(first)
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("слив ждёт позднюю доставку, начатую после его старта")
+	}
+	if noticeRan.Load() {
+		t.Fatal("уведомление во время слива запущено, ждали отказ")
 	}
 }
