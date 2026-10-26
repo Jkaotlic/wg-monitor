@@ -117,8 +117,10 @@ const owedReplyMaxAge = 24 * time.Hour
 
 // retryOwedReplies повторяет ответы на тревоги, которые не дошли ни до кого
 // (db.OwedReplies, BOT-01). Доставлено -- долг снят и переписка по проверке
-// забыта, как после обычного «восстановилось». Проверка снова в аварии --
-// долг снят: новая тревога важнее. Лимит частоты -- обход останавливается.
+// забыта, как после обычного «восстановилось». Проверка снова не в порядке
+// (fail или hard) -- долг снят без отправки: «восстановилось» поверх новой
+// поломки соврало бы, а о ней скажет своя тревога (FRESH-03). Лимит
+// частоты -- обход останавливается.
 // Возвращает false, если обход надо прервать.
 func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 	owed, err := p.d.OwedReplies().List()
@@ -135,7 +137,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 				slog.Warn("realert: owed reply state get failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 				continue
 			}
-			drop = st.CurrentStatus == "hard"
+			drop = st.CurrentStatus != "ok"
 			silent = alerts.Silenced(st, now)
 		}
 		if drop {
