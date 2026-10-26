@@ -90,6 +90,9 @@ type Poller struct {
 	// hard -- доставка самой карточки HARD-тревоги (alerts.Dispatcher), когда
 	// первая не дошла никому (last_alert_at NULL); nil -- напоминание.
 	hard HardDeliverer
+	// beforeHardQueue -- шов для тестов: зовётся между чтением состояния и
+	// постановкой карточки в очередь проверки. В проде nil.
+	beforeHardQueue func()
 }
 
 // HardDeliverer -- отправка карточки HARD-тревоги так же, как при первом
@@ -184,10 +187,6 @@ func (p *Poller) sendOwedReply(ctx context.Context, now time.Time, o db.OwedRepl
 	}
 	return true
 }
-
-// beforeHardQueue -- шов для тестов: зовётся между чтением состояния и
-// постановкой карточки в очередь проверки. В проде nil.
-var beforeHardQueue func()
 
 // SetNotifySink подменяет рассылку. Только для тестов.
 func (p *Poller) SetNotifySink(s realertSink) { p.notify = s }
@@ -436,8 +435,8 @@ func (p *Poller) tick(ctx context.Context) {
 			// Очередь доставок проверки общая с отчётом (карточка,
 			// «восстановилось»): впереди доставка -- карточку не шлём, обход
 			// не ждёт, повтор на следующем; состояние перечитается заново.
-			if beforeHardQueue != nil {
-				beforeHardQueue()
+			if p.beforeHardQueue != nil {
+				p.beforeHardQueue()
 			}
 			release, ok := alerts.TryEnqueueDelivery(sh.UserID, sh.CheckName)
 			if !ok {

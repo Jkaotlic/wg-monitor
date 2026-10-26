@@ -169,14 +169,13 @@ func TestRealertDeliverHardRereadsStateInQueue(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, uid, f, p, now := undeliveredHard(t)
-			beforeHardQueue = func() {
+			p.beforeHardQueue = func() {
 				st := tc.st(now)
 				st.UserID, st.CheckName = uid, "awg_handshake"
 				if err := d.State().Save(uid, "awg_handshake", st); err != nil {
 					t.Error(err)
 				}
 			}
-			t.Cleanup(func() { beforeHardQueue = nil })
 			tickBounded(t, p)
 			if n := f.count(); n != 0 {
 				t.Fatalf("карточка по устаревшему снимку ушла: %d сообщений", n)
