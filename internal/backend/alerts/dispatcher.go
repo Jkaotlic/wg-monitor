@@ -134,8 +134,16 @@ func (di *Dispatcher) rememberHard(userID int64, checkName, text string, kb tg.I
 // или ответил на неё в приложении. Память тревоги дополняется строкой
 // statusLine (пустая -- текст прежний) и теряет кнопки, как сама тревога в
 // Telegram: нить починки правит уже от этого (BOT-06). Тревоги в памяти нет
-// (перезапуск, «восстановилось») -- делать нечего.
+// (перезапуск, «восстановилось») -- делать нечего. Проверка уже
+// восстановилась (автомат не в hard), а «восстановилось» ещё в очереди
+// доставки -- тоже: карточке, которую вот-вот закроет ответ, строка
+// тишины ни к чему. Автомат не прочитался -- как раньше, дополняем.
 func (di *Dispatcher) NoteAlertAction(userID int64, checkName, statusLine string) {
+	if di.d != nil {
+		if st, err := di.d.State().Get(userID, checkName); err == nil && st.CurrentStatus != "hard" {
+			return
+		}
+	}
 	di.mu.Lock()
 	defer di.mu.Unlock()
 	key := hardKey{userID, checkName}
