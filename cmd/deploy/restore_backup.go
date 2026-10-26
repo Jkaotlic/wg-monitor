@@ -560,6 +560,9 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 	for _, e := range b.Extras {
 		if e.Name == restoreReviveKey {
 			reviveKey, keyInArchive = "yes", true
+			if b.ForDocker {
+				reviveKey = "yes (not installed on the Pi)"
+			}
 			continue
 		}
 		stores = append(stores, e.Name)

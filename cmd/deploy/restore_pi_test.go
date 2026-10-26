@@ -666,6 +666,9 @@ func TestRestorePreviewOnPiWarnsSealedStoresEvenWithKeyInArchive(t *testing.T) {
 	if strings.ContainsAny(p, "абвгдежзийклмнопрстуфхцчшщъыьэюя") {
 		t.Fatalf("кириллица в превью:\n%s", p)
 	}
+	if !strings.Contains(p, "\nrevive.key: yes (not installed on the Pi)") {
+		t.Fatalf("заголовок revive.key на Pi:\n%s", p)
+	}
 	delete(members, "revive.key")
 	if p := RenderRestoreBackupPreview(inspectPiArchive(t, members)); !strings.Contains(p, want) {
 		t.Fatalf("без ключа в архиве то же:\n%s", p)
