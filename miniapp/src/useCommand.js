@@ -89,6 +89,9 @@ export function useCommand(routerID) {
           continue
         }
         if (!aliveRef.current) return null
+        // Удачный опрос снимает отметку сбоя: к тексту «ушла, итога нет»
+        // ведёт только сбой ПОСЛЕДНЕГО опроса, а не любой давний.
+        lostPoll = false
         if (res) {
           // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
           const tagged = { ...res, for_router: routerID }

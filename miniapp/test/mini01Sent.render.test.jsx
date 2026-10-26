@@ -134,6 +134,18 @@ describe('useCommand: сбой опроса после постановки', ()
     expect(text()).toMatch(/^Не дождались ответа за отведённое время/)
   })
 
+  it('разовый сбой опроса, дальше успешные «ещё не готово» до дедлайна -- текст дедлайна, не «ушла»', async () => {
+    mocks.poll = [new ApiError(502, 'unknown', 'x'), null]
+    await mount()
+    let p
+    await act(async () => { p = api.run('x', {}, { deadlineMs: 4000 }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    await p
+    expect(api.sent).toBe(true)
+    expect(mocks.pollCalls).toBeGreaterThan(2)
+    expect(text()).toMatch(/^Не дождались ответа за отведённое время/)
+  })
+
   it('429 на опросе -- следующий опрос через JOB_POLL_RATE_LIMIT_MS, не через обычную паузу', async () => {
     const { JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS } = await import('../src/jobPoll.js')
     mocks.poll = [new ApiError(429, 'rate_limited', 'x'), { status: 'ok', output: '' }]
