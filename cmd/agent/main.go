@@ -156,7 +156,7 @@ func main() {
 	}
 	refreshOpkgCronScript(logger)
 	refreshEntwareCleanScript(logger)
-	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks, multiChecks)
+	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceReport, singleChecks, multiChecks)
 	// Действия с туннелем шлют внеплановый отчёт без Resumed (AG-05);
 	// ForceResumed -- только force_recheck.
 	runner.ReportNow = rep.SendNow
@@ -414,7 +414,7 @@ func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog
 // защит сброса DNS (свой резолвер, снимок «до», сброс кеша проверки) можно было
 // проверить тестом: удалённое поле иначе компилируется и молчит.
 func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client, opkg *actions.OpkgRunner,
-	forceRecheck func(context.Context), singleChecks []checks.Check, multiChecks []checks.MultiCheck) *actions.Runner {
+	forceRecheck func(context.Context) error, singleChecks []checks.Check, multiChecks []checks.MultiCheck) *actions.Runner {
 	return &actions.Runner{
 		AwgClient:            awgClient,
 		ForceRecheck:         forceRecheck,

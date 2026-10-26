@@ -73,7 +73,6 @@ type Reporter struct {
 	mu           sync.Mutex
 	sendOnceMu   sync.Mutex // serialises sendOnce; see sendOnce comment
 	lastReportAt time.Time
-	forceResumed bool // set by ForceResumed; consumed by next sendOnce
 
 	facts FactsProvider // nil -- отчёт без фактов
 	wake  chan struct{}
@@ -182,14 +181,16 @@ func (r *Reporter) regularOverdue() bool {
 	return !r.lastRegularAt.IsZero() && r.now().Sub(r.lastRegularAt) >= r.interval
 }
 
-// ForceResumed triggers an immediate report cycle with Resumed=true regardless
-// of last-report timing. Wired into the cmdloop force_recheck action so an
-// admin can poke a mobile router into a fresh report from TG.
-func (r *Reporter) ForceResumed(ctx context.Context) {
-	r.mu.Lock()
-	r.forceResumed = true
-	r.mu.Unlock()
-	r.sendOnce(ctx)
+// ForceReport -- внеплановый отчёт для force_recheck («Проверить ещё раз» в
+// мини-аппе, v0.62). Resumed не принуждается (AG-05: у мобильного роутера
+// Resumed=true выбрасывает упавшие проверки из тревог) и ставится только
+// по-честному, как в SendNow; свежий пингчек awg-manager пинается всегда.
+// Ошибка -- отчёт не дошёл до сервера: проверка на бэкенде не обновилась, и
+// команда не должна отвечать успехом.
+func (r *Reporter) ForceReport(ctx context.Context) error {
+	r.sendOnceMu.Lock()
+	defer r.sendOnceMu.Unlock()
+	return r.sendOnceLocked(ctx, "", true)
 }
 
 // SendNow -- внеплановый отчёт без принудительного Resumed (AG-05): после
@@ -216,39 +217,38 @@ func (r *Reporter) wakeReport(ctx context.Context) bool {
 	}
 	r.sendOnceMu.Lock()
 	defer r.sendOnceMu.Unlock()
-	r.sendOnceLocked(ctx, wire.TriggerHook)
+	_ = r.sendOnceLocked(ctx, wire.TriggerHook, false)
 	return true
 }
 
-// sendMu serialises sendOnce — both the scheduled tick and ForceResumed call
+// sendMu serialises sendOnce — both the scheduled tick and ForceReport call
 // sendOnce. Without serialisation, concurrent invocations issue duplicate
 // /v1/report POSTs and pollute events with same-timestamp duplicates.
 func (r *Reporter) sendOnce(ctx context.Context) {
 	r.sendOnceMu.Lock()
 	defer r.sendOnceMu.Unlock()
-	r.sendOnceLocked(ctx, "")
+	_ = r.sendOnceLocked(ctx, "", false) // плановый: сбой уже в журнале, следующий тик повторит
 }
 
 // sendOnceLocked шлёт один отчёт; trigger решается вызывающим под
 // sendOnceMu (общего поля нет -- метка не перетечёт на чужой отчёт).
-// Хук-отчёт не трогает состояние «вернулся после отвала»: forceResumed и
-// lastReportAt остаются первому плановому, который и несёт Resumed=true.
-func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
+// Хук-отчёт не трогает состояние «вернулся после отвала»: lastReportAt
+// остаётся первому плановому, который и несёт Resumed=true. kick -- пнуть
+// пингчек awg-manager перед сбором даже без Resumed (force_recheck).
+// Ошибка -- отчёт не доставлен (или прерван до отправки).
+func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string, kick bool) error {
 	start := time.Now()
 	hook := trigger == wire.TriggerHook
 
 	r.mu.Lock()
 	prev := r.lastReportAt
-	forced := false
 	if !hook {
-		forced = r.forceResumed
-		r.forceResumed = false
 		r.lastRegularAt = r.now()
 	}
 	r.mu.Unlock()
-	resumed := !hook && (forced || (!prev.IsZero() && time.Since(prev) > ResumedThreshold))
+	resumed := !hook && !prev.IsZero() && time.Since(prev) > ResumedThreshold
 
-	if resumed && r.awgClient != nil {
+	if (resumed || kick) && r.awgClient != nil {
 		// Kick awg-manager into a fresh ping cycle so our /pingcheck/status
 		// fetch a moment later returns up-to-date failCount/restartCount.
 		// Best-effort: ignore errors and continue with whatever we have.
@@ -261,7 +261,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
 		select {
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 	}
 
@@ -314,7 +314,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
 			r.mu.Unlock()
 			r.persistStateThrottled(snap, firstReject)
 		}
-		return
+		return err
 	}
 	if canonicalURL != "" && canonicalURL != r.backendURL && r.configPath != "" {
 		slog.Info("backend advertised new canonical URL; migrating config",
@@ -342,6 +342,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string) {
 	if r.facts != nil && facts != nil {
 		r.facts.Committed(facts)
 	}
+	return nil
 }
 
 // markReportRejected -- AGENT-11: бэкенд явно отверг отчёт. Скрипт замены

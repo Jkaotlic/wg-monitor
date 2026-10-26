@@ -239,7 +239,7 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	}
 
 	var rechecked bool
-	runner := &actions.Runner{ForceRecheck: func(context.Context) { rechecked = true }}
+	runner := &actions.Runner{ForceRecheck: func(context.Context) error { rechecked = true; return nil }}
 	res := runner.Execute(context.Background(), *cmd)
 	if res.Status != "ok" {
 		t.Errorf("expected ok status, got %q output=%q", res.Status, res.Output)
