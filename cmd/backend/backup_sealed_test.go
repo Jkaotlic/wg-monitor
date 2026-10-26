@@ -11,6 +11,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
+	"github.com/Jkaotlic/wg-monitor/internal/backup"
 )
 
 // sealFixtureStores шифрует хранилища фикстуры её ключом оживления -- так,
@@ -219,5 +220,34 @@ func TestBackupManifestNamesSealedStores(t *testing.T) {
 	manifest = string(tarMember(t, plain.decryptArchive(t, fixtureSmallName), "manifest.txt"))
 	if !strings.Contains(manifest, "sealed_stores=\n") || !strings.Contains(manifest, "sealed_stores_note=\n") {
 		t.Fatalf("манифест без зашифрованных хранилищ:\n%s", manifest)
+	}
+}
+
+// v0.62 (BACK-04): прогон бэкапа и проверка пишут в файл состояния, едет ли
+// ключ шифрования в архив, -- карточка «Бэкенд» напоминает сохранить его
+// отдельно, пока он не в бэкапе.
+func TestBackupRecordsReviveKeyInBackup(t *testing.T) {
+	for _, in := range []bool{false, true} {
+		setIncludeReviveKey(t, in)
+		f := newBackupFixture(t)
+		writeBackupStatusFixture(t, f, !in)
+		f.backupSmall(t)
+		if got := f.status(t).ReviveKeyInBackup; got != in {
+			t.Fatalf("после бэкапа revive_key_in_backup=%v, ждали %v", got, in)
+		}
+		writeBackupStatusFixture(t, f, !in)
+		if err := runBackupVerify(context.Background(), f.verifyOpts(&bytes.Buffer{})); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.status(t).ReviveKeyInBackup; got != in {
+			t.Fatalf("после проверки revive_key_in_backup=%v, ждали %v", got, in)
+		}
+	}
+}
+
+func writeBackupStatusFixture(t *testing.T, f *backupFixture, keyIn bool) {
+	t.Helper()
+	if err := backup.UpdateStatus(f.statusFilePath(), func(s *backup.Status) { s.ReviveKeyInBackup = keyIn }); err != nil {
+		t.Fatal(err)
 	}
 }

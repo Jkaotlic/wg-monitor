@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { backupLine } from '../src/backupLine.js'
+import { backupLine, backupKeyLines } from '../src/backupLine.js'
 
 // Все времена -- UTC; генерирует ответ сервера в 05:30 7 октября.
 const GENERATED = '2026-10-07T05:30:00Z'
@@ -196,5 +196,42 @@ describe('строка «Бэкап» в карточке «Бэкенд»', () 
     // но всё остальное в тексте -- только русские слова и единицы.
     const l = line({ known: true, small: small(), full: full(), verify: verify() })
     expect(l.text.replace(/Telegram|Pi/g, '')).not.toMatch(/[A-Za-z]/)
+  })
+})
+
+// v0.62 (BACK-04): ключ шифрования хранилищ в бэкап не кладётся -- карточка
+// «Бэкенд» напоминает об этом всегда, а провал пробного открытия хранилищ
+// недельной проверкой показывает отдельной строкой.
+describe('строки про ключ шифрования в карточке «Бэкенд»', () => {
+  const keyLines = (backup) => backupKeyLines(fleet(backup))
+  const REMIND = { text: 'Ключ шифрования не в бэкапе — сохраните secrets/revive.key отдельно', tone: 'hint' }
+
+  it('нет поля backup или состояние неизвестно -- строк нет', () => {
+    expect(backupKeyLines({ generated_at: GENERATED })).toEqual([])
+    expect(backupKeyLines(null)).toEqual([])
+    expect(keyLines({ known: false })).toEqual([])
+  })
+
+  it('ключ не в бэкапе -- напоминание всегда, даже когда всё хорошо', () => {
+    expect(keyLines({ known: true, small: small(), full: full(), verify: verify() })).toEqual([REMIND])
+    expect(keyLines({ known: true, revive_key_in_backup: false, verify: verify({ sealed_stores_open: true }) })).toEqual([REMIND])
+  })
+
+  it('ключ в бэкапе -- напоминания нет', () => {
+    expect(keyLines({ known: true, revive_key_in_backup: true, verify: verify() })).toEqual([])
+  })
+
+  it('хранилища не открываются текущим ключом -- отдельная строка', () => {
+    expect(keyLines({ known: true, verify: verify({ ok: false, sealed_stores_open: false }) })).toEqual([
+      REMIND,
+      { text: 'Хранилища не открываются текущим ключом', tone: 'danger' },
+    ])
+  })
+
+  it('ключа нет на сервере -- своя строка, не «ключ не тот»', () => {
+    expect(keyLines({ known: true, verify: verify({ sealed_stores_open: false, sealed_key_missing: true }) })).toEqual([
+      REMIND,
+      { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS и своих VPS из бэкапа не откроются', tone: 'danger' },
+    ])
   })
 })

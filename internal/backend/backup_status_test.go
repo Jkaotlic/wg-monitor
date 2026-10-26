@@ -187,3 +187,63 @@ func TestBackupReasonWordsForManifestProblems(t *testing.T) {
 		}
 	}
 }
+
+// v0.62 (BACK-04): сводка несёт, лежит ли ключ шифрования в бэкапе и
+// открылись ли зашифрованные хранилища при недельной проверке -- карточка
+// «Бэкенд» говорит об этом до аварии. Заметка с именами файлов наружу не
+// идёт: экран строит фразу сам.
+func TestBackupSummaryCarriesSealedStoresState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), backup.StatusFileName)
+	clk := &fakeClock{t: time.Date(2026, 10, 7, 5, 0, 0, 0, time.UTC)}
+	open, closed := true, false
+	for _, c := range []struct {
+		name       string
+		mutate     func(*backup.Status)
+		wantOpen   *bool
+		wantMissed bool
+		wantKeyIn  bool
+	}{
+		{"зашифрованных нет", func(s *backup.Status) {}, nil, false, false},
+		{"открываются", func(s *backup.Status) { s.Verify.SealedStoresOpen = &open }, &open, false, false},
+		{"ключ не тот", func(s *backup.Status) { s.Verify.SealedStoresOpen = &closed }, &closed, false, false},
+		{"ключа нет", func(s *backup.Status) {
+			s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = &closed, true
+		}, &closed, true, false},
+		{"ключ в бэкапе", func(s *backup.Status) { s.ReviveKeyInBackup = true }, nil, false, true},
+	} {
+		writeBackupStatus(t, path, func(s *backup.Status) {
+			*s = backup.Status{}
+			goodBackupStatus(s)
+			s.Verify.SealedStoresNote = "хранилища из архива (awg3-panels.json) открываются"
+			c.mutate(s)
+		})
+		clk.advance(time.Hour)
+		got := NewBackupStatusSource(path, clk.now).Summary()
+		if got.ReviveKeyInBackup == nil || *got.ReviveKeyInBackup != c.wantKeyIn {
+			t.Errorf("%s: revive_key_in_backup %v", c.name, got.ReviveKeyInBackup)
+		}
+		if (got.Verify.SealedStoresOpen == nil) != (c.wantOpen == nil) ||
+			(c.wantOpen != nil && *got.Verify.SealedStoresOpen != *c.wantOpen) || got.Verify.SealedKeyMissing != c.wantMissed {
+			t.Errorf("%s: проверка %+v", c.name, got.Verify)
+		}
+		blob, _ := json.Marshal(got)
+		if !strings.Contains(string(blob), `"revive_key_in_backup":`) {
+			t.Errorf("%s: в JSON нет revive_key_in_backup: %s", c.name, blob)
+		}
+		if strings.Contains(string(blob), "awg3-panels.json") {
+			t.Errorf("%s: заметка с именами файлов в сводке: %s", c.name, blob)
+		}
+	}
+}
+
+func TestBackupReasonWordsForSealedStoreKey(t *testing.T) {
+	cases := map[string]string{
+		"хранилище awg3-panels.json из архива не расшифровывается ключом шифрования этой машины: после восстановления ключи кабинетов не прочитать": "хранилища не открываются текущим ключом шифрования",
+		"ключ шифрования этой машины негоден: revive key: bad length": "ключ шифрования на сервере негоден",
+	}
+	for raw, want := range cases {
+		if got := backupReasonWords(raw); got != want {
+			t.Errorf("%q -> %q, ждали %q", raw, got, want)
+		}
+	}
+}

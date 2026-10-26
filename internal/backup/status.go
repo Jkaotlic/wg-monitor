@@ -38,6 +38,10 @@ type Status struct {
 	Small   KindStatus   `json:"small"`
 	Full    KindStatus   `json:"full"`
 	Verify  VerifyStatus `json:"verify"`
+	// ReviveKeyInBackup -- ключ шифрования (revive.key) едет в архивы. По
+	// правилу нет (cmd/backend includeReviveKey); пишут прогон бэкапа и
+	// проверка. Карточка «Бэкенд» по false напоминает сохранить ключ отдельно.
+	ReviveKeyInBackup bool `json:"revive_key_in_backup"`
 }
 
 // KindStatus -- итог последнего прогона одного вида архива. Пустой

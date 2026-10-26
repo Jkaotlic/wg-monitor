@@ -71,7 +71,7 @@ import {
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
 import { watchdogLine, routerDelayLines } from '../watchdogLine.js'
-import { backupLine } from '../backupLine.js'
+import { backupLine, backupKeyLines } from '../backupLine.js'
 import {
   canPickVersion,
   otherVersionSheetText,
@@ -493,6 +493,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : null
   const backupRow = fleet ? backupLine(fleet) : null
+  const backupKeys = fleet ? backupKeyLines(fleet) : []
   const backend = fleet ? backendRow(fleet) : null
   const deployOffer = fleet ? backendDeployOffer(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
@@ -529,6 +530,11 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                 <p class="park-backup-line">{backupRow.text}</p>
               </div>
             )}
+            {backupKeys.map((k) => (
+              <p key={k.text} class={k.tone === 'danger' ? 'park-backup-key state state-error' : 'park-backup-key hint'}>
+                {k.text}
+              </p>
+            ))}
             {deployOffer && openLayer && (
               <div class="park-backend-actions">
                 <button type="button" class="btn btn-ghost btn-row" onClick={askBackendDeploy}>

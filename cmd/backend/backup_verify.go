@@ -121,6 +121,7 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 	at := opts.now().UTC().Format(time.RFC3339)
 	serr := backup.UpdateStatus(backup.StatusPath(dbPath), func(s *backup.Status) {
 		s.Verify = backup.VerifyStatus{LastRunAt: at, OK: verr == nil, Routers: counts.Routers}
+		s.ReviveKeyInBackup = includeReviveKey
 		if c := counts.Sealed; c != nil {
 			open := c.Open
 			s.Verify.SealedStoresOpen = &open
