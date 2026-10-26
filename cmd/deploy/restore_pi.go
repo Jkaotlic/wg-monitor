@@ -19,6 +19,11 @@ const (
 	piBackendContainer = "wg-monitor-backend"
 	piRestoreTmp       = "data/restore-tmp" // от корня раскладки, как в DEPLOY.md
 	piContainerDBPath  = "/data/state.db"   // db_path в backend.yaml контейнера
+
+	// Коды выхода скрипта замены: по ним мастер говорит правду о том,
+	// где осталась база.
+	piScriptFailedBeforeReplace = 10 // провал до замены: база не тронута
+	piScriptFailedAfterReplace  = 11 // провал после начала замены, откат удался
 )
 
 // restoreConfirm -- вопрос оператору; тесты подменяют.
@@ -147,10 +152,8 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	for _, e := range stores {
 		names = append(names, e.Name)
 	}
-	if _, err := s.MustRun(buildPiRestoreScript(base, stamp, names)); err != nil {
-		// Скрипт сам откатывает и запускает контейнер, но связь могла
-		// оборваться раньше -- запускаем ещё раз, это безопасно.
-		return piStartBack(s, fmt.Errorf("замена не удалась, прежняя база возвращена из копии: %w", err))
+	if err := piRunRestoreScript(s, base, stamp, names); err != nil {
+		return err
 	}
 	PrintOK("база заменена, прежняя сохранена как data/state.db.bak." + stamp)
 
@@ -164,6 +167,27 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	PrintOK("восстановление на Pi завершено")
 	PrintInfo("сохранённые пароли роутеров после восстановления вводятся заново")
 	return nil
+}
+
+// piRunRestoreScript запускает скрипт замены и по коду выхода говорит, где
+// база. В тексте ошибки -- только stderr, не сам скрипт.
+func piRunRestoreScript(s remoteExec, base, stamp string, names []string) error {
+	_, stderr, rc, err := s.Run(buildPiRestoreScript(base, stamp, names))
+	if err != nil {
+		// Скрипт на Pi сам откатывает и запускает контейнер, если доработал;
+		// исход отсюда не виден.
+		return fmt.Errorf("связь оборвалась во время замены, исход неизвестен (%v). Проверьте на Pi: ls -l %s/data; docker ps\n%s", err, base, piRollbackHint(base, stamp, names))
+	}
+	why := strings.TrimSpace(stderr)
+	switch rc {
+	case 0:
+		return nil
+	case piScriptFailedAfterReplace:
+		// Скрипт уже откатил и запустил контейнер; ещё один start безопасен.
+		return piStartBack(s, fmt.Errorf("замена не удалась (%s): прежняя база возвращена из копии state.db.bak.%s", why, stamp))
+	default:
+		return piStartBack(s, fmt.Errorf("замена не удалась (код %d: %s): замена не начиналась, база не тронута", rc, why))
+	}
 }
 
 // piHealthURL -- /healthz бэкенда на самом Pi: по умолчанию listen
@@ -264,7 +288,7 @@ rollback() {
 	if [ -f data/state.db.bak.%[2]s-wal ]; then cp -p data/state.db.bak.%[2]s-wal data/state.db-wal || true; fi
 	if [ -f data/state.db.bak.%[2]s-shm ]; then cp -p data/state.db.bak.%[2]s-shm data/state.db-shm || true; fi
 %[6]s}
-trap 'rc=$?; if [ "$rc" != 0 ] && [ "$replaced" = 1 ]; then rollback; fi; rm -rf %[3]s; docker start %[7]s >/dev/null 2>&1 || true; exit $rc' EXIT
+trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then rollback; rc=%[9]d; else rc=%[10]d; fi; fi; rm -rf %[3]s; docker start %[7]s >/dev/null 2>&1 || true; exit $rc' EXIT
 test -s %[3]s/state.db
 chmod 600 %[3]s/state.db
 chown --reference=data %[3]s/state.db
@@ -274,7 +298,8 @@ if [ -f data/state.db-shm ]; then cp -p data/state.db-shm data/state.db.bak.%[2]
 %[5]sreplaced=1
 rm -f data/state.db-wal data/state.db-shm
 mv -f %[3]s/state.db data/state.db
-%[8]s`, shellSingleQuote(base), stamp, piRestoreTmp, prep.String(), backupOld.String(), rollback.String(), piBackendContainer, install.String())
+%[8]s`, shellSingleQuote(base), stamp, piRestoreTmp, prep.String(), backupOld.String(), rollback.String(), piBackendContainer, install.String(),
+		piScriptFailedAfterReplace, piScriptFailedBeforeReplace)
 }
 
 // piRollbackHint -- как вернуть прежнюю базу руками, если новая не поднялась.

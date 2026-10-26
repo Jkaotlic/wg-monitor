@@ -169,7 +169,7 @@ func TestPiRestoreScriptKeepsOldDBWithWalBeforeReplacing(t *testing.T) {
 		last += 1 + i
 	}
 	// Ловушка выхода: откат только после начала замены, контейнер -- всегда.
-	if !strings.Contains(script, `trap 'rc=$?; if [ "$rc" != 0 ] && [ "$replaced" = 1 ]; then rollback; fi; rm -rf data/restore-tmp; docker start wg-monitor-backend >/dev/null 2>&1 || true; exit $rc' EXIT`) {
+	if !strings.Contains(script, "docker start wg-monitor-backend >/dev/null 2>&1 || true; exit $rc' EXIT") {
 		t.Fatalf("нет ловушки выхода:\n%s", script)
 	}
 	if strings.Index(script, "trap 'rc=") > strings.Index(script, "chmod 600") {
@@ -290,22 +290,44 @@ func TestRestoreToPiStopFailureStartsBackAndCleans(t *testing.T) {
 	}
 }
 
-func TestRestoreToPiScriptFailureStartsBack(t *testing.T) {
-	stubRestoreConfirm(t, true)
-	fake := newFakeRemote()
-	fake.reply = func(cmd string) (string, string, int, error) {
-		if strings.HasPrefix(cmd, "set -eu") {
-			return "", "mv: cannot move", 1, nil
+func TestRestoreToPiScriptFailureCodes(t *testing.T) {
+	cases := []struct {
+		rc          int
+		want, wrong string
+	}{
+		{piScriptFailedBeforeReplace, "замена не начиналась, база не тронута", "возвращена"},
+		{piScriptFailedAfterReplace, "прежняя база возвращена из копии state.db.bak.", "не тронута"},
+	}
+	for _, tc := range cases {
+		stubRestoreConfirm(t, true)
+		fake := newFakeRemote()
+		fake.reply = func(cmd string) (string, string, int, error) {
+			if strings.HasPrefix(cmd, "set -eu") {
+				return "", "mv: cannot move 'x'\n", tc.rc, nil
+			}
+			return piReply("ok\n", "200")(cmd)
 		}
-		return piReply("ok\n", "200")(cmd)
+		stubRestoreConnect(t, fake)
+		b := inspectPiArchive(t, piArchiveMembers())
+		err := restoreBackupToCurrentVPS(piState(), nil, b)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tc.wrong) {
+			t.Fatalf("rc=%d: err=%v", tc.rc, err)
+		}
+		if !strings.Contains(err.Error(), "mv: cannot move 'x'") || strings.Contains(err.Error(), "set -eu") || strings.Contains(err.Error(), "rollback()") {
+			t.Fatalf("rc=%d: в тексте нужен stderr, а не скрипт: %v", tc.rc, err)
+		}
+		if fake.indexOfCall("run: docker start wg-monitor-backend") < fake.indexOfCall("set -eu") {
+			t.Fatalf("rc=%d: после провала скрипта -- docker start:\n%s", tc.rc, strings.Join(fake.calls, "\n"))
+		}
 	}
-	stubRestoreConnect(t, fake)
-	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err == nil {
-		t.Fatal("ожидалась ошибка")
-	}
-	if fake.indexOfCall("run: docker start wg-monitor-backend") < fake.indexOfCall("set -eu") {
-		t.Fatalf("после провала скрипта -- docker start:\n%s", strings.Join(fake.calls, "\n"))
+}
+
+func TestPiRestoreScriptExitCodes(t *testing.T) {
+	script := buildPiRestoreScript("/root/wg-monitor", "20261026T010203Z", nil)
+	for _, want := range []string{"rc=10", "rc=11"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("нет %q:\n%s", want, script)
+		}
 	}
 }
 func TestInspectRestoreBackupForDockerPaths(t *testing.T) {
