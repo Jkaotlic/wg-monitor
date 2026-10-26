@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -349,6 +350,12 @@ func (s *SSH) UploadStdin(remotePath string, data []byte) error {
 // UploadSFTP uploads via SFTP. Use on systems with full openssh (e.g. VPS).
 // Falls back to UploadStdin on dropbear (caller decides which to use).
 func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
+	return s.UploadSFTPMode(remotePath, data, "")
+}
+
+// UploadSFTPMode — как UploadSFTP, но для файла с секретным режимом (без прав
+// «для прочих») создаёт его сразу закрытым: до chmod он не читается всеми.
+func (s *SSH) UploadSFTPMode(remotePath string, data []byte, mode string) error {
 	// Use scp-equivalent via ssh exec to avoid pulling github.com/pkg/sftp.
 	// Pattern: open session, send `dd of=PATH bs=1M`, write to stdin.
 	sess, err := s.client.NewSession()
@@ -361,7 +368,7 @@ func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(uploadSFTPCommand(remotePath)); err != nil {
+	if err := sess.Start(uploadSFTPCommandMode(remotePath, mode)); err != nil {
 		return err
 	}
 	prog := newProgressDots(len(data), os.Stderr)
@@ -384,6 +391,33 @@ func uploadStdinCommand(remotePath string) string {
 
 func uploadSFTPCommand(remotePath string) string {
 	return "dd of=" + shellSingleQuote(remotePath) + " bs=1M status=none"
+}
+
+// isSecretMode: у режима нет прав для «прочих» (600, 640, 660...). Пустой или
+// непонятный режим секретным не считается.
+func isSecretMode(mode string) bool {
+	m, err := strconv.ParseUint(strings.TrimSpace(mode), 8, 32)
+	return err == nil && m&0o007 == 0
+}
+
+// uploadSFTPCommandMode: для секретных режимов файл создаётся под umask 077,
+// чтобы между загрузкой и chmod его не читал никто посторонний.
+func uploadSFTPCommandMode(remotePath, mode string) string {
+	if isSecretMode(mode) {
+		return "umask 077; " + uploadSFTPCommand(remotePath)
+	}
+	return uploadSFTPCommand(remotePath)
+}
+
+// chmodUploadedCommand: если chmod секретного файла не удался, файл удаляется,
+// а не остаётся с неверными правами.
+func chmodUploadedCommand(remotePath, mode string) string {
+	q := shellSingleQuote(remotePath)
+	cmd := "chmod " + mode + " " + q
+	if isSecretMode(mode) {
+		return cmd + " || { rm -f " + q + "; exit 1; }"
+	}
+	return cmd
 }
 
 // progressDots prints one '.' to its writer per 1 MiB consumed, and a

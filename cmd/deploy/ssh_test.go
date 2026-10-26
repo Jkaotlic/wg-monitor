@@ -558,3 +558,24 @@ func TestKnownHosts_ReplaceHostKeyAtomic(t *testing.T) {
 		})
 	}
 }
+
+func TestUploadSecretCommandUsesUmaskAndRemovesOnChmodFailure(t *testing.T) {
+	got := uploadSFTPCommandMode("/etc/wg-monitor/bot-token.txt", "600")
+	want := "umask 077; dd of='/etc/wg-monitor/bot-token.txt' bs=1M status=none"
+	if got != want {
+		t.Fatalf("secret upload=%q want %q", got, want)
+	}
+	if got := uploadSFTPCommandMode("/etc/wg-monitor/bot-token.txt", "640"); !strings.HasPrefix(got, "umask 077; ") {
+		t.Fatalf("640 is not world-readable, must use umask: %q", got)
+	}
+	if got := uploadSFTPCommandMode("/etc/caddy/Caddyfile", "644"); strings.Contains(got, "umask") {
+		t.Fatalf("non-secret upload changed: %q", got)
+	}
+	chmod := chmodUploadedCommand("/etc/wg-monitor/bot-token.txt", "600")
+	if !strings.Contains(chmod, "chmod 600 '/etc/wg-monitor/bot-token.txt'") || !strings.Contains(chmod, "rm -f '/etc/wg-monitor/bot-token.txt'") {
+		t.Fatalf("secret chmod must remove file on failure: %q", chmod)
+	}
+	if plain := chmodUploadedCommand("/etc/caddy/Caddyfile", "644"); strings.Contains(plain, "rm ") {
+		t.Fatalf("non-secret must not be removed: %q", plain)
+	}
+}
