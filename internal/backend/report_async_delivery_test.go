@@ -138,4 +138,7 @@ func TestReportDoesNotWaitForAlertDelivery(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("тревога после разблокировки Telegram не доставлена")
 	}
+	// Доставка ещё может держать место в пуле relay (отметки после
+	// отправки): не оставляем её следующим тестам насыщения пула.
+	waitRelayPoolEmpty(t)
 }
