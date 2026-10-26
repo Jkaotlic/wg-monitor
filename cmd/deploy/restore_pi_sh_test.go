@@ -18,7 +18,7 @@ type piShRun struct {
 	rc        int
 }
 
-func runPiScriptInSh(t *testing.T, setup func(data string), failMV, failCP string) piShRun {
+func runPiScriptInSh(t *testing.T, setup func(data string), failMV, failCP string, failRM ...string) piShRun {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("нужен POSIX sh")
@@ -29,7 +29,8 @@ func runPiScriptInSh(t *testing.T, setup func(data string), failMV, failCP strin
 	}
 	realMV, err1 := exec.LookPath("mv")
 	realCP, err2 := exec.LookPath("cp")
-	if err1 != nil || err2 != nil {
+	realRM, err3 := exec.LookPath("rm")
+	if err1 != nil || err2 != nil || err3 != nil {
 		t.Skip("нет mv/cp")
 	}
 	root := t.TempDir()
@@ -45,6 +46,7 @@ func runPiScriptInSh(t *testing.T, setup func(data string), failMV, failCP strin
 		"docker": "#!/bin/sh\necho \"docker $*\" >> '" + log + "'\n",
 		"chown":  "#!/bin/sh\necho \"chown $*\" >> '" + log + "'\n",
 		"mv":     "#!/bin/sh\ncase \"$*\" in *\"$FAIL_MV\"*) [ -n \"$FAIL_MV\" ] && { echo \"mv: fail $*\" >&2; exit 1; };; esac\nexec '" + realMV + "' \"$@\"\n",
+		"rm":     "#!/bin/sh\ncase \"$*\" in *\"$FAIL_RM\"*) [ -n \"$FAIL_RM\" ] && { echo \"rm: fail $*\" >&2; exit 1; };; esac\nexec '" + realRM + "' \"$@\"\n",
 		"cp":     "#!/bin/sh\ncase \"$*\" in *\"$FAIL_CP\"*) [ -n \"$FAIL_CP\" ] && { echo \"cp: fail $*\" >&2; exit 1; };; esac\nexec '" + realCP + "' \"$@\"\n",
 	}
 	for name, body := range shims {
@@ -59,7 +61,7 @@ func runPiScriptInSh(t *testing.T, setup func(data string), failMV, failCP strin
 		t.Fatal(err)
 	}
 	cmd := exec.Command(sh, scriptPath)
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAIL_MV="+failMV, "FAIL_CP="+failCP)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAIL_MV="+failMV, "FAIL_CP="+failCP, "FAIL_RM="+strings.Join(failRM, ""))
 	out, err := cmd.CombinedOutput()
 	rc := 0
 	var ee *exec.ExitError
@@ -181,5 +183,20 @@ func TestPiRestoreScriptInShRollbackFailureDoesNotStart(t *testing.T) {
 	}
 	if r.read(t, "data/state.db.bak.20261026T010203Z") != "OLD" {
 		t.Fatal("копия прежней базы должна остаться для ручного возврата")
+	}
+}
+
+func TestPiRestoreScriptInShFailedCleanupStillStarts(t *testing.T) {
+	// Уборка restore-tmp в ловушке падает -- код и запуск контейнера не теряются.
+	r := runPiScriptInSh(t, piOldAndNew(t), "restore-tmp/awg3-panels.json", "", "-rf data/restore-tmp")
+	if r.rc != piScriptFailedAfterReplace {
+		t.Fatalf("rc=%d, want %d", r.rc, piScriptFailedAfterReplace)
+	}
+	if !r.started(t) {
+		t.Fatal("контейнер не запущен из-за провала уборки")
+	}
+	ok := runPiScriptInSh(t, piOldAndNew(t), "", "", "-rf data/restore-tmp")
+	if ok.rc != 0 || !ok.started(t) {
+		t.Fatalf("успех с провалом уборки: rc=%d started=%v", ok.rc, ok.started(t))
 	}
 }

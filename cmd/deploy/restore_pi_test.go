@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -446,5 +448,69 @@ func TestRestoreToPiStoppedContainerIsAnnouncedAndAsked(t *testing.T) {
 	all := strings.Join(fake.calls, "\n")
 	if strings.Contains(all, "upload:") || strings.Contains(all, "docker stop") || strings.Contains(all, "docker start") {
 		t.Fatalf("после отказа ничего не делается:\n%s", all)
+	}
+}
+
+func TestRestoreToPiScriptTransportErrorOutcomeUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("ssh command %q timed out after 10m0s: %w", "set -eu\ncd '/root/wg-monitor'", context.DeadlineExceeded), "таймаут"},
+		{errors.New("ssh command \"set -eu\" broken pipe"), "обрыв связи"},
+	} {
+		stubRestoreConfirm(t, true)
+		fake := newFakeRemote()
+		fake.reply = func(cmd string) (string, string, int, error) {
+			if strings.HasPrefix(cmd, "set -eu") {
+				return "", "", -1, tc.err
+			}
+			return piReply("ok\n", "200")(cmd)
+		}
+		stubRestoreConnect(t, fake)
+		b := inspectPiArchive(t, piArchiveMembers())
+		err := restoreBackupToCurrentVPS(piState(), nil, b)
+		if err == nil {
+			t.Fatal("ожидалась ошибка")
+		}
+		msg := err.Error()
+		for _, want := range []string{"исход неизвестен", tc.want, "ls -d /root/wg-monitor/data/restore-tmp", "pgrep"} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("нет %q: %s", want, msg)
+			}
+		}
+		if strings.Contains(msg, "set -eu") || strings.Contains(msg, "cd '/root") {
+			t.Fatalf("текст скрипта в сообщении: %s", msg)
+		}
+		if strings.Index(msg, "pgrep") > strings.Index(msg, "cp -p data/state.db.bak.") {
+			t.Fatalf("сначала проверка, потом рецепт отката: %s", msg)
+		}
+		if fake.indexOfCall("run: docker start") >= 0 {
+			t.Fatalf("при неизвестном исходе контейнер не запускается:\n%s", strings.Join(fake.calls, "\n"))
+		}
+	}
+}
+
+func TestRestoreToPiScriptEmptyStderrCode(t *testing.T) {
+	stubRestoreConfirm(t, true)
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.HasPrefix(cmd, "set -eu") {
+			return "", "  \n", piScriptFailedBeforeReplace, nil
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	if err == nil || !strings.Contains(err.Error(), "(код 10)") || strings.Contains(err.Error(), "код 10:") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestPiRestoreScriptTrapCleanupCannotSkipStart(t *testing.T) {
+	script := buildPiRestoreScript("/root/wg-monitor", "20261026T010203Z", nil)
+	if !strings.Contains(script, "rm -rf data/restore-tmp || true; if [ \"$rc\" != 12 ]") {
+		t.Fatalf("уборка в ловушке не защищена:\n%s", script)
 	}
 }

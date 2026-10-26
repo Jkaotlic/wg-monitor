@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -184,21 +185,33 @@ func piRunRestoreScript(s remoteExec, base, stamp string, names []string) error 
 	_, stderr, rc, err := s.Run(buildPiRestoreScript(base, stamp, names))
 	if err != nil {
 		// Скрипт на Pi сам откатывает и запускает контейнер, если доработал;
-		// исход отсюда не виден.
-		return fmt.Errorf("связь оборвалась во время замены, исход неизвестен (%v). Проверьте на Pi: ls -l %s/data; docker ps\n%s", err, base, piRollbackHint(base, stamp, names))
+		// исход отсюда не виден. Текст ошибки транспорта несёт сам скрипт --
+		// его не показываем, и контейнер отсюда не запускаем.
+		what := "обрыв связи"
+		if errors.Is(err, context.DeadlineExceeded) {
+			what = "таймаут"
+		}
+		return fmt.Errorf("%s во время замены, исход неизвестен. Сначала проверьте на Pi:\n"+
+			"  ls -d %s/%s   # каталога нет -- скрипт доработал: сам откатил при сбое и запустил бэкенд\n"+
+			"  pgrep -af 'restore-tmp'   # скрипт ещё идёт -- дождитесь его конца\n"+
+			"  docker ps -a --filter name=%s\n"+
+			"Только если каталог остался, а скрипта уже нет -- %s", what, base, piRestoreTmp, piBackendContainer, piRollbackHint(base, stamp, names))
 	}
-	why := strings.TrimSpace(stderr)
+	why := ""
+	if e := strings.TrimSpace(stderr); e != "" {
+		why = ": " + e
+	}
 	switch rc {
 	case 0:
 		return nil
 	case piScriptRollbackFailed:
 		// Запускать бэкенд на полувозвращённой базе нельзя -- только руками.
-		return fmt.Errorf("замена не удалась (%s), откат не удался — вернуть руками:\n%s", why, piRollbackHint(base, stamp, names))
+		return fmt.Errorf("замена не удалась (код %d%s), откат не удался — вернуть руками:\n%s", rc, why, piRollbackHint(base, stamp, names))
 	case piScriptFailedAfterReplace:
 		// Скрипт уже откатил и запустил контейнер; ещё один start безопасен.
-		return piStartBack(s, fmt.Errorf("замена не удалась (%s): прежняя база возвращена из копии state.db.bak.%s", why, stamp))
+		return piStartBack(s, fmt.Errorf("замена не удалась (код %d%s): прежняя база возвращена из копии state.db.bak.%s", rc, why, stamp))
 	default:
-		return piStartBack(s, fmt.Errorf("замена не удалась (код %d: %s): замена не начиналась, база не тронута", rc, why))
+		return piStartBack(s, fmt.Errorf("замена не удалась (код %d%s): замена не начиналась, база не тронута", rc, why))
 	}
 }
 
@@ -305,7 +318,7 @@ rollback() {
 	if [ -f data/state.db.bak.%[2]s-shm ]; then { cp -p data/state.db.bak.%[2]s-shm data/state.db-shm.rb.%[2]s && mv -f data/state.db-shm.rb.%[2]s data/state.db-shm; } || rbfail=1; fi
 %[6]s	return $rbfail
 }
-trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then if rollback; then rc=%[9]d; else rc=%[11]d; fi; else rc=%[10]d; fi; fi; rm -rf %[3]s; if [ "$rc" != %[11]d ]; then docker start %[7]s >/dev/null 2>&1 || true; fi; exit $rc' EXIT
+trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then if rollback; then rc=%[9]d; else rc=%[11]d; fi; else rc=%[10]d; fi; fi; rm -rf %[3]s || true; if [ "$rc" != %[11]d ]; then docker start %[7]s >/dev/null 2>&1 || true; fi; exit $rc' EXIT
 test -s %[3]s/state.db
 chmod 600 %[3]s/state.db
 chown --reference=data %[3]s/state.db
