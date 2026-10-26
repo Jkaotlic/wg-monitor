@@ -34,13 +34,18 @@ type Entry struct {
 	Err       error
 }
 
+// negativeTTL -- как долго в кэше живёт ошибка апстрима. Успех держится TTL
+// (часы), а сбой не должен отключать проверку обновлений на тот же срок.
+const negativeTTL = 5 * time.Minute
+
 // Cache is a per-source TTL'd GitHub-releases fetcher. Construct via
 // NewCache; safe for concurrent use.
 type Cache struct {
 	TTL     time.Duration
 	sources map[string]Source
 	http    *http.Client
-	api     string // template; "%s" becomes the repo. Test-overridable.
+	api     string           // template; "%s" becomes the repo. Test-overridable.
+	now     func() time.Time // часы кэша; в тестах подменяются
 
 	mu   sync.RWMutex
 	data map[string]Entry
@@ -67,6 +72,7 @@ func NewCache(ttl time.Duration, sources []Source) *Cache {
 		sources:  m,
 		http:     &http.Client{Timeout: 10 * time.Second},
 		api:      defaultAPI,
+		now:      time.Now,
 		data:     make(map[string]Entry),
 		inflight: make(map[string]chan struct{}),
 	}
@@ -84,7 +90,7 @@ func (c *Cache) Latest(ctx context.Context, name string) (string, error) {
 	}
 	for {
 		c.mu.Lock()
-		if e, ok := c.data[name]; ok && time.Since(e.FetchedAt) < c.TTL {
+		if e, ok := c.data[name]; ok && c.now().Sub(e.FetchedAt) < c.entryTTL(e) {
 			c.mu.Unlock()
 			return e.Latest, e.Err
 		}
@@ -104,7 +110,12 @@ func (c *Cache) Latest(ctx context.Context, name string) (string, error) {
 		c.inflight[name] = ch
 		c.mu.Unlock()
 
-		v, err := c.fetch(ctx, src.GitHubRepo)
+		// Запрос не привязан к ctx вызывающего: закрытая вкладка мини-аппа
+		// отменяет свой ctx, и context.Canceled уходил в кэш на весь TTL
+		// (BACK-02). Срок -- свой, как в releaseSmallAssets.fetch.
+		fctx, fcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		v, err := c.fetch(fctx, src.GitHubRepo)
+		fcancel()
 		if err != nil {
 			// Loud-fail: lets the operator notice expired GitHub tokens / repo
 			// renames / 403 rate-limit before "no update warnings" mystery
@@ -113,12 +124,20 @@ func (c *Cache) Latest(ctx context.Context, name string) (string, error) {
 		}
 
 		c.mu.Lock()
-		c.data[name] = Entry{Latest: v, Err: err, FetchedAt: time.Now()}
+		c.data[name] = Entry{Latest: v, Err: err, FetchedAt: c.now()}
 		delete(c.inflight, name)
 		c.mu.Unlock()
 		close(ch)
 		return v, err
 	}
+}
+
+// entryTTL -- срок жизни записи: ошибка короче успеха, но не длиннее TTL.
+func (c *Cache) entryTTL(e Entry) time.Duration {
+	if e.Err != nil && negativeTTL < c.TTL {
+		return negativeTTL
+	}
+	return c.TTL
 }
 
 // LatestAll returns a snapshot of all currently cached entries (cache-only —

@@ -135,3 +135,58 @@ func TestCache_LatestAll_SnapshotOnly(t *testing.T) {
 		t.Errorf("LatestAll must NOT trigger fetch; hits=%d", hits)
 	}
 }
+
+// BACK-02: закрытая вкладка (отменённый ctx) не должна ни срывать запрос в
+// GitHub, ни класть ошибку в кэш на весь TTL.
+func TestCache_CancelledCallerCtxStillFetchesAndCaches(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"tag_name": "v3.1.0"}})
+	}))
+	defer srv.Close()
+	c := NewCache(12*time.Hour, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=10"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	v, err := c.Latest(ctx, "x")
+	if err != nil || v != "3.1.0" {
+		t.Fatalf("отменённый ctx сорвал запрос: v=%q err=%v", v, err)
+	}
+	v, err = c.Latest(context.Background(), "x")
+	if err != nil || v != "3.1.0" || hits != 1 {
+		t.Fatalf("результат не закэширован: v=%q err=%v hits=%d", v, err, hits)
+	}
+}
+
+// BACK-02: ошибка апстрима живёт в кэше negativeTTL (5 мин), а не 12 часов.
+func TestCache_ErrorCachedOnlyNegativeTTL(t *testing.T) {
+	hits := 0
+	fail := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if fail {
+			w.WriteHeader(500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"tag_name": "v1.2.3"}})
+	}))
+	defer srv.Close()
+	c := NewCache(12*time.Hour, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=10"
+	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return clock }
+	if _, err := c.Latest(context.Background(), "x"); err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	clock = clock.Add(4*time.Minute + 59*time.Second)
+	if _, err := c.Latest(context.Background(), "x"); err == nil || hits != 1 {
+		t.Fatalf("до 5 мин ошибка должна браться из кэша: err=%v hits=%d", err, hits)
+	}
+	fail = false
+	clock = clock.Add(2 * time.Second) // 5 мин 1 с от начала
+	v, err := c.Latest(context.Background(), "x")
+	if err != nil || v != "1.2.3" || hits != 2 {
+		t.Fatalf("через 5 мин 1 с нужен новый запрос: v=%q err=%v hits=%d", v, err, hits)
+	}
+}
