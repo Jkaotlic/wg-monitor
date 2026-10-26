@@ -23,6 +23,10 @@ var (
 	metricCmdEnqueued        = expvar.NewInt("wgm_cmd_enqueued_total")
 	metricCmdResultRecorded  = expvar.NewInt("wgm_cmd_result_recorded_total")
 	metricTGSendErrors       = expvar.NewInt("wgm_tg_send_errors_total")
+	// Запросы на входы с частным RemoteAddr (за прокси): дописал ли прокси
+	// X-Forwarded-For. От ответа зависит, чем ограничен подбор (FRESH-05).
+	metricRemoteXFFPresent = expvar.NewInt("wgm_remote_xff_present")
+	metricRemoteXFFAbsent  = expvar.NewInt("wgm_remote_xff_absent")
 )
 
 // Число горутин -- дешёвый детектор «фоновый цикл умер или залип». Утечка

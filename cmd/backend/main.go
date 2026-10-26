@@ -321,6 +321,7 @@ func main() {
 		DashboardStaleAfterMobile: time.Duration(dashboardMobileStaleAfter) * time.Second,
 		WizardToken:               cfg.Wizard.Token,
 		DashboardToken:            cfg.Dashboard.Token,
+		DistrustForwardedFor:      cfg.TrustForwardedFor != nil && !*cfg.TrustForwardedFor,
 		TelegramBotToken:          cfg.Telegram.BotToken,
 		TelegramAdminUserID:       cfg.Telegram.AdminUserID,
 		TelegramPrimaryChatID:     cfg.Telegram.ChatID,

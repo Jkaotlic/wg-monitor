@@ -408,3 +408,14 @@ func TestMoveStoreFileMatchesDirOwner(t *testing.T) {
 		t.Fatalf("владелец сверялся с %q, ждали %q", gotDir, dstDir)
 	}
 }
+
+// FRESH-05: trust_forwarded_for не задан -- true; false читается как false.
+func TestConfigTrustForwardedForDefault(t *testing.T) {
+	if cfg := loadStoreCfg(t, ""); cfg.TrustForwardedFor != nil {
+		t.Fatalf("не задан: %v, want nil (= доверять)", *cfg.TrustForwardedFor)
+	}
+	cfg := loadStoreCfg(t, "trust_forwarded_for: false\n")
+	if cfg.TrustForwardedFor == nil || *cfg.TrustForwardedFor {
+		t.Fatalf("false не прочитался: %v", cfg.TrustForwardedFor)
+	}
+}

@@ -198,7 +198,7 @@ func webLinkRedeemHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		remote := clientRateKey(r)
+		remote := clientRateKeyOpt(r, !d.DistrustForwardedFor)
 		refuse := func(reason string, token string) {
 			if d.Logger != nil {
 				prefix := ""

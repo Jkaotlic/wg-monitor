@@ -23,7 +23,11 @@ type Config struct {
 	// (e.g. rpie4 inside the operator tunnel resolves its own host to a private
 	// address), so it cannot look up its own fleet-facing IP. Empty → no
 	// --resolve (unchanged behaviour).
-	PublicIP          string                   `yaml:"public_ip"`
+	PublicIP string `yaml:"public_ip"`
+	// TrustForwardedFor -- читать ли X-Forwarded-For за частным прокси при
+	// выборе ключа лимита входов. Не задан или true -- читать (как раньше);
+	// false -- ключ всегда RemoteAddr (FRESH-05).
+	TrustForwardedFor *bool                    `yaml:"trust_forwarded_for"`
 	DBPath            string                   `yaml:"db_path"`
 	Telegram          TelegramConfig           `yaml:"telegram"`
 	Wizard            WizardConfig             `yaml:"wizard"`

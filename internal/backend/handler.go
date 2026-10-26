@@ -381,6 +381,9 @@ type Deps struct {
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken    string
 	DashboardToken string
+	// DistrustForwardedFor -- ключ лимита входа всегда RemoteAddr, заголовок
+	// X-Forwarded-For не читается (config trust_forwarded_for: false).
+	DistrustForwardedFor bool
 	// Replace -- движок замены конфига туннеля (мастер из шести шагов с
 	// откатом, internal/backend/replace). nil-safe: без него экран отвечает
 	// «не настроено», а не падает.
@@ -579,6 +582,9 @@ func NewMux(d Deps) http.Handler {
 	// перебор ведётся с адреса, а не по одному эндпоинту, и считать его надо
 	// там же.
 	entrance := newRemoteRateLimiter(entranceRatePerSec, entranceBurst)
+	if entrance != nil {
+		entrance.ignoreForwarded = d.DistrustForwardedFor
+	}
 	if d.DashboardToken != "" {
 		registerDashboardRoutes(mux, d, entrance)
 	}

@@ -1,9 +1,12 @@
 package backend
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -349,4 +352,74 @@ func TestClientRateKeyIgnoresRealIPEntirely(t *testing.T) {
 	if got := clientRateKey(r); got != "127.0.0.1" {
 		t.Fatalf("key = %q, want 127.0.0.1", got)
 	}
+}
+
+// FRESH-05: trust_forwarded_for=false -- ключ всегда RemoteAddr, подбор
+// заголовка X-Forwarded-For ведёрко не обходит.
+func TestRemoteRateLimitIgnoresForwardedWhenNotTrusted(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC) }
+	l.ignoreForwarded = true
+	h := limitedHandler(l, http.StatusUnauthorized)
+	proxy := "192.168.1.1:40001"
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.5"}); c != http.StatusUnauthorized {
+		t.Fatalf("первый = %d", c)
+	}
+	for i, xff := range []string{"203.0.113.6", "203.0.113.7", "198.51.100.8"} {
+		if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": xff}); c != http.StatusTooManyRequests {
+			t.Fatalf("попытка %d с XFF %s = %d, want 429", i, xff, c)
+		}
+	}
+}
+
+func TestRedactForwardedChainTo24(t *testing.T) {
+	got := redactForwardedChain("203.0.113.77, 10.0.0.2, мусор, 2001:db8:1:2:3:4:5:6")
+	want := "203.0.113.0/24, 10.0.0.0/24, ?, 2001:db8:1:2::/64"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Счётчики и разовый журнал: по запросам с частным RemoteAddr.
+func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
+	resetForwardedObs()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	l := newRemoteRateLimiter(100, 100)
+	h := remoteRateLimitMiddleware(l, logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	p0, a0 := metricRemoteXFFPresent.Value(), metricRemoteXFFAbsent.Value()
+	for i := 0; i < 3; i++ {
+		hitVia(h, "192.168.1.1:1", "203.0.113.77")
+	}
+	for i := 0; i < 2; i++ {
+		hitVia(h, "192.168.1.1:1", "")
+	}
+	hitVia(h, "198.51.100.9:1", "203.0.113.5") // публичный RemoteAddr не считается
+	if d := metricRemoteXFFPresent.Value() - p0; d != 3 {
+		t.Fatalf("present +%d, want 3", d)
+	}
+	if d := metricRemoteXFFAbsent.Value() - a0; d != 2 {
+		t.Fatalf("absent +%d, want 2", d)
+	}
+	out := buf.String()
+	if n := strings.Count(out, "с X-Forwarded-For"); n != 1 {
+		t.Fatalf("разовых записей с XFF = %d, want 1:\n%s", n, out)
+	}
+	if n := strings.Count(out, "без X-Forwarded-For"); n != 1 {
+		t.Fatalf("разовых записей без XFF = %d, want 1:\n%s", n, out)
+	}
+	if strings.Contains(out, "203.0.113.77") || !strings.Contains(out, "203.0.113.0/24") {
+		t.Fatalf("адрес не отредактирован до /24:\n%s", out)
+	}
+}
+
+func hitVia(h http.Handler, remote, xff string) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
+	req.RemoteAddr = remote
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), req)
 }

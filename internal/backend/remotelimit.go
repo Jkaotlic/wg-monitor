@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,10 @@ type remoteRateLimiter struct {
 	// прокси пропускает X-Forwarded-For клиента как есть, перебором заголовка
 	// ведёрко клиента не обойти. Десятикратный запас, считает каждый запрос.
 	backstop *remoteRateLimiter
+	// ignoreForwarded -- не читать X-Forwarded-For: ключ всегда RemoteAddr
+	// (config trust_forwarded_for: false). Нулевое значение -- верить, как и
+	// было до флага.
+	ignoreForwarded bool
 }
 
 func newRemoteRateLimiter(perSec float64, burst int) *remoteRateLimiter {
@@ -177,10 +182,14 @@ func trustedHop(ip net.IP) bool {
 // справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при
 // проброске заголовков прокси он целиком в руках клиента. Нет годного
 // заголовка -- RemoteAddr.
-func clientRateKey(r *http.Request) string {
+func clientRateKey(r *http.Request) string { return clientRateKeyOpt(r, true) }
+
+// clientRateKeyOpt -- clientRateKey с выключателем: trustForwarded=false
+// возвращает RemoteAddr, не заглядывая в заголовки.
+func clientRateKeyOpt(r *http.Request, trustForwarded bool) string {
 	remote := remoteRateKey(r.RemoteAddr)
 	rip := net.ParseIP(remote)
-	if rip == nil || !trustedHop(rip) {
+	if !trustForwarded || rip == nil || !trustedHop(rip) {
 		return remote
 	}
 	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
@@ -194,6 +203,61 @@ func clientRateKey(r *http.Request) string {
 		}
 	}
 	return remote
+}
+
+// Разовые записи в журнал: первый запрос за прокси с X-Forwarded-For и первый
+// без него. Живьём не известно, дописывает ли его KeenDNS; следующий взгляд в
+// журнал должен ответить на это без новой раскопки.
+var (
+	loggedXFFPresent atomic.Bool
+	loggedXFFAbsent  atomic.Bool
+)
+
+// resetForwardedObs -- для тестов: забыть, что уже писали.
+func resetForwardedObs() {
+	loggedXFFPresent.Store(false)
+	loggedXFFAbsent.Store(false)
+}
+
+// redactForwardedChain прячет адреса цепочки до сети: IPv4 до /24, IPv6 до /64.
+func redactForwardedChain(chain string) string {
+	parts := strings.Split(chain, ",")
+	for i, p := range parts {
+		ip := net.ParseIP(strings.TrimSpace(p))
+		switch {
+		case ip == nil:
+			parts[i] = "?"
+		case ip.To4() != nil:
+			parts[i] = (&net.IPNet{IP: ip.To4().Mask(net.CIDRMask(24, 32)), Mask: net.CIDRMask(24, 32)}).String()
+		default:
+			parts[i] = (&net.IPNet{IP: ip.Mask(net.CIDRMask(64, 128)), Mask: net.CIDRMask(64, 128)}).String()
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// noteForwardedPresence считает запросы за прокси (частный RemoteAddr) с
+// X-Forwarded-For и без и один раз на процесс пишет по примеру каждого.
+func noteForwardedPresence(r *http.Request, logger *slog.Logger) {
+	rip := net.ParseIP(remoteRateKey(r.RemoteAddr))
+	if rip == nil || !trustedHop(rip) {
+		return
+	}
+	chain := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	if strings.TrimSpace(chain) == "" {
+		metricRemoteXFFAbsent.Add(1)
+		if logger != nil && loggedXFFAbsent.CompareAndSwap(false, true) {
+			logger.Info("вход: запрос за прокси без X-Forwarded-For",
+				"proxy", redactForwardedChain(remoteRateKey(r.RemoteAddr)))
+		}
+		return
+	}
+	metricRemoteXFFPresent.Add(1)
+	if logger != nil && loggedXFFPresent.CompareAndSwap(false, true) {
+		logger.Info("вход: запрос за прокси с X-Forwarded-For",
+			"proxy", redactForwardedChain(remoteRateKey(r.RemoteAddr)),
+			"chain", redactForwardedChain(chain))
+	}
 }
 
 // statusRecorder запоминает код ответа, чтобы вернуть токен за удачный вход.
@@ -251,7 +315,8 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key := clientRateKey(r)
+			noteForwardedPresence(r, logger)
+			key := clientRateKeyOpt(r, !l.ignoreForwarded)
 			// Сначала ведёрко самого клиента: отказанный им же запрос общий
 			// потолок не расходует, иначе один настойчивый клиент запер бы
 			// всех, кто идёт через тот же прокси.
