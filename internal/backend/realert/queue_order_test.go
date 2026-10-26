@@ -103,3 +103,50 @@ func TestRealertDeliverHardHoldsQueue(t *testing.T) {
 		t.Fatal("карточка из обхода шла мимо очереди: доставка из отчёта её не ждала бы")
 	}
 }
+
+// Повтор недошедшего «восстановилось» -- тоже в общей очереди проверки:
+// пока по ней идёт доставка (здесь -- карточка из отчёта), повтор не уходит
+// и долг остаётся; на следующем обходе после неё -- уходит.
+func TestRealertOwedReplyWaitsQueuedDelivery(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := d.State().Save(uid, "awg_handshake", db.IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "ok", ConsecutiveOKs: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AlertMessages().Put(uid, "awg_handshake", 6001, 555); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.OwedReplies().Put(uid, "awg_handshake", "✅ Простой 1 ч", now); err != nil {
+		t.Fatal(err)
+	}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetNow(func() time.Time { return now.Add(time.Minute) })
+
+	_, release := alerts.EnqueueDelivery(uid, "awg_handshake") // доставка в полёте
+	tickBounded(t, p)
+	if n := f.count(); n != 0 {
+		release()
+		t.Fatalf("повтор «восстановилось» ушёл (%d сообщений), пока доставка той же проверки ещё идёт", n)
+	}
+	owed, err := d.OwedReplies().List()
+	if err != nil || len(owed) != 1 {
+		release()
+		t.Fatalf("долг «восстановилось» потерян при занятой очереди: %v %v", owed, err)
+	}
+	release()
+
+	p.SetNow(func() time.Time { return now.Add(2 * time.Minute) })
+	tickBounded(t, p)
+	if n := f.count(); n != 1 {
+		t.Fatalf("после очереди сообщений %d, ждали повтор «восстановилось»", n)
+	}
+	if owed, _ := d.OwedReplies().List(); len(owed) != 0 {
+		t.Fatalf("долг не снят после доставки: %v", owed)
+	}
+	if n := alerts.DeliveryQueueLen(); n != 0 {
+		t.Fatalf("очередь не освобождена: %d", n)
+	}
+}

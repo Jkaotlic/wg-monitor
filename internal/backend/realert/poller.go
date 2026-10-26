@@ -146,20 +146,41 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 			}
 			continue
 		}
-		if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
-			slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
-			if delay, ok := tg.RateLimitDelay(err); ok {
-				p.markRateLimited(now, delay)
-				return false
-			}
+		// Очередь доставок проверки общая с отчётом: впереди доставка (новая
+		// карточка, «восстановилось») -- повтор не шлём, долг остаётся до
+		// следующего обхода. Иначе повтор мог ответить мимо нити или стереть
+		// alert_messages карточки, ушедшей следом.
+		release, ok := alerts.TryEnqueueDelivery(o.UserID, o.CheckName)
+		if !ok {
+			slog.Info("realert: доставка по проверке уже идёт, «восстановилось» -- на следующем обходе",
+				"user_id", o.UserID, "check", o.CheckName)
 			continue
 		}
-		if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
-			slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		if !p.sendOwedReply(ctx, now, o, silent) {
+			release()
+			return false
 		}
-		if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
-			slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		release()
+	}
+	return true
+}
+
+// sendOwedReply -- повтор одного долга «восстановилось» с местом в очереди
+// проверки, уже занятым вызывающим. false -- лимит частоты, обход прервать.
+func (p *Poller) sendOwedReply(ctx context.Context, now time.Time, o db.OwedReply, silent bool) bool {
+	if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
+		slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		if delay, ok := tg.RateLimitDelay(err); ok {
+			p.markRateLimited(now, delay)
+			return false
 		}
+		return true
+	}
+	if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
+		slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+	}
+	if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
+		slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 	}
 	return true
 }
