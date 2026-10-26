@@ -66,20 +66,49 @@ func newReviveService(ctx context.Context, cfg *backend.Config, d *db.DB, provis
 	return svc
 }
 
-// waitBounded ждёт wait не дольше d. Остановка бэкенда (финальное ревью
-// 15.09, M2): фоновые проверки оживления, запущенные постановкой, не должны
-// писать в уже закрытую базу, но и зависшая проба панели не должна держать
-// процесс после SIGTERM. false -- не дождались.
-func waitBounded(wait func(), d time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(d):
-		return false
+// shutdownBudget -- общий срок остановки от сигнала: меньше stop-timeout
+// докера (10 с), чтобы d.Close() успел до SIGKILL.
+const shutdownBudget = 8 * time.Second
+
+// shutdownWait -- одно ожидание останова: имя для журнала и функция.
+type shutdownWait struct {
+	name string
+	wait func()
+}
+
+// waitShutdown запускает ожидания останова разом и ждёт их до общего
+// срока deadline: зависшие не складываются друг с другом, и вся остановка
+// укладывается в stop-timeout докера (10 с по умолчанию, потом SIGKILL).
+// По каждому незавершённому -- предупреждение; возвращаются их имена в
+// порядке waits.
+func waitShutdown(logger *slog.Logger, deadline time.Time, waits []shutdownWait) []string {
+	done := make([]chan struct{}, len(waits))
+	for i, w := range waits {
+		done[i] = make(chan struct{})
+		go func(wait func(), ch chan struct{}) {
+			wait()
+			close(ch)
+		}(w.wait, done[i])
 	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	expired := false
+	var left []string
+	for i, w := range waits {
+		if !expired {
+			select {
+			case <-done[i]:
+				continue
+			case <-timer.C:
+				expired = true
+			}
+		}
+		select {
+		case <-done[i]:
+		default:
+			logger.Warn("останов: не дождались, останавливаемся без него", "что", w.name)
+			left = append(left, w.name)
+		}
+	}
+	return left
 }

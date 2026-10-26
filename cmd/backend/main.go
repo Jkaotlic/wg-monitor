@@ -498,26 +498,28 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	// Общий срок остановки -- 8 с от сигнала: докер по умолчанию ждёт
+	// SIGTERM 10 с и потом убивает процесс, и d.Close() (отложен выше) должен
+	// успеть до этого.
+	stopDeadline := time.Now().Add(shutdownBudget)
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
-	// Фоновые проверки оживления (confirmSoon, уведомление итога) пишут в
-	// базу, а d.Close() отложен выше: ждём их, но ограниченно.
-	if reviveSvc != nil && !waitBounded(reviveSvc.Wait, 10*time.Second) {
-		logger.Warn("оживление: фоновые проверки не завершились за 10 с, останавливаемся без них")
-	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
-	// Фоновые доставки тревог из /v1/report (пул relay) пишут в базу:
-	// ждём их до d.Close(), но ограниченно -- их держит Telegram.
-	if !waitBounded(backend.WaitRelayDrain, 10*time.Second) {
-		logger.Warn("доставки тревог: пул relay не опустел за 10 с, останавливаемся без них")
+	// Фоновые проверки оживления (confirmSoon, уведомление итога), доставки
+	// тревог из /v1/report и мягкое напоминание пишут в базу: ждём их до
+	// d.Close() разом и не дольше общего срока -- их держит Telegram и пробы
+	// панелей.
+	var waits []shutdownWait
+	if reviveSvc != nil {
+		waits = append(waits, shutdownWait{name: "оживление: фоновые проверки", wait: reviveSvc.Wait})
 	}
-	// Мягкое напоминание пишет отметки в базу: ждём его до d.Close(), но
-	// ограниченно -- рассылку держит Telegram с его таймаутами.
-	if maintPoller != nil && !waitBounded(maintPoller.WaitForExit, 10*time.Second) {
-		logger.Warn("maintnotify: пуллер не завершился за 10 с, останавливаемся без него")
+	waits = append(waits, shutdownWait{name: "доставки тревог", wait: backend.WaitRelayDrain})
+	if maintPoller != nil {
+		waits = append(waits, shutdownWait{name: "maintnotify", wait: maintPoller.WaitForExit})
 	}
+	waitShutdown(logger, stopDeadline, waits)
 	logger.Info("backend stopped")
 }
 
