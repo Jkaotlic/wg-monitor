@@ -77,7 +77,7 @@ func main() {
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	awg3Mode := flag.String("awg3", "on", "панели awg3: on -- две поддельные панели и настоящий сервис; off -- не настроены (экран «не настроено»)")
 	awg3P12 := flag.String("awg3-p12-out", "", "куда записать .p12 поддельной панели main (пароль sandbox) для формы «Добавить панель»; рядом -- .json с адресом и паролем")
-	backupMode := flag.String("backup", sandboxBackupGood, "состояние бэкапа в Парке: good | failed | unknown (файла нет) | off (не подключено)")
+	backupMode := flag.String("backup", sandboxBackupGood, "состояние бэкапа в Парке: good | failed | unknown (файла нет) | off (не подключено) | sealed-closed (хранилища не открываются ключом) | sealed-nokey (ключа шифрования нет на сервере) | key-in-backup (ключ в архиве)")
 	flag.Parse()
 	if *role != "" {
 		if _, ok := sandboxRoles[*role]; !ok {

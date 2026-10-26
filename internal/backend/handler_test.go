@@ -28,6 +28,12 @@ type fakeDisp struct {
 	db     *db.DB
 }
 
+// Apply -- как Handle: фейк ничего не доставляет, запись и учёт вызова --
+// синхронная часть, доставки нет.
+func (f *fakeDisp) Apply(uid int64, nick, check string, tr state.Transition, c wire.Check) (func(context.Context) error, error) {
+	return nil, f.Handle(context.Background(), uid, nick, check, tr, c)
+}
+
 func (f *fakeDisp) Handle(_ context.Context, uid int64, _, check string, tr state.Transition, c wire.Check) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2000,6 +2006,12 @@ func TestReportRejectsTooLarge(t *testing.T) {
 // два провала уже записаны, третий придёт отчётом.
 func hardReportEnv(t *testing.T, checkName string, start func(linkrepair.StartReq) (string, error)) (*httptest.Server, string) {
 	t.Helper()
+	return hardReportEnvCtx(t, checkName, start, nil)
+}
+
+// hardReportEnvCtx -- то же, но с заданным контекстом остановки бэкенда.
+func hardReportEnvCtx(t *testing.T, checkName string, start func(linkrepair.StartReq) (string, error), shutdown context.Context) (*httptest.Server, string) {
+	t.Helper()
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	t.Cleanup(func() { _ = d.Close() })
 	tok := "3030303030303030303030303030303030303030303030303030303030303030"
@@ -2017,6 +2029,7 @@ func hardReportEnv(t *testing.T, checkName string, start func(linkrepair.StartRe
 		Dispatcher:      &fakeDisp{db: d},
 		Thresholds:      state.Thresholds{Fail: 3, Recovery: 2},
 		StartLinkRepair: start,
+		ShutdownCtx:     shutdown,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -2040,6 +2053,8 @@ func postFailingCheck(t *testing.T, srv *httptest.Server, tok, checkName string)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: %d", resp.StatusCode)
 	}
+	// Починка стартует в фоне, после доставки тревоги (FRESH-04).
+	waitRelayPoolEmpty(t)
 }
 
 // Переход в hard по упавшему туннелю запускает починку сам.
@@ -2064,6 +2079,62 @@ func TestHardTransition_StartsAutoRepair(t *testing.T) {
 	}
 	if got.AgentVersion != "v0.19.7" {
 		t.Fatalf("версия агента не доехала: %q", got.AgentVersion)
+	}
+}
+
+// Бэкенд останавливается: доставка тревоги оборвана, и починку в окне слива
+// запускать нельзя -- движок никто не дождётся.
+func TestHardTransition_NoAutoRepairAfterShutdown(t *testing.T) {
+	var mu sync.Mutex
+	started := false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	srv, tok := hardReportEnvCtx(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		started = true
+		return "job-1", nil
+	}, ctx)
+	postFailingCheck(t, srv, tok, "tunnel_awg12")
+	// Проверка «не запущена» верна, только когда доставка уже закончилась:
+	// иначе тест прошёл бы вхолостую, глянув на started раньше фоновой
+	// задачи. Ждём и пул, и слив (он считает и доставки на месте).
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if started {
+		t.Fatal("починка запущена после остановки бэкенда")
+	}
+}
+
+// Идёт слив доставок (останов): тревога доставляется, а автопочинку не
+// начинаем -- её движок никто не дождётся.
+func TestHardTransition_NoAutoRepairWhileDraining(t *testing.T) {
+	var mu sync.Mutex
+	started := false
+	srv, tok := hardReportEnv(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		started = true
+		return "job-1", nil
+	})
+	relayDrain.mu.Lock()
+	relayDrain.draining = true
+	relayDrain.mu.Unlock()
+	t.Cleanup(func() {
+		relayDrain.mu.Lock()
+		relayDrain.draining = false
+		relayDrain.mu.Unlock()
+	})
+	postFailingCheck(t, srv, tok, "tunnel_awg12")
+	waitRelayPoolEmpty(t)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if started {
+		t.Fatal("автопочинка запущена во время слива доставок")
 	}
 }
 
@@ -2092,6 +2163,7 @@ func TestHardTransition_PassesTunnelName(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	waitRelayPoolEmpty(t)
 
 	mu.Lock()
 	defer mu.Unlock()

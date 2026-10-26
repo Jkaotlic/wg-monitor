@@ -29,6 +29,14 @@ type ctxProbeDispatcher struct {
 	result  chan string // "completed" or "aborted:<err>"
 }
 
+// Apply отдаёт пробу как доставку: /v1/report запускает её в фоне (FRESH-04),
+// и проверяется контекст именно этой фоновой доставки.
+func (f *ctxProbeDispatcher) Apply(userID int64, nickname, checkName string, tr state.Transition, check wire.Check) (func(context.Context) error, error) {
+	return func(ctx context.Context) error {
+		return f.Handle(ctx, userID, nickname, checkName, tr, check)
+	}, nil
+}
+
 func (f *ctxProbeDispatcher) Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error {
 	close(f.entered)
 	select {

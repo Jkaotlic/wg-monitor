@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -212,6 +214,42 @@ const relayConcurrencyLimit = 32
 // is shared across the by-value Deps copies every handler receives.
 var relaySem = make(chan struct{}, relayConcurrencyLimit)
 
+// relayWG считает все фоновые уведомления и доставки тревог -- и те, что
+// ушли на месте при полном пуле: они тоже пишут в базу (отметки доставки),
+// и остановка бэкенда ждёт их до d.Close() (WaitRelayDrain).
+var relayWG sync.WaitGroup
+
+// relayDrain -- идёт ли слив (WaitRelayDrain). Add у WaitGroup параллельно с
+// Wait запрещён (паника «Add called concurrently with Wait»), а обработчик,
+// переживший srv.Shutdown (5 с), может запустить доставку посреди слива.
+// Поэтому учёт (relayTrack) и подъём флага -- под одним мьютексом: после
+// подъёма Add не вызывается. Во время слива тревога доставляется без учёта
+// (её всё равно ждать некому, а бросить -- потерять), прочие уведомления и
+// старт автопочинки бросаются.
+var relayDrain struct {
+	mu       sync.Mutex
+	draining bool
+}
+
+// relayTrack учитывает фоновую задачу в relayWG; false -- идёт слив, задача
+// не учтена (relayWG.Done для неё звать нельзя).
+func relayTrack() bool {
+	relayDrain.mu.Lock()
+	defer relayDrain.mu.Unlock()
+	if relayDrain.draining {
+		return false
+	}
+	relayWG.Add(1)
+	return true
+}
+
+// relayDraining -- идёт слив: новые уведомления и автопочинку не начинаем.
+func relayDraining() bool {
+	relayDrain.mu.Lock()
+	defer relayDrain.mu.Unlock()
+	return relayDrain.draining
+}
+
 // spawnRelay runs fn in a bounded background goroutine parented to the relay
 // (shutdown) context with a 10s timeout. When the relay pool is saturated the
 // notification is dropped (and logged) instead of spawning an unbounded
@@ -229,13 +267,136 @@ func spawnRelay(d Deps, label string, fn func(ctx context.Context)) {
 // through the one shared pool, so a fleet-wide resume/bulk-result storm
 // can't spawn unbounded TG-calling goroutines (BE-02/C4).
 func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx context.Context)) {
+	if !relayTrack() {
+		d.Logger.Warn("backend stopping; dropping background notify", "label", label)
+		return
+	}
 	select {
 	case relaySem <- struct{}{}:
 	default:
+		relayWG.Done()
 		d.Logger.Warn("relay pool saturated; dropping background notify", "label", label, "limit", relayConcurrencyLimit)
 		return
 	}
+	goRelay(d, timeout, fn)
+}
+
+// spawnAlertDelivery -- доставка тревоги из /v1/report (FRESH-04): отчёт
+// отвечает агенту, не дожидаясь Telegram. Доставки одной пары (роутер,
+// проверка) идут строго по очереди (alerts.EnqueueDelivery, общая с обходом
+// напоминаний). В отличие от прочих уведомлений тревогу при занятом пуле не
+// бросаем: отметка last_alert_at уже стоит, и брошенная тревога пришла бы
+// лишь напоминанием через 6 часов. Пути:
+//
+//   - есть место в пуле relay -- фоновая горутина: ждёт предыдущую доставку
+//     проверки, затем свой срок alertDeliveryTimeout (30 с);
+//   - пул полон -- такая же фоновая горутина без места в пуле, пока их
+//     меньше alertSlotlessLimit (общий потолок на процесс): ответ на отчёт
+//     не ждёт Telegram, а горутины не растут без предела даже у флапающей
+//     проверки;
+//   - выше потолка -- доставка на месте тем же порядком: ожидание
+//     предыдущей по проверке (до остановки бэкенда), затем свой срок
+//     alertDeliveryTimeout; отчёт ждёт, но тревога не теряется;
+//   - идёт слив (WaitRelayDrain) -- любой из путей выше, но без учёта в
+//     relayWG: Add параллельно с Wait запрещён, а бросить тревогу -- потерять.
+func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
+	// Очередь общая с обходом напоминаний (alerts.EnqueueDelivery).
+	prev, release := alerts.EnqueueDelivery(userID, checkName)
+	// background: доставка в своей горутине ждёт предыдущую той же пары
+	// (роутер, проверка) и только потом отсчитывает свой срок (30 с):
+	// зависший Telegram держит каждый шаг не дольше его срока, вся цепочка
+	// конечна. Остановка бэкенда ожидание прерывает.
+	background := func() {
+		defer release()
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-relayParent(d).Done():
+			}
+		}
+		ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
+		defer cancel()
+		fn(ctx)
+	}
+	tracked := relayTrack() // слив уже идёт -- доставка без учёта
+	untrack := func() {
+		if tracked {
+			relayWG.Done()
+		}
+	}
+	select {
+	case relaySem <- struct{}{}:
+		go func() {
+			defer untrack()
+			defer func() { <-relaySem }()
+			background()
+		}()
+		return
+	default:
+	}
+	// Пул полон -- в фон без места в пуле, пока таких меньше потолка: ответ
+	// на отчёт не ждёт Telegram, а число горутин ограничено при любой
+	// длине цепочки по проверке.
+	if alertSlotless.Add(1) <= alertSlotlessLimit {
+		d.Logger.Warn("relay pool saturated; delivering alert in background without a slot", "label", label, "limit", relayConcurrencyLimit)
+		go func() {
+			defer untrack()
+			defer alertSlotless.Add(-1)
+			background()
+		}()
+		return
+	}
+	alertSlotless.Add(-1)
+	// Выше потолка -- на месте: отчёт подождёт, тревога дойдёт. Та же
+	// логика, что в фоне: предыдущую доставку проверки ждём до остановки
+	// бэкенда, а свой срок alertDeliveryTimeout отсчитываем после неё --
+	// общий срок на оба шага долгая предыдущая съела бы, и тревога ушла бы
+	// с истёкшим контекстом (потерялась).
+	d.Logger.Warn("relay pool and slotless alert cap saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit, "slotless_limit", alertSlotlessLimit)
+	defer untrack()
+	background()
+}
+
+// alertQueueLen -- сколько очередей доставки не закончено (для тестов).
+func alertQueueLen() int { return alerts.DeliveryQueueLen() }
+
+// WaitRelayDrain ждёт конца всех фоновых уведомлений и доставок тревог,
+// включая ушедшие на месте при полном пуле: они пишут в базу (отметки
+// доставки), поэтому остановка бэкенда ждёт их до d.Close(). Без
+// ограничения по времени -- его ставит вызывающий; контекст доставок к
+// этому моменту уже отменён, так что они заканчиваются быстро.
+//
+// На время ожидания поднят флаг слива (relayDrain): поздние задачи в
+// relayWG не попадают, и Add не идёт параллельно с Wait. После Wait флаг
+// снимается -- WaitGroup снова можно использовать (тесты зовут слив не раз).
+func WaitRelayDrain() {
+	relayDrain.mu.Lock()
+	relayDrain.draining = true
+	relayDrain.mu.Unlock()
+	relayWG.Wait()
+	relayDrain.mu.Lock()
+	relayDrain.draining = false
+	relayDrain.mu.Unlock()
+}
+
+// alertSlotlessLimit -- потолок фоновых доставок тревог без места в пуле
+// relay (пул полон): выше него доставка идёт на месте, чтобы горутины не
+// росли без предела при шторме или флапающей проверке.
+const alertSlotlessLimit = 32
+
+// alertSlotless -- сколько таких доставок сейчас идёт.
+var alertSlotless atomic.Int32
+
+// alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
+// повторами (sendWithRetry пережидает retry_after при 429). Переменная --
+// тесты сокращают.
+var alertDeliveryTimeout = 30 * time.Second
+
+// goRelay запускает fn с местом в relaySem, уже занятым вызывающим.
+// Учёт в relayWG (relayTrack) уже сделан вызывающим.
+func goRelay(d Deps, timeout time.Duration, fn func(ctx context.Context)) {
 	go func() {
+		defer relayWG.Done()
 		defer func() { <-relaySem }()
 		ctx, cancel := context.WithTimeout(relayParent(d), timeout)
 		defer cancel()
@@ -267,6 +428,10 @@ func trimSpace(s string) string {
 
 type Dispatcher interface {
 	Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error
+	// Apply -- синхронная часть Handle: запись автомата. Возвращает доставку
+	// в Telegram (nil -- слать нечего); /v1/report запускает её в фоне,
+	// чтобы агент не ждал рассылки с повторами (FRESH-04).
+	Apply(userID int64, nickname, checkName string, tr state.Transition, check wire.Check) (deliver func(ctx context.Context) error, err error)
 }
 
 // Resumer is a back-edge from /v1/report into the heartbeat watcher.
@@ -349,6 +514,9 @@ type Deps struct {
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken    string
 	DashboardToken string
+	// DistrustForwardedFor -- ключ лимита входа всегда RemoteAddr, заголовок
+	// X-Forwarded-For не читается (config trust_forwarded_for: false).
+	DistrustForwardedFor bool
 	// Replace -- движок замены конфига туннеля (мастер из шести шагов с
 	// откатом, internal/backend/replace). nil-safe: без него экран отвечает
 	// «не настроено», а не падает.
@@ -547,6 +715,9 @@ func NewMux(d Deps) http.Handler {
 	// перебор ведётся с адреса, а не по одному эндпоинту, и считать его надо
 	// там же.
 	entrance := newRemoteRateLimiter(entranceRatePerSec, entranceBurst)
+	if entrance != nil {
+		entrance.ignoreForwarded = d.DistrustForwardedFor
+	}
 	if d.DashboardToken != "" {
 		registerDashboardRoutes(mux, d, entrance)
 	}
@@ -658,7 +829,18 @@ func closeHardAsRecovery(d Deps, userID int64, nickname, checkName, reason strin
 	check := wire.Check{Name: checkName, Status: "ok", Details: map[string]any{"reason": reason}}
 	tr := state.Transition{Kind: state.Recovery, Next: next}
 	if d.Dispatcher != nil {
-		return d.Dispatcher.Handle(relayParent(d), userID, nickname, checkName, tr, check)
+		// Автомат -- сейчас, «восстановилось» -- в фоне: отчёт не ждёт
+		// Telegram (FRESH-04).
+		deliver, err := d.Dispatcher.Apply(userID, nickname, checkName, tr, check)
+		if err != nil || deliver == nil {
+			return err
+		}
+		spawnAlertDelivery(d, "recovery-missing-check", userID, checkName, func(ctx context.Context) {
+			if err := deliver(ctx); err != nil {
+				d.Logger.Warn("clear missing check hard: deliver recovery", "nickname", nickname, "check", checkName, "err", err)
+			}
+		})
+		return nil
 	}
 	return d.DB.State().Save(userID, checkName, next)
 }
@@ -1122,28 +1304,17 @@ func reportHandler(d Deps) http.HandlerFunc {
 					"consecutive_fails", tr.Next.ConsecutiveFails,
 				)
 			}
-			// Server-owned context (relayParent(d), not r.Context() — C6):
-			// the agent's report POST can disconnect mid-handler (its own
-			// timeout, network blip, process restart) for reasons that have
-			// nothing to do with whether this HARD/Recovery alert should
-			// still be sent. net/http cancels r.Context() on client
-			// disconnect independent of server shutdown, which was
-			// aborting an in-flight TG send out from under the alert.
-			// Bounded (unlike the request context, which had no timeout of
-			// its own) so a genuinely stuck TG call can't hang forever
-			// after being decoupled from the request's lifetime — same
-			// budget as the other TG-relay families in this file.
-			dispatchCtx, cancelDispatch := context.WithTimeout(relayParent(d), 30*time.Second)
-			err = d.Dispatcher.Handle(dispatchCtx, uid, nick, c.Name, tr, c)
-			cancelDispatch()
+			// Автомат записан синхронно (Apply) -- следующий отчёт читает его
+			// как prev, и отложенная запись дала бы дубль тревоги (BUG-02).
+			// Доставка -- в фоне: рассылка с повторами длится до полуминуты, а
+			// агент ждёт ответа на отчёт 10 с и писал «send report failed»,
+			// хотя отчёт принят (FRESH-04). Контекст доставки -- серверный
+			// (relayParent, не r.Context() -- C6): отвал агента посреди
+			// отчёта не должен рвать отправку тревоги; срок свой, 30 с.
+			deliver, err := d.Dispatcher.Apply(uid, nick, c.Name, tr, c)
 			if err != nil {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}
-			// Починка стартует ПОСЛЕ отправки тревоги: человек обязан узнать
-			// о поломке независимо от того, справится автоматика или нет.
-			// Запусти мы раньше -- отказ движка (выключенный полуавтомат,
-			// исчерпанные попытки, идущая замена) рисковал бы унести с собой
-			// и уведомление.
 			// VPN-туннель ожил сам -- стоп автопочинки после провала снимается
 			// (D1): иначе однажды не починенный туннель не чинился бы больше
 			// никогда. Окно попыток остаётся: флапающему туннелю потолок тот же.
@@ -1153,22 +1324,53 @@ func reportHandler(d Deps) http.HandlerFunc {
 					d.Logger.Warn("автопочинка: стоп не снялся", "nickname", nick, "check", c.Name, "err", err)
 				}
 			}
+			// Починка стартует ПОСЛЕ отправки тревоги: человек обязан узнать
+			// о поломке независимо от того, справится автоматика или нет.
+			// Запусти мы раньше -- отказ движка (выключенный полуавтомат,
+			// исчерпанные попытки, идущая замена) рисковал бы унести с собой
+			// и уведомление. Поэтому старт -- в той же фоновой задаче, после
+			// доставки.
+			var startRepair func()
 			if tr.Kind == state.Hard && d.StartLinkRepair != nil {
 				if _, ok := linkrepair.ScenarioFor(c.Name); ok {
 					// Имя VPN-туннеля -- из самой проверки: оно нужно починке,
 					// если снимок от роутера не придёт.
 					tunnelName, _ := c.Details["tunnel_name"].(string)
-					if _, err := d.StartLinkRepair(linkrepair.StartReq{
+					startReq := linkrepair.StartReq{
 						RouterID: uid, Nickname: nick, CheckName: c.Name,
 						AgentVersion: rep.AgentVersion, Auto: true,
 						TunnelName: tunnelName,
-					}); err != nil {
-						// Отказ здесь -- норма, а не авария: полуавтомат
-						// выключен владельцем, попытки исчерпаны, идёт замена.
-						d.Logger.Info("автопочинка не начата",
-							"nickname", nick, "check", c.Name, "почему", err)
+					}
+					startRepair = func() {
+						if _, err := d.StartLinkRepair(startReq); err != nil {
+							// Отказ здесь -- норма, а не авария: полуавтомат
+							// выключен владельцем, попытки исчерпаны, идёт замена.
+							d.Logger.Info("автопочинка не начата",
+								"nickname", nick, "check", startReq.CheckName, "почему", err)
+						}
 					}
 				}
+			}
+			if deliver != nil || startRepair != nil {
+				checkName, kind := c.Name, tr.Kind
+				spawnAlertDelivery(d, "dispatch", uid, checkName, func(ctx context.Context) {
+					if deliver != nil {
+						if err := deliver(ctx); err != nil {
+							d.Logger.Warn("dispatch", "check", checkName, "kind", kind, "err", err)
+						}
+					}
+					if startRepair != nil {
+						// Доставку оборвала остановка бэкенда: движок починки
+						// в окне слива никто не дождётся, он стартует при
+						// следующем отчёте после перезапуска.
+						if ctx.Err() != nil || relayDraining() {
+							d.Logger.Info("автопочинка не начата: бэкенд останавливается",
+								"nickname", nick, "check", checkName)
+							return
+						}
+						startRepair()
+					}
+				})
 			}
 		}
 		// v0.47: хук-отчёт не двигает автомат тревог -- то же правило, что и

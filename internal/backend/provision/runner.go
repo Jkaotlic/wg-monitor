@@ -2,6 +2,9 @@ package provision
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -181,9 +184,23 @@ func (d Deps) run(jobID string, req StartReq) {
 	var tail []string
 	var commitErr error
 	committed := false
+	// errCode is the relay's structured failure class (ErrMarker line,
+	// BACK-01). It only matters when the run fails: a stray marker on a
+	// successful run is ignored.
+	var errCode string
+	// errNonce ties ErrMarker lines to this job (v0.62 T10): the relay
+	// streams the router's terminal output to the same stdout, and only the
+	// runner and the relay know this value. Empty when JobJSON could not
+	// carry it — then every marker is ignored and the hint stays generic.
+	jobJSON, errNonce := withErrNonce(req.JobJSON)
 
 	onLine := func(line string) {
 		tail = appendTail(tail, line)
+
+		if code, ok := ParseErrLine(strings.TrimSpace(line), errNonce); ok {
+			errCode = code
+			return
+		}
 
 		// Cross-task requirement (from Task 3/B3's review): trim leading and
 		// trailing whitespace and \r before parsing — a PTY echoes the
@@ -225,7 +242,7 @@ func (d Deps) run(jobID string, req StartReq) {
 		}
 	}
 
-	rc, relayErr := d.Relay(installCtx, req.RelayPath, req.JobJSON, onLine)
+	rc, relayErr := d.Relay(installCtx, req.RelayPath, jobJSON, onLine)
 
 	if commitErr != nil {
 		d.fail(jobID, req, StepConfigWritten, commitErr, noExitCode, tail)
@@ -245,6 +262,15 @@ func (d Deps) run(jobID string, req StartReq) {
 		effErr := relayErr
 		if errors.Is(installCtx.Err(), context.DeadlineExceeded) {
 			effErr = context.DeadlineExceeded
+		} else if errCode != "" {
+			// BACK-01: relayErr from DefaultRelay is a bare "exit status N";
+			// the relay's ErrMarker code is what terminalConnectHint can
+			// actually classify. A timeout still wins (checked above).
+			if relayErr != nil {
+				effErr = fmt.Errorf("%s: %w", errCode, relayErr)
+			} else {
+				effErr = errors.New(errCode)
+			}
 		}
 		d.fail(jobID, req, activeStep, effErr, rc, tail)
 		return
@@ -412,12 +438,13 @@ const HintAuthFailed = "root-пароль или awgm-логин не подош
 // сохранённый пароль root; 401 панели (сменили ключ) пароля root не касается.
 const HintRootAuthFailed = "root-пароль не подошёл"
 
-// terminalConnectHint distinguishes the two relay-reported terminal_connected
-// failure classes the design spec calls out by keying off relayErr's text —
-// there is no structured error code from the relay to switch on instead
-// (RelayFunc returns a plain error). A nil relayErr, or text matching
-// neither known class, gets a generic connectivity hint rather than one of
-// the two specific ones.
+// terminalConnectHint distinguishes the relay-reported terminal_connected
+// failure classes by keying off relayErr's text. In production that text
+// carries the relay's structured ErrMarker code (run prefixes relayErr with
+// it — see ParseErrLine, BACK-01), since DefaultRelay's own error is only
+// "exit status N"; the free-text substrings below remain for relay stubs and
+// older relay copies. A nil relayErr, or text matching no known class, gets a
+// generic connectivity hint rather than one of the specific ones.
 func terminalConnectHint(relayErr error) string {
 	if relayErr == nil {
 		return "не удалось подключиться к AWG Manager terminal — проверь awgm_url и доступность роутера"
@@ -437,4 +464,27 @@ func terminalConnectHint(relayErr error) string {
 	default:
 		return "не удалось подключиться к AWG Manager terminal — проверь awgm_url и доступность роутера"
 	}
+}
+
+// withErrNonce returns jobJSON with a fresh "err_nonce" field (16 hex chars
+// from crypto/rand) and that nonce. A jobJSON that is not a JSON object, or
+// a failed rand read, comes back unchanged with an empty nonce: the relay
+// then prints no ErrMarker and the runner accepts none.
+func withErrNonce(jobJSON []byte) ([]byte, string) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(jobJSON, &fields); err != nil || fields == nil {
+		return jobJSON, ""
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return jobJSON, ""
+	}
+	nonce := hex.EncodeToString(b[:])
+	quoted, _ := json.Marshal(nonce)
+	fields["err_nonce"] = quoted
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return jobJSON, ""
+	}
+	return out, nonce
 }

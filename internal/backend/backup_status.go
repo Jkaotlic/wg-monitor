@@ -24,6 +24,10 @@ type backupSummary struct {
 	Small  *backupKindSummary   `json:"small,omitempty"`
 	Full   *backupKindSummary   `json:"full,omitempty"`
 	Verify *backupVerifySummary `json:"verify,omitempty"`
+	// ReviveKeyInBackup -- ключ шифрования хранилищ едет в архив. false --
+	// экран напоминает сохранить secrets/revive.key отдельно; nil -- при
+	// Known=false (ответ остаётся {"known":false}).
+	ReviveKeyInBackup *bool `json:"revive_key_in_backup,omitempty"`
 }
 
 type backupKindSummary struct {
@@ -44,6 +48,12 @@ type backupVerifySummary struct {
 	OK        bool   `json:"ok"`
 	Routers   int    `json:"routers"`
 	Reason    string `json:"reason,omitempty"`
+	// SealedStoresOpen -- открылись ли зашифрованные хранилища архива
+	// текущим ключом шифрования сервера; nil -- зашифрованных нет.
+	// SealedKeyMissing -- ключа на сервере нет вовсе. Заметка с именами
+	// файлов из backup-status.json наружу не идёт: фразу строит экран.
+	SealedStoresOpen *bool `json:"sealed_stores_open,omitempty"`
+	SealedKeyMissing bool  `json:"sealed_key_missing,omitempty"`
 }
 
 // BackupStatusSource читает backup-status.json по требованию, с коротким
@@ -99,11 +109,13 @@ func summarizeBackupStatus(st backup.Status) backupSummary {
 		}
 		return out
 	}
-	v := &backupVerifySummary{LastRunAt: st.Verify.LastRunAt, OK: st.Verify.OK, Routers: st.Verify.Routers}
+	v := &backupVerifySummary{LastRunAt: st.Verify.LastRunAt, OK: st.Verify.OK, Routers: st.Verify.Routers,
+		SealedStoresOpen: st.Verify.SealedStoresOpen, SealedKeyMissing: st.Verify.SealedKeyMissing}
 	if !st.Verify.OK && st.Verify.LastRunAt != "" {
 		v.Reason = backupReasonWords(st.Verify.Error)
 	}
-	return backupSummary{Known: true, Small: kind(st.Small), Full: kind(st.Full), Verify: v}
+	keyIn := st.ReviveKeyInBackup
+	return backupSummary{Known: true, Small: kind(st.Small), Full: kind(st.Full), Verify: v, ReviveKeyInBackup: &keyIn}
 }
 
 // backupReasonWords превращает сырой текст ошибки из файла состояния в
@@ -166,6 +178,11 @@ func backupReasonWords(raw string) string {
 		return "в архиве нет хранилища, записанного при бэкапе"
 	case has("в манифесте"):
 		return "числа в архиве не сходятся с записанными при бэкапе"
+	case has("не расшифровывается ключом шифрования"):
+		// Раньше, чем «хранилищ»: хранилище цело, не тот ключ на сервере.
+		return "хранилища не открываются текущим ключом шифрования"
+	case has("ключ шифрования этой машины негоден"):
+		return "ключ шифрования на сервере негоден"
 	case has("хранилищ", "не json"):
 		return "хранилище в архиве повреждено или потеряно"
 	case has("база из архива"):

@@ -23,7 +23,11 @@ type Config struct {
 	// (e.g. rpie4 inside the operator tunnel resolves its own host to a private
 	// address), so it cannot look up its own fleet-facing IP. Empty → no
 	// --resolve (unchanged behaviour).
-	PublicIP          string                   `yaml:"public_ip"`
+	PublicIP string `yaml:"public_ip"`
+	// TrustForwardedFor -- читать ли X-Forwarded-For за частным прокси при
+	// выборе ключа лимита входов. Не задан или true -- читать (как раньше);
+	// false -- ключ всегда RemoteAddr (FRESH-05).
+	TrustForwardedFor *bool                    `yaml:"trust_forwarded_for"`
 	DBPath            string                   `yaml:"db_path"`
 	Telegram          TelegramConfig           `yaml:"telegram"`
 	Wizard            WizardConfig             `yaml:"wizard"`
@@ -98,11 +102,12 @@ type DigestConfig struct {
 	OnlineWindowSec int  `yaml:"online_window_sec"` // router counts as online if its last report is fresher; default 600
 }
 
-// AmneziaConfig wires the optional Amnezia Premium cabinet helper.
+// AmneziaConfig -- хранилище ключей Amnezia Premium. В кабинет бот не ходит
+// (решение оператора 16.10); старый ключ base_url в config.yaml читается и
+// игнорируется.
 // SecretsPath lives outside state.db; when unset it defaults to the directory
 // of db_path (see ApplyStoreDefaults) and rides in the encrypted full backup.
 type AmneziaConfig struct {
-	BaseURL     string `yaml:"base_url"`
 	SecretsPath string `yaml:"secrets_path"`
 }
 
@@ -320,7 +325,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	// Rate-limit defaults: 0.2 r/s × burst 5 = "1 every 5s sustained, burst
 	// of 5". Reporter interval is 60s so legitimate traffic uses ~1/60 r/s
-	// per agent — room for transient ForceResumed spikes without limiting.
+	// per agent — room for transient force_recheck/hook spikes without limiting.
 	if cfg.RateLimit.ReportPerSec == 0 {
 		cfg.RateLimit.ReportPerSec = 0.2
 	}

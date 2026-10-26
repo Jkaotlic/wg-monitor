@@ -340,6 +340,11 @@ type dashboardWatchdog struct {
 	LastOfflineError       string `json:"last_offline_error,omitempty"`
 	LastOfflineErrorRouter string `json:"last_offline_error_router,omitempty"`
 	LastOfflineErrorAt     string `json:"last_offline_error_at,omitempty"`
+	// «Могло дойти» -- не ошибка: отдельно от offline_errors_total.
+	OfflineMaybeDelivered           int64  `json:"offline_maybe_delivered_total"`
+	LastOfflineMaybeDelivered       string `json:"last_offline_maybe_delivered,omitempty"`
+	LastOfflineMaybeDeliveredRouter string `json:"last_offline_maybe_delivered_router,omitempty"`
+	LastOfflineMaybeDeliveredAt     string `json:"last_offline_maybe_delivered_at,omitempty"`
 }
 
 type dashboardTelegramSummary struct {
@@ -477,6 +482,8 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 				SleepSent:     st.SleepSent,
 				OfflineSent:   st.OfflineSent,
 				OfflineErrors: st.OfflineErrors,
+
+				OfflineMaybeDelivered: st.OfflineMaybeDelivered,
 			}
 			if !st.LastScanAt.IsZero() {
 				wd.LastScanAt = st.LastScanAt.Format(time.RFC3339)
@@ -485,6 +492,11 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 				wd.LastOfflineError = st.LastOfflineError
 				wd.LastOfflineErrorRouter = st.LastOfflineErrorRouter
 				wd.LastOfflineErrorAt = st.LastOfflineErrorAt.UTC().Format(time.RFC3339)
+			}
+			if st.LastOfflineMaybeDelivered != "" {
+				wd.LastOfflineMaybeDelivered = st.LastOfflineMaybeDelivered
+				wd.LastOfflineMaybeDeliveredRouter = st.LastOfflineMaybeDeliveredRouter
+				wd.LastOfflineMaybeDeliveredAt = st.LastOfflineMaybeDeliveredAt.UTC().Format(time.RFC3339)
 			}
 			resp.Watchdog = wd
 		}

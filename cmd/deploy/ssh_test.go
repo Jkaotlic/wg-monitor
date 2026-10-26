@@ -558,3 +558,45 @@ func TestKnownHosts_ReplaceHostKeyAtomic(t *testing.T) {
 		})
 	}
 }
+
+func TestUploadSecretCommandUsesUmaskAndRemovesOnChmodFailure(t *testing.T) {
+	got := uploadSFTPCommandMode("/etc/wg-monitor/bot-token.txt", "600")
+	want := "umask 077; dd of='/etc/wg-monitor/bot-token.txt' bs=1M status=none"
+	if got != want {
+		t.Fatalf("secret upload=%q want %q", got, want)
+	}
+	if got := uploadSFTPCommandMode("/etc/wg-monitor/bot-token.txt", "640"); !strings.HasPrefix(got, "umask 077; ") {
+		t.Fatalf("640 is not world-readable, must use umask: %q", got)
+	}
+	if got := uploadSFTPCommandMode("/etc/caddy/Caddyfile", "644"); strings.Contains(got, "umask") {
+		t.Fatalf("non-secret upload changed: %q", got)
+	}
+	chmod := chmodUploadedCommand("/etc/wg-monitor/bot-token.txt", "600", false)
+	if !strings.Contains(chmod, "chmod 600 '/etc/wg-monitor/bot-token.txt'") || !strings.Contains(chmod, "rm -f '/etc/wg-monitor/bot-token.txt'") {
+		t.Fatalf("secret chmod must remove file on failure: %q", chmod)
+	}
+	if plain := chmodUploadedCommand("/etc/caddy/Caddyfile", "644", false); strings.Contains(plain, "rm ") {
+		t.Fatalf("non-secret must not be removed: %q", plain)
+	}
+}
+
+// Провал chmod не стирает файл, который был до загрузки: dd перезаписывает
+// его на месте с прежними правами, а rm унёс бы живой backend.yaml.
+func TestChmodUploadedCommandKeepsPreexistingFile(t *testing.T) {
+	got := chmodUploadedCommand("/etc/wg-monitor/backend.yaml", "640", true)
+	want := "chmod 640 '/etc/wg-monitor/backend.yaml' || exit 1"
+	if got != want {
+		t.Fatalf("existing secret: %q want %q", got, want)
+	}
+	if strings.Contains(got, "rm ") {
+		t.Fatalf("existing file must never be removed: %q", got)
+	}
+	fresh := chmodUploadedCommand("/etc/wg-monitor/backend.yaml", "640", false)
+	wantFresh := "chmod 640 '/etc/wg-monitor/backend.yaml' || { rm -f '/etc/wg-monitor/backend.yaml'; exit 1; }"
+	if fresh != wantFresh {
+		t.Fatalf("new secret: %q want %q", fresh, wantFresh)
+	}
+	if c := existsBeforeUploadCommand("/etc/wg-monitor/it's.yaml"); c != `test -e '/etc/wg-monitor/it'\''s.yaml'` {
+		t.Fatalf("exists check: %q", c)
+	}
+}

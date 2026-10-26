@@ -42,6 +42,11 @@ type miniappAutorepairResp struct {
 	// OptionUnconfirmed -- вариант настройки стоит на роутере, но проверку
 	// не прошёл: автопочинка сменила локацию, и доказать её не вышло.
 	OptionUnconfirmed bool `json:"option_unconfirmed,omitempty"`
+	// SourceHidden -- источник настройки «свой сервер», но вариант (панель и
+	// интерфейс) этому человеку не показан: выдачи с этой панели ему не
+	// разрешено. Экран пишет «из «Свой сервер»», а не «только перезапуск»,
+	// и подтверждает включение с keep_source, не трогая источник.
+	SourceHidden bool `json:"source_hidden,omitempty"`
 	// HasBackup -- есть ли у VPN-туннеля запасной в общем наборе правил.
 	// Снимок наборов правил живёт на роутере и бэкендом не хранится, а
 	// спрашивать роутер из GET нельзя -- поэтому пока всегда nil: «не знаем».
@@ -76,6 +81,10 @@ type miniappAutorepairReq struct {
 	Provider      string `json:"provider"`
 	Option        string `json:"option"`
 	AllowRelocate bool   `json:"allow_relocate"`
+	// KeepSource -- включить, оставив записанный источник «свой сервер» как
+	// есть (Provider, Option, AllowRelocate и право выпуска UpdatedBy): так
+	// подтверждает тот, кому вариант не показан (SourceHidden).
+	KeepSource bool `json:"keep_source"`
 }
 
 // Состояния меток вкладки «VPN-туннели». Выключенных в ответе нет.
@@ -348,6 +357,10 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 		// сервер», без подробностей чужой панели.
 		if s.Provider == RepairProviderAwg3 && !miniappCanIssueAwg3(d, tg, u.ID, miniappAutorepairPanelOf(s.Option)) {
 			resp.Option = ""
+			// Скрытый источник подтверждают только у включённой настройки
+			// (после переименования): выключенную без права на панель
+			// включают заново со своим источником.
+			resp.SourceHidden = s.Enabled
 		}
 		if o, ok, err := d.DB.TunnelOrigins().Get(u.ID, tunnelID); err == nil && ok && o.Unconfirmed &&
 			o.Provider == s.Provider && o.Variant == s.Option && resp.Option != "" {
@@ -468,17 +481,32 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		} else {
-			if !miniappAutorepairCheckSource(r.Context(), d, w, tg, routerID, req) {
-				return
-			}
-			// Имя -- из тех же событий роутера, что и подсказка источника:
-			// по нему движок узнает, что под этим id уже другой VPN-туннель.
-			if err := repo.Put(db.TunnelRepairSetting{
+			next := db.TunnelRepairSetting{
 				UserID: routerID, TunnelID: tid, Enabled: true,
+				// Имя -- из тех же событий роутера, что и подсказка источника:
+				// по нему движок узнает, что под этим id уже другой VPN-туннель.
 				TunnelName: tunnelName,
 				Provider:   req.Provider, Option: req.Option, AllowRelocate: req.AllowRelocate,
 				UpdatedBy: tg,
-			}); err != nil {
+			}
+			if req.KeepSource {
+				// Подтверждает тот, кому вариант своего сервера не показан
+				// (MINI-02): источник и право выпуска остаются за тем, кто его
+				// выбрал, -- движок выпускает конфиг от имени UpdatedBy. Права
+				// на панель у подтверждающего нет по определению, его не сверяем.
+				// Только у включённой настройки: выключенную keep_source снова
+				// включил бы от чужого имени (или от того, кому выпуск запрещён).
+				if !found || !cur.Enabled || cur.Provider != RepairProviderAwg3 {
+					writeJSONError(w, http.StatusBadRequest, "bad_keep_source",
+						"Включить автопочинку со своего сервера может только тот, кому разрешена выдача с его панели: выберите другой источник.")
+					return
+				}
+				next.Provider, next.Option, next.AllowRelocate, next.UpdatedBy =
+					cur.Provider, cur.Option, cur.AllowRelocate, cur.UpdatedBy
+			} else if !miniappAutorepairCheckSource(r.Context(), d, w, tg, routerID, req) {
+				return
+			}
+			if err := repo.Put(next); err != nil {
 				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "settings not saved")
 				return
 			}
@@ -490,7 +518,7 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 		}
 		if d.Logger != nil {
 			d.Logger.Info("miniapp autorepair set", "nickname", u.Nickname, "tunnel_id", tid,
-				"enabled", req.Enabled, "provider", req.Provider, "by", tg)
+				"enabled", req.Enabled, "provider", req.Provider, "keep_source", req.KeepSource, "by", tg)
 		}
 		resp, err := miniappAutorepairBuild(r.Context(), d, tg, u, tid)
 		if err != nil {

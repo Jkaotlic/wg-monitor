@@ -84,6 +84,25 @@ export function AccessSection({ routerID, openSheet }) {
     )
   }
 
+  // Оператор уходит с доступом и с тревогами роутера одним нажатием «✖» --
+  // сначала лист подтверждения, как у отвязки владельца.
+  const askRemoveOperator = (id) => {
+    const apply = () => runMutation(() => removeOperator(routerID, id))
+    if (!openSheet) {
+      apply()
+      return
+    }
+    openSheet(
+      localSheet({
+        title: `Убрать ${nameOf(id, byID)} из операторов?`,
+        body: 'Этот человек перестанет видеть роутер в приложении и получать тревоги о нём.',
+        buttonLabel: 'Убрать',
+        danger: true,
+        perform: apply,
+      }),
+    )
+  }
+
   function addByID(id) {
     setBusy(true)
     setActionError(null)
@@ -285,7 +304,7 @@ export function AccessSection({ routerID, openSheet }) {
                   class="btn btn-danger btn-icon"
                   disabled={busy}
                   aria-label={`Удалить оператора ${nameOf(op.telegram_user_id, byID)}`}
-                  onClick={() => runMutation(() => removeOperator(routerID, op.telegram_user_id))}
+                  onClick={() => askRemoveOperator(op.telegram_user_id)}
                 >
                   ✖
                 </button>

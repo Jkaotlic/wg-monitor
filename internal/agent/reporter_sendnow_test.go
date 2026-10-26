@@ -25,9 +25,11 @@ func TestReporterSendNowIsNotResumed(t *testing.T) {
 		t.Fatalf("trigger = %q, want плановый", reps[0].Trigger)
 	}
 
-	// force_recheck по-прежнему Resumed=true.
-	r.ForceResumed(context.Background())
-	if reps = s.snapshot(); len(reps) != 2 || !reps[1].Resumed {
-		t.Fatalf("ForceResumed без Resumed: %+v", reps)
+	// v0.62: force_recheck тоже без принудительного Resumed.
+	if err := r.ForceReport(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if reps = s.snapshot(); len(reps) != 2 || reps[1].Resumed {
+		t.Fatalf("ForceReport ушёл с Resumed=true: %+v", reps)
 	}
 }

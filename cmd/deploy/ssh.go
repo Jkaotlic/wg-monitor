@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,23 @@ type SSH struct {
 	client *ssh.Client
 	host   string
 }
+
+// remoteExec -- то, чем шаги мастера пользуются на сервере: команды и
+// загрузка файла. *SSH его реализует, тесты подставляют фейк и видят все
+// команды по порядку, не трогая живых машин.
+type remoteExec interface {
+	Run(cmd string) (stdout, stderr string, rc int, err error)
+	MustRun(cmd string) (string, error)
+	UploadSFTPMode(remotePath string, data []byte, mode string) error
+}
+
+// remoteSession -- remoteExec, которое надо закрыть по окончании.
+type remoteSession interface {
+	remoteExec
+	Close() error
+}
+
+var _ remoteSession = (*SSH)(nil)
 
 const defaultSSHCommandTimeout = 10 * time.Minute
 
@@ -349,6 +367,12 @@ func (s *SSH) UploadStdin(remotePath string, data []byte) error {
 // UploadSFTP uploads via SFTP. Use on systems with full openssh (e.g. VPS).
 // Falls back to UploadStdin on dropbear (caller decides which to use).
 func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
+	return s.UploadSFTPMode(remotePath, data, "")
+}
+
+// UploadSFTPMode — как UploadSFTP, но для файла с секретным режимом (без прав
+// «для прочих») создаёт его сразу закрытым: до chmod он не читается всеми.
+func (s *SSH) UploadSFTPMode(remotePath string, data []byte, mode string) error {
 	// Use scp-equivalent via ssh exec to avoid pulling github.com/pkg/sftp.
 	// Pattern: open session, send `dd of=PATH bs=1M`, write to stdin.
 	sess, err := s.client.NewSession()
@@ -361,7 +385,7 @@ func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(uploadSFTPCommand(remotePath)); err != nil {
+	if err := sess.Start(uploadSFTPCommandMode(remotePath, mode)); err != nil {
 		return err
 	}
 	prog := newProgressDots(len(data), os.Stderr)
@@ -384,6 +408,44 @@ func uploadStdinCommand(remotePath string) string {
 
 func uploadSFTPCommand(remotePath string) string {
 	return "dd of=" + shellSingleQuote(remotePath) + " bs=1M status=none"
+}
+
+// isSecretMode: у режима нет прав для «прочих» (600, 640, 660...). Пустой или
+// непонятный режим секретным не считается.
+func isSecretMode(mode string) bool {
+	m, err := strconv.ParseUint(strings.TrimSpace(mode), 8, 32)
+	return err == nil && m&0o007 == 0
+}
+
+// uploadSFTPCommandMode: для секретных режимов файл создаётся под umask 077,
+// чтобы между загрузкой и chmod его не читал никто посторонний.
+func uploadSFTPCommandMode(remotePath, mode string) string {
+	if isSecretMode(mode) {
+		return "umask 077; " + uploadSFTPCommand(remotePath)
+	}
+	return uploadSFTPCommand(remotePath)
+}
+
+// chmodUploadedCommand: если chmod секретного файла не удался, файл, которого
+// до загрузки не было, удаляется, а не остаётся с неверными правами. Файл,
+// который был (existed), не трогаем: dd перезаписал его на месте с прежними
+// правами, а rm унёс бы живой /etc/wg-monitor/backend.yaml.
+func chmodUploadedCommand(remotePath, mode string, existed bool) string {
+	q := shellSingleQuote(remotePath)
+	cmd := "chmod " + mode + " " + q
+	if !isSecretMode(mode) {
+		return cmd
+	}
+	if existed {
+		return cmd + " || exit 1"
+	}
+	return cmd + " || { rm -f " + q + "; exit 1; }"
+}
+
+// existsBeforeUploadCommand -- проверка до загрузки: был ли файл на месте.
+// Код выхода 0 -- был.
+func existsBeforeUploadCommand(remotePath string) string {
+	return "test -e " + shellSingleQuote(remotePath)
 }
 
 // progressDots prints one '.' to its writer per 1 MiB consumed, and a

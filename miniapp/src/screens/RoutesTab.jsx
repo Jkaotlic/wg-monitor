@@ -1,4 +1,4 @@
-import { agentReplyText } from '../errorText.js'
+import { agentReplyText, errorText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
@@ -23,9 +23,10 @@ import {
   otherSourceRow,
   otherSourceSummary,
   rebindSheetText,
+  rebindSubtitle,
 } from '../routes.js'
 import { fetchRouterSettings, fetchRouterChecksWithIncidents } from '../api.js'
-import { rulesCount, tunnelTargetLabel } from '../labels.js'
+import { tunnelTargetLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -119,6 +120,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   // удаление правила, которого он не видит целиком, -- это удаление вслепую.
   const plan = useCommand(routerID)
   const [pendingRule, setPendingRule] = useState(null)
+  // План удаления не пришёл (MINI-04): правило, которое можно запросить заново.
+  const [planFailed, setPlanFailed] = useState(null)
 
   // «Куда пойдёт сайт» -- свой канал команд: ответ на вопрос не должен
   // перетирать снимок экрана, а снимок -- ответ. Ответ показывается только
@@ -169,7 +172,14 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   }
 
   useEffect(() => {
-    if (!pendingRule || plan.result?.status !== 'ok') return
+    if (!pendingRule) return
+    // Роутер не показал план -- говорим это и не оставляем правило «в ожидании».
+    if (plan.error || (plan.result && plan.result.status !== 'ok')) {
+      setPlanFailed(pendingRule)
+      setPendingRule(null)
+      return
+    }
+    if (plan.result?.status !== 'ok') return
     const summary = deletePlanSummary(parseRouteSnapshot(plan.result.output))
     setPendingRule(null)
     openSheet?.(
@@ -188,9 +198,16 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         onDone: refresh,
       }),
     )
-  }, [plan.result])
+  }, [plan.result, plan.error])
+
+  const planProblem = planFailed
+    ? plan.error
+      ? errorText(plan.error)
+      : agentReplyText(plan.result, 'Роутер не показал, что исчезнет, — правило не тронуто.')
+    : ''
 
   const askDelete = (rule) => {
+    setPlanFailed(null)
     setPendingRule({ id: rule.id, kind: rule.kind })
     plan.run('route_delete_plan', { kind: rule.kind, route_id: rule.id }, deadline)
   }
@@ -224,10 +241,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
     const options = rebindTargets(rows, src.id)
     return {
       title: 'Куда перенести',
-      subtitle:
-        src.id === OTHER_SOURCE_ID
-          ? `Всё, что сейчас идёт напрямую через провайдера (${rulesCount(src.total)})`
-          : `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
+      subtitle: rebindSubtitle(src),
       options: options.map((dst) => {
         // Текст -- честный: обратный перенос унесёт и правила, уже стоявшие
         // на цели, а из «Напрямую (WAN)» обратной дороги в приложении нет.
@@ -563,6 +577,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
 
       {groups.length > 0 && (
         <Section title="Названные сайты и адреса">
+          {planProblem && <ErrorLine text={planProblem} busy={plan.busy} onRetry={() => askDelete(planFailed)} />}
           {groups.map((g) => (
             <div key={g.bind} class="rules-group">
               <h3 class="rules-bind">{g.label}</h3>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { commandErrorText } from '../maintenance.js'
+import { commandFailText } from '../maintenance.js'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import {
@@ -114,7 +114,7 @@ export function PackagesCard({ kind, routerID, asleep, canRun }) {
           {cmd.sleepNote && <p class="hint">{cmd.sleepNote}</p>}
           {outcome && <p class={`result-note${failed ? ' result-note-error' : ''}`}>{outcome}</p>}
           {cmd.error && (
-            <p class="state state-error">{commandErrorText(cmd.errorCode) || (cmd.errorCode ? 'Команда не отправлена.' : cmd.error)}</p>
+            <p class="state state-error">{commandFailText(cmd)}</p>
           )}
           {failed && cmd.result.output && (
             <details class="packages-details">

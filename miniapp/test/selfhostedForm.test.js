@@ -244,6 +244,13 @@ describe('тексты экрана сервера', () => {
     expect(selfhostedErrorText(new Error('net'))).toBe('Не получилось. Попробуйте ещё раз.')
   })
 
+  it('MINI-09: английская фраза сервера на экран не идёт', () => {
+    expect(selfhostedErrorText(new ApiError(403, 'forbidden', 'x', 'admin only'))).toBe('Не получилось. Попробуйте ещё раз.')
+    expect(selfhostedErrorText(new ApiError(401, 'unauthorized', 'x', 'sign in required'))).toBe('Не получилось. Попробуйте ещё раз.')
+    // Код с известной фразой экрана главнее английского текста сервера.
+    expect(selfhostedErrorText(new ApiError(404, 'not_found', 'x', 'not found'))).toBe('Такого сервера больше нет — вернитесь к списку.')
+  })
+
   it('словарь: «Серверы», без self-hosted и без бота', () => {
     expect(SELFHOSTED_TEXTS.title).toBe('Серверы')
     const all = Object.values(SELFHOSTED_TEXTS).join(' ')

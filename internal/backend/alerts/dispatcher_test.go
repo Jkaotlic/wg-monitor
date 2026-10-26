@@ -882,3 +882,38 @@ func TestDispatcher_CoveredWithRealRepairs(t *testing.T) {
 		t.Fatalf("ответов=%v, новая тревога не снимает закрытие прежней починки", sink.replies)
 	}
 }
+
+// «Тише на час» нажали под карточкой, а проверка уже восстановилась
+// (автомат в ok, «восстановилось» ещё в очереди доставки): память карточки
+// не дополняется -- нить починки иначе вписала бы строку тишины в тревогу,
+// которой уже нет. Пока тревога в hard -- как раньше.
+func TestDispatcher_NoteAlertActionSkipsRecoveredCheck(t *testing.T) {
+	d := newDB(t)
+	uid, _ := d.Users().Insert("router-r", "6666000000000000000000000000000000000000000000000000000000000001", "198.51.100.7", "awg0")
+	disp := NewDispatcher(d, &fakeTG{}, Config{FailThreshold: 3, RecoveryThreshold: 2})
+	disp.SetNotifySink(&recordingSink{delivers: 1})
+	if err := disp.Handle(context.Background(), uid, "router-r", "dns", hardTr(), chk("dns", "fail", nil)); err != nil {
+		t.Fatal(err)
+	}
+	disp.NoteAlertAction(uid, "dns", "скрыты до 12:00")
+	if text, kb, _ := disp.Last(uid, "dns"); !strings.Contains(text, "скрыты до 12:00") || len(kb.InlineKeyboard) != 0 {
+		t.Fatalf("в hard карточка дополняется и теряет кнопки: %q %+v", text, kb)
+	}
+
+	if err := disp.Handle(context.Background(), uid, "router-r", "dns", hardTr(), chk("dns", "fail", nil)); err != nil {
+		t.Fatal(err)
+	}
+	before, beforeKB, _ := disp.Last(uid, "dns")
+	deliver, err := disp.Apply(uid, "router-r", "dns", state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok", ConsecutiveOKs: 2}}, chk("dns", "ok", nil))
+	if err != nil || deliver == nil {
+		t.Fatalf("Apply recovery: %v", err)
+	}
+	disp.NoteAlertAction(uid, "dns", "скрыты до 13:00")
+	text, kb, ok := disp.Last(uid, "dns")
+	if !ok {
+		t.Fatal("память карточки забыта до доставки «восстановилось»")
+	}
+	if text != before || strings.Contains(text, "13:00") || len(kb.InlineKeyboard) != len(beforeKB.InlineKeyboard) {
+		t.Fatalf("восстановившаяся карточка дополнена: %q %+v", text, kb)
+	}
+}

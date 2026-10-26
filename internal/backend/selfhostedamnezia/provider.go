@@ -269,7 +269,6 @@ func (s *Store) Upsert(inst Instance) error {
 	}
 	inst.SSHHost = strings.TrimSpace(inst.SSHHost)
 	inst.SSHUser = strings.TrimSpace(inst.SSHUser)
-	inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
 	if inst.SSHHost != "" {
 		if inst.SSHPort == 0 {
 			inst.SSHPort = 22
@@ -280,7 +279,7 @@ func (s *Store) Upsert(inst Instance) error {
 		if inst.SSHUser == "" {
 			inst.SSHUser = "root"
 		}
-		if inst.SSHPassword == "" {
+		if strings.TrimSpace(inst.SSHPassword) == "" {
 			return errors.New("ssh_password is required when ssh_host is set")
 		}
 	}
@@ -391,7 +390,7 @@ func (s *Store) normalize() {
 		}
 		inst.SSHHost = strings.TrimSpace(inst.SSHHost)
 		inst.SSHUser = strings.TrimSpace(inst.SSHUser)
-		inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
+		// Пароль хранится как введён: пробел по краям -- его часть (BACK-06).
 		inst.SSHHostKey = strings.TrimSpace(inst.SSHHostKey)
 		inst.SSHHostKeyPending = strings.TrimSpace(inst.SSHHostKeyPending)
 		if inst.SSHHostKeyPending == "" {

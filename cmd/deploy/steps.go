@@ -142,12 +142,21 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	return nil
 }
 
+// verifyHTTPTimeout -- сколько stepVerifyHTTP ждёт 200 после рестарта.
+// Тесты сокращают, чтобы провал не ждал 12 секунд.
+var verifyHTTPTimeout = 12 * time.Second
+
 // stepVerifyHTTP: curl URL, expect 200. Backend restarts can return
 // connection-refused for a short window after systemctl start succeeds, so
 // give the listener a few seconds before surfacing the failure.
-func stepVerifyHTTP(s *SSH, url string) error {
+func stepVerifyHTTP(s remoteExec, url string) error {
+	return stepVerifyHTTPWithin(s, url, verifyHTTPTimeout)
+}
+
+// stepVerifyHTTPWithin -- то же с явным сроком ожидания.
+func stepVerifyHTTPWithin(s remoteExec, url string, timeout time.Duration) error {
 	cmd := curlHTTPCodeCommand(url)
-	deadline := time.Now().Add(12 * time.Second)
+	deadline := time.Now().Add(timeout)
 	var lastOut string
 	var lastErr error
 	for {
@@ -179,7 +188,7 @@ func curlHTTPCodeCommand(url string) string {
 	return "curl -sS -o /dev/null -w '%{http_code}' " + shellSingleQuote(url)
 }
 
-func stepVerifyBackendHealth(s *SSH, domain string) error {
+func stepVerifyBackendHealth(s remoteExec, domain string) error {
 	if err := stepVerifyHTTP(s, backendHealthURL(domain)); err != nil {
 		return err
 	}
@@ -258,12 +267,20 @@ func stepEnsureDir(s *SSH, path, owner string) error {
 }
 
 // stepUploadFile uploads bytes via UploadSFTP and chmod's.
-func stepUploadFile(s *SSH, remotePath string, data []byte, mode string) error {
-	if err := s.UploadSFTP(remotePath, data); err != nil {
+func stepUploadFile(s remoteExec, remotePath string, data []byte, mode string) error {
+	// Был ли файл до загрузки: провал chmod стирает только свежий файл.
+	// Проверка не удалась -- считаем, что был: живой файл дороже.
+	existed := true
+	if isSecretMode(mode) {
+		if _, _, rc, err := s.Run(existsBeforeUploadCommand(remotePath)); err == nil && rc != 0 {
+			existed = false
+		}
+	}
+	if err := s.UploadSFTPMode(remotePath, data, mode); err != nil {
 		PrintFail("upload: " + err.Error())
 		return err
 	}
-	if _, err := s.MustRun("chmod " + mode + " " + shellSingleQuote(remotePath)); err != nil {
+	if _, err := s.MustRun(chmodUploadedCommand(remotePath, mode, existed)); err != nil {
 		PrintFail(err.Error())
 		return err
 	}

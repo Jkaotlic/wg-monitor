@@ -47,7 +47,7 @@ func TestReporterWakeSendsHookReportWhenBackendAllows(t *testing.T) {
 	if trig != wire.TriggerHook {
 		t.Fatalf("внеочередной отчёт без trigger=hook: %q", trig)
 	}
-	r.ForceResumed(ctx)
+	_ = r.ForceReport(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.last.Trigger != "" {
@@ -243,7 +243,7 @@ func TestReporterForceReportNeverLabelledHookUnderConcurrency(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	go func() { defer wg.Done(); r.wakeReport(ctx) }()
 	time.Sleep(30 * time.Millisecond)
-	go func() { defer wg.Done(); r.ForceResumed(ctx) }()
+	go func() { defer wg.Done(); _ = r.ForceReport(ctx) }()
 	time.Sleep(30 * time.Millisecond)
 	close(s.block)
 	wg.Wait()
@@ -251,20 +251,16 @@ func TestReporterForceReportNeverLabelledHookUnderConcurrency(t *testing.T) {
 	if len(reps) != 3 {
 		t.Fatalf("отчётов %d, хотим 3", len(reps))
 	}
-	sawForced, sawHook := false, false
-	for _, rep := range reps[1:] {
-		if rep.Resumed {
-			sawForced = true
-			if rep.Trigger == wire.TriggerHook {
-				t.Fatalf("принудительный отчёт ушёл с trigger=hook: %+v", rep)
-			}
-		}
+	// Плановый и принудительный идут без метки, хук -- ровно один: лишняя
+	// метка hook означала бы, что принудительный отчёт ушёл мимо автомата.
+	hooks := 0
+	for _, rep := range reps {
 		if rep.Trigger == wire.TriggerHook {
-			sawHook = true
+			hooks++
 		}
 	}
-	if !sawForced || !sawHook {
-		t.Fatalf("ждали принудительный и хук-отчёт: forced=%v hook=%v", sawForced, sawHook)
+	if hooks != 1 {
+		t.Fatalf("хук-отчётов %d, хотим 1: %+v", hooks, reps)
 	}
 }
 
@@ -288,23 +284,6 @@ func TestReporterHookReportDoesNotConsumeResumed(t *testing.T) {
 	}
 	if !reps[1].Resumed || reps[1].Trigger != "" {
 		t.Fatalf("первый плановый после отвала без Resumed: %+v", reps[1])
-	}
-}
-
-// M5: принудительный Resumed (force_recheck) тоже не съедается хук-отчётом.
-func TestReporterHookReportKeepsForceResumed(t *testing.T) {
-	s := &recSender{}
-	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
-	r.lastReportAt = time.Now()
-	r.mu.Lock()
-	r.forceResumed = true
-	r.mu.Unlock()
-	ctx := context.Background()
-	r.wakeReport(ctx)
-	r.sendOnce(ctx)
-	reps := s.snapshot()
-	if len(reps) != 2 || !reps[1].Resumed {
-		t.Fatalf("метку force съел хук-отчёт: %+v", reps)
 	}
 }
 

@@ -178,6 +178,15 @@ def ws_connect(cfg, jar):
     response = read_until(raw, b"\r\n\r\n")
     first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
     if " 101 " not in first:
+        try:
+            raw.close()
+        except Exception:
+            pass
+        # v0.62 T10: 401/403 на рукопожатии -- отказ входа в панель, та же
+        # форма, что у request(), чтобы err_code дал auth_failed.
+        parts = first.split(" ", 2)
+        if len(parts) >= 2 and parts[1] in ("401", "403"):
+            raise RelayError("awgm GET %s: HTTP %s: terminal ws handshake refused: %s" % (target.path or "/", parts[1], first))
         raise RelayError("awgm terminal ws handshake failed: " + response[:500].decode("utf-8", "replace"))
     raw.settimeout(1.0)
     return raw
@@ -850,9 +859,10 @@ def run_bootstrap(sock, cfg):
     raise RelayError("bootstrap script timeout waiting for marker")
 
 def main():
-    global TLS_CONFIG
+    global TLS_CONFIG, ERR_NONCE
     cfg = load_config(sys.argv[1])
     TLS_CONFIG = cfg
+    ERR_NONCE = job_err_nonce(cfg)
     if cfg.get("mode") == "deferred_bootstrap":
         run_deferred_bootstrap(cfg, sys.argv[1])
         return
@@ -884,9 +894,52 @@ def main():
         except Exception as e:
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
 
+# BACK-01: структурная метка отказа для backend (provision.ErrMarker). Поток
+# stdout+stderr у backend один, а ошибка процесса -- голое «exit status 1»,
+# поэтому класс отказа передаётся отдельной строкой. Коды -- ровно те, что
+# знает provision.ParseErrLine.
+#
+# v0.62 T10: строка -- «__WG_ERR__ <nonce> <code>», nonce -- err_nonce из
+# задания. Вывод терминала роутера идёт в тот же stdout, и роутер мог бы
+# напечатать метку сам (оживление тогда стёрло бы сохранённый root-пароль).
+# Нет нонса в задании -- метку не печатаем вовсе.
+ERR_MARKER = "__WG_ERR__ "
+ERR_NONCE = ""
+_AWGM_AUTH_HTTP = re.compile(r"^awgm \S+ \S+: HTTP (401|403):")
+_NONCE_RE = re.compile(r"^[0-9A-Za-z]{1,64}$")
+
+def job_err_nonce(cfg):
+    n = cfg.get("err_nonce") if isinstance(cfg, dict) else None
+    if isinstance(n, str) and _NONCE_RE.match(n):
+        return n
+    return ""
+
+def err_code(e):
+    if not isinstance(e, RelayError):
+        return None
+    msg = str(e)
+    if msg == ROOT_LOGIN_REFUSED:
+        return "root_auth_failed"
+    if msg == "awgm login: success=false" or _AWGM_AUTH_HTTP.match(msg):
+        return "auth_failed"
+    if "already has an active session" in msg:
+        return "session_active"
+    return None
+
+def report_error(e, out=None, err=None, nonce=None):
+    out = out if out is not None else sys.stdout
+    err = err if err is not None else sys.stderr
+    nonce = ERR_NONCE if nonce is None else nonce
+    code = err_code(e)
+    if code and nonce:
+        # "\n" впереди: строка роутера без перевода строки не склеится с меткой.
+        out.write("\n" + ERR_MARKER + nonce + " " + code + "\n")
+        out.flush()
+    print(str(e), file=err)
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(str(e), file=sys.stderr)
+        report_error(e)
         sys.exit(1)

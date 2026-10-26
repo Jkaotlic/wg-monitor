@@ -240,8 +240,82 @@ mode `0600`. After a restore the saved router passwords must be entered again
 are refused. The uploaded copies in `/tmp/wg-monitor-restore` are removed
 whether the restore succeeds or not.
 
-This flow is for the VPS (systemd) layout. For the Docker layout see
-[Восстановление из малого архива](#восстановление-из-малого-архива).
+This flow is for the VPS (systemd) layout. On the Docker layout (Raspberry Pi,
+`source_bind` set) `--to-current-vps` runs the steps of
+[Восстановление бэкапа на Pi](#восстановление-бэкапа-на-pi) itself, and
+`--to-new-vps` is refused.
+
+### Восстановление бэкапа на Pi
+
+Мастер делает эти шаги сам: `wg-monitor-deploy restore-backup <архив> --to-current-vps`
+(или `[1] Restore to current VPS`) на докер-раскладке спрашивает «Восстановить на Pi?
+Бэкенд будет остановлен», до остановки проверяет `sqlite3`, `docker`, каталог `data/` и
+контейнер `wg-monitor-backend`, выгружает архив в `data/restore-tmp` и проверяет базу
+`integrity_check`, пока бэкенд работает: останавливает его только на копирование и
+замену файлов. Если база из архива не прошла проверку, ничего не заменяется и бэкенд
+не останавливается. Прежняя база остаётся рядом как
+`state.db.bak.<время>` (с `-wal`/`-shm`), `secrets/revive.key` мастер не трогает.
+Без терминала (скрипт, пайп) спросить некого — нужен `--yes`, иначе мастер отказывает с
+ошибкой, а не выходит молча. До выгрузки проверяется место на диске `data/`: нужно не меньше
+2 × (`state.db` + `-wal`) + размер архива. После запуска `/healthz` ждётся до 60 с.
+Восстановление «на новую VPS» с докер-раскладки мастер не делает.
+Ниже — тот же порядок руками, запасной путь. Пути — от корня раскладки (`~/wg-monitor`, у root —
+`/root/wg-monitor`), внутри контейнера каталог `data/` виден как `/data`. Значения в
+`<...>` подставьте свои. Для малого архива короче шаг-в-шаг есть в
+[Восстановление из малого архива](#восстановление-из-малого-архива); ниже — полный порядок.
+
+```bash
+cd ~/wg-monitor
+# 1. остановить контейнер бэкенда (как он запущен на площадке)
+docker compose stop            # или: docker stop <имя контейнера>
+
+# 2. распаковать архив во временный каталог и проверить базу
+#    (архивы обычно лежат в data/backups/; extract не перезаписывает файлы,
+#    поэтому остаток прошлой попытки убираем заранее)
+rm -rf data/restore-tmp
+bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
+  --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
+sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # ждём: ok
+
+# 3. сохранить текущее и положить файлы в /data тома (на хосте — data/)
+# -wal/-shm -- часть текущей базы: копируем их рядом с .bak ДО удаления
+B=$(date +%Y%m%d)
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$B
+for x in wal shm; do
+  [ -f data/state.db-$x ] && cp -p data/state.db-$x data/state.db.bak.$B-$x
+done
+rm -f data/state.db-wal data/state.db-shm
+install -m 600 data/restore-tmp/state.db data/state.db
+for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
+  [ -f data/restore-tmp/$f ] && install -m 600 data/restore-tmp/$f data/$f
+done
+
+# 4. права: владелец и группа как у самого каталога data/ (так делает fileown.MatchDir)
+sudo chown --reference=data data/state.db data/*.json
+ls -l data/                    # владелец должен совпадать с соседними файлами
+
+# 5. вернуть revive.key из своего хранилища (в архиве его нет)
+install -m 600 <ваш revive.key> secrets/revive.key
+sudo chown --reference=secrets/bot-token.txt secrets/revive.key
+
+# 6. запустить и проверить
+rm -rf data/restore-tmp
+docker compose start
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+Адрес для `curl` — ключ `listen:` в `config/backend.yaml` (по умолчанию
+`127.0.0.1:8080`). Если контейнер не в сети хоста, порт на хосте — тот, что
+опубликован в `ports:` вашего `docker-compose.yml`.
+
+На пустой машине сначала верните `backend.yaml` в `config/`, токены
+(`bot-token.txt`, `wizard-token.txt`, `dashboard-token.txt`) в `secrets/`, а в
+`backend.yaml` оставьте пути хранилищ в `/data/...`. Хранилище секретов
+оператора `operator-secrets.tgz.enc` (его кладёт `backup push-secrets`) — тоже в
+`secrets/`; сами архивы бэкапа — в `data/backups/`, там их кладёт ночной бэкап.
+Если `/healthz` не отвечает —
+смотрите `docker logs wg-monitor-backend`, а прежнюю базу верните из `state.db.bak.<дата>` вместе с `-wal`/`-shm` рядом (как `state.db-wal`, `state.db-shm`).
+После восстановления сохранённые пароли роутеров вводятся заново.
 
 `--to-new-vps` bootstraps the new host first: `wgmonitor` user, systemd units,
 backend binary from the current release, Caddy route, bot token from the local
@@ -431,7 +505,8 @@ wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --
 wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --to-current-vps   # или --to-new-vps
 ```
 
-**Докер-раскладка (Raspberry Pi)** — руками. Пути ниже — от корня раскладки
+**Докер-раскладка (Raspberry Pi)** — мастером так же (`--to-current-vps`, см.
+[Восстановление бэкапа на Pi](#восстановление-бэкапа-на-pi)) или руками. Пути ниже — от корня раскладки
 (`~/wg-monitor`); парольная фраза лежит в `secrets/backup-passphrase.txt` (на
 пустой машине — создать этот файл с фразой из менеджера паролей, права `0600`).
 Контейнер бэкенда на время замены файлов должен быть остановлен — тем же
@@ -440,12 +515,18 @@ wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --
 
 ```bash
 cd ~/wg-monitor
+rm -rf data/restore-tmp        # extract не перезаписывает остаток прошлой попытки
 bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
   --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
 sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # должно ответить ok
 
 # остановить контейнер бэкенда
-[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$(date +%Y%m%d)
+# -wal/-shm -- часть текущей базы: копируем их рядом с .bak ДО удаления
+B=$(date +%Y%m%d)
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$B
+for x in wal shm; do
+  [ -f data/state.db-$x ] && cp -p data/state.db-$x data/state.db.bak.$B-$x
+done
 rm -f data/state.db-wal data/state.db-shm
 install -m 600 data/restore-tmp/state.db data/state.db
 for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
@@ -453,6 +534,7 @@ for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemynam
 done
 # на пустой машине -- ещё конфиг и токены из того же каталога:
 #   backend.yaml -> config/; bot-token.txt, wizard-token.txt, dashboard-token.txt -> secrets/
+#   operator-secrets.tgz.enc -> secrets/; архивы бэкапа -> data/backups/
 # запустить контейнер бэкенда
 rm -rf data/restore-tmp
 ```
@@ -464,6 +546,18 @@ rm -rf data/restore-tmp
 Владелец файлов — тот же, что у остальных файлов в `data/` и `secrets/`.
 `backup extract` читает оба формата шифрования и оба вида архивов; в непустой
 каталог не разворачивает, а при битом архиве не оставляет половины файлов.
+
+## Адрес клиента за прокси (`trust_forwarded_for`)
+
+Бэкенд ограничивает частоту неудачных входов по адресу клиента. За частным
+прокси (KeenDNS, nginx) настоящий адрес лежит в заголовке `X-Forwarded-For`,
+поэтому по умолчанию (`trust_forwarded_for` не задан или `true`) бэкенд его читает.
+Счётчики в `/debug/vars` показывают, приходит ли заголовок:
+`wgm_remote_xff_present` -- пришёл, `wgm_remote_xff_absent` -- нет.
+
+Если за прокси `wgm_remote_xff_absent` заметно больше нуля, прокси заголовок не
+добавляет, и все клиенты выглядят одним адресом. Тогда задайте в `backend.yaml`
+`trust_forwarded_for: false`: ключом лимита станет адрес соединения.
 
 ## Update Components
 

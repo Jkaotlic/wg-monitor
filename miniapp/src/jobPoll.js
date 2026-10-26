@@ -6,10 +6,20 @@
 // сервер забыл задание через 30 минут после конца), lost (40 сетевых ошибок
 // подряд -- около минуты без связи; задание могло продолжиться).
 
+import { isTransient } from './api.js'
+
 export const JOB_POLL_MS = 1500
 export const JOB_POLL_FAILURE_LIMIT = 40
 // После 429 ограничитель просит не частить: пауза длиннее обычной.
 export const JOB_POLL_RATE_LIMIT_MS = 5000
+
+// retryPauseMs -- пауза перед повтором после временного сбоя: после 429
+// ограничитель просит не частить (JOB_POLL_RATE_LIMIT_MS вместо обычной),
+// и в любом случае не дольше, чем осталось до дедлайна.
+export function retryPauseMs(err, pauseMs, remainingMs) {
+  const want = err?.status === 429 ? Math.max(pauseMs, JOB_POLL_RATE_LIMIT_MS) : pauseMs
+  return Math.max(0, Math.min(want, remainingMs))
+}
 
 export function jobPollStart() {
   return { phase: 'loading', job: null, failures: 0 }
@@ -25,7 +35,8 @@ function terminal(state) {
 
 function deniedStatus(status, code) {
   if (status === 503) return code === 'provision_not_configured'
-  return status >= 400 && status < 500 && status !== 404 && status !== 429
+  if (isTransient({ status })) return false
+  return status >= 400 && status < 500 && status !== 404
 }
 
 export function jobPollStep(state, event) {

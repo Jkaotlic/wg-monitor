@@ -3,6 +3,11 @@ log_level: info
 public_base_url: "{{.PublicBaseURL}}"
 db_path: /var/lib/wg-monitor/state.db
 
+# Читать X-Forwarded-For за частным прокси при выборе ключа лимита входов.
+# По умолчанию true. Поставьте false, если счётчик wgm_remote_xff_absent в
+# /debug/vars заметно больше нуля: прокси заголовок не добавляет (см. DEPLOY.md).
+# trust_forwarded_for: false
+
 # bot_token is read from a separate file (mode 0600, owned by wgmonitor)
 # so the main config can stay readable for debugging without exposing the
 # token. Agents/users live in the SQLite DB at db_path — managed via
@@ -55,8 +60,6 @@ retention:
 # archive does not include subscription secrets.
 amnezia_premium:
   secrets_path: /var/lib/wg-monitor/amnezia-premium.json
-  # base_url may be left empty: backend resolves the official CP mirror.
-  base_url: ""
 
 # HideMy.name access codes are added in the mini app as well.
 # Self-hosted VPN servers (amnezia_selfhosted) are managed by the admin in the

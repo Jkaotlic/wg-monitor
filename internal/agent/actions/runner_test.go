@@ -112,7 +112,7 @@ func TestRunner_ForceRecheck_CallsCallback(t *testing.T) {
 	called := 0
 	r := Runner{
 		Now:          mockNow(),
-		ForceRecheck: func(ctx context.Context) { called++ },
+		ForceRecheck: func(ctx context.Context) error { called++; return nil },
 	}
 	res := r.Execute(context.Background(), wire.Command{ID: "c4", Action: "force_recheck"})
 	if res.Status != "ok" {
@@ -120,6 +120,40 @@ func TestRunner_ForceRecheck_CallsCallback(t *testing.T) {
 	}
 	if called != 1 {
 		t.Errorf("expected 1 callback call, got %d", called)
+	}
+}
+
+// v0.62: отчёт не дошёл до сервера -- проверка не обновилась, и экран
+// не должен перечитать старые данные как свежие.
+func TestRunner_ForceRecheck_ReportNotDeliveredIsErr(t *testing.T) {
+	r := Runner{
+		Now:          mockNow(),
+		ForceRecheck: func(ctx context.Context) error { return errors.New("backend returned 500") },
+	}
+	res := r.Execute(context.Background(), wire.Command{ID: "c4", Action: "force_recheck"})
+	if res.Status != "err" {
+		t.Fatalf("status %q, want err", res.Status)
+	}
+	if res.Output != "Отчёт не дошёл до сервера — проверка не обновлена." {
+		t.Fatalf("output %q", res.Output)
+	}
+}
+
+// Ревью задачи 13: отчёт может ждать планового за замком отправки и пинка
+// пингчека -- 45 с по умолчанию мало, как и для diag_now.
+func TestRunner_ForceRecheck_GetsLongerBudget(t *testing.T) {
+	var left time.Duration
+	r := Runner{
+		Now: mockNow(),
+		ForceRecheck: func(ctx context.Context) error {
+			d, _ := ctx.Deadline()
+			left = time.Until(d)
+			return nil
+		},
+	}
+	r.Execute(context.Background(), wire.Command{ID: "c5", Action: "force_recheck"})
+	if left < 70*time.Second {
+		t.Fatalf("срок force_recheck %v, want ~75 с", left)
 	}
 }
 

@@ -365,6 +365,7 @@ func (e *backupEnv) writeKindStatus(kind backup.Kind, res kindResult) error {
 			section = &s.Full
 		}
 		lastOK := section.LastOKAt
+		s.ReviveKeyInBackup = includeReviveKey
 		*section = backup.KindStatus{
 			LastOKAt:  lastOK,
 			LastRunAt: at,

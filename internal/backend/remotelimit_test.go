@@ -1,9 +1,13 @@
 package backend
 
 import (
+	"bytes"
+	"expvar"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -252,7 +256,7 @@ func TestRemoteRateLimitTakesRightmostUntrustedForwarded(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", nil)
 	r.RemoteAddr = "127.0.0.1:5"
 	r.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.4, 10.0.0.2")
-	if got := clientRateKey(r); got != "198.51.100.4" {
+	if got := clientRateKeyOpt(r, true); got != "198.51.100.4" {
 		t.Fatalf("key = %q, want 198.51.100.4", got)
 	}
 }
@@ -346,7 +350,110 @@ func TestClientRateKeyIgnoresRealIPEntirely(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", nil)
 	r.RemoteAddr = "127.0.0.1:4242"
 	r.Header.Set("X-Real-IP", "203.0.113.7")
-	if got := clientRateKey(r); got != "127.0.0.1" {
+	if got := clientRateKeyOpt(r, true); got != "127.0.0.1" {
 		t.Fatalf("key = %q, want 127.0.0.1", got)
+	}
+}
+
+// FRESH-05: trust_forwarded_for=false -- ключ всегда RemoteAddr, подбор
+// заголовка X-Forwarded-For ведёрко не обходит.
+func TestRemoteRateLimitIgnoresForwardedWhenNotTrusted(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	l.now = func() time.Time { return time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC) }
+	l.ignoreForwarded = true
+	h := limitedHandler(l, http.StatusUnauthorized)
+	proxy := "192.168.1.1:40001"
+	if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": "203.0.113.5"}); c != http.StatusUnauthorized {
+		t.Fatalf("первый = %d", c)
+	}
+	for i, xff := range []string{"203.0.113.6", "203.0.113.7", "198.51.100.8"} {
+		if c := hitFrom(h, proxy, map[string]string{"X-Forwarded-For": xff}); c != http.StatusTooManyRequests {
+			t.Fatalf("попытка %d с XFF %s = %d, want 429", i, xff, c)
+		}
+	}
+}
+
+func TestRedactForwardedChainTo24(t *testing.T) {
+	got := redactForwardedChain("203.0.113.77, 10.0.0.2, мусор, 2001:db8:1:2:3:4:5:6")
+	want := "203.0.113.0/24, 10.0.0.0/24, ?, 2001:db8:1:2::/64"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Счётчики и разовый журнал: по запросам с частным RemoteAddr.
+func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
+	o := useLocalForwardedObs(t)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	l := newRemoteRateLimiter(100, 100)
+	h := remoteRateLimitMiddleware(l, logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	for i := 0; i < 3; i++ {
+		hitVia(h, "192.168.1.1:1", "203.0.113.77")
+	}
+	for i := 0; i < 2; i++ {
+		hitVia(h, "192.168.1.1:1", "")
+	}
+	hitVia(h, "198.51.100.9:1", "203.0.113.5") // публичный RemoteAddr не считается
+	if d := o.present.Value(); d != 3 {
+		t.Fatalf("present +%d, want 3", d)
+	}
+	if d := o.absent.Value(); d != 2 {
+		t.Fatalf("absent +%d, want 2", d)
+	}
+	out := buf.String()
+	if n := strings.Count(out, "с X-Forwarded-For"); n != 1 {
+		t.Fatalf("разовых записей с XFF = %d, want 1:\n%s", n, out)
+	}
+	if n := strings.Count(out, "без X-Forwarded-For"); n != 1 {
+		t.Fatalf("разовых записей без XFF = %d, want 1:\n%s", n, out)
+	}
+	if strings.Contains(out, "203.0.113.77") || !strings.Contains(out, "203.0.113.0/24") {
+		t.Fatalf("адрес не отредактирован до /24:\n%s", out)
+	}
+}
+
+// useLocalForwardedObs подменяет глобальные счётчики своим экземпляром на время
+// теста: опубликованный expvar не читается и не сбрасывается.
+// Подменяется пакетный указатель, поэтому нельзя звать из t.Parallel-тестов.
+func useLocalForwardedObs(t *testing.T) *forwardedObs {
+	t.Helper()
+	o := &forwardedObs{present: new(expvar.Int), absent: new(expvar.Int)}
+	prev := forwardedObsDefault
+	forwardedObsDefault = o
+	t.Cleanup(func() { forwardedObsDefault = prev })
+	return o
+}
+
+func hitVia(h http.Handler, remote, xff string) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
+	req.RemoteAddr = remote
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+// Обмен веб-ссылки стоит за тем же входным лимитом, поэтому считается ровно
+// один раз на запрос (не дважды: ни лимитом, ни самим обработчиком).
+func TestWebLinkRedeemCountsForwardedPresenceOnce(t *testing.T) {
+	o := useLocalForwardedObs(t)
+	mux := NewMux(Deps{DashboardToken: "t"})
+	do := func(xff string) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/web-link/redeem", strings.NewReader(`{"token":"x"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.168.1.1:1"
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	do("203.0.113.77")
+	do("203.0.113.78")
+	do("")
+	if o.present.Value() != 2 || o.absent.Value() != 1 {
+		t.Fatalf("present=%d absent=%d, want 2 и 1", o.present.Value(), o.absent.Value())
 	}
 }

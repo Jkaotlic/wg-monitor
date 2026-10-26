@@ -1,4 +1,4 @@
-import { agentReplyText } from '../errorText.js'
+import { agentReplyText, agentOwnText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
@@ -64,17 +64,21 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         })
         setError(null)
       })
-      .catch(() => setError('Не удалось прочитать состояние проверок. Откройте экран заново.'))
+      .catch(() => setError('Не удалось прочитать состояние проверок.'))
   }
 
   useEffect(() => {
     setData(null)
+    setError(null)
     setShowRaw(false)
     load()
   }, [routerID])
 
-  if (error) return <p class="state state-error">{error}</p>
-  if (data == null) return <p class="state">Загрузка…</p>
+  // Полноэкранная ошибка -- только когда показывать нечего (MINI-07);
+  // иначе сбой «Обновить» стирал бы вкладку со свежими данными.
+  if (data == null) {
+    return error ? <ErrorLine text={error} onRetry={load} /> : <p class="state">Загрузка…</p>
+  }
 
   const rows = checkRows(data)
   const age = data.router?.last_seen_age_sec
@@ -95,6 +99,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           Обновить
         </button>
       </div>
+      <ErrorLine text={error ? 'Не удалось обновить проверки — показано то, что было.' : ''} />
       <p class="router-lastseen">
         {rows.length} {rows.length === 1 ? 'вопрос' : 'вопросов'} роутеру
         {age != null ? ` · последний отчёт ${agoText(age)}` : ''}
@@ -156,7 +161,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         </p>
         <ErrorLine text={recheck.error} busy={recheck.busy} onRetry={runRecheck} />
         {recheck.result && recheck.result.status !== 'ok' && (
-          <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
+          <p class="state state-error">{agentOwnText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
         )}
       </DiagGroup>
 

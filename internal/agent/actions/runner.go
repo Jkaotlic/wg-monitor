@@ -7,7 +7,8 @@
 //     (raw body); older panels without the stream endpoint fall back to
 //     whatever /api/diagnostics/result already has on record
 //   - pingcheck_now   → awgmgr.PingCheckNow
-//   - force_recheck   → caller-provided callback (typically reporter.SendOnce)
+//   - force_recheck   → caller-provided callback (reporter.ForceReport):
+//     внеплановый отчёт без Resumed; ok только если отчёт дошёл до сервера
 //   - opkg_upgrade    → OpkgRunner.SmartUpgrade (opkg update + space check +
 //     live upgrade; partial-update failures continue and surface failed feeds)
 //   - opkg_feed_disable → OpkgRunner.DisableFeed (comment matching feed in
@@ -76,9 +77,10 @@ type Runner struct {
 	// команды. nil -- никто не слушает.
 	OnCommand func(cmd wire.Command)
 	AwgClient *awgmgr.Client
-	// ForceRecheck -- отчёт с Resumed=true (reporter.ForceResumed); только
-	// для force_recheck: «роутер вернулся, проверь всё заново».
-	ForceRecheck func(ctx context.Context)
+	// ForceRecheck -- внеплановый отчёт для force_recheck («Проверить ещё
+	// раз», reporter.ForceReport): без Resumed (AG-05), со свежим пингчеком.
+	// Ошибка -- отчёт не дошёл до сервера, проверка на бэкенде не обновилась.
+	ForceRecheck func(ctx context.Context) error
 	// ReportNow -- внеплановый отчёт без Resumed (reporter.SendNow, AG-05):
 	// после действий с туннелем, чтобы экран и тревоги увидели свежее
 	// состояние. Resumed=true здесь соврал бы бэкенду, и у мобильного
@@ -154,6 +156,10 @@ type Runner struct {
 // means every command after it silently dies while heartbeats keep flowing.
 const defaultActionTimeout = 45 * time.Second
 
+// forceRecheckNotDelivered -- ответ force_recheck, когда отчёт не дошёл:
+// мини-апп показывает фразу агента владельцу как есть.
+const forceRecheckNotDelivered = "Отчёт не дошёл до сервера — проверка не обновлена."
+
 // actionTimeoutOverrides lists actions whose legitimate runtime exceeds
 // defaultActionTimeout, so binding them to the 45s default would wrongly
 // abort real work. Two families qualify:
@@ -192,6 +198,10 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"self_update":       600 * time.Second,
 	"firmware_install":  600 * time.Second,
 	"diag_now":          75 * time.Second,
+	// force_recheck: отчёт может ждать планового за замком отправки, потом
+	// пинок пингчека, все проверки и POST -- на медленном роутере за 45 с
+	// не укладывается, и команда врала бы «не дошёл» (ревью задачи 13 v0.62).
+	"force_recheck": 75 * time.Second,
 	// dns_reset: до восьми снятий и восьми постановок через ndmc, сохранение
 	// и два чтения running-config -- на медленном роутере дольше 45 с
 	// (AGENT-03), а обрыв посередине оставил бы DNS наполовину.
@@ -469,7 +479,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.ForceRecheck == nil {
 			return "err", "force_recheck callback not wired", payload
 		}
-		r.ForceRecheck(ctx)
+		// Причину отказа репортёр уже записал в журнал агента.
+		if err := r.ForceRecheck(ctx); err != nil {
+			return "err", forceRecheckNotDelivered, payload
+		}
 		return "ok", "agent report kicked", payload
 	case "awgm_update":
 		if r.AwgClient == nil {

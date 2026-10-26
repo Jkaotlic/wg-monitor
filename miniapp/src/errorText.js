@@ -9,7 +9,7 @@ import { commandErrorText } from './maintenance.js'
 // «sign in required») -- тоже.
 export const FALLBACK_ERROR_TEXT = 'Не получилось: сервер ответил ошибкой. Повторите; если повторится — напишите админу.'
 export const OFFLINE_ERROR_TEXT = 'Сервер не ответил — проверьте связь и повторите.'
-const SESSION_TEXT = 'Сессия истекла — откройте приложение заново.'
+export const SESSION_TEXT = 'Сессия истекла — откройте приложение заново.'
 
 const RUSSIAN = /[А-Яа-яЁё]/
 // Пути и протоколы -- признак технического текста, даже если в нём есть русское слово.
@@ -50,4 +50,12 @@ export function errorText(err, codes = {}) {
 export function agentReplyText(result, fallback) {
   const said = String(result?.output ?? '').trim()
   return isRussianText(said) ? `${fallback} ${said}` : fallback
+}
+
+// Как agentReplyText, но когда агент сам сказал владельцу русскую фразу
+// (force_recheck: «Отчёт не дошёл до сервера — проверка не обновлена.»),
+// экран показывает только её: своя фраза перед ней говорила бы то же дважды.
+export function agentOwnText(result, fallback) {
+  const said = String(result?.output ?? '').trim()
+  return isRussianText(said) ? said : fallback
 }

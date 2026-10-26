@@ -41,6 +41,19 @@ describe('строка «Сторож»', () => {
     expect(dead.alarm).toBe('сторож не обходил парк 5m0s')
   })
 
+  it('«могло дойти» -- не ошибка: своя строка, тон не тревожный', () => {
+    const maybe = watchdogLine(fleet({ ...WD, offline_maybe_delivered: 2 }))
+    expect(maybe.tone).toBe('ok')
+    expect(maybe.sub).toContain('2 отправки могли дойти: ответ Telegram не пришёл')
+    expect(maybe.sub).not.toContain('не ушл')
+    const both = watchdogLine(fleet({ ...WD, offline_errors: 1, offline_maybe_delivered: 1 }))
+    expect(both.tone).toBe('warn')
+    expect(both.sub).toContain('1 отправка не ушла')
+    expect(both.sub).toContain('1 отправка могла дойти')
+    expect(watchdogLine(fleet({ ...WD, offline_maybe_delivered: 5 })).sub).toContain('5 отправок могло дойти')
+    expect(watchdogLine(fleet({ ...WD, offline_maybe_delivered: 21 })).sub).toContain('21 отправка могла дойти')
+  })
+
   it('старый бэкенд без новых счётчиков -- не выдумываем нули', () => {
     const old = watchdogLine(fleet({ alive: true, reason: '', last_scan_at: '2026-09-17T10:00:00Z', offline_errors: 0 }))
     expect(old.text).toBe('последний обход только что')

@@ -90,6 +90,9 @@ type Poller struct {
 	// hard -- доставка самой карточки HARD-тревоги (alerts.Dispatcher), когда
 	// первая не дошла никому (last_alert_at NULL); nil -- напоминание.
 	hard HardDeliverer
+	// beforeHardQueue -- шов для тестов: зовётся между чтением состояния и
+	// постановкой карточки в очередь проверки. В проде nil.
+	beforeHardQueue func()
 }
 
 // HardDeliverer -- отправка карточки HARD-тревоги так же, как при первом
@@ -117,8 +120,10 @@ const owedReplyMaxAge = 24 * time.Hour
 
 // retryOwedReplies повторяет ответы на тревоги, которые не дошли ни до кого
 // (db.OwedReplies, BOT-01). Доставлено -- долг снят и переписка по проверке
-// забыта, как после обычного «восстановилось». Проверка снова в аварии --
-// долг снят: новая тревога важнее. Лимит частоты -- обход останавливается.
+// забыта, как после обычного «восстановилось». Проверка снова не в порядке
+// (fail или hard) -- долг снят без отправки: «восстановилось» поверх новой
+// поломки соврало бы, а о ней скажет своя тревога (FRESH-03). Лимит
+// частоты -- обход останавливается.
 // Возвращает false, если обход надо прервать.
 func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 	owed, err := p.d.OwedReplies().List()
@@ -135,7 +140,7 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 				slog.Warn("realert: owed reply state get failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 				continue
 			}
-			drop = st.CurrentStatus == "hard"
+			drop = st.CurrentStatus != "ok"
 			silent = alerts.Silenced(st, now)
 		}
 		if drop {
@@ -144,20 +149,41 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 			}
 			continue
 		}
-		if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
-			slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
-			if delay, ok := tg.RateLimitDelay(err); ok {
-				p.markRateLimited(now, delay)
-				return false
-			}
+		// Очередь доставок проверки общая с отчётом: впереди доставка (новая
+		// карточка, «восстановилось») -- повтор не шлём, долг остаётся до
+		// следующего обхода. Иначе повтор мог ответить мимо нити или стереть
+		// alert_messages карточки, ушедшей следом.
+		release, ok := alerts.TryEnqueueDelivery(o.UserID, o.CheckName)
+		if !ok {
+			slog.Info("realert: доставка по проверке уже идёт, «восстановилось» -- на следующем обходе",
+				"user_id", o.UserID, "check", o.CheckName)
 			continue
 		}
-		if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
-			slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		if !p.sendOwedReply(ctx, now, o, silent) {
+			release()
+			return false
 		}
-		if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
-			slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		release()
+	}
+	return true
+}
+
+// sendOwedReply -- повтор одного долга «восстановилось» с местом в очереди
+// проверки, уже занятым вызывающим. false -- лимит частоты, обход прервать.
+func (p *Poller) sendOwedReply(ctx context.Context, now time.Time, o db.OwedReply, silent bool) bool {
+	if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
+		slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		if delay, ok := tg.RateLimitDelay(err); ok {
+			p.markRateLimited(now, delay)
+			return false
 		}
+		return true
+	}
+	if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
+		slog.Warn("realert: owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+	}
+	if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
+		slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
 	}
 	return true
 }
@@ -406,7 +432,33 @@ func (p *Poller) tick(ctx context.Context) {
 		if st.LastAlertAt == nil && p.hard != nil && sh.CheckName != heartbeatCheck {
 			// Первая тревога не дошла никому: шлём её саму, с записью в
 			// alert_messages и памятью для нити починки (BOT-01).
-			if _, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check); err != nil {
+			// Очередь доставок проверки общая с отчётом (карточка,
+			// «восстановилось»): впереди доставка -- карточку не шлём, обход
+			// не ждёт, повтор на следующем; состояние перечитается заново.
+			if p.beforeHardQueue != nil {
+				p.beforeHardQueue()
+			}
+			release, ok := alerts.TryEnqueueDelivery(sh.UserID, sh.CheckName)
+			if !ok {
+				slog.Info("realert: доставка по проверке уже идёт, карточка -- на следующем обходе",
+					"user_id", sh.UserID, "check", sh.CheckName)
+				continue
+			}
+			// Место в очереди занято -- снимок st мог устареть: доставка из
+			// отчёта закончилась между чтением и постановкой (проверка ожила
+			// или карточка уже ушла). Перечитываем и шлём, только если тревога
+			// всё ещё hard и не отправлена -- иначе дубль карточки.
+			fresh, ferr := p.d.State().Get(sh.UserID, sh.CheckName)
+			if ferr != nil || fresh.CurrentStatus != "hard" || fresh.LastAlertAt != nil || fresh.HardSince == nil {
+				release()
+				if ferr != nil {
+					slog.Warn("realert: state reread failed", "user_id", sh.UserID, "check", sh.CheckName, "err", ferr)
+				}
+				continue
+			}
+			_, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, fresh, check)
+			release()
+			if err != nil {
 				if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 					slog.Error("realert: повтор тревоги не дошёл", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
 				}

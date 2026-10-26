@@ -302,3 +302,9 @@ func writeAtomic(path string, body []byte) error {
 	}
 	return nil
 }
+
+// FileIsSealed -- файл path начинается с заголовка шифра; читается только
+// заголовок. Файла нет -- false без ошибки. Для манифеста бэкапа и превью
+// восстановления: им нужно знать, зашифровано ли хранилище, а не его
+// содержимое.
+func FileIsSealed(path string) (bool, error) { return fileIsSealed(path) }

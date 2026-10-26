@@ -1,6 +1,9 @@
 package provision
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // StepMarker prefixes every structured progress line the relay writes to
 // stdout, e.g. "__WG_STEP__ arch_detected arm64". It is the wire contract
@@ -128,4 +131,52 @@ func RedactToken(s, rawToken string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, rawToken, redactedMarker)
+}
+
+// ErrMarker prefixes the relay's structured failure line on stdout, e.g.
+// "__WG_ERR__ <nonce> root_auth_failed" (BACK-01). The relay prints it once,
+// from its top-level exception handler, right before exiting non-zero; the
+// backend reads it off the same merged stream as StepMarker lines. Without it
+// the only failure signal reaching the runner is exec's bare "exit status 1".
+//
+// <nonce> is the per-job err_nonce the runner puts into the job (v0.62 T10):
+// the relay streams the router's own terminal output to the same stdout, so
+// a router printing a bare "__WG_ERR__ root_auth_failed" must not be able to
+// make revive drop the stored root password.
+const ErrMarker = "__WG_ERR__ "
+
+// Relay failure codes carried by ErrMarker. terminalConnectHint keys off
+// these exact substrings — keep them in sync with err_code in awgm-relay.py.
+const (
+	ErrCodeRootAuthFailed = "root_auth_failed"
+	ErrCodeAuthFailed     = "auth_failed"
+	ErrCodeSessionActive  = "session_active"
+)
+
+// errCodes is every code ParseErrLine accepts; TestErrCodes_MatchRelay
+// checks it equals the set err_code in awgm-relay.py can return.
+var errCodes = []string{ErrCodeRootAuthFailed, ErrCodeAuthFailed, ErrCodeSessionActive}
+
+// ParseErrLine parses one already-trimmed relay line as an ErrMarker line
+// carrying this job's nonce. Like ParseStepLine the marker must be a strict
+// prefix; a line without the nonce, with another nonce, or an empty job
+// nonce (an old relay without nonce support) is not a code. Only the known
+// codes are accepted, so an unexpected token never travels into the job's
+// error.
+func ParseErrLine(line, nonce string) (code string, ok bool) {
+	if nonce == "" {
+		return "", false
+	}
+	rest, hasMarker := strings.CutPrefix(line, ErrMarker)
+	if !hasMarker {
+		return "", false
+	}
+	fields := strings.Fields(rest)
+	if len(fields) != 2 || fields[0] != nonce {
+		return "", false
+	}
+	if !slices.Contains(errCodes, fields[1]) {
+		return "", false
+	}
+	return fields[1], true
 }

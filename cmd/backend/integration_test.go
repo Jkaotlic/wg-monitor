@@ -239,7 +239,7 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	}
 
 	var rechecked bool
-	runner := &actions.Runner{ForceRecheck: func(context.Context) { rechecked = true }}
+	runner := &actions.Runner{ForceRecheck: func(context.Context) error { rechecked = true; return nil }}
 	res := runner.Execute(context.Background(), *cmd)
 	if res.Status != "ok" {
 		t.Errorf("expected ok status, got %q output=%q", res.Status, res.Output)
@@ -266,6 +266,10 @@ type noopDispatcher struct{}
 
 func (noopDispatcher) Handle(_ context.Context, _ int64, _, _ string, _ state.Transition, _ wire.Check) error {
 	return nil
+}
+
+func (noopDispatcher) Apply(int64, string, string, state.Transition, wire.Check) (func(context.Context) error, error) {
+	return nil, nil
 }
 
 // TestIntegration_DiagNow_FreshRunNoRestart verifies the diag_now state

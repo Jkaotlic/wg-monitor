@@ -24,7 +24,6 @@ func TestAmneziaDisabled_NoCabinetRequestOnAnyPath(t *testing.T) {
 	t.Cleanup(srv.Close)
 	dir := t.TempDir()
 	r := &Router{cfg: Config{
-		AmneziaBaseURL:     srv.URL,
 		AmneziaSecretsPath: filepath.Join(dir, "amnezia-premium.json"),
 		HideMyBaseURL:      srv.URL,
 		HideMySecretsPath:  filepath.Join(dir, "hidemyname.json"),
@@ -80,7 +79,6 @@ func TestAmneziaDisabled_NoCabinetRequestOnAnyPath(t *testing.T) {
 func TestAmneziaDisabled_WithoutKeySaysDisabled(t *testing.T) {
 	dir := t.TempDir()
 	r := &Router{cfg: Config{
-		AmneziaBaseURL:     "http://198.51.100.1:1",
 		AmneziaSecretsPath: filepath.Join(dir, "amnezia-premium.json"),
 	}}
 	ctx := context.Background()

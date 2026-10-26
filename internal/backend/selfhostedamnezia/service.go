@@ -311,7 +311,7 @@ func ValidateInstance(inst Instance) error {
 	if !sshUserRe.MatchString(inst.SSHUser) {
 		return &FieldError{Field: "ssh_user", Reason: "Пользователь SSH: латиница в нижнем регистре, цифры, «_», «-»"}
 	}
-	if inst.SSHPassword == "" {
+	if strings.TrimSpace(inst.SSHPassword) == "" {
 		return &FieldError{Field: "ssh_password", Reason: "Нужен пароль SSH"}
 	}
 	return nil

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { sendCommand, fetchCommandResult } from './api.js'
-import { asleepNote } from './maintenance.js'
-import { errorText } from './errorText.js'
+import { sendCommand, COMMAND_GONE_TEXT } from './api.js'
+import { waitCommand } from './commandWait.js'
+import { asleepNote, SENT_NO_RESULT_TEXT, COMMAND_DEADLINE_TEXT } from './maintenance.js'
+import { errorText, SESSION_TEXT } from './errorText.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -31,12 +32,16 @@ export function useCommand(routerID) {
   // sleepNote -- «роутер спит, команда подождёт N минут»: сервер говорит это
   // в ответе на постановку, и экран обязан пересказать, а не обещать ответ.
   const [sleepNote, setSleepNote] = useState('')
+  // sent -- команда поставлена (получен cmd_id). После этого сбой опроса уже
+  // не «команда не отправлена»: роутер её мог получить (MINI-01).
+  const [sent, setSent] = useState(false)
 
   // A sleeping-router deadline can run minutes long; if the screen is closed
   // (component unmounted) before it resolves, the in-flight poll must not
   // call setState on a dead component. This ref is the only thing every
   // async continuation below checks before touching state.
   const aliveRef = useRef(true)
+  const sentRef = useRef(false)
   useEffect(
     () => () => {
       aliveRef.current = false
@@ -51,36 +56,41 @@ export function useCommand(routerID) {
     setErrorCode(null)
     setResult(null)
     setSleepNote('')
+    setSent(false)
+    sentRef.current = false
     try {
-      const sent = await sendCommand(routerID, action, args, confirm)
-      const id = sent.cmd_id
-      if (aliveRef.current) setSleepNote(asleepNote(sent))
-      const until = Date.now() + deadlineMs
-      while (Date.now() < until) {
-        // Bounded hop: the backend caps wait_sec at 12 anyway
-        // (miniappMaxCommandWaitSec, miniapp_commands.go) -- релей KeenDNS
-        // рвёт всё, что дольше 15 секунд, и обрыв здесь читался бы как
-        // ошибка, а не «ещё не готово». Capping the
-        // LAST hop to whatever time remains keeps the loop from overshooting
-        // the deadline by a near-full hop when the deadline is close.
-        const remainingSec = Math.max(1, Math.ceil((until - Date.now()) / 1000))
-        const res = await fetchCommandResult(routerID, id, Math.min(waitSec, remainingSec))
-        if (!aliveRef.current) return null
-        if (res) {
-          // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
-          const tagged = { ...res, for_router: routerID }
-          setResult(tagged)
-          return tagged
-        }
-      }
+      const posted = await sendCommand(routerID, action, args, confirm)
+      const id = posted.cmd_id
+      sentRef.current = true
       if (aliveRef.current) {
-        setError('Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.')
+        setSent(true)
+        setSleepNote(asleepNote(posted))
       }
+      // Опрос и повторы после временных сбоев релея -- общий цикл commandWait.
+      let lostPoll = false
+      const res = await waitCommand(routerID, id, {
+        deadlineMs,
+        waitSec,
+        alive: () => aliveRef.current,
+        onPoll: (failed) => { lostPoll = failed },
+      })
+      if (res) {
+        // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
+        const tagged = { ...res, for_router: routerID }
+        setResult(tagged)
+        return tagged
+      }
+      // Экран закрыт -- состояние не трогаем.
+      if (!aliveRef.current) return null
+      setError(lostPoll ? SENT_NO_RESULT_TEXT : COMMAND_DEADLINE_TEXT)
     } catch (err) {
       if (aliveRef.current) {
         // Фраза для человека, а не «/routers/7/commands failed: 400» (v0.50).
-        setError(errorText(err))
-        setErrorCode(err?.code ?? null)
+        const text = errorText(err)
+        // После cmd_id не-временный сбой опроса (например 500) -- тоже «ушла,
+        // итога нет»; своими остаются только «сессия истекла» и «команда исчезла».
+        setError(sentRef.current && text !== SESSION_TEXT && text !== COMMAND_GONE_TEXT ? SENT_NO_RESULT_TEXT : text)
+        setErrorCode(sentRef.current ? null : (err?.code ?? null))
       }
     } finally {
       if (aliveRef.current) setBusy(false)
@@ -88,5 +98,5 @@ export function useCommand(routerID) {
     return null
   }
 
-  return { busy, result, error, errorCode, sleepNote, run }
+  return { busy, result, error, errorCode, sleepNote, sent, run }
 }

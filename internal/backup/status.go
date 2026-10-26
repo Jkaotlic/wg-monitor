@@ -38,6 +38,10 @@ type Status struct {
 	Small   KindStatus   `json:"small"`
 	Full    KindStatus   `json:"full"`
 	Verify  VerifyStatus `json:"verify"`
+	// ReviveKeyInBackup -- ключ шифрования (revive.key) едет в архивы. По
+	// правилу нет (cmd/backend includeReviveKey); пишут прогон бэкапа и
+	// проверка. Карточка «Бэкенд» по false напоминает сохранить ключ отдельно.
+	ReviveKeyInBackup bool `json:"revive_key_in_backup"`
 }
 
 // KindStatus -- итог последнего прогона одного вида архива. Пустой
@@ -67,6 +71,21 @@ type VerifyStatus struct {
 	Error     string `json:"error"`
 	// Routers -- сколько роутеров в проверенном архиве.
 	Routers int `json:"routers"`
+	// SealedStoresOpen -- открываются ли зашифрованные хранилища из архива
+	// (ключи кабинетов, панелей VPS, своих VPS) текущим ключом шифрования
+	// сервера (revive.key; в архив он не кладётся). nil -- зашифрованных
+	// хранилищ в архиве нет или проверка до них не дошла.
+	SealedStoresOpen *bool `json:"sealed_stores_open,omitempty"`
+	// SealedKeyMissing -- зашифрованные есть, а ключа на сервере нет вовсе
+	// (отдельное состояние: «ключа нет на сервере», а не «ключ не тот»).
+	SealedKeyMissing bool `json:"sealed_key_missing,omitempty"`
+	// SealedStoreDamaged -- ключ подошёл, но хранилище из архива не
+	// читается или внутри не JSON: беда хранилища, а не ключа
+	// (SealedStoresOpen тогда не ставится).
+	SealedStoreDamaged bool `json:"sealed_store_damaged,omitempty"`
+	// SealedStoresNote -- итог словами: имена хранилищ, без путей и
+	// содержимого.
+	SealedStoresNote string `json:"sealed_stores_note,omitempty"`
 }
 
 // StatusPath -- путь файла состояния для базы dbPath.

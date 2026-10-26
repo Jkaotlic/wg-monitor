@@ -55,7 +55,7 @@ async function mount(node, steps) {
 const errors = (root) => [...root.querySelectorAll('.state-error')].map((e) => e.textContent)
 
 const PLACES = [
-  ['DiagTab (переспросить)', () => <DiagTab routerID={2} asleep={false} isAdmin openSheet={noop} />, 'Роутер не переспросил — попробуйте ещё раз через минуту.'],
+  ['DiagTab (переспросить)', () => <DiagTab routerID={2} asleep={false} isAdmin openSheet={noop} />, 'Роутер не переспросил — попробуйте ещё раз через минуту.', undefined, true],
   ['DiagTab (отчёт)', () => <DiagTab routerID={2} asleep={false} isAdmin openSheet={noop} />, 'Роутер не собрал отчёт — попробуйте ещё раз через минуту.'],
   ['TunnelsTab', () => <TunnelsTab routerID={2} asleep={false} openSheet={noop} />, 'Роутер не отдал снимок — попробуйте ещё раз через минуту.'],
   ['RoutesTab', () => <RoutesTab routerID={2} asleep={false} openSheet={noop} />, 'Роутер не отдал снимок маршрутизации — попробуйте ещё раз через минуту.'],
@@ -68,7 +68,7 @@ const PLACES = [
 beforeEach(() => { mocks.result = null })
 
 describe('ответ агента без сырых строк', () => {
-  for (const [name, view, phrase, steps] of PLACES) {
+  for (const [name, view, phrase, steps, agentOnly] of PLACES) {
     it(`${name}: английский вывод и «timeout» -- фраза экрана`, async () => {
       mocks.result = { status: 'timeout', output: 'awgmgr GET /api/x: HTTP 500' }
       const root = await mount(view(), steps)
@@ -89,7 +89,9 @@ describe('ответ агента без сырых строк', () => {
     it(`${name}: русский вывод агента сохраняется после фразы`, async () => {
       mocks.result = { status: 'error', output: 'Служба не отвечает.' }
       const root = await mount(view(), steps)
-      expect(errors(root).some((t) => t.includes(`${phrase} Служба не отвечает.`))).toBe(true)
+      // Повторная проверка: фраза агента говорит всё сама -- фразы экрана перед ней нет.
+      const expected = agentOnly ? 'Служба не отвечает.' : `${phrase} Служба не отвечает.`
+      expect(errors(root).some((t) => (agentOnly ? t === expected : t.includes(expected)))).toBe(true)
       render(null, root)
     })
   }

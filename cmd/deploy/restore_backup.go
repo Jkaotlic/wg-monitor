@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
 	"gopkg.in/yaml.v3"
 )
@@ -34,6 +35,9 @@ type RestoreBackup struct {
 	Extras []RestoreExtraFile
 	// Warnings -- что из архива восстановить не получится и почему.
 	Warnings []string
+	// ForDocker -- архив разобран для докер-раскладки (Raspberry Pi): там
+	// мастер revive.key не ставит, ключ хранилищ -- тот, что уже на Pi.
+	ForDocker bool
 }
 
 // RestoreExtraFile -- файл из архива, который восстановление кладёт на
@@ -55,6 +59,9 @@ type RestoreBackupOptions struct {
 	ArchivePath string
 	Mode        string
 	DryRun      bool
+	// Yes (--yes) -- согласие заранее: без терминала восстановление на Pi
+	// иначе отказывается, а не «отменяется» молча.
+	Yes bool
 }
 
 type restoreBackendConfig struct {
@@ -206,7 +213,7 @@ const (
 
 // InspectRestoreBackup читает нешифрованный архив .tgz (старый формат).
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAML, true)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAML, resolveRestoreExtras)
 }
 
 // InspectRestoreBackupWithPassphrase читает архив любого вида: нешифрованный
@@ -214,16 +221,21 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 // Шифрованный расшифровывается потоком прямо в распаковку -- открытого
 // архива целиком на диске не появляется.
 func InspectRestoreBackupWithPassphrase(archivePath, passphrase string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAML, true)
+	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAML, resolveRestoreExtras)
 }
 
 func InspectRestoreBackupForImport(archivePath string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAMLForImport, false)
+	return inspectRestoreBackup(archivePath, "", validateRestoreBackendYAMLForImport, nil)
 }
 
-// inspectRestoreBackup: withExtras=false -- хранилища и ключ не извлекаются
+// restoreExtrasResolver сопоставляет извлечённым хранилищам и ключу их места
+// на сервере по backend.yaml архива.
+type restoreExtrasResolver func(backendYAMLPath string, extracted map[string]string) ([]RestoreExtraFile, []string, error)
+
+// inspectRestoreBackup: resolveExtras=nil -- хранилища и ключ не извлекаются
 // (импорт секретов оператора: на сервер ничего не кладётся).
-func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML func(string) error, withExtras bool) (*RestoreBackup, func(), error) {
+func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML func(string) error, resolveExtras restoreExtrasResolver) (*RestoreBackup, func(), error) {
+	withExtras := resolveExtras != nil
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("temp dir: %w", err)
@@ -383,7 +395,7 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 		warnings []string
 	)
 	if withExtras {
-		extras, warnings, err = resolveRestoreExtras(seen["backend.yaml"], extracted)
+		extras, warnings, err = resolveExtras(seen["backend.yaml"], extracted)
 		if err != nil {
 			cleanup()
 			return nil, nil, err
@@ -542,14 +554,26 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 	if info != nil {
 		size = info.Size()
 	}
-	var stores []string
+	var stores, sealed []string
 	reviveKey := "no (not in the backup: saved router passwords must be entered again after the restore)"
+	keyInArchive := false
 	for _, e := range b.Extras {
 		if e.Name == restoreReviveKey {
-			reviveKey = "yes"
+			reviveKey, keyInArchive = "yes", true
+			if b.ForDocker {
+				reviveKey = "yes (not installed on the Pi)"
+			}
 			continue
 		}
 		stores = append(stores, e.Name)
+		// Только заголовок файла: содержимое хранилищ -- секреты. Ошибку
+		// чтения заголовка превью глотает намеренно: файл только что извлечён
+		// нами же, а если он не читается, это всплывёт при копировании на
+		// сервер с настоящей ошибкой. Превью -- подсказка, не проверка, и
+		// ронять из-за неё восстановление нельзя; худшее -- строки не будет.
+		if ok, err := sealedfile.FileIsSealed(e.LocalPath); err == nil && ok {
+			sealed = append(sealed, e.Name)
+		}
 	}
 	out := fmt.Sprintf(
 		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d\nstores: %s\nrevive.key: %s",
@@ -562,6 +586,15 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 		emptyDash(strings.Join(stores, ", ")),
 		reviveKey,
 	)
+	if len(sealed) > 0 && b.ForDocker {
+		// На Pi ключ из архива не ставится никогда: откроет хранилища только
+		// прежний secrets/revive.key, если он на Pi остался.
+		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " (open only if secrets/revive.key on the Pi is still the old one: the restore never installs revive.key on the Pi)"
+	} else if len(sealed) > 0 && !keyInArchive {
+		// v0.62 (BACK-04): ключ шифрования хранилищ в архив не кладётся --
+		// без прежнего revive.key на сервере они не откроются.
+		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " (won't open without the old revive.key: it is not in the backup)"
+	}
 	if b.Manifest["kind"] == "small" {
 		out += "\nkind: small (no event history: after restore the screens stay empty until agents report, up to a minute)"
 	}
@@ -569,6 +602,11 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 }
 
 func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opts RestoreBackupOptions) error {
+	if m := strings.ToLower(strings.TrimSpace(opts.Mode)); opts.Yes && (opts.DryRun || (m != "current" && m != "current-vps")) {
+		// Вопрос «Восстановить?» есть только у восстановления на текущий
+		// сервер; без режима выбор режима остался бы вопросом.
+		return fmt.Errorf("--yes подтверждает только --to-current-vps: с --dry-run, --to-new-vps или без режима флаг не применяется")
+	}
 	path := strings.TrimSpace(opts.ArchivePath)
 	if path == "" {
 		path = strings.TrimSpace(Ask("Path to wg-monitor backup (.tgz or .tgz.enc)", ""))
@@ -588,7 +626,12 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 			return fmt.Errorf("backup archive is encrypted: the backup recovery password is required")
 		}
 	}
-	backup, cleanup, err := InspectRestoreBackupWithPassphrase(path, passphrase)
+	inspect := InspectRestoreBackupWithPassphrase
+	if isDockerBackend(state) {
+		// Pi: в backend.yaml архива пути контейнера (/data/...), а не VPS.
+		inspect = InspectRestoreBackupForDocker
+	}
+	backup, cleanup, err := inspect(path, passphrase)
 	if err != nil {
 		return err
 	}
@@ -620,7 +663,7 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 
 	switch mode {
 	case "current", "current-vps":
-		return restoreBackupToCurrentVPS(state, secrets, backup)
+		return restoreBackupToCurrentVPS(state, secrets, backup, opts.Yes)
 	case "new", "new-vps":
 		return restoreBackupToNewVPS(state, secrets, dl, backup)
 	default:
@@ -628,16 +671,25 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 	}
 }
 
-func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
+// connectRestoreBackend -- SSH к текущему бэкенду для восстановления. Тесты
+// подменяют его фейком и считают, было ли подключение вообще.
+var connectRestoreBackend = func(state *State, secrets *SecretStore) (remoteSession, error) {
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return nil, err
+	}
+	return connectBackendSSH(state, secrets, kh)
+}
+
+func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup, yes bool) error {
+	if isDockerBackend(state) {
+		return restoreBackupToPi(state, secrets, backup, yes)
+	}
 	if state.Backend.Host == "" {
 		return fmt.Errorf("backend VPS is not configured in wizard.toml")
 	}
-	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
-	if err != nil {
-		return err
-	}
 	PrintStep(1, 4, "SSH to current VPS")
-	s, err := connectBackendSSH(state, secrets, kh)
+	s, err := connectRestoreBackend(state, secrets)
 	if err != nil {
 		return err
 	}
@@ -656,7 +708,18 @@ func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *Resto
 	return verifyRestoredBackend(s, state.Backend.Domain)
 }
 
+// errRestoreNewVPSFromDocker: мастер настроен на Pi, а бэкап Pi несёт пути
+// контейнера -- поднять из него VPS с systemd значит положить нерабочий
+// backend.yaml. Отказ до любых вопросов и подключений. Текст -- фраза для
+// человека целиком.
+//
+//lint:ignore ST1005 законченная фраза для человека: с заглавной и с точкой.
+var errRestoreNewVPSFromDocker = errors.New("Мастер настроен на бэкенд в докере (Raspberry Pi): восстановление на новую VPS отсюда не делается — в бэкапе Pi пути контейнера (/data/...), которых на VPS с systemd нет. Восстановить на этот же Pi — режим [1] Restore to current VPS (--to-current-vps); переезд с Pi на VPS мастер не делает.")
+
 func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, backup *RestoreBackup) error {
+	if isDockerBackend(state) {
+		return errRestoreNewVPSFromDocker
+	}
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
 		return err
@@ -802,7 +865,7 @@ const restoreStagingPrefix = "/tmp/wg-monitor-restore."
 
 // removeRestoreStaging убирает каталог выгрузки на сервере; ошибка уборки
 // ничего не меняет в исходе восстановления, но о ней говорим.
-func removeRestoreStaging(s *SSH, staging string) {
+func removeRestoreStaging(s remoteExec, staging string) {
 	if !restoreStagingRe.MatchString(staging) {
 		return
 	}
@@ -814,7 +877,7 @@ func removeRestoreStaging(s *SSH, staging string) {
 // uploadRestoreBackupFiles выгружает базу, конфиг и хранилища в новый каталог
 // mktemp -d (0700, имя не угадать) и возвращает его путь. При любом провале
 // выгрузки каталог убирается.
-func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, err error) {
+func uploadRestoreBackupFiles(s remoteExec, backup *RestoreBackup) (staging string, err error) {
 	out, err := s.MustRun("mktemp -d " + restoreStagingPrefix + "XXXXXXXXXX")
 	if err != nil {
 		return "", err
@@ -854,7 +917,7 @@ func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, er
 	return staging, nil
 }
 
-func applyRestoreBackupOnRemote(s *SSH, staging string, extras []RestoreExtraFile) error {
+func applyRestoreBackupOnRemote(s remoteExec, staging string, extras []RestoreExtraFile) error {
 	if !restoreStagingRe.MatchString(staging) {
 		return fmt.Errorf("unexpected staging directory %q", staging)
 	}
@@ -926,7 +989,7 @@ rm -rf %[6]s
 `, stamp, preflight.String(), rollback.String(), backupOld.String(), install.String(), staging)
 }
 
-func verifyRestoredBackend(s *SSH, domain string) error {
+func verifyRestoredBackend(s remoteExec, domain string) error {
 	out, err := s.MustRun("systemctl is-active wg-monitor-backend")
 	var healthErr error
 	if strings.TrimSpace(domain) != "" {

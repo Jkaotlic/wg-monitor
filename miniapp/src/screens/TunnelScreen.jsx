@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { deleteTunnel, getAutorepair, putAutorepair } from '../api.js'
 import { errorText } from '../errorText.js'
+import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { autorepairRow, backupFor, enableBody, enableFields, enableReady, enableSheetText } from '../autorepair.js'
 import { waitCommand, waitDeadlineMs, repeatWhilePending } from '../commandWait.js'
 import { localSheet, confirmSheet } from '../sheet.js'
@@ -52,20 +53,26 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
   const [ar, setAr] = useState(null)
   const [arBusy, setArBusy] = useState(false)
   const [arError, setArError] = useState('')
+  // Сбой чтения не прячет блок: «Выключить автопочинку» пропала бы вместе с ним.
+  const [arLoadFailed, setArLoadFailed] = useState(false)
+  const [arReload, setArReload] = useState(0)
   useEffect(() => {
     let live = true
     setAr(null)
+    setArLoadFailed(false)
     if (tunnelID) {
       getAutorepair(routerID, tunnelID)
         .then((r) => {
           if (live) setAr(r)
         })
-        .catch(() => {})
+        .catch(() => {
+          if (live) setArLoadFailed(true)
+        })
     }
     return () => {
       live = false
     }
-  }, [routerID, tunnelID])
+  }, [routerID, tunnelID, arReload])
 
   function askAutorepair() {
     const target = card
@@ -92,7 +99,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
         fields: enableFields(ar),
         fieldsReady: enableReady,
         errorText: (err) => errorText(err),
-        perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values)),
+        perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values, ar)),
         onDone: (resp) => {
           if (alive.current && resp) setAr(resp)
         },
@@ -262,6 +269,12 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
           {fresh && <ExitRow routerID={routerID} tunnelID={card.id} running={tunnelRunning} />}
           {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
+
+        {fresh && arLoadFailed && !ar && typeof openSheet === 'function' && (
+          <div class="tunnel-autorepair-error">
+            <ErrorLine text="Не удалось узнать, включена ли автопочинка." onRetry={() => setArReload((n) => n + 1)} />
+          </div>
+        )}
 
         {fresh && ar?.can_edit && typeof openSheet === 'function' && (() => {
           const row = autorepairRow(ar)

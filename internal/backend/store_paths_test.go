@@ -408,3 +408,22 @@ func TestMoveStoreFileMatchesDirOwner(t *testing.T) {
 		t.Fatalf("владелец сверялся с %q, ждали %q", gotDir, dstDir)
 	}
 }
+
+// FRESH-05: trust_forwarded_for не задан -- true; false читается как false.
+func TestConfigTrustForwardedForDefault(t *testing.T) {
+	if cfg := loadStoreCfg(t, ""); cfg.TrustForwardedFor != nil {
+		t.Fatalf("не задан: %v, want nil (= доверять)", *cfg.TrustForwardedFor)
+	}
+	cfg := loadStoreCfg(t, "trust_forwarded_for: false\n")
+	if cfg.TrustForwardedFor == nil || *cfg.TrustForwardedFor {
+		t.Fatalf("false не прочитался: %v", cfg.TrustForwardedFor)
+	}
+}
+
+// FRESH-06: старый config.yaml с base_url кабинета Amnezia по-прежнему грузится.
+func TestConfigOldAmneziaBaseURLStillLoads(t *testing.T) {
+	cfg := loadStoreCfg(t, "amnezia_premium:\n  secrets_path: /secrets/a.json\n  base_url: \"https://example.com\"\n")
+	if cfg.Amnezia.SecretsPath != "/secrets/a.json" {
+		t.Fatalf("secrets_path: %q", cfg.Amnezia.SecretsPath)
+	}
+}

@@ -128,6 +128,26 @@ describe('автопочинка: экран VPN-туннеля', () => {
     root.remove()
   })
 
+  it('MINI-02: свой сервер скрыт -- строка называет его, подтверждение шлёт keep_source', async () => {
+    mocks.get = { ...BASE, enabled: true, provider: 'awg3', option: '', source_hidden: true, rename_pending: 'Старый' }
+    const { root, sheets } = await mount()
+    const confirm = root.querySelector('.tunnel-autorepair-confirm')
+    await act(async () => confirm.click())
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].fields).toEqual([])
+    await sheets[0].perform('', {})
+    expect(mocks.put).toEqual([[4, 'awg12', { enabled: true, keep_source: true }]])
+    render(null, root)
+    root.remove()
+
+    mocks.get = { ...BASE, enabled: true, provider: 'awg3', option: '', source_hidden: true }
+    const again = await mount()
+    expect(again.root.textContent).toContain('включена · из «Свой сервер»')
+    expect(again.root.textContent).not.toContain('только перезапуск')
+    render(null, again.root)
+    again.root.remove()
+  })
+
   it('резерв, а первое звено лежит -- лист не называет лежащий VPN-туннель', async () => {
     mocks.get = { ...BASE }
     const snap = {

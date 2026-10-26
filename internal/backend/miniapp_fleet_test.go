@@ -823,3 +823,31 @@ func TestMiniappFleetMarksStalePendingDeploy(t *testing.T) {
 		t.Errorf("назначена версия бэкенда -- не устаревшее: %+v", rows[otherID])
 	}
 }
+
+// «Могло дойти» в сводке панели -- отдельно от ошибок: свой счётчик и своя
+// строка, а offline_errors и last_offline_error его не включают.
+func TestMiniappFleetWatchdogMaybeDeliveredSeparateFromErrors(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, _, _, _ := seedMiniappFleet(t)
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	stats := heartbeat.Stats{ScansTotal: 5, LastScanAt: time.Now(), ScanEvery: time.Minute,
+		OfflineMaybeDelivered: 2, LastOfflineMaybeDelivered: "context deadline exceeded",
+		LastOfflineMaybeDeliveredRouter: "Дача", LastOfflineMaybeDeliveredAt: at}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999,
+		HeartbeatStats: func() heartbeat.Stats { return stats }})
+	body := fleetRequest(t, h, 999).Body.String()
+	for _, want := range []string{
+		`"offline_maybe_delivered":2`,
+		`"last_offline_maybe_delivered":"context deadline exceeded"`,
+		`"last_offline_maybe_delivered_router":"Дача"`,
+		`"last_offline_maybe_delivered_at":"2026-10-26T09:00:00Z"`,
+		`"offline_errors":0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("в сводке нет %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"last_offline_error"`) {
+		t.Fatalf("«могло дойти» попало в последнюю ошибку: %s", body)
+	}
+}

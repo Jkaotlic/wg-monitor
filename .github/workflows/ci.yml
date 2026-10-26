@@ -53,6 +53,8 @@ jobs:
     # async relay в handler, retention 3 параллельных loop'а, command
     # queue), но `-race` НИКОГДА не запускался — Makefile и CI оба
     # пропускали. CGO=1 (race требует gcc) на ubuntu-latest есть из коробки.
+    # CI-01 (аудит 26.10): internal/backend под -race шёл ~330 с при потолке
+    # 360 с -- новые тесты уронили бы CI по таймауту, а не по дефекту.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,7 +62,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./... -race -count=1 -timeout 360s
+      - run: go test ./... -race -count=1 -timeout 600s
         env:
           CGO_ENABLED: 1
 

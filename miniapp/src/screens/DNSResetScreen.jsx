@@ -1,6 +1,7 @@
-import { agentReplyText } from '../errorText.js'
-import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
+import { agentReplyText, agentOwnText, errorText } from '../errorText.js'
+import { useEffect, useRef, useState } from 'preact/hooks'
+import { fetchRouter, fetchRouterChecks, fetchRouterSettings } from '../api.js'
+import { serverClockOffset } from '../serverClock.js'
 import { placeText } from '../places.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
@@ -19,6 +20,8 @@ import {
   parsePreview,
   parseProbes,
   parseReset,
+  snapshotResetAt,
+  serverAwareResetAt,
   probeRows,
   referenceUnreachable,
   skippedServersText,
@@ -65,8 +68,14 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const [after, setAfter] = useState(null)
   const [previewFresh, setPreviewFresh] = useState(false)
   const [reset, setReset] = useState(null)
+  // Момент сброса по часам роутера (из имени снимка): отчёты не новее него -- про состояние до сброса.
+  const [resetAt, setResetAt] = useState(null)
   // '' -- ещё не копировали, 'ok' / 'fail' -- итог последнего нажатия.
   const [copyState, setCopyState] = useState('')
+  // Поздний ответ про роутер не должен трогать закрытый экран или перебивать новый сброс.
+  const aliveRef = useRef(true)
+  const resetSeq = useRef(0)
+  useEffect(() => () => { aliveRef.current = false }, [])
 
   function copyCommands() {
     copyText(dnsReferenceCommands()).then((ok) => setCopyState(ok ? 'ok' : 'fail'))
@@ -97,12 +106,22 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   function loadAfter() {
-    recheck.run('force_recheck', {}, deadline).then(() =>
-      fetchRouterChecks(routerID)
+    recheck.run('force_recheck', {}, deadline).then((res) => {
+      // Отказ роутера (MINI-05): отчёт не обновился, перечитывать нечего.
+      if (res?.status !== 'ok') return
+      return fetchRouterChecks(routerID)
         .then((c) => setAfter(c?.checks ?? []))
-        .catch(() => {}),
-    )
+        .catch(() => {})
+    })
   }
+
+  const recheckProblem = recheck.busy
+    ? ''
+    : recheck.error
+      ? errorText(recheck.error)
+      : recheck.result && recheck.result.status !== 'ok'
+        ? agentOwnText(recheck.result, 'Роутер не выполнил повторную проверку — отчёт не обновлён.')
+        : ''
 
   function askReset() {
     if (!routerName) return
@@ -123,7 +142,25 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         asleep,
         confirmPhrase: routerName || '',
         onResult: (res) => {
-          setReset(parseReset(res))
+          const parsedReset = parseReset(res)
+          setReset(parsedReset)
+          const seq = ++resetSeq.current
+          const snapMs = snapshotResetAt(parsedReset.snapshot)
+          setResetAt(snapMs)
+          // Часы роутера могли уйти вперёд сервера: метки отчётов тогда
+          // серверные. Оценка серверного времени на момент ответа -- по
+          // ответу сервера про роутер.
+          const replyMs = Date.now()
+          if (snapMs != null) {
+            Promise.resolve()
+              .then(() => fetchRouter(routerID))
+              .then((r) => {
+                if (!aliveRef.current || seq !== resetSeq.current) return
+                const offset = serverClockOffset(r?.router, Date.now())
+                setResetAt(serverAwareResetAt(snapMs, replyMs, offset))
+              })
+              .catch(() => {})
+          }
           setAfter(null)
           if (res?.status !== 'err') loadAfter()
         },
@@ -194,7 +231,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                 {(reset.status !== 'err' || reset.unreachable) && <ProbeList probes={reset.probes} />}
                 {reset.status !== 'err' && (
                   <div class="card card-rows">
-                    {postconditionRows({ before, after: after ?? before }).map((r) => (
+                    {postconditionRows({ before, after: after ?? before, resetAt }).map((r) => (
                       <DataRow
                         key={r.key}
                         dot={r.tone === 'muted' ? undefined : r.tone}
@@ -210,6 +247,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
                     {recheck.busy ? 'Спрашиваем роутер…' : T.checkAgain}
                   </button>
                 )}
+                {recheckProblem && <p class="state state-error">{recheckProblem}</p>}
               </Section>
             )}
           </>

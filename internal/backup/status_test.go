@@ -52,6 +52,12 @@ func TestStatusUpdatePreservesOtherSections(t *testing.T) {
 		t.Fatalf("version: %s", top["version"])
 	}
 	delete(top, "version")
+	// v0.62 (BACK-04): едет ли ключ шифрования в архивы -- булево верхнего
+	// уровня, пишется всегда.
+	if string(top["revive_key_in_backup"]) != "false" {
+		t.Fatalf("revive_key_in_backup: %s", top["revive_key_in_backup"])
+	}
+	delete(top, "revive_key_in_backup")
 	doc = map[string]map[string]any{}
 	for k, v := range top {
 		var m map[string]any

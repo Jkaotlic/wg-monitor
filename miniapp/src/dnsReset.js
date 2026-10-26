@@ -123,6 +123,32 @@ export function previewText(p) {
 const SNAPSHOT = /снимок «до»: (\S+)/
 const SNAPSHOT_FAILED = /снимок «до» не записан/
 
+// Момент сброса по часам роутера: агент пишет снимок «до» в
+// dns-before-<unix>.txt ровно перед применением. Нет снимка -- null, и
+// отсечки по времени нет (часы телефона с метками роутера не сравниваем).
+export function snapshotResetAt(snapshotPath) {
+  const m = /dns-before-(\d+)\.txt/.exec(String(snapshotPath ?? ''))
+  return m ? Number(m[1]) * 1000 : null
+}
+
+// Момент сброса для сравнения с метками отчётов. Бэкенд зажимает метку отчёта
+// до серверного времени, когда часы роутера уходят вперёд больше чем на 2
+// минуты, - тогда метки проверок серверные, а снимок «до» по часам роутера, и
+// строки застряли бы в «ждём отчёта». Поэтому resetAt = min(снимок, серверное
+// время на момент ответа о сбросе). replyMs - часы телефона при ответе о
+// сбросе; offsetMs - сдвиг сервера от телефона (serverClockOffset). Нет оценки -
+// остаётся снимок.
+// Бэкенд зажимает метку отчёта, только когда часы роутера впереди больше
+// чем на 2 минуты; меньшее расхождение метки не меняет - они по часам роутера.
+const CLAMP_AHEAD_MS = 2 * 60_000
+
+export function serverAwareResetAt(snapshotMs, replyMs, offsetMs) {
+  if (snapshotMs == null) return null
+  if (typeof offsetMs !== 'number' || !Number.isFinite(replyMs)) return snapshotMs
+  const estimate = replyMs + offsetMs
+  return snapshotMs - estimate > CLAMP_AHEAD_MS ? estimate : snapshotMs
+}
+
 export function parseReset(result) {
   const output = String(result?.output ?? '')
   const m = SNAPSHOT.exec(output)
@@ -198,22 +224,31 @@ function find(checks, name) {
   return (checks ?? []).find((c) => c.check_name === name) ?? null
 }
 
-// Свежесть -- по меткам самого роутера до и после, а не по часам телефона:
-// часы роутера и телефона вправе расходиться, а сравнение двух меток одного
-// источника от этого не зависит.
-function fresh(beforeCheck, afterCheck, stamp) {
+// Свежесть -- по меткам самого роутера до и после: часы роутера и телефона
+// вправе расходиться, а сравнение двух меток одного источника от этого не
+// зависит.
+//
+// MINI-06: сверх этого проверка свежая, только если её метка позже момента
+// сброса (resetAt, мс, ЧАСЫ РОУТЕРА -- см. snapshotResetAt): отчёт, пришедший
+// между «до» и сбросом, отличается от прежнего, но про состояние ДО сброса.
+// resetAt == null -- момента нет, остаётся только сравнение «до» и «после».
+function fresh(beforeCheck, afterCheck, stamp, resetAt) {
   if (!afterCheck) return false
+  if (resetAt != null) {
+    const at = Date.parse(stamp(afterCheck))
+    if (!Number.isFinite(at) || at <= resetAt) return false
+  }
   if (!beforeCheck) return true
   return stamp(afterCheck) !== stamp(beforeCheck)
 }
 
 // postconditionRows -- три вопроса после сброса: резолвит ли роутер, остался
 // ли свой DNS-сервер у сторожа, у Яндекса ли русские зоны.
-export function postconditionRows({ before, after }) {
+export function postconditionRows({ before, after, resetAt = null }) {
   const splitStamp = (c) => c.details?.checked_at ?? c.ts
   const splitBefore = find(before, 'dns_split')
   const split = find(after, 'dns_split')
-  const splitFresh = fresh(splitBefore, split, splitStamp)
+  const splitFresh = fresh(splitBefore, split, splitStamp, resetAt)
 
   const rows = []
   const d = split?.details ?? {}
@@ -235,7 +270,7 @@ export function postconditionRows({ before, after }) {
   // остановленного сторожа» у выключенного сторожа строки просто не будет,
   // и это тот же самый «выключен», а не поломка.
   if (!guard) guardRow = { value: 'сторож выключен', tone: 'muted' }
-  else if (!fresh(guardBefore, guard, (c) => c.ts)) guardRow = { value: TEXTS.waiting, tone: 'muted' }
+  else if (!fresh(guardBefore, guard, (c) => c.ts, resetAt)) guardRow = { value: TEXTS.waiting, tone: 'muted' }
   else {
     // Один словарь исходов сторожа на всё приложение (guardVerdict,
     // labels.js) -- раньше idle/ready читались здесь отдельной копией

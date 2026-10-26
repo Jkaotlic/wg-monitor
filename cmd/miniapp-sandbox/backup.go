@@ -14,6 +14,10 @@ const (
 	sandboxBackupFailed  = "failed"  // малый не ушёл, полный не скопирован, проверка не прошла
 	sandboxBackupUnknown = "unknown" // файла состояния нет
 	sandboxBackupOff     = "off"     // источник не подключён вовсе (старый бэкенд)
+	// v0.62 (BACK-04): строки про ключ шифрования в карточке «Бэкенд».
+	sandboxBackupSealedClosed = "sealed-closed" // хранилища не открываются текущим ключом (ключ не тот)
+	sandboxBackupSealedNoKey  = "sealed-nokey"  // ключа шифрования нет на сервере
+	sandboxBackupKeyInBackup  = "key-in-backup" // ключ едет в архив: напоминания нет
 )
 
 // seedBackupStatus кладёт backup-status.json рядом с базой песочницы -- туда,
@@ -21,14 +25,34 @@ const (
 func seedBackupStatus(dbPath, mode string, now time.Time) error {
 	ts := func(ago time.Duration) string { return now.Add(-ago).UTC().Format(time.RFC3339) }
 	path := backup.StatusPath(dbPath)
+	good := func(s *backup.Status) {
+		open := true
+		s.Small = backup.KindStatus{LastOKAt: ts(3 * time.Hour), LastRunAt: ts(3 * time.Hour), OK: true,
+			SizeBytes: 4 << 20, File: "wg-monitor-small-backup-sandbox.tgz.enc", Telegram: backup.DeliveryOK}
+		s.Full = backup.KindStatus{LastOKAt: ts(3 * time.Hour), LastRunAt: ts(3 * time.Hour), OK: true,
+			SizeBytes: 190 << 20, File: "wg-monitor-full-backup-sandbox.tgz.enc", Telegram: backup.DeliveryOff, Offsite: backup.DeliveryOK}
+		s.Verify = backup.VerifyStatus{LastRunAt: ts(60 * time.Hour), OK: true, Routers: 3, SealedStoresOpen: &open}
+	}
 	switch mode {
 	case sandboxBackupGood:
+		return backup.UpdateStatus(path, good)
+	case sandboxBackupSealedClosed:
 		return backup.UpdateStatus(path, func(s *backup.Status) {
-			s.Small = backup.KindStatus{LastOKAt: ts(3 * time.Hour), LastRunAt: ts(3 * time.Hour), OK: true,
-				SizeBytes: 4 << 20, File: "wg-monitor-small-backup-sandbox.tgz.enc", Telegram: backup.DeliveryOK}
-			s.Full = backup.KindStatus{LastOKAt: ts(3 * time.Hour), LastRunAt: ts(3 * time.Hour), OK: true,
-				SizeBytes: 190 << 20, File: "wg-monitor-full-backup-sandbox.tgz.enc", Telegram: backup.DeliveryOff, Offsite: backup.DeliveryOK}
-			s.Verify = backup.VerifyStatus{LastRunAt: ts(60 * time.Hour), OK: true, Routers: 3}
+			good(s)
+			closed := false
+			s.Verify.OK, s.Verify.SealedStoresOpen = false, &closed
+			s.Verify.Error = "хранилище awg3-panels.json из архива не расшифровывается ключом шифрования этой машины: после восстановления ключи кабинетов не прочитать"
+		})
+	case sandboxBackupSealedNoKey:
+		return backup.UpdateStatus(path, func(s *backup.Status) {
+			good(s)
+			closed := false
+			s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = &closed, true
+		})
+	case sandboxBackupKeyInBackup:
+		return backup.UpdateStatus(path, func(s *backup.Status) {
+			good(s)
+			s.ReviveKeyInBackup = true
 		})
 	case sandboxBackupFailed:
 		return backup.UpdateStatus(path, func(s *backup.Status) {
@@ -44,7 +68,7 @@ func seedBackupStatus(dbPath, mode string, now time.Time) error {
 	case sandboxBackupUnknown, sandboxBackupOff:
 		return nil
 	}
-	return fmt.Errorf("неизвестное состояние бэкапа %q (good|failed|unknown|off)", mode)
+	return fmt.Errorf("неизвестное состояние бэкапа %q (good|failed|unknown|off|sealed-closed|sealed-nokey|key-in-backup)", mode)
 }
 
 // sandboxBackupPath -- где лежит файл состояния для базы песочницы.

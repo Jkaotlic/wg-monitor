@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRepairStatus, startRepair } from '../api.js'
 import { repairView } from '../repair.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -47,24 +47,38 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
   // сбое читались бы как «починка стоит».
   const [pollError, setPollError] = useState('')
 
+  // Поколение ответов: «Починить» открывает новое. Ответ на опрос, ушедший
+  // раньше последнего запуска, про состояние ДО него -- его отбрасываем,
+  // иначе кнопка «Починить» вернулась бы поверх идущей починки (MINI-08).
+  const epoch = useRef(0)
+
+  // Последовательный цикл (await → пауза), а не setInterval: медленный ответ
+  // не наслаивается на следующий запрос.
   useEffect(() => {
     let alive = true
-    const poll = () => {
-      fetchRepairStatus(routerID)
-        .then((j) => {
-          if (!alive) return
-          setJob(j)
-          setPollError('')
+    let timer = null
+    const loop = async () => {
+      while (alive) {
+        const asked = epoch.current
+        try {
+          const j = await fetchRepairStatus(routerID)
+          if (alive && asked === epoch.current) {
+            setJob(j)
+            setPollError('')
+          }
+        } catch (e) {
+          if (alive && asked === epoch.current) setPollError(errorText(e))
+        }
+        if (!alive) return
+        await new Promise((resolve) => {
+          timer = setTimeout(resolve, POLL_MS)
         })
-        .catch((e) => {
-          if (alive) setPollError(errorText(e))
-        })
+      }
     }
-    poll()
-    const timer = setInterval(poll, POLL_MS)
+    loop()
     return () => {
       alive = false
-      clearInterval(timer)
+      clearTimeout(timer)
     }
   }, [routerID])
 
@@ -74,8 +88,11 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
   function start() {
     setStarting(true)
     setError('')
+    epoch.current++
     startRepair(routerID, checkName)
       .then((j) => {
+        // Опрос, ушедший во время запуска, мог не увидеть новое задание.
+        epoch.current++
         setJob(j)
         setOwnJobID(j?.job_id ?? '')
       })

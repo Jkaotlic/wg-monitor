@@ -337,3 +337,39 @@ describe('autorepairRow: источник выключен', () => {
     }
   })
 })
+
+// MINI-02: источник «свой сервер» скрыт (у человека нет права выдачи с этой
+// панели) -- автопочинка включена со своего сервера, а не «только перезапуск»;
+// выбора источника нет, подтверждение оставляет источник как есть.
+describe('source_hidden (MINI-02)', () => {
+  const hidden = (over = {}) => RESP({ enabled: true, provider: 'awg3', option: '', source_hidden: true, sources: SOURCES.filter((s) => s.provider !== 'awg3'), ...over })
+  it('строка экрана -- «включена · из «Свой сервер»»', () => {
+    expect(autorepairRow(hidden()).value).toBe('включена · из «Свой сервер»')
+    expect(autorepairRow(hidden({ sources: SOURCES })).value).toBe('включена · из «Свой сервер»')
+    expect(autorepairRow(hidden({ blocked: 'лимит попыток' })).value).toBe('стоит: лимит попыток')
+    expect(autorepairRow(hidden({ rename_pending: 'Старый' })).value).toBe('ждёт подтверждения')
+  })
+  it('лист прячет выбор источника', () => {
+    expect(enableFields(hidden())).toEqual([])
+    // Выключенная настройка без права на панель -- обычный выбор, без
+    // своего сервера и без keep_source.
+    const off = hidden({ enabled: false })
+    const [sel] = enableFields(off)
+    expect(sel.name).toBe('source')
+    expect(sel.options.map((o) => o.value)).toEqual(['', 'amnezia|nl'])
+    expect(enableBody({ source: 'amnezia|nl' }, off)).toEqual({ enabled: true, provider: 'amnezia', option: 'nl', allow_relocate: false })
+    expect(enableBody({ source: '' }, off)).not.toHaveProperty('keep_source')
+  })
+  it('лист не отсылает к полю источника и называет свой сервер', () => {
+    const t = enableSheetText(hidden({ rename_pending: 'Старый' }), 'Дача', null)
+    const all = [t.title, ...t.sections.map((s) => s.text)].join(' ')
+    expect(all).not.toContain('ниже выбран')
+    expect(all).not.toContain('под полем')
+    expect(all).toContain('«Свой сервер»')
+    expect(latinOutside(all)).toEqual([])
+  })
+  it('тело PUT -- keep_source без провайдера', () => {
+    expect(enableBody({}, hidden())).toEqual({ enabled: true, keep_source: true })
+    expect(enableBody({ source: 'amnezia|nl' }, RESP())).toEqual({ enabled: true, provider: 'amnezia', option: 'nl', allow_relocate: false })
+  })
+})

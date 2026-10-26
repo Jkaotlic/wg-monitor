@@ -160,6 +160,28 @@ describe('Парк: строка «Бэкап» в карточке «Бэкен
     expect(unknown.root.querySelector('.park-backup-warn')).not.toBe(null)
     cleanup(unknown.root)
   })
+
+  // v0.62 (BACK-04): напоминание про ключ шифрования и провал пробного
+  // открытия хранилищ -- в той же карточке «Бэкенд», под строкой «Бэкап».
+  it('ключ не в бэкапе -- напоминание; хранилища не открываются -- красная строка', async () => {
+    mocks.fleet = { ...FLEET, backup: { ...GOOD, revive_key_in_backup: false } }
+    const calm = await mountPark()
+    const card = calm.root.querySelector('.park-backend')
+    expect(card.querySelector('.park-backup-key.hint')?.textContent).toBe('Ключ шифрования не в бэкапе — сохраните secrets/revive.key отдельно')
+    expect(card.textContent).not.toContain('не открываются')
+    cleanup(calm.root)
+
+    mocks.fleet = { ...FLEET, backup: { ...GOOD, verify: { ...GOOD.verify, sealed_stores_open: false } } }
+    const broken = await mountPark()
+    const errs = [...broken.root.querySelectorAll('.park-backend .park-backup-key.state-error')].map((n) => n.textContent)
+    expect(errs).toContain('Хранилища не открываются текущим ключом')
+    cleanup(broken.root)
+
+    mocks.fleet = { ...FLEET, backup: { ...GOOD, revive_key_in_backup: true } }
+    const inBackup = await mountPark()
+    expect(inBackup.root.querySelector('.park-backend').textContent).not.toContain('Ключ шифрования не в бэкапе')
+    cleanup(inBackup.root)
+  })
 })
 
 describe('Парк: сторож и отложенное', () => {

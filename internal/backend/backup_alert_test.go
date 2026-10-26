@@ -505,3 +505,57 @@ func TestBackupAlertVerifyNoArchivesWordingIsHonest(t *testing.T) {
 		}
 	}
 }
+
+// v0.62 (BACK-04, решение координатора): ключа шифрования нет на сервере --
+// своя тревога со своими словами, хотя сама проверка восстановления прошла.
+func TestBackupAlertSealedKeyMissing(t *testing.T) {
+	r := newAlertRig(t)
+	r.healthy()
+	closed := false
+	r.status(func(s *backup.Status) {
+		s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = &closed, true
+	})
+	r.alerter().Tick(context.Background())
+	got := r.texts()
+	if len(got) != 1 || !strings.Contains(got[0], "Ключа шифрования нет на сервере") ||
+		!strings.Contains(got[0], "ключи кабинетов, панелей VPS, своих VPS и коды HideMy не прочитать") {
+		t.Fatalf("%v", got)
+	}
+	if strings.Contains(got[0], "Проверка восстановления бэкапа не прошла") {
+		t.Fatalf("проверка прошла, а текст говорит иное: %s", got[0])
+	}
+
+	// Ключ не тот (а не «нет») -- тревога идёт как провал проверки, этой нет.
+	r2 := newAlertRig(t)
+	r2.healthy()
+	r2.status(func(s *backup.Status) { s.Verify.SealedStoresOpen = &closed })
+	r2.alerter().Tick(context.Background())
+	if got := r2.texts(); len(got) != 0 {
+		t.Fatalf("без признака «ключа нет» тревоги про ключ быть не должно: %v", got)
+	}
+}
+
+// Ревью задачи 14: «в порядке» сбрасывает и метку тревоги про ключ -- ключ,
+// снова пропавший в пределах суток, снова даёт тревогу.
+func TestBackupAlertSealedKeyMissingAgainAfterRecovery(t *testing.T) {
+	r := newAlertRig(t)
+	r.healthy()
+	closed := false
+	missing := func() {
+		r.status(func(s *backup.Status) { s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = &closed, true })
+	}
+	missing()
+	a := r.alerter()
+	a.Tick(context.Background())
+	r.healthy()
+	r.status(func(s *backup.Status) { s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = nil, false })
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	missing()
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	got := r.texts()
+	if len(got) != 3 || !strings.Contains(got[0], "Ключа шифрования нет") || got[1] != "Бэкап снова в порядке." || !strings.Contains(got[2], "Ключа шифрования нет") {
+		t.Fatalf("%q", got)
+	}
+}

@@ -91,3 +91,26 @@ export function backupLine(fleet, opts = {}) {
   }
   return { text: parts.join(' · '), tone: 'ok' }
 }
+
+// Строки про ключ шифрования хранилищ под строкой «Бэкап» (v0.62, BACK-04).
+// Ключ (secrets/revive.key) в бэкап по правилу не кладётся: без него ключи
+// кабинетов, панелей VPS и своих VPS из бэкапа не откроются. Напоминание --
+// всегда, пока ключ не в бэкапе; провал пробного открытия недельной
+// проверкой -- отдельной строкой, «ключа нет на сервере» -- своей.
+export function backupKeyLines(fleet) {
+  const b = fleet?.backup
+  if (!b?.known) return []
+  const lines = []
+  if (b.revive_key_in_backup !== true) {
+    lines.push({ text: 'Ключ шифрования не в бэкапе — сохраните secrets/revive.key отдельно', tone: 'hint' })
+  }
+  const verify = b.verify ?? {}
+  if (verify.sealed_stores_open === false) {
+    lines.push(
+      verify.sealed_key_missing
+        ? { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS, своих VPS и коды HideMy из бэкапа не откроются', tone: 'danger' }
+        : { text: 'Хранилища не открываются текущим ключом', tone: 'danger' },
+    )
+  }
+  return lines
+}

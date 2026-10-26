@@ -179,9 +179,10 @@ func TestRunner_TunnelPower_RequiresTunnelID(t *testing.T) {
 	}
 }
 
-// AG-05: действия с туннелем просят внеплановый отчёт (ReportNow), а не
-// «вернулся после отвала» (ForceRecheck → Resumed=true): у мобильного роутера
-// бэкенд выбросил бы из такого отчёта упавшие проверки туннелей.
+// AG-05: после действия с туннелем агент шлёт внеплановый отчёт через
+// ReportNow. ForceRecheck (пинок пингчека и проверка доставки) нужен только
+// команде force_recheck -- кнопке «Проверить ещё раз», и действия с туннелем
+// его не зовут.
 func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tunnels/get" {
@@ -200,7 +201,7 @@ func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
 			AwgClient:    awgmgrFake(t, ok),
 			Exec:         func(ctx context.Context, name string, args ...string) ([]byte, error) { return nil, nil },
 			Now:          mockNow(),
-			ForceRecheck: func(ctx context.Context) { resumed++ },
+			ForceRecheck: func(ctx context.Context) error { resumed++; return nil },
 			ReportNow:    func(ctx context.Context) { now++ },
 		}
 		res := r.Execute(context.Background(), cmd)

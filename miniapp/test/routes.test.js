@@ -20,6 +20,7 @@ import {
   otherSourceRow,
   otherSourceSummary,
   rebindSheetText,
+  rebindSubtitle,
   bindTunnelName,
 } from '../src/routes.js'
 
@@ -884,6 +885,26 @@ describe('rebindSheetText', () => {
 
   it('правила общего набора на цели обратный перенос не трогает -- их не считаем', () => {
     expect(rebindSheetText(src, { id: 'nwg3', name: 'x', total: 5, policyRules: 5 }).body).toMatch(/Отменить можно обратным переносом с «x»\.$/)
+  })
+})
+
+describe('rebindSheetText -- MINI-03: правила общего набора остаются', () => {
+  it('считает только свои правила и не обещает «не останется ничего»', () => {
+    const src = { id: 'nwg1', name: 'amsterdam', total: 5, policyRules: 2 }
+    const body = rebindSheetText(src, { id: 'nwg2', name: 'spare', total: 0, policyRules: 0 }).body
+    expect(body).toBe(
+      '3 правила уедут из «amsterdam» в «spare». Правила общего набора (2) останутся — их переносит «Сделать главным». Отменить можно обратным переносом с «spare».',
+    )
+    expect(body).not.toMatch(/не останется ничего/)
+  })
+
+  it('подзаголовок выбора цели считает свои правила и говорит про оставшиеся', () => {
+    expect(rebindSubtitle({ id: 'nwg1', name: 'amsterdam', total: 5, policyRules: 2 })).toBe(
+      'Всё, что сейчас ведёт в «amsterdam» (3 правила); правила общего набора (2) останутся',
+    )
+    expect(rebindSubtitle({ id: 'nwg1', name: 'amsterdam', total: 3, policyRules: 0 })).toBe(
+      'Всё, что сейчас ведёт в «amsterdam» (3 правила)',
+    )
   })
 })
 
