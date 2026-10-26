@@ -240,13 +240,21 @@ mode `0600`. After a restore the saved router passwords must be entered again
 are refused. The uploaded copies in `/tmp/wg-monitor-restore` are removed
 whether the restore succeeds or not.
 
-This flow is for the VPS (systemd) layout. For the Docker layout see
-[Восстановление из малого архива](#восстановление-из-малого-архива).
+This flow is for the VPS (systemd) layout. On the Docker layout (Raspberry Pi,
+`source_bind` set) `--to-current-vps` runs the steps of
+[Восстановление бэкапа на Pi](#восстановление-бэкапа-на-pi) itself, and
+`--to-new-vps` is refused.
 
 ### Восстановление бэкапа на Pi
 
-Мастер на докер-раскладке (Raspberry Pi) восстановление не делает и отказывает до
-любых изменений. Делайте руками; пути — от корня раскладки (`~/wg-monitor`, у root —
+Мастер делает эти шаги сам: `wg-monitor-deploy restore-backup <архив> --to-current-vps`
+(или `[1] Restore to current VPS`) на докер-раскладке спрашивает «Восстановить на Pi?
+Бэкенд будет остановлен», до остановки проверяет `sqlite3`, `docker`, каталог `data/` и
+контейнер `wg-monitor-backend`, а если база из архива не прошла `integrity_check`,
+ничего не заменяет и запускает контейнер обратно. Прежняя база остаётся рядом как
+`state.db.bak.<время>` (с `-wal`/`-shm`), `secrets/revive.key` мастер не трогает.
+Восстановление «на новую VPS» с докер-раскладки мастер не делает.
+Ниже — тот же порядок руками, запасной путь. Пути — от корня раскладки (`~/wg-monitor`, у root —
 `/root/wg-monitor`), внутри контейнера каталог `data/` виден как `/data`. Значения в
 `<...>` подставьте свои. Для малого архива короче шаг-в-шаг есть в
 [Восстановление из малого архива](#восстановление-из-малого-архива); ниже — полный порядок.
@@ -492,7 +500,8 @@ wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --
 wg-monitor-deploy restore-backup wg-monitor-small-backup-<время>.tgz.enc --to-current-vps   # или --to-new-vps
 ```
 
-**Докер-раскладка (Raspberry Pi)** — руками. Пути ниже — от корня раскладки
+**Докер-раскладка (Raspberry Pi)** — мастером так же (`--to-current-vps`, см.
+[Восстановление бэкапа на Pi](#восстановление-бэкапа-на-pi)) или руками. Пути ниже — от корня раскладки
 (`~/wg-monitor`); парольная фраза лежит в `secrets/backup-passphrase.txt` (на
 пустой машине — создать этот файл с фразой из менеджера паролей, права `0600`).
 Контейнер бэкенда на время замены файлов должен быть остановлен — тем же
