@@ -2096,6 +2096,11 @@ func TestHardTransition_NoAutoRepairAfterShutdown(t *testing.T) {
 		return "job-1", nil
 	}, ctx)
 	postFailingCheck(t, srv, tok, "tunnel_awg12")
+	// Проверка «не запущена» верна, только когда доставка уже закончилась:
+	// иначе тест прошёл бы вхолостую, глянув на started раньше фоновой
+	// задачи. Ждём и пул, и слив (он считает и доставки на месте).
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
 
 	mu.Lock()
 	defer mu.Unlock()

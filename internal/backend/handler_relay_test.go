@@ -22,6 +22,19 @@ func waitRelayPoolEmpty(t *testing.T) {
 	}
 }
 
+// waitRelayDrained ждёт конца всех фоновых доставок, включая ушедшие на
+// месте при полном пуле (WaitRelayDrain на relayWG).
+func waitRelayDrained(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { WaitRelayDrain(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("фоновые доставки не закончились за 2 с")
+	}
+}
+
 // TestSpawnRelay_DropsWhenPoolSaturated pins BE-02: relay spawns are bounded by
 // relayConcurrencyLimit. spawnRelay acquires the semaphore synchronously, so
 // once every slot is held the next relay is dropped (its fn never runs) instead
