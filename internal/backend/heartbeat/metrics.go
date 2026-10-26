@@ -17,7 +17,10 @@ var (
 	metricStaleUsers    = expvar.NewInt("wgm_heartbeat_stale_users")
 	metricOfflineSent   = expvar.NewInt("wgm_heartbeat_offline_sent_total")
 	metricOfflineErrors = expvar.NewInt("wgm_heartbeat_offline_errors_total")
-	metricSleepSent     = expvar.NewInt("wgm_heartbeat_sleep_sent_total")
+	// «Могло дойти»: ответ Telegram не пришёл, тревога, скорее всего, у
+	// владельца -- не ошибка, считается отдельно.
+	metricOfflineMaybeDelivered = expvar.NewInt("wgm_heartbeat_offline_maybe_delivered_total")
+	metricSleepSent             = expvar.NewInt("wgm_heartbeat_sleep_sent_total")
 	// Сколько просроченных роутеров обход пропустил намеренно -- из-за ack
 	// или тишины, выставленной оператором. Без этого числа «увидел четверых,
 	// не отправил ни одной тревоги» выглядит поломкой, хотя может быть

@@ -30,6 +30,12 @@ export function watchdogLine(fleet) {
   if (errors > 0) {
     sub.push(`${errors} ${pluralRu(errors, 'отправка не ушла', 'отправки не ушли', 'отправок не ушло')}`)
   }
+  // «Могло дойти» -- ответ Telegram не пришёл, тревога, скорее всего, у
+  // владельца. Это не ошибка: своя строка и тон не меняется.
+  const maybe = num(wd.offline_maybe_delivered) ? wd.offline_maybe_delivered : 0
+  if (maybe > 0) {
+    sub.push(`${maybe} ${pluralRu(maybe, 'отправка могла дойти', 'отправки могли дойти', 'отправок могли дойти')}: ответ Telegram не пришёл`)
+  }
 
   const dead = wd.alive === false
   return {

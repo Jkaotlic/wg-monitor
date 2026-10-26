@@ -89,3 +89,32 @@ func TestWatcherOfflineKnownNotSentIsRetried(t *testing.T) {
 		t.Fatal("тревога не дошла, а сторож записал hard")
 	}
 }
+
+// «Могло дойти» -- не ошибка: тревога, скорее всего, у владельца. В сводке
+// панели она шла счётчиком ошибок и «последней ошибкой», и оператор искал
+// поломку там, где её нет. Теперь у неё свой счётчик и своя строка.
+func TestWatcherOfflineMaybeDeliveredIsNotAnError(t *testing.T) {
+	d, _, t0 := offlineFixture(t, "maybe-tg",
+		"3737373737373737373737373737373737373737373737373737373737373737", "198.51.100.37")
+	off := &errOffline{err: fmt.Errorf("%w: %w", notify.ErrNoneDelivered, context.DeadlineExceeded)}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: 30 * time.Second})
+
+	before := w.Snapshot()
+	driveScan(w, t0)
+	after := w.Snapshot()
+
+	if got := after.OfflineErrors - before.OfflineErrors; got != 0 {
+		t.Fatalf("«могло дойти» посчитано ошибкой: +%d", got)
+	}
+	if got := after.OfflineMaybeDelivered - before.OfflineMaybeDelivered; got != 1 {
+		t.Fatalf("счётчик «могло дойти» +%d, ждали +1", got)
+	}
+	if nick, text, _ := w.LastOfflineError(); nick != "" || text != "" {
+		t.Fatalf("«могло дойти» записано последней ошибкой: %q %q", nick, text)
+	}
+	if after.LastOfflineMaybeDeliveredRouter != "maybe-tg" || after.LastOfflineMaybeDelivered == "" ||
+		!after.LastOfflineMaybeDeliveredAt.Equal(t0) {
+		t.Fatalf("строка «могло дойти»: %q %q %v", after.LastOfflineMaybeDeliveredRouter,
+			after.LastOfflineMaybeDelivered, after.LastOfflineMaybeDeliveredAt)
+	}
+}

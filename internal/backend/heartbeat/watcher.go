@@ -147,8 +147,13 @@ type Watcher struct {
 	lastOfflineErrRouter string
 	lastOfflineErrText   string
 	lastOfflineErrAt     time.Time
-	mu                   sync.Mutex
-	wg                   sync.WaitGroup
+	// Последняя отправка «могло дойти» (ответ не пришёл) -- под mu. Не
+	// ошибка: в сводке своей строкой.
+	lastOfflineMaybeRouter string
+	lastOfflineMaybeText   string
+	lastOfflineMaybeAt     time.Time
+	mu                     sync.Mutex
+	wg                     sync.WaitGroup
 	// now is set once at construction (or by SetNow before Run starts) and
 	// read concurrently from scan/MarkResumed. Tests inject a deterministic
 	// clock; production keeps time.Now. The pointer write is single-shot;
@@ -239,6 +244,14 @@ func (w *Watcher) LastOfflineError() (nickname, errText string, at time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.lastOfflineErrRouter, w.lastOfflineErrText, w.lastOfflineErrAt
+}
+
+// LastOfflineMaybeDelivered -- последняя отправка «роутер не на связи», ответ
+// на которую не пришёл (могло дойти): имя роутера, текст без секретов, время.
+func (w *Watcher) LastOfflineMaybeDelivered() (nickname, errText string, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastOfflineMaybeRouter, w.lastOfflineMaybeText, w.lastOfflineMaybeAt
 }
 
 // maxOfflineErrorRunes -- потолок текста ошибки в сводке. Ответ Telegram бывает
@@ -427,13 +440,15 @@ func (w *Watcher) scan(ctx context.Context) {
 			// доставить. Повтор через 1 и 5 минут слал владельцу дубли
 			// «Роутер не на связи» (FRESH-02) -- считаем тревогу ушедшей,
 			// как HARD-тревоги; дальше напоминания realert по расписанию.
-			metricOfflineErrors.Add(1)
+			// Не ошибка: в сводке панели -- свой счётчик и строка
+			// «могло дойти», а не «последняя ошибка».
+			metricOfflineMaybeDelivered.Add(1)
 			slog.Warn("heartbeat: send offline failed, могло дойти -- не повторяем", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)
 			w.mu.Lock()
 			delete(w.offlineRetry, u.ID)
-			w.lastOfflineErrRouter = u.Nickname
-			w.lastOfflineErrText = redactSecrets(err.Error())
-			w.lastOfflineErrAt = now
+			w.lastOfflineMaybeRouter = u.Nickname
+			w.lastOfflineMaybeText = redactSecrets(err.Error())
+			w.lastOfflineMaybeAt = now
 			w.mu.Unlock()
 			if mErr := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); mErr != nil {
 				slog.Error("heartbeat: offline notice maybe delivered but not recorded", "user_id", u.ID, "nickname", u.Nickname, "err", mErr)

@@ -29,6 +29,13 @@ type Stats struct {
 	LastOfflineError       string    `json:"last_offline_error,omitempty"`
 	LastOfflineErrorRouter string    `json:"last_offline_error_router,omitempty"`
 	LastOfflineErrorAt     time.Time `json:"last_offline_error_at"`
+	// OfflineMaybeDelivered и LastOfflineMaybeDelivered* -- отправки «роутер
+	// не на связи», ответ на которые не пришёл (срок вышел): тревога, скорее
+	// всего, дошла. Это не ошибка, поэтому и не в OfflineErrors.
+	OfflineMaybeDelivered           int64     `json:"offline_maybe_delivered_total"`
+	LastOfflineMaybeDelivered       string    `json:"last_offline_maybe_delivered,omitempty"`
+	LastOfflineMaybeDeliveredRouter string    `json:"last_offline_maybe_delivered_router,omitempty"`
+	LastOfflineMaybeDeliveredAt     time.Time `json:"last_offline_maybe_delivered_at"`
 }
 
 // Snapshot читает счётчики процесса. Метод на Watcher, а не пакетная функция:
@@ -39,6 +46,7 @@ func (w *Watcher) Snapshot() Stats {
 		last = time.Unix(unix, 0).UTC()
 	}
 	router, errText, errAt := w.LastOfflineError()
+	maybeRouter, maybeText, maybeAt := w.LastOfflineMaybeDelivered()
 	return Stats{
 		ScansTotal:             metricScans.Value(),
 		LastScanAt:             last,
@@ -52,6 +60,11 @@ func (w *Watcher) Snapshot() Stats {
 		LastOfflineError:       errText,
 		LastOfflineErrorRouter: router,
 		LastOfflineErrorAt:     errAt,
+
+		OfflineMaybeDelivered:           metricOfflineMaybeDelivered.Value(),
+		LastOfflineMaybeDelivered:       maybeText,
+		LastOfflineMaybeDeliveredRouter: maybeRouter,
+		LastOfflineMaybeDeliveredAt:     maybeAt,
 	}
 }
 

@@ -179,6 +179,12 @@ type miniappFleetWatchdog struct {
 	LastOfflineError       string  `json:"last_offline_error,omitempty"`
 	LastOfflineErrorRouter string  `json:"last_offline_error_router,omitempty"`
 	LastOfflineErrorAt     string  `json:"last_offline_error_at,omitempty"`
+	// «Могло дойти» -- ответ Telegram не пришёл, тревога, скорее всего, у
+	// владельца. Не ошибка: отдельно от offline_errors/last_offline_error.
+	OfflineMaybeDelivered           int64  `json:"offline_maybe_delivered"`
+	LastOfflineMaybeDelivered       string `json:"last_offline_maybe_delivered,omitempty"`
+	LastOfflineMaybeDeliveredRouter string `json:"last_offline_maybe_delivered_router,omitempty"`
+	LastOfflineMaybeDeliveredAt     string `json:"last_offline_maybe_delivered_at,omitempty"`
 }
 
 type miniappFleetResp struct {
@@ -400,13 +406,14 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			st := d.HeartbeatStats()
 			verdict := heartbeat.Judge(st, now)
 			wd := &miniappFleetWatchdog{
-				Alive:           verdict.Alive,
-				Reason:          verdict.Reason,
-				OfflineErrors:   st.OfflineErrors,
-				ScansTotal:      st.ScansTotal,
-				StaleUsers:      st.StaleUsers,
-				SuppressedUsers: st.Suppressed,
-				LastScanMs:      st.LastScanMs,
+				Alive:                 verdict.Alive,
+				Reason:                verdict.Reason,
+				OfflineErrors:         st.OfflineErrors,
+				OfflineMaybeDelivered: st.OfflineMaybeDelivered,
+				ScansTotal:            st.ScansTotal,
+				StaleUsers:            st.StaleUsers,
+				SuppressedUsers:       st.Suppressed,
+				LastScanMs:            st.LastScanMs,
 			}
 			if !st.LastScanAt.IsZero() {
 				at := st.LastScanAt.UTC().Format(time.RFC3339)
@@ -416,6 +423,11 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				wd.LastOfflineError = st.LastOfflineError
 				wd.LastOfflineErrorRouter = st.LastOfflineErrorRouter
 				wd.LastOfflineErrorAt = st.LastOfflineErrorAt.UTC().Format(time.RFC3339)
+			}
+			if st.LastOfflineMaybeDelivered != "" {
+				wd.LastOfflineMaybeDelivered = st.LastOfflineMaybeDelivered
+				wd.LastOfflineMaybeDeliveredRouter = st.LastOfflineMaybeDeliveredRouter
+				wd.LastOfflineMaybeDeliveredAt = st.LastOfflineMaybeDeliveredAt.UTC().Format(time.RFC3339)
 			}
 			resp.Watchdog = wd
 		}
