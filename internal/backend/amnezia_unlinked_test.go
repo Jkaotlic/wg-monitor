@@ -16,6 +16,10 @@ func TestBackendDoesNotLinkAmneziaCabinet(t *testing.T) {
 	if _, err := os.Stat(goBin); err != nil || os.Getenv("GOROOT") == "" {
 		p, lerr := exec.LookPath("go")
 		if lerr != nil {
+			if os.Getenv("CI") != "" {
+				// В CI молчаливый пропуск отключил бы сторожа насовсем.
+				t.Fatalf("go не найден: GOROOT=%q, PATH: %v", os.Getenv("GOROOT"), lerr)
+			}
 			t.Skipf("go не найден: GOROOT=%q, PATH: %v", os.Getenv("GOROOT"), lerr)
 		}
 		goBin = p
@@ -24,6 +28,9 @@ func TestBackendDoesNotLinkAmneziaCabinet(t *testing.T) {
 	cmd.Dir = "../.."
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("go list не отработал: %v\n%s", err, out)
+		}
 		t.Skipf("go list не отработал: %v\n%s", err, out)
 	}
 	for _, pkg := range strings.Fields(string(out)) {
