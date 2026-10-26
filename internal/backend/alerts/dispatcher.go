@@ -258,8 +258,11 @@ func (di *Dispatcher) Apply(userID int64, nickname, checkName string, tr state.T
 			RecoveredAt: di.now(),
 			Check:       check,
 		})
-		di.forgetHard(userID, checkName)
 		return func(ctx context.Context) error {
+			// Память тревоги забывается в доставке, а не в Apply: карточка
+			// той же проверки, что ещё стоит в очереди перед этим ответом,
+			// запомнит себя позже и иначе пережила бы «восстановилось».
+			di.forgetHard(userID, checkName)
 			return di.deliverRecovery(ctx, userID, nickname, checkName, text, next, prev, prevErr)
 		}, nil
 	}

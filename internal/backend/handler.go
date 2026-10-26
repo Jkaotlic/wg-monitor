@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -244,17 +245,82 @@ func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx 
 // last_alert_at уже стоит, и брошенная тревога пришла бы лишь напоминанием
 // через 6 часов. Пул занят -- доставка идёт на месте, как до v0.62: отчёт
 // подождёт, тревога дойдёт.
-func spawnAlertDelivery(d Deps, label string, fn func(ctx context.Context)) {
+func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
+	key := alertQueueKey{userID: userID, check: checkName}
+	prev, done := enqueueAlert(key)
+	run := func() {
+		defer releaseAlert(key, done)
+		// Очередь по проверке: эта доставка ждёт предыдущую той же пары
+		// (роутер, проверка). Свой срок (30 с) отсчитывается после ожидания:
+		// зависший Telegram держит каждый шаг не дольше его собственного
+		// срока, и вся цепочка конечна. Остановка бэкенда ожидание прерывает.
+		if prev != nil {
+			select {
+			case <-prev:
+			case <-relayParent(d).Done():
+			}
+		}
+		ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
+		defer cancel()
+		fn(ctx)
+	}
 	select {
 	case relaySem <- struct{}{}:
 	default:
 		d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
-		ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
-		defer cancel()
-		fn(ctx)
+		run()
 		return
 	}
-	goRelay(d, alertDeliveryTimeout, fn)
+	go func() {
+		defer func() { <-relaySem }()
+		run()
+	}()
+}
+
+// alertQueueKey -- очередь доставок одной проверки одного роутера.
+type alertQueueKey struct {
+	userID int64
+	check  string
+}
+
+// alertQueue -- хвосты очередей доставки тревог по проверке. Без очереди
+// «восстановилось» могло уйти раньше карточки тревоги, которая ещё висит на
+// Telegram (ответить не на что), или стереть alert_messages новой тревоги,
+// ушедшей следом. Запись живёт, пока в цепочке есть незаконченная доставка.
+var alertQueue = struct {
+	mu    sync.Mutex
+	tails map[alertQueueKey]chan struct{}
+}{tails: map[alertQueueKey]chan struct{}{}}
+
+// enqueueAlert ставит доставку в хвост очереди проверки: prev -- канал
+// предыдущей (nil, если очередь пуста), done закрывается по её завершении.
+func enqueueAlert(key alertQueueKey) (prev <-chan struct{}, done chan struct{}) {
+	done = make(chan struct{})
+	alertQueue.mu.Lock()
+	if p, ok := alertQueue.tails[key]; ok {
+		prev = p
+	}
+	alertQueue.tails[key] = done
+	alertQueue.mu.Unlock()
+	return prev, done
+}
+
+// releaseAlert -- доставка закончилась: следующая в очереди может идти, а
+// если она была хвостом, запись очереди удаляется.
+func releaseAlert(key alertQueueKey, done chan struct{}) {
+	alertQueue.mu.Lock()
+	if alertQueue.tails[key] == done {
+		delete(alertQueue.tails, key)
+	}
+	alertQueue.mu.Unlock()
+	close(done)
+}
+
+// alertQueueLen -- сколько очередей доставки не закончено (для тестов).
+func alertQueueLen() int {
+	alertQueue.mu.Lock()
+	defer alertQueue.mu.Unlock()
+	return len(alertQueue.tails)
 }
 
 // WaitRelayDrain ждёт, пока опустеет общий пул relay: фоновые доставки
@@ -713,7 +779,7 @@ func closeHardAsRecovery(d Deps, userID int64, nickname, checkName, reason strin
 		if err != nil || deliver == nil {
 			return err
 		}
-		spawnAlertDelivery(d, "recovery-missing-check", func(ctx context.Context) {
+		spawnAlertDelivery(d, "recovery-missing-check", userID, checkName, func(ctx context.Context) {
 			if err := deliver(ctx); err != nil {
 				d.Logger.Warn("clear missing check hard: deliver recovery", "nickname", nickname, "check", checkName, "err", err)
 			}
@@ -1231,7 +1297,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 			if deliver != nil || startRepair != nil {
 				checkName, kind := c.Name, tr.Kind
-				spawnAlertDelivery(d, "dispatch", func(ctx context.Context) {
+				spawnAlertDelivery(d, "dispatch", uid, checkName, func(ctx context.Context) {
 					if deliver != nil {
 						if err := deliver(ctx); err != nil {
 							d.Logger.Warn("dispatch", "check", checkName, "kind", kind, "err", err)

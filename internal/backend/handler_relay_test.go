@@ -72,7 +72,7 @@ func TestSpawnAlertDelivery_InlineWhenPoolSaturated(t *testing.T) {
 
 	var ran atomic.Bool
 	var hadDeadline atomic.Bool
-	spawnAlertDelivery(d, "dispatch", func(ctx context.Context) {
+	spawnAlertDelivery(d, "dispatch", 1, "dns", func(ctx context.Context) {
 		_, ok := ctx.Deadline()
 		hadDeadline.Store(ok)
 		ran.Store(true)
