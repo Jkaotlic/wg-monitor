@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 )
 
 type OfflineSender interface {
@@ -421,6 +422,24 @@ func (w *Watcher) scan(ctx context.Context) {
 		sendCtx, cancelSend := context.WithTimeout(ctx, w.sendTimeout())
 		err = w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
 		cancelSend()
+		if err != nil && notify.MaybeDelivered(err) {
+			// Таймаут ответа или срок контекста: Telegram мог тревогу уже
+			// доставить. Повтор через 1 и 5 минут слал владельцу дубли
+			// «Роутер не на связи» (FRESH-02) -- считаем тревогу ушедшей,
+			// как HARD-тревоги; дальше напоминания realert по расписанию.
+			metricOfflineErrors.Add(1)
+			slog.Warn("heartbeat: send offline failed, могло дойти -- не повторяем", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)
+			w.mu.Lock()
+			delete(w.offlineRetry, u.ID)
+			w.lastOfflineErrRouter = u.Nickname
+			w.lastOfflineErrText = redactSecrets(err.Error())
+			w.lastOfflineErrAt = now
+			w.mu.Unlock()
+			if mErr := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); mErr != nil {
+				slog.Error("heartbeat: offline notice maybe delivered but not recorded", "user_id", u.ID, "nickname", u.Nickname, "err", mErr)
+			}
+			continue
+		}
 		if err != nil {
 			metricOfflineErrors.Add(1)
 			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)

@@ -3,7 +3,6 @@ package alerts
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -335,7 +334,7 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 	kb := tg.AlertKeyboard(userID, checkName, appURL)
 	delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb, Silenced(st, di.now()))
 	if err != nil {
-		if hardMaybeDelivered(err) {
+		if notify.MaybeDelivered(err) {
 			// Таймаут ответа или срок контекста: карточка могла дойти.
 			// Отметка ставится, как при доставке -- дальше обычное
 			// напоминание по расписанию, а не полная карточка на каждом
@@ -377,14 +376,6 @@ func (di *Dispatcher) hardNeverDelivered(userID int64, checkName string, prev db
 	}
 	msgs, err := di.d.AlertMessages().List(userID, checkName)
 	return err == nil && len(msgs) == 0
-}
-
-// hardMaybeDelivered -- рассылка карточки провалилась так, что Telegram мог
-// её уже доставить: получатели были (ErrNoneDelivered), а ошибка -- не из
-// тех, что значат «заведомо не отправлено» (tg.KnownNotSent). Ошибка
-// составления списка получателей (база) -- не отправлено ничего.
-func hardMaybeDelivered(err error) bool {
-	return errors.Is(err, notify.ErrNoneDelivered) && !tg.KnownNotSent(err)
 }
 
 // collectNeighbors returns short summaries of the user's other tunnel checks.
