@@ -932,7 +932,8 @@ def report_error(e, out=None, err=None, nonce=None):
     nonce = ERR_NONCE if nonce is None else nonce
     code = err_code(e)
     if code and nonce:
-        print(ERR_MARKER + nonce + " " + code, file=out)
+        # "\n" впереди: строка роутера без перевода строки не склеится с меткой.
+        out.write("\n" + ERR_MARKER + nonce + " " + code + "\n")
         out.flush()
     print(str(e), file=err)
 

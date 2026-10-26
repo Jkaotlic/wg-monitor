@@ -270,3 +270,33 @@ func TestWithErrNonce_NotAnObject(t *testing.T) {
 		}
 	}
 }
+
+// Строка роутера без перевода строки перед меткой: relay начинает метку с
+// "\n", и runner разбирает её как отдельную строку.
+func TestRunner_RelayErrMarker_AfterPartialLine(t *testing.T) {
+	relay := &nonceRelay{scriptedRelay: scriptedRelay{lines: []string{"router# partial", "__WG_ERR__ {nonce} root_auth_failed"}, rc: 1, err: errors.New("exit status 1")}}
+	if job := runErrMarkerJob(t, relay.run, 2*time.Second); job.Hint != HintRootAuthFailed {
+		t.Fatalf("Hint = %q, want %q", job.Hint, HintRootAuthFailed)
+	}
+}
+
+func TestDefaultRelay_ErrMarker_AfterUnterminatedOutput(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	script := filepath.Join(t.TempDir(), "fake-relay.py")
+	body := "import json, sys\n" +
+		"nonce = json.load(open(sys.argv[1]))['err_nonce']\n" +
+		"sys.stdout.write('router# partial'); sys.stdout.flush()\n" +
+		"sys.stdout.write('\\n__WG_ERR__ ' + nonce + ' root_auth_failed\\n'); sys.stdout.flush()\n" +
+		"sys.exit(1)\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relay := func(ctx context.Context, _ string, jobJSON []byte, onLine func(string)) (int, error) {
+		return DefaultRelay(ctx, script, jobJSON, onLine)
+	}
+	if job := runErrMarkerJob(t, relay, 10*time.Second); job.Hint != HintRootAuthFailed {
+		t.Fatalf("Hint = %q, want %q", job.Hint, HintRootAuthFailed)
+	}
+}

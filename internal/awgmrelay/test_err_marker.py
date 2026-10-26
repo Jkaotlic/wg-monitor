@@ -110,8 +110,18 @@ class MainMarkerTest(unittest.TestCase):
         relay = load_relay()
         out, err = io.StringIO(), io.StringIO()
         relay.report_error(relay.RelayError(relay.ROOT_LOGIN_REFUSED), out, err, nonce=self.NONCE)
-        self.assertEqual(out.getvalue(), "__WG_ERR__ 0123456789abcdef root_auth_failed\n")
+        self.assertEqual(out.getvalue().strip(), "__WG_ERR__ 0123456789abcdef root_auth_failed")
         self.assertIn("root_auth_failed", err.getvalue())
+
+    def test_marker_survives_unterminated_router_line(self):
+        # Роутер оставил строку без перевода строки -- метка не должна
+        # приклеиться к ней и потеряться для backend.
+        relay = load_relay()
+        out, err = io.StringIO(), io.StringIO()
+        out.write("router# partial output")
+        relay.report_error(relay.RelayError(relay.ROOT_LOGIN_REFUSED), out, err, nonce=self.NONCE)
+        lines = [l.strip() for l in out.getvalue().splitlines()]
+        self.assertIn("__WG_ERR__ 0123456789abcdef root_auth_failed", lines)
 
     def test_no_marker_without_nonce(self):
         # v0.62 T10: в задании нет err_nonce (старый backend) -- метку не
@@ -178,7 +188,7 @@ class MainMarkerTest(unittest.TestCase):
     def test_main_prints_marker_with_job_nonce(self):
         res = self.run_relay_against_panel({"err_nonce": self.NONCE})
         self.assertEqual(res.returncode, 1, res.stderr)
-        self.assertIn("__WG_ERR__ 0123456789abcdef auth_failed\n", res.stdout)
+        self.assertIn("__WG_ERR__ 0123456789abcdef auth_failed", [l.strip() for l in res.stdout.splitlines()])
         self.assertIn("HTTP 401", res.stderr)
 
     def test_main_no_marker_without_job_nonce(self):
