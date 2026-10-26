@@ -42,7 +42,7 @@ func TestRunBindTGUser_BindsAndClears(t *testing.T) {
 	if err := runBindTGUser(bindTGUserOpts{DBPath: dbPath, Nickname: "vasya", Clear: true, Out: &out}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if !strings.Contains(out.String(), "cleared owner binding") {
+	if !strings.Contains(out.String(), "владелец снят") || !strings.Contains(out.String(), "bind-tg-user --tg-id=N") || strings.Contains(out.String(), "TOFU") {
 		t.Errorf("unexpected output: %q", out.String())
 	}
 	d3, _ := db.Open(dbPath)

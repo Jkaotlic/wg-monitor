@@ -22,7 +22,7 @@ func cmdBindTGUser(args []string) {
 	dbPath := fs.String("db", "/var/lib/wg-monitor/state.db", "path to SQLite DB")
 	nick := fs.String("nickname", "", "router nickname to bind")
 	tgID := fs.Int64("tg-id", 0, "Telegram numeric user id of the owner (positive; get from @userinfobot)")
-	clear := fs.Bool("clear", false, "instead of binding, clear the existing owner (re-enables TOFU on next tap)")
+	clear := fs.Bool("clear", false, "instead of binding, clear the existing owner (nobody is bound afterwards; bind a new one with --tg-id=N or in the mini app, Access)")
 	_ = fs.Parse(args)
 	if err := runBindTGUser(bindTGUserOpts{DBPath: *dbPath, Nickname: *nick, TGUserID: *tgID, Clear: *clear, Out: os.Stdout}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -54,7 +54,7 @@ func runBindTGUser(o bindTGUserOpts) error {
 		return fmt.Errorf("set telegram_user_id: %w", err)
 	}
 	if o.Clear {
-		fmt.Fprintf(o.Out, "OK — cleared owner binding for %s (TOFU will re-bind on next tap in their topic).\n", o.Nickname)
+		fmt.Fprintf(o.Out, "OK — владелец снят у %s; привязать нового — bind-tg-user --tg-id=N или в мини-аппе (Доступ).\n", o.Nickname)
 	} else {
 		fmt.Fprintf(o.Out, "OK — bound %s to Telegram user_id=%d.\n", o.Nickname, o.TGUserID)
 	}

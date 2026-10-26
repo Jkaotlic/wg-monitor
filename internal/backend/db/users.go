@@ -33,9 +33,9 @@ type User struct {
 	TelegramThreadID *int64
 	TelegramChatID   *int64
 	// TelegramUserID is the numeric Telegram user id of the router's owner,
-	// captured either via CLI bind-tg-user or via TOFU on the first action
-	// in the owner's per-router topic. NULL until bound; callbacks router
-	// uses it to gate non-admin button taps to the rightful owner.
+	// set via CLI bind-tg-user or in the mini app (Access). NULL until bound;
+	// callbacks router uses it to gate non-admin button taps to the rightful
+	// owner. There is no automatic bind on a tap any more.
 	TelegramUserID *int64
 	CreatedAt      time.Time
 	LastSeenAt     *time.Time
@@ -420,8 +420,8 @@ func (u *UsersRepo) UpdateTelegramTopic(id, chatID, threadID int64) error {
 }
 
 // SetTelegramUserID binds the router to a specific Telegram user id.
-// Used by the callbacks router (TOFU on first owner action) and the
-// `bind-tg-user` CLI. Pass 0 to clear the binding.
+// Used by the `bind-tg-user` CLI and the mini app. Pass 0 to clear the
+// binding; nothing re-binds it automatically afterwards.
 func (u *UsersRepo) SetTelegramUserID(id, tgUserID int64) error {
 	if tgUserID == 0 {
 		_, err := u.d.db.Exec(`UPDATE users SET telegram_user_id = NULL WHERE id = ?`, id)
