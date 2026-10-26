@@ -220,3 +220,29 @@ func TestCache_OnlyPrereleasesIsError(t *testing.T) {
 		t.Fatal("ожидалась ошибка: стабильных релизов нет")
 	}
 }
+
+// Если TTL кэша короче 5 минут, ошибка живёт TTL, а не negativeTTL.
+func TestCache_ErrorTTLShorterThanNegative(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+	c := NewCache(2*time.Minute, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=10"
+	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return clock }
+	if _, err := c.Latest(context.Background(), "x"); err == nil {
+		t.Fatal("ожидалась ошибка")
+	}
+	clock = clock.Add(time.Minute + 59*time.Second)
+	if _, err := c.Latest(context.Background(), "x"); err == nil || hits != 1 {
+		t.Fatalf("до TTL ошибка из кэша: err=%v hits=%d", err, hits)
+	}
+	clock = clock.Add(2 * time.Second) // 2 мин 1 с
+	_, _ = c.Latest(context.Background(), "x")
+	if hits != 2 {
+		t.Fatalf("после TTL (2 мин) нужен новый запрос, hits=%d", hits)
+	}
+}
