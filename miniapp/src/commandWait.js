@@ -55,7 +55,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // settled -- дождались ли ответа не «в процессе». Ошибка запроса -- исключение.
 export async function repeatWhilePending(
   once,
-  { pending, deadlineMs = 120_000, pauseMs = 1500, alive = () => true, now = () => Date.now(), sleep = pause } = {},
+  { pending, deadlineMs = 120_000, pauseMs = COMMAND_POLL_PAUSE_MS, alive = () => true, now = () => Date.now(), sleep = pause } = {},
 ) {
   const until = now() + deadlineMs
   let resp = null
