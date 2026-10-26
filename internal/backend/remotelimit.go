@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"expvar"
 	"log/slog"
 	"net"
 	"net/http"
@@ -202,19 +203,19 @@ func clientRateKeyOpt(r *http.Request, trustForwarded bool) string {
 	return remote
 }
 
+// forwardedObs -- счётчики присутствия X-Forwarded-For и «уже писали» разовых
+// записей. Отдельным значением, чтобы тест держал свой экземпляр и не трогал
+// глобальный expvar.
+type forwardedObs struct {
+	present, absent *expvar.Int
+	loggedPresent   atomic.Bool
+	loggedAbsent    atomic.Bool
+}
+
 // Разовые записи в журнал: первый запрос за прокси с X-Forwarded-For и первый
 // без него. Живьём не известно, дописывает ли его KeenDNS; следующий взгляд в
 // журнал должен ответить на это без новой раскопки.
-var (
-	loggedXFFPresent atomic.Bool
-	loggedXFFAbsent  atomic.Bool
-)
-
-// resetForwardedObs -- для тестов: забыть, что уже писали.
-func resetForwardedObs() {
-	loggedXFFPresent.Store(false)
-	loggedXFFAbsent.Store(false)
-}
+var forwardedObsDefault = &forwardedObs{present: metricRemoteXFFPresent, absent: metricRemoteXFFAbsent}
 
 // redactForwardedChain прячет адреса цепочки до сети: IPv4 до /24, IPv6 до /64.
 func redactForwardedChain(chain string) string {
@@ -236,21 +237,25 @@ func redactForwardedChain(chain string) string {
 // noteForwardedPresence считает запросы за прокси (частный RemoteAddr) с
 // X-Forwarded-For и без и один раз на процесс пишет по примеру каждого.
 func noteForwardedPresence(r *http.Request, logger *slog.Logger) {
+	forwardedObsDefault.note(r, logger)
+}
+
+func (o *forwardedObs) note(r *http.Request, logger *slog.Logger) {
 	rip := net.ParseIP(remoteRateKey(r.RemoteAddr))
 	if rip == nil || !trustedHop(rip) {
 		return
 	}
 	chain := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 	if strings.TrimSpace(chain) == "" {
-		metricRemoteXFFAbsent.Add(1)
-		if logger != nil && loggedXFFAbsent.CompareAndSwap(false, true) {
+		o.absent.Add(1)
+		if logger != nil && o.loggedAbsent.CompareAndSwap(false, true) {
 			logger.Info("вход: запрос за прокси без X-Forwarded-For",
 				"proxy", redactForwardedChain(remoteRateKey(r.RemoteAddr)))
 		}
 		return
 	}
-	metricRemoteXFFPresent.Add(1)
-	if logger != nil && loggedXFFPresent.CompareAndSwap(false, true) {
+	o.present.Add(1)
+	if logger != nil && o.loggedPresent.CompareAndSwap(false, true) {
 		logger.Info("вход: запрос за прокси с X-Forwarded-For",
 			"proxy", redactForwardedChain(remoteRateKey(r.RemoteAddr)),
 			"chain", redactForwardedChain(chain))

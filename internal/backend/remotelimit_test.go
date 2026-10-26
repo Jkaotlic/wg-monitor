@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"expvar"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -382,14 +383,13 @@ func TestRedactForwardedChainTo24(t *testing.T) {
 
 // Счётчики и разовый журнал: по запросам с частным RemoteAddr.
 func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
-	resetForwardedObs()
+	o := useLocalForwardedObs(t)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	l := newRemoteRateLimiter(100, 100)
 	h := remoteRateLimitMiddleware(l, logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
-	p0, a0 := metricRemoteXFFPresent.Value(), metricRemoteXFFAbsent.Value()
 	for i := 0; i < 3; i++ {
 		hitVia(h, "192.168.1.1:1", "203.0.113.77")
 	}
@@ -397,10 +397,10 @@ func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
 		hitVia(h, "192.168.1.1:1", "")
 	}
 	hitVia(h, "198.51.100.9:1", "203.0.113.5") // публичный RemoteAddr не считается
-	if d := metricRemoteXFFPresent.Value() - p0; d != 3 {
+	if d := o.present.Value(); d != 3 {
 		t.Fatalf("present +%d, want 3", d)
 	}
-	if d := metricRemoteXFFAbsent.Value() - a0; d != 2 {
+	if d := o.absent.Value(); d != 2 {
 		t.Fatalf("absent +%d, want 2", d)
 	}
 	out := buf.String()
@@ -413,6 +413,17 @@ func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
 	if strings.Contains(out, "203.0.113.77") || !strings.Contains(out, "203.0.113.0/24") {
 		t.Fatalf("адрес не отредактирован до /24:\n%s", out)
 	}
+}
+
+// useLocalForwardedObs подменяет глобальные счётчики своим экземпляром на время
+// теста: опубликованный expvar не читается и не сбрасывается.
+func useLocalForwardedObs(t *testing.T) *forwardedObs {
+	t.Helper()
+	o := &forwardedObs{present: new(expvar.Int), absent: new(expvar.Int)}
+	prev := forwardedObsDefault
+	forwardedObsDefault = o
+	t.Cleanup(func() { forwardedObsDefault = prev })
+	return o
 }
 
 func hitVia(h http.Handler, remote, xff string) {
