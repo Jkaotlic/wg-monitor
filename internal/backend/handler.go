@@ -1238,6 +1238,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 						}
 					}
 					if startRepair != nil {
+						// Доставку оборвала остановка бэкенда: движок починки
+						// в окне слива никто не дождётся, он стартует при
+						// следующем отчёте после перезапуска.
+						if ctx.Err() != nil {
+							d.Logger.Info("автопочинка не начата: бэкенд останавливается",
+								"nickname", nick, "check", checkName)
+							return
+						}
 						startRepair()
 					}
 				})

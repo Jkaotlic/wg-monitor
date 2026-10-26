@@ -2006,6 +2006,12 @@ func TestReportRejectsTooLarge(t *testing.T) {
 // два провала уже записаны, третий придёт отчётом.
 func hardReportEnv(t *testing.T, checkName string, start func(linkrepair.StartReq) (string, error)) (*httptest.Server, string) {
 	t.Helper()
+	return hardReportEnvCtx(t, checkName, start, nil)
+}
+
+// hardReportEnvCtx -- то же, но с заданным контекстом остановки бэкенда.
+func hardReportEnvCtx(t *testing.T, checkName string, start func(linkrepair.StartReq) (string, error), shutdown context.Context) (*httptest.Server, string) {
+	t.Helper()
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	t.Cleanup(func() { _ = d.Close() })
 	tok := "3030303030303030303030303030303030303030303030303030303030303030"
@@ -2023,6 +2029,7 @@ func hardReportEnv(t *testing.T, checkName string, start func(linkrepair.StartRe
 		Dispatcher:      &fakeDisp{db: d},
 		Thresholds:      state.Thresholds{Fail: 3, Recovery: 2},
 		StartLinkRepair: start,
+		ShutdownCtx:     shutdown,
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -2072,6 +2079,28 @@ func TestHardTransition_StartsAutoRepair(t *testing.T) {
 	}
 	if got.AgentVersion != "v0.19.7" {
 		t.Fatalf("версия агента не доехала: %q", got.AgentVersion)
+	}
+}
+
+// Бэкенд останавливается: доставка тревоги оборвана, и починку в окне слива
+// запускать нельзя -- движок никто не дождётся.
+func TestHardTransition_NoAutoRepairAfterShutdown(t *testing.T) {
+	var mu sync.Mutex
+	started := false
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	srv, tok := hardReportEnvCtx(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		started = true
+		return "job-1", nil
+	}, ctx)
+	postFailingCheck(t, srv, tok, "tunnel_awg12")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if started {
+		t.Fatal("починка запущена после остановки бэкенда")
 	}
 }
 
