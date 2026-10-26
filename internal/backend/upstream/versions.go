@@ -57,7 +57,7 @@ type Cache struct {
 	inflight map[string]chan struct{}
 }
 
-const defaultAPI = "https://api.github.com/repos/%s/releases?per_page=1"
+const defaultAPI = "https://api.github.com/repos/%s/releases?per_page=10"
 const maxGitHubReleasesBodyBytes = 1 << 20
 
 // NewCache builds a Cache wired to the public GitHub API with a 10s timeout
@@ -197,7 +197,9 @@ func (c *Cache) fetch(ctx context.Context, repo string) (string, error) {
 		return "", fmt.Errorf("github %s: %w", repo, err)
 	}
 	var arr []struct {
-		TagName string `json:"tag_name"`
+		TagName    string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
 	}
 	if err := json.Unmarshal(body, &arr); err != nil {
 		return "", fmt.Errorf("decode releases for %s: %w", repo, err)
@@ -205,7 +207,15 @@ func (c *Cache) fetch(ctx context.Context, repo string) (string, error) {
 	if len(arr) == 0 {
 		return "", fmt.Errorf("no releases for %s", repo)
 	}
-	return strings.TrimPrefix(strings.TrimPrefix(arr[0].TagName, "V"), "v"), nil
+	// Бета и черновик не предлагаются как «новая версия» (BACK-08): берём
+	// первый стабильный релиз из последних десяти.
+	for _, r := range arr {
+		if r.Prerelease || r.Draft || r.TagName == "" {
+			continue
+		}
+		return strings.TrimPrefix(strings.TrimPrefix(r.TagName, "V"), "v"), nil
+	}
+	return "", fmt.Errorf("no stable releases for %s", repo)
 }
 
 func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {

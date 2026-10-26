@@ -190,3 +190,33 @@ func TestCache_ErrorCachedOnlyNegativeTTL(t *testing.T) {
 		t.Fatalf("через 5 мин 1 с нужен новый запрос: v=%q err=%v hits=%d", v, err, hits)
 	}
 }
+
+// BACK-08: pre-release и черновик не считаются «последней версией».
+func TestCache_SkipsPrereleaseAndDraft(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"tag_name": "v2.21.0", "draft": true},
+			{"tag_name": "v2.20.0-rc1", "prerelease": true},
+			{"tag_name": "v2.19.16"},
+		})
+	}))
+	defer srv.Close()
+	c := NewCache(time.Hour, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=10"
+	v, err := c.Latest(context.Background(), "x")
+	if err != nil || v != "2.19.16" {
+		t.Fatalf("got %q err=%v, want 2.19.16", v, err)
+	}
+}
+
+func TestCache_OnlyPrereleasesIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"tag_name": "v1.0.0-rc1", "prerelease": true}})
+	}))
+	defer srv.Close()
+	c := NewCache(time.Hour, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=10"
+	if _, err := c.Latest(context.Background(), "x"); err == nil {
+		t.Fatal("ожидалась ошибка: стабильных релизов нет")
+	}
+}
