@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { sendCommand, fetchCommandResult, isTransient, COMMAND_GONE_TEXT } from './api.js'
-import { asleepNote, SENT_NO_RESULT_TEXT } from './maintenance.js'
+import { asleepNote, SENT_NO_RESULT_TEXT, COMMAND_DEADLINE_TEXT } from './maintenance.js'
 import { errorText, SESSION_TEXT } from './errorText.js'
 import { JOB_POLL_MS, retryPauseMs } from './jobPoll.js'
 
@@ -97,7 +97,7 @@ export function useCommand(routerID) {
         }
       }
       if (aliveRef.current) {
-        setError(lostPoll ? SENT_NO_RESULT_TEXT : 'Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.')
+        setError(lostPoll ? SENT_NO_RESULT_TEXT : COMMAND_DEADLINE_TEXT)
       }
     } catch (err) {
       if (aliveRef.current) {

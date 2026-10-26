@@ -118,6 +118,22 @@ describe('useCommand: сбой опроса после постановки', ()
     expect(text()).toBe(SENT_PHRASE)
   })
 
+  it('commandFailText: sent и текст дедлайна -- как есть (он уже говорит «выполнится позже»)', () => {
+    const deadline = 'Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.'
+    expect(commandFailText({ sent: true, errorCode: null, error: deadline })).toBe(deadline)
+  })
+
+  it('дедлайн без сбоев опроса -- на экране текст дедлайна, не общий «ушла»', async () => {
+    mocks.poll = [null]
+    await mount()
+    let p
+    await act(async () => { p = api.run('x', {}, { deadlineMs: 3000 }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    await p
+    expect(api.sent).toBe(true)
+    expect(text()).toMatch(/^Не дождались ответа за отведённое время/)
+  })
+
   it('429 на опросе -- следующий опрос через JOB_POLL_RATE_LIMIT_MS, не через обычную паузу', async () => {
     const { JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS } = await import('../src/jobPoll.js')
     mocks.poll = [new ApiError(429, 'rate_limited', 'x'), { status: 'ok', output: '' }]

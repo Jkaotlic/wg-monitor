@@ -406,13 +406,17 @@ export function commandErrorText(code) {
 // выполнить, повторное нажатие выполнило бы её дважды.
 export const SENT_NO_RESULT_TEXT = 'Команда ушла на роутер, но ответ не получен — откройте экран позже, чтобы увидеть итог.'
 
+// Дедлайн ожидания вышел без сбоев опроса: фраза сама говорит, что команда
+// выполнится позже, и подменять её общим SENT_NO_RESULT_TEXT нельзя.
+export const COMMAND_DEADLINE_TEXT = 'Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.'
+
 // Одна фраза отказа для листа и экранов (MINI-01). sent -- команда уже
 // поставлена: «Команда не отправлена» тут было бы неправдой.
 export function commandFailText({ sent, errorCode, error }) {
   // Команда уже поставлена: любой сбой опроса, кроме «сессия истекла» и
   // «команда исчезла», читается как «ушла, итога нет», а не как приглашение
   // нажать ещё раз (команда могла выполниться).
-  if (sent) return error === SESSION_TEXT || error === COMMAND_GONE_TEXT ? error : SENT_NO_RESULT_TEXT
+  if (sent) return error === SESSION_TEXT || error === COMMAND_GONE_TEXT || error === COMMAND_DEADLINE_TEXT ? error : SENT_NO_RESULT_TEXT
   return commandErrorText(errorCode) || (errorCode ? 'Команда не отправлена' : error)
 }
 
