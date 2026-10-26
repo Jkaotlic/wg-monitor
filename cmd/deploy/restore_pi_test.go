@@ -704,3 +704,21 @@ func TestRestoreToPiPreflightDockerPermissionVsMissingContainer(t *testing.T) {
 		}
 	}
 }
+
+func TestActionRestoreBackupRejectsYesOutsideCurrent(t *testing.T) {
+	connects := stubRestoreConnect(t, newFakeRemote())
+	archive := writeRestoreBackupArchive(t, piArchiveMembers())
+	for _, opts := range []RestoreBackupOptions{
+		{ArchivePath: archive, Mode: "new", Yes: true},
+		{ArchivePath: archive, Mode: "dry-run", DryRun: true, Yes: true},
+		{ArchivePath: archive, Yes: true},
+	} {
+		err := actionRestoreBackup(piState(), nil, nil, opts)
+		if err == nil || !strings.Contains(err.Error(), "--yes подтверждает только --to-current-vps") {
+			t.Fatalf("opts=%+v: err=%v", opts, err)
+		}
+	}
+	if *connects != 0 {
+		t.Fatalf("подключений: %d", *connects)
+	}
+}
