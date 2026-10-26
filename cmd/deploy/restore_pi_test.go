@@ -675,3 +675,29 @@ func TestRestorePreviewOnPiWarnsSealedStoresEvenWithKeyInArchive(t *testing.T) {
 		t.Fatalf("открытые хранилища -- строки нет:\n%s", p)
 	}
 }
+
+func TestRestoreToPiPreflightDockerPermissionVsMissingContainer(t *testing.T) {
+	for _, tc := range []struct{ stderr, want, wrong string }{
+		{"permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/containers/wg-monitor-backend/json\": dial unix /var/run/docker.sock: connect: permission denied\n",
+			"нет прав на docker (нужен root или группа docker)", "нет контейнера"},
+		{"Error: No such object: wg-monitor-backend\n", "нет контейнера wg-monitor-backend", "нет прав"},
+	} {
+		stubRestoreConfirm(t, true)
+		fake := newFakeRemote()
+		fake.reply = func(cmd string) (string, string, int, error) {
+			if strings.Contains(cmd, "docker inspect") {
+				return "", tc.stderr, 1, nil
+			}
+			return piReply("ok\n", "200")(cmd)
+		}
+		stubRestoreConnect(t, fake)
+		b := inspectPiArchive(t, piArchiveMembers())
+		err := restoreBackupToCurrentVPS(piState(), nil, b, false)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tc.wrong) {
+			t.Fatalf("stderr %q: err=%v", tc.stderr, err)
+		}
+		if fake.indexOfCall("docker stop") >= 0 || strings.Contains(strings.Join(fake.calls, "\n"), "upload:") {
+			t.Fatalf("после отказа проверки ничего не делается:\n%s", strings.Join(fake.calls, "\n"))
+		}
+	}
+}

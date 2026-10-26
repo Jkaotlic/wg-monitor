@@ -257,12 +257,19 @@ func piRestorePreflight(s remoteExec, base string) (running bool, err error) {
 	var out string
 	for _, c := range checks {
 		var rc int
-		out, _, rc, err = s.Run(c.cmd)
+		var stderr string
+		out, stderr, rc, err = s.Run(c.cmd)
 		if err != nil {
 			return false, fmt.Errorf("проверка до остановки: %w", err)
 		}
 		if rc != 0 {
-			return false, errors.New("проверка до остановки не прошла, ничего не менялось: " + c.why)
+			why := c.why
+			// docker inspect без прав на сокет падает так же, как без
+			// контейнера: «нет контейнера» увело бы чинить не то.
+			if strings.HasPrefix(c.cmd, "docker ") && strings.Contains(strings.ToLower(stderr), "permission denied") {
+				why = "нет прав на docker (нужен root или группа docker)"
+			}
+			return false, errors.New("проверка до остановки не прошла, ничего не менялось: " + why)
 		}
 	}
 	PrintOK("sqlite3, docker и каталог data/ на месте")
