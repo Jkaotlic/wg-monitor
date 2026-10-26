@@ -68,6 +68,18 @@ type verifyCounts struct {
 	// SealNote -- строка вывода про зашифрованные хранилища кабинетов;
 	// пусто -- зашифрованных в архиве нет.
 	SealNote string
+	// Sealed -- итог пробного открытия зашифрованных хранилищ для файла
+	// состояния; nil -- зашифрованных в архиве нет (или до них не дошло).
+	Sealed *sealedCheck
+}
+
+// sealedCheck -- открылись ли зашифрованные хранилища архива текущим
+// ключом шифрования сервера. Note -- короткая фраза для файла состояния:
+// имена хранилищ, без путей и содержимого.
+type sealedCheck struct {
+	Open       bool
+	KeyMissing bool
+	Note       string
 }
 
 // runBackupVerify разворачивает последний малый архив во временный каталог
@@ -109,6 +121,12 @@ func runBackupVerify(ctx context.Context, opts backupVerifyOptions) error {
 	at := opts.now().UTC().Format(time.RFC3339)
 	serr := backup.UpdateStatus(backup.StatusPath(dbPath), func(s *backup.Status) {
 		s.Verify = backup.VerifyStatus{LastRunAt: at, OK: verr == nil, Routers: counts.Routers}
+		if c := counts.Sealed; c != nil {
+			open := c.Open
+			s.Verify.SealedStoresOpen = &open
+			s.Verify.SealedKeyMissing = c.KeyMissing
+			s.Verify.SealedStoresNote = backup.StatusErrorText(c.Note)
+		}
 		if verr != nil {
 			s.Verify.Error = backup.StatusErrorText(verr.Error())
 		}
@@ -220,7 +238,8 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 		}
 	}
 	if len(sealed) > 0 {
-		note, err := verifySealedStores(tmpDir, sealed, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot))
+		note, check, err := verifySealedStores(tmpDir, sealed, resolveLayoutPath(cfg.Revive.KeyFile, opts.LayoutRoot))
+		counts.Sealed = &check
 		if err != nil {
 			return archive, counts, err
 		}
@@ -241,39 +260,47 @@ func verifyLatestSmall(ctx context.Context, opts backupVerifyOptions, cfg *backe
 // расшифровываются ключом шифрования этой машины (revive.key вне архива,
 // вариант А) и разбираются как JSON. Ключа нет -- не провал, а слова: без
 // него после восстановления ключи кабинетов не прочитать. Ключ не тот или
-// внутри не JSON -- провал. Возвращает строку для вывода.
-func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (string, error) {
+// внутри не JSON -- провал. Возвращает строку для вывода и итог для файла
+// состояния (он заполнен и при ошибке). Расшифрованное только проверяется
+// на JSON и сразу затирается: ни в вывод, ни в журнал оно не идёт.
+func verifySealedStores(tmpDir string, names []string, liveKeyPath string) (string, sealedCheck, error) {
 	list := strings.Join(names, ", ")
+	closed := func(note string) sealedCheck { return sealedCheck{Note: note} }
 	key, err := revive.LoadKey(liveKeyPath)
 	if err != nil && !errors.Is(err, revive.ErrKeyNotConfigured) && !errors.Is(err, os.ErrNotExist) {
 		// Файл ключа есть, но битый (не base64, не та длина) -- это не
 		// «ключа нет»: с таким ключом бэкенд кабинеты не прочитает.
-		return "", fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
+		return "", closed("ключ шифрования на сервере негоден: хранилища из архива (" + list + ") не открываются"),
+			fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
 	}
 	if err != nil {
-		return "хранилища кабинетов в архиве зашифрованы (" + list + "), а ключа шифрования на этой машине нет: после восстановления ключи кабинетов не прочитать, пока на сервер не вернётся прежний revive.key", nil
+		return "хранилища кабинетов в архиве зашифрованы (" + list + "), а ключа шифрования на этой машине нет: после восстановления ключи кабинетов не прочитать, пока на сервер не вернётся прежний revive.key",
+			sealedCheck{KeyMissing: true, Note: "ключа нет на сервере: хранилища из архива (" + list + ") не открыть, пока не вернётся прежний revive.key"}, nil
 	}
 	box, err := revive.NewBox(key)
 	clear(key)
 	if err != nil {
-		return "", fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
+		return "", closed("ключ шифрования на сервере негоден: хранилища из архива (" + list + ") не открываются"),
+			fmt.Errorf("ключ шифрования этой машины негоден: %w", err)
 	}
 	for _, name := range names {
 		body, err := os.ReadFile(filepath.Join(tmpDir, name)) // #nosec G304 -- имя из манифеста, присутствие в архиве проверено
 		if err != nil {
-			return "", fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
+			return "", closed("хранилище " + name + " из архива не читается"), fmt.Errorf("хранилище %s из архива не читается: %w", name, err)
 		}
 		plain, err := sealedfile.DecodeWith(box, name, body)
 		if err != nil {
-			return "", fmt.Errorf("хранилище %s из архива не расшифровывается ключом шифрования этой машины: после восстановления ключи кабинетов не прочитать", name)
+			return "", closed("хранилища из архива (" + list + ") не открываются текущим ключом шифрования: " + name + " не расшифровывается"),
+				fmt.Errorf("хранилище %s из архива не расшифровывается ключом шифрования этой машины: после восстановления ключи кабинетов не прочитать", name)
 		}
 		ok := json.Valid(plain)
 		clear(plain)
 		if !ok {
-			return "", fmt.Errorf("хранилище %s из архива -- не JSON после расшифровки", name)
+			return "", closed("хранилище " + name + " из архива -- не JSON после расшифровки"), fmt.Errorf("хранилище %s из архива -- не JSON после расшифровки", name)
 		}
 	}
-	return "хранилища кабинетов в архиве зашифрованы (" + list + ") и расшифровываются ключом шифрования этой машины; самого ключа в архиве нет -- храните revive.key отдельно: без него ключи кабинетов не прочитать", nil
+	return "хранилища кабинетов в архиве зашифрованы (" + list + ") и расшифровываются ключом шифрования этой машины; самого ключа в архиве нет -- храните revive.key отдельно: без него ключи кабинетов не прочитать",
+		sealedCheck{Open: true, Note: "хранилища из архива (" + list + ") открываются текущим ключом шифрования; самого ключа в архиве нет"}, nil
 }
 
 // readManifest разбирает manifest.txt (строки key=value) архива.

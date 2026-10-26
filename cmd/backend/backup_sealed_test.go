@@ -97,3 +97,100 @@ func TestBackupVerifySealedStoresBrokenKey(t *testing.T) {
 	mustWrite(t, f.keyPath, "not-base64-at-all!\n")
 	f.verifyFails(t, "ключ шифрования этой машины негоден")
 }
+
+// v0.62 (BACK-04): итог пробного открытия зашифрованных хранилищ ложится в
+// backup-status.json -- экран видит его до аварии, а не после неё. Секретов
+// в файле состояния нет ни в каком исходе.
+func TestBackupVerifyRecordsSealedStoresOpen(t *testing.T) {
+	setIncludeReviveKey(t, false)
+	statusBody := func(t *testing.T, f *backupFixture) string {
+		t.Helper()
+		body, err := os.ReadFile(f.statusFilePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"PREMIUM-KEY", "203.0.113.7", "panel.example.com", "1234567890", fixturePassphrase} {
+			if strings.Contains(string(body), secret) {
+				t.Fatalf("секрет %q в файле состояния:\n%s", secret, body)
+			}
+		}
+		return string(body)
+	}
+	t.Run("ключ тот", func(t *testing.T) {
+		f := newBackupFixture(t)
+		f.sealFixtureStores(t)
+		f.backupSmall(t)
+		if err := runBackupVerify(context.Background(), f.verifyOpts(&bytes.Buffer{})); err != nil {
+			t.Fatal(err)
+		}
+		v := f.status(t).Verify
+		if v.SealedStoresOpen == nil || !*v.SealedStoresOpen || v.SealedKeyMissing {
+			t.Fatalf("состояние: %+v", v)
+		}
+		if !strings.Contains(v.SealedStoresNote, "открываются текущим ключом") {
+			t.Fatalf("заметка: %q", v.SealedStoresNote)
+		}
+		if !strings.Contains(statusBody(t, f), `"sealed_stores_open": true`) {
+			t.Fatal("в файле нет sealed_stores_open: true")
+		}
+	})
+	t.Run("ключа нет на сервере", func(t *testing.T) {
+		f := newBackupFixture(t)
+		f.sealFixtureStores(t)
+		f.backupSmall(t)
+		if err := os.Remove(f.keyPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := runBackupVerify(context.Background(), f.verifyOpts(&bytes.Buffer{})); err != nil {
+			t.Fatalf("нет ключа -- не провал проверки: %v", err)
+		}
+		v := f.status(t).Verify
+		if v.SealedStoresOpen == nil || *v.SealedStoresOpen || !v.SealedKeyMissing || !v.OK {
+			t.Fatalf("состояние: %+v", v)
+		}
+		if !strings.Contains(v.SealedStoresNote, "ключа нет на сервере") {
+			t.Fatalf("заметка: %q", v.SealedStoresNote)
+		}
+		statusBody(t, f)
+	})
+	t.Run("ключ не тот", func(t *testing.T) {
+		f := newBackupFixture(t)
+		f.sealFixtureStores(t)
+		f.backupSmall(t)
+		mustWrite(t, f.keyPath, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, revive.KeySize))+"\n")
+		f.verifyFails(t, "не расшифровывается ключом шифрования этой машины")
+		v := f.status(t).Verify
+		if v.SealedStoresOpen == nil || *v.SealedStoresOpen || v.SealedKeyMissing {
+			t.Fatalf("состояние: %+v", v)
+		}
+		if !strings.Contains(v.SealedStoresNote, "не открываются текущим ключом") {
+			t.Fatalf("заметка: %q", v.SealedStoresNote)
+		}
+		statusBody(t, f)
+	})
+	t.Run("ключ испорчен", func(t *testing.T) {
+		f := newBackupFixture(t)
+		f.sealFixtureStores(t)
+		f.backupSmall(t)
+		mustWrite(t, f.keyPath, "not-base64-at-all!\n")
+		f.verifyFails(t, "ключ шифрования этой машины негоден")
+		v := f.status(t).Verify
+		if v.SealedStoresOpen == nil || *v.SealedStoresOpen || v.SealedKeyMissing {
+			t.Fatalf("состояние: %+v", v)
+		}
+	})
+	t.Run("зашифрованных нет", func(t *testing.T) {
+		f := newBackupFixture(t)
+		f.backupSmall(t)
+		if err := runBackupVerify(context.Background(), f.verifyOpts(&bytes.Buffer{})); err != nil {
+			t.Fatal(err)
+		}
+		v := f.status(t).Verify
+		if v.SealedStoresOpen != nil || v.SealedKeyMissing || v.SealedStoresNote != "" {
+			t.Fatalf("состояние: %+v", v)
+		}
+		if strings.Contains(statusBody(t, f), "sealed_stores") {
+			t.Fatal("поле sealed_stores_* без зашифрованных хранилищ")
+		}
+	})
+}

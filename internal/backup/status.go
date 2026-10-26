@@ -67,6 +67,17 @@ type VerifyStatus struct {
 	Error     string `json:"error"`
 	// Routers -- сколько роутеров в проверенном архиве.
 	Routers int `json:"routers"`
+	// SealedStoresOpen -- открываются ли зашифрованные хранилища из архива
+	// (ключи кабинетов, панелей VPS, своих VPS) текущим ключом шифрования
+	// сервера (revive.key; в архив он не кладётся). nil -- зашифрованных
+	// хранилищ в архиве нет или проверка до них не дошла.
+	SealedStoresOpen *bool `json:"sealed_stores_open,omitempty"`
+	// SealedKeyMissing -- зашифрованные есть, а ключа на сервере нет вовсе
+	// (отдельное состояние: «ключа нет на сервере», а не «ключ не тот»).
+	SealedKeyMissing bool `json:"sealed_key_missing,omitempty"`
+	// SealedStoresNote -- итог словами: имена хранилищ, без путей и
+	// содержимого.
+	SealedStoresNote string `json:"sealed_stores_note,omitempty"`
 }
 
 // StatusPath -- путь файла состояния для базы dbPath.
