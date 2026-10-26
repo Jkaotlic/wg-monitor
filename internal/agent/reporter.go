@@ -187,10 +187,42 @@ func (r *Reporter) regularOverdue() bool {
 // по-честному, как в SendNow; свежий пингчек awg-manager пинается всегда.
 // Ошибка -- отчёт не дошёл до сервера: проверка на бэкенде не обновилась, и
 // команда не должна отвечать успехом.
+//
+// Замок отправки ждётся под ctx (срок команды): плановый отчёт, висящий на
+// медленном роутере, не съедает весь срок молча. Если пока ждали, плановый
+// отчёт дошёл до сервера (после нажатия) -- это и есть свежая проверка:
+// успех без второго POST.
 func (r *Reporter) ForceReport(ctx context.Context) error {
-	r.sendOnceMu.Lock()
+	asked := time.Now()
+	for !r.sendOnceMu.TryLock() {
+		if r.reportLandedSince(asked) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if r.reportLandedSince(asked) {
+				return nil
+			}
+			return ctx.Err()
+		case <-time.After(forceReportLockPoll):
+		}
+	}
 	defer r.sendOnceMu.Unlock()
+	if r.reportLandedSince(asked) {
+		return nil
+	}
 	return r.sendOnceLocked(ctx, "", true)
+}
+
+// forceReportLockPoll -- как часто ForceReport заглядывает за занятый замок.
+const forceReportLockPoll = 50 * time.Millisecond
+
+// reportLandedSince -- плановый (не хук) отчёт дошёл до сервера после t:
+// lastReportAt ставится только по успешной доставке.
+func (r *Reporter) reportLandedSince(t time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastReportAt.After(t)
 }
 
 // SendNow -- внеплановый отчёт без принудительного Resumed (AG-05): после

@@ -248,8 +248,10 @@ func TestReporterForceReportNeverLabelledHookUnderConcurrency(t *testing.T) {
 	close(s.block)
 	wg.Wait()
 	reps := s.snapshot()
-	if len(reps) != 3 {
-		t.Fatalf("отчётов %d, хотим 3", len(reps))
+	// Принудительный может засчитать плановый, дошедший пока он ждал замка
+	// (ревью задачи 13), -- тогда отчётов два.
+	if len(reps) < 2 {
+		t.Fatalf("отчётов %d, хотим 2-3", len(reps))
 	}
 	// Плановый и принудительный идут без метки, хук -- ровно один: лишняя
 	// метка hook означала бы, что принудительный отчёт ушёл мимо автомата.

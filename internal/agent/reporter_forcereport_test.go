@@ -75,3 +75,52 @@ func TestReporterForceReportDeliveredWithoutResumed(t *testing.T) {
 		t.Fatalf("пингчек awg-manager пнут %d раз, want 1", kicks.Load())
 	}
 }
+
+// Ревью задачи 13: «Проверить ещё раз» нажата, пока плановый отчёт в пути.
+// Отчёт дошёл после нажатия -- это и есть свежая проверка: ok без второго
+// POST, а не «не дошёл» по исчерпанному сроку команды за замком отправки.
+func TestReporterForceReportCountsScheduledReportLandedWhileWaiting(t *testing.T) {
+	s := &recSender{block: make(chan struct{})}
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
+	done := make(chan struct{})
+	go func() { r.sendOnce(context.Background()); close(done) }() // плановый, висит на POST
+	time.Sleep(30 * time.Millisecond)
+	errc := make(chan error, 1)
+	go func() { errc <- r.ForceReport(context.Background()) }()
+	time.Sleep(30 * time.Millisecond)
+	close(s.block)
+	<-done
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("плановый отчёт дошёл после нажатия, а ForceReport: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ForceReport не вернулся")
+	}
+	if n := len(s.snapshot()); n != 1 {
+		t.Fatalf("POST отчёта %d, want 1 (дошедший плановый засчитан)", n)
+	}
+}
+
+// Срок команды кончился за замком, пока плановый отчёт висит: ошибка, а не
+// вечное ожидание.
+func TestReporterForceReportGivesUpWithContextWhileWaiting(t *testing.T) {
+	s := &recSender{block: make(chan struct{})}
+	defer close(s.block)
+	r := NewReporter(ReporterConfig{Sender: s, Version: "test", Interval: time.Hour})
+	go r.sendOnce(context.Background())
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- r.ForceReport(ctx) }()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("отчёт не дошёл, а ForceReport ответил успехом")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ForceReport висит за замком дольше срока команды")
+	}
+}

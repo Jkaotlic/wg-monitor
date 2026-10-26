@@ -139,6 +139,24 @@ func TestRunner_ForceRecheck_ReportNotDeliveredIsErr(t *testing.T) {
 	}
 }
 
+// Ревью задачи 13: отчёт может ждать планового за замком отправки и пинка
+// пингчека -- 45 с по умолчанию мало, как и для diag_now.
+func TestRunner_ForceRecheck_GetsLongerBudget(t *testing.T) {
+	var left time.Duration
+	r := Runner{
+		Now: mockNow(),
+		ForceRecheck: func(ctx context.Context) error {
+			d, _ := ctx.Deadline()
+			left = time.Until(d)
+			return nil
+		},
+	}
+	r.Execute(context.Background(), wire.Command{ID: "c5", Action: "force_recheck"})
+	if left < 70*time.Second {
+		t.Fatalf("срок force_recheck %v, want ~75 с", left)
+	}
+}
+
 func TestRunner_ForceRecheck_NilCallbackErrs(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c4", Action: "force_recheck"})

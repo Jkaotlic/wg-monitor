@@ -198,6 +198,10 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"self_update":       600 * time.Second,
 	"firmware_install":  600 * time.Second,
 	"diag_now":          75 * time.Second,
+	// force_recheck: отчёт может ждать планового за замком отправки, потом
+	// пинок пингчека, все проверки и POST -- на медленном роутере за 45 с
+	// не укладывается, и команда врала бы «не дошёл» (ревью задачи 13 v0.62).
+	"force_recheck": 75 * time.Second,
 	// dns_reset: до восьми снятий и восьми постановок через ndmc, сохранение
 	// и два чтения running-config -- на медленном роутере дольше 45 с
 	// (AGENT-03), а обрыв посередине оставил бы DNS наполовину.
