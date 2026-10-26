@@ -41,3 +41,32 @@ func TestSeedBackupStatusModes(t *testing.T) {
 		t.Fatal("неизвестный режим принят")
 	}
 }
+
+// v0.62 (BACK-04): режимы для строк про ключ шифрования в карточке «Бэкенд».
+func TestSeedBackupStatusSealedModes(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	load := func(mode string) backup.Status {
+		t.Helper()
+		db := filepath.Join(t.TempDir(), "sandbox.db")
+		if err := seedBackupStatus(db, mode, now); err != nil {
+			t.Fatal(err)
+		}
+		s, err := backup.LoadStatus(sandboxBackupPath(db))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if s := load("sealed-closed"); s.Verify.OK || s.Verify.SealedStoresOpen == nil || *s.Verify.SealedStoresOpen || s.Verify.SealedKeyMissing || !s.Small.OK {
+		t.Fatalf("sealed-closed: %+v", s.Verify)
+	}
+	if s := load("sealed-nokey"); !s.Verify.OK || s.Verify.SealedStoresOpen == nil || *s.Verify.SealedStoresOpen || !s.Verify.SealedKeyMissing {
+		t.Fatalf("sealed-nokey: %+v", s.Verify)
+	}
+	if s := load("key-in-backup"); !s.ReviveKeyInBackup || !s.Verify.OK {
+		t.Fatalf("key-in-backup: %+v", s)
+	}
+	if s := load("good"); s.ReviveKeyInBackup || s.Verify.SealedStoresOpen == nil || !*s.Verify.SealedStoresOpen {
+		t.Fatalf("good: ключ не в бэкапе, хранилища открываются: %+v", s)
+	}
+}
