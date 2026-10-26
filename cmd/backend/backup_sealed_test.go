@@ -194,3 +194,30 @@ func TestBackupVerifyRecordsSealedStoresOpen(t *testing.T) {
 		}
 	})
 }
+
+// v0.62 (BACK-04): манифест архива с зашифрованными хранилищами честно
+// говорит, что без прежнего revive.key они не откроются, -- а не только про
+// пароли роутеров. Без зашифрованных хранилищ этой строки нет.
+func TestBackupManifestNamesSealedStores(t *testing.T) {
+	setIncludeReviveKey(t, false)
+	f := newBackupFixture(t)
+	f.sealFixtureStores(t)
+	f.backupSmall(t)
+	manifest := string(tarMember(t, f.decryptArchive(t, fixtureSmallName), "manifest.txt"))
+	for _, want := range []string{
+		"sealed_stores=amnezia-premium.json,amnezia-selfhosted.json,awg3-panels.json,hidemyname.json\n",
+		"sealed_stores_note=без прежнего revive.key не откроются: ключи кабинетов, панелей VPS, своих VPS, кодов HideMy\n",
+		"revive_key_note=" + reviveKeyNotInBackupNote + "\n",
+	} {
+		if !strings.Contains(manifest, want) {
+			t.Errorf("в манифесте нет %q:\n%s", want, manifest)
+		}
+	}
+
+	plain := newBackupFixture(t)
+	plain.backupSmall(t)
+	manifest = string(tarMember(t, plain.decryptArchive(t, fixtureSmallName), "manifest.txt"))
+	if !strings.Contains(manifest, "sealed_stores=\n") || !strings.Contains(manifest, "sealed_stores_note=\n") {
+		t.Fatalf("манифест без зашифрованных хранилищ:\n%s", manifest)
+	}
+}

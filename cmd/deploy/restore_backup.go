@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
 	"gopkg.in/yaml.v3"
 )
@@ -542,14 +543,19 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 	if info != nil {
 		size = info.Size()
 	}
-	var stores []string
+	var stores, sealed []string
 	reviveKey := "no (not in the backup: saved router passwords must be entered again after the restore)"
+	keyInArchive := false
 	for _, e := range b.Extras {
 		if e.Name == restoreReviveKey {
-			reviveKey = "yes"
+			reviveKey, keyInArchive = "yes", true
 			continue
 		}
 		stores = append(stores, e.Name)
+		// Только заголовок файла: содержимое хранилищ -- секреты.
+		if ok, err := sealedfile.FileIsSealed(e.LocalPath); err == nil && ok {
+			sealed = append(sealed, e.Name)
+		}
 	}
 	out := fmt.Sprintf(
 		"backup: %s\ncreated: %s\nhost: %s\nbackend: %s\nstate.db: %d bytes\nagents: %d\nstores: %s\nrevive.key: %s",
@@ -562,6 +568,11 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 		emptyDash(strings.Join(stores, ", ")),
 		reviveKey,
 	)
+	if len(sealed) > 0 && !keyInArchive {
+		// v0.62 (BACK-04): ключ шифрования хранилищ в архив не кладётся --
+		// без прежнего revive.key на сервере они не откроются.
+		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " -- " + backup.SealedStoresNote(sealed)
+	}
 	if b.Manifest["kind"] == "small" {
 		out += "\nkind: small (no event history: after restore the screens stay empty until agents report, up to a minute)"
 	}

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/sealedfile"
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
 	"github.com/Jkaotlic/wg-monitor/internal/backup/smalldb"
 )
@@ -127,14 +128,24 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 	}
 	// JSON-хранилища вне базы: панели, свои серверы, ключи кабинетов, коды
 	// HideMy. Файла нет -- не ошибка: хранилище ещё не заводили.
-	var stores []string
+	// Зашифрованные ключом revive.key (v0.55) -- отдельным списком в
+	// манифест: без прежнего ключа они после восстановления не откроются.
+	var stores, sealed []string
 	for _, st := range cfg.StoreFiles() {
-		ok, err := optional(st.Name, resolveLayoutPath(st.Path, opts.LayoutRoot))
+		path := resolveLayoutPath(st.Path, opts.LayoutRoot)
+		ok, err := optional(st.Name, path)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			stores = append(stores, st.Name)
+			isSealed, err := sealedfile.FileIsSealed(path)
+			if err != nil {
+				return nil, fmt.Errorf("read %s: %w", st.Name, err)
+			}
+			if isSealed {
+				sealed = append(sealed, st.Name)
+			}
 		}
 	}
 	// Ключ оживления по правилу в архив не кладётся (см. includeReviveKey).
@@ -157,6 +168,7 @@ func (e *backupEnv) stageMembers(ctx context.Context, kind backup.Kind, tmpDir s
 		DBPath:     cfg.DBPath,
 		ConfigPath: opts.ConfigPath,
 		Stores:     stores,
+		Sealed:     sealed,
 		ReviveKey:  hasKey,
 		Counts:     counts,
 	}); err != nil {
@@ -220,6 +232,7 @@ type manifestInfo struct {
 	DBPath     string
 	ConfigPath string
 	Stores     []string
+	Sealed     []string // зашифрованные из Stores
 	ReviveKey  bool
 	Counts     verifyCounts
 }
@@ -242,8 +255,10 @@ const reviveKeyNotInBackupNote = "ключа оживления в бэкапе 
 // хранилищ и ключа -- секреты.
 func writeManifest(path string, m manifestInfo) error {
 	reviveKey, reviveNote, skipped := "no", reviveKeyNotInBackupNote, ""
+	sealedNote := backup.SealedStoresNote(m.Sealed)
 	if m.ReviveKey {
-		reviveKey, reviveNote = "yes", ""
+		// Ключ в архиве -- зашифрованные хранилища откроются им же.
+		reviveKey, reviveNote, sealedNote = "yes", "", ""
 	}
 	if m.Kind == backup.KindSmall {
 		skipped = strings.Join(smalldb.SkipTables, ",")
@@ -261,6 +276,8 @@ func writeManifest(path string, m manifestInfo) error {
 		{"stores", strings.Join(m.Stores, ",")},
 		{"revive_key", reviveKey},
 		{"revive_key_note", reviveNote},
+		{"sealed_stores", strings.Join(m.Sealed, ",")},
+		{"sealed_stores_note", sealedNote},
 		{"routers", countText(m.Counts.Routers)},
 		{"owners", countText(m.Counts.Owners)},
 		{"operators", countText(m.Counts.Operators)},
