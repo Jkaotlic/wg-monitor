@@ -253,12 +253,12 @@ func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx 
 func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
 	// Очередь общая с обходом напоминаний (alerts.EnqueueDelivery).
 	prev, release := alerts.EnqueueDelivery(userID, checkName)
-	run := func() {
+	// background: доставка в своей горутине ждёт предыдущую той же пары
+	// (роутер, проверка) и только потом отсчитывает свой срок (30 с):
+	// зависший Telegram держит каждый шаг не дольше его срока, вся цепочка
+	// конечна. Остановка бэкенда ожидание прерывает.
+	background := func() {
 		defer release()
-		// Очередь по проверке: эта доставка ждёт предыдущую той же пары
-		// (роутер, проверка). Свой срок (30 с) отсчитывается после ожидания:
-		// зависший Telegram держит каждый шаг не дольше его собственного
-		// срока, и вся цепочка конечна. Остановка бэкенда ожидание прерывает.
 		if prev != nil {
 			select {
 			case <-prev:
@@ -272,17 +272,34 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 	relayWG.Add(1)
 	select {
 	case relaySem <- struct{}{}:
+		go func() {
+			defer relayWG.Done()
+			defer func() { <-relaySem }()
+			background()
+		}()
+		return
 	default:
-		d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
-		defer relayWG.Done()
-		run()
+	}
+	if prev != nil {
+		// Пул полон, но по проверке уже стоит доставка: ждать её на месте
+		// значило бы держать ответ на отчёт всю цепочку. В фон без места в
+		// пуле -- таких горутин не больше, чем доставок в цепочке.
+		d.Logger.Warn("relay pool saturated; alert queued behind same check, delivering in background", "label", label, "limit", relayConcurrencyLimit)
+		go func() {
+			defer relayWG.Done()
+			background()
+		}()
 		return
 	}
-	go func() {
-		defer relayWG.Done()
-		defer func() { <-relaySem }()
-		run()
-	}()
+	// Пул полон, очередь проверки пуста -- доставка на месте, как до v0.62:
+	// отчёт подождёт, тревога дойдёт. Ожидание и доставка -- под одним
+	// сроком, чтобы ответ на отчёт не держался дольше alertDeliveryTimeout.
+	d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
+	defer relayWG.Done()
+	defer release()
+	ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
+	defer cancel()
+	fn(ctx)
 }
 
 // alertQueueLen -- сколько очередей доставки не закончено (для тестов).

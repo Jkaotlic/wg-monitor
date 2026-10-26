@@ -1,9 +1,13 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -208,4 +212,79 @@ func TestAlertDeliveryQueue_RecoveryDoesNotClearNextHard(t *testing.T) {
 	if n := alertQueueLen(); n != 0 {
 		t.Fatalf("очередь доставки не освобождена: %d записей", n)
 	}
+}
+
+// Пул relay полон, а по проверке уже стоит доставка: ждать её на месте
+// значило бы держать ответ на отчёт всю цепочку. Доставка уходит в фон --
+// число таких горутин ограничено самой цепочкой.
+func TestReportNotHeldByQueueWhenPoolFull(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "f412f412f412f412f412f412f412f412f412f412f412f412f412f412f412f412"
+	uid, err := d.Users().Insert("fullpool", tok, "198.51.100.46", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.State().Save(uid, "dns", db.IncidentState{CurrentStatus: "fail", ConsecutiveFails: 1}); err != nil {
+		t.Fatal(err)
+	}
+	sink := &stuckTelegram{release: make(chan struct{}), delivered: make(chan string, 1)}
+	close(sink.release) // Telegram отвечает сразу
+	disp := alerts.NewDispatcher(d, nil, alerts.Config{FailThreshold: 2, RecoveryThreshold: 2})
+	disp.SetNotifySink(sink)
+	deps := Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  disp,
+		CommandSink: &fakeCmdSink{},
+		Thresholds:  state.Thresholds{Fail: 2, Recovery: 2},
+	}
+	srv := httptest.NewServer(NewMux(deps))
+	defer srv.Close()
+
+	_, releaseQueued := alerts.EnqueueDelivery(uid, "dns") // доставка по dns уже в очереди
+	fill := make(chan struct{})
+	for i := 0; i < relayConcurrencyLimit; i++ {
+		spawnRelay(deps, "fill", func(ctx context.Context) { <-fill })
+	}
+	cleanup := func() { releaseQueued(); close(fill) }
+
+	body, _ := json.Marshal(wire.Report{Timestamp: time.Now().UTC(), AgentVersion: "test",
+		Checks: []wire.Check{{Name: "dns", Status: "fail"}}})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- -1
+			return
+		}
+		resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			cleanup()
+			t.Fatalf("ответ на отчёт: %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		cleanup()
+		<-done
+		t.Fatal("ответ на отчёт ждёт доставку, стоящую в очереди проверки")
+	}
+	cleanup()
+	select {
+	case <-sink.delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("тревога после очереди не доставлена")
+	}
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
 }
