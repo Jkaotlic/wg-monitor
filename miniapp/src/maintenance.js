@@ -1,3 +1,5 @@
+import { SESSION_TEXT } from './errorText.js'
+import { COMMAND_GONE_TEXT } from './api.js'
 // Обслуживание роутера: чистые функции экрана настроек.
 //
 // Кнопки переехали из панели обслуживания бота (цикл 1 «бот без слеш-команд»).
@@ -407,7 +409,10 @@ export const SENT_NO_RESULT_TEXT = 'Команда ушла на роутер, �
 // Одна фраза отказа для листа и экранов (MINI-01). sent -- команда уже
 // поставлена: «Команда не отправлена» тут было бы неправдой.
 export function commandFailText({ sent, errorCode, error }) {
-  if (sent) return commandErrorText(errorCode) || error || SENT_NO_RESULT_TEXT
+  // Команда уже поставлена: любой сбой опроса, кроме «сессия истекла» и
+  // «команда исчезла», читается как «ушла, итога нет», а не как приглашение
+  // нажать ещё раз (команда могла выполниться).
+  if (sent) return error === SESSION_TEXT || error === COMMAND_GONE_TEXT ? error : SENT_NO_RESULT_TEXT
   return commandErrorText(errorCode) || (errorCode ? 'Команда не отправлена' : error)
 }
 

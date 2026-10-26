@@ -107,6 +107,31 @@ describe('useCommand: сбой опроса после постановки', ()
     expect(text()).toBe('Команда не отправлена')
   })
 
+  it('500 на опросе после постановки -- фраза «ушла», не «повторите»', async () => {
+    mocks.poll = [new ApiError(500, 'internal', 'x')]
+    await mount()
+    await act(async () => { await api.run('x') })
+    expect(api.sent).toBe(true)
+    expect(text()).toBe(SENT_PHRASE)
+  })
+
+  it('commandFailText: sent и общая ошибка -- фраза «ушла»', () => {
+    expect(commandFailText({ sent: true, errorCode: 'internal', error: 'Не получилось: сервер ответил ошибкой. Повторите; если повторится — напишите админу.' })).toBe(SENT_PHRASE)
+  })
+
+  it('смена роутера на экране во время повторов: итог роутера 1 помечен for_router=1', async () => {
+    mocks.poll = [new ApiError(503, 'unknown', 'x'), { status: 'ok', output: '' }]
+    await mount(1)
+    let p
+    await act(async () => { p = api.run('x') })
+    await act(async () => render(<Probe routerID={2} />, root))
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    const res = await p
+    expect(res.for_router).toBe(1)
+    expect(api.result.for_router).toBe(1)
+    expect(api.result.for_router).not.toBe(2)
+  })
+
   it('смена роутера во время повторов: поздний итог не применяется', async () => {
     mocks.poll = [new ApiError(503, 'unknown', 'x'), { status: 'ok', output: '' }]
     await mount(1)

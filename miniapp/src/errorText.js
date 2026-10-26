@@ -9,7 +9,7 @@ import { commandErrorText } from './maintenance.js'
 // «sign in required») -- тоже.
 export const FALLBACK_ERROR_TEXT = 'Не получилось: сервер ответил ошибкой. Повторите; если повторится — напишите админу.'
 export const OFFLINE_ERROR_TEXT = 'Сервер не ответил — проверьте связь и повторите.'
-const SESSION_TEXT = 'Сессия истекла — откройте приложение заново.'
+export const SESSION_TEXT = 'Сессия истекла — откройте приложение заново.'
 
 const RUSSIAN = /[А-Яа-яЁё]/
 // Пути и протоколы -- признак технического текста, даже если в нём есть русское слово.

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { sendCommand, fetchCommandResult, isTransient } from './api.js'
+import { sendCommand, fetchCommandResult, isTransient, COMMAND_GONE_TEXT } from './api.js'
 import { asleepNote, SENT_NO_RESULT_TEXT } from './maintenance.js'
-import { errorText } from './errorText.js'
+import { errorText, SESSION_TEXT } from './errorText.js'
 import { JOB_POLL_MS } from './jobPoll.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
@@ -41,6 +41,7 @@ export function useCommand(routerID) {
   // call setState on a dead component. This ref is the only thing every
   // async continuation below checks before touching state.
   const aliveRef = useRef(true)
+  const sentRef = useRef(false)
   useEffect(
     () => () => {
       aliveRef.current = false
@@ -56,9 +57,11 @@ export function useCommand(routerID) {
     setResult(null)
     setSleepNote('')
     setSent(false)
+    sentRef.current = false
     try {
       const posted = await sendCommand(routerID, action, args, confirm)
       const id = posted.cmd_id
+      sentRef.current = true
       if (aliveRef.current) {
         setSent(true)
         setSleepNote(asleepNote(posted))
@@ -99,8 +102,11 @@ export function useCommand(routerID) {
     } catch (err) {
       if (aliveRef.current) {
         // Фраза для человека, а не «/routers/7/commands failed: 400» (v0.50).
-        setError(errorText(err))
-        setErrorCode(err?.code ?? null)
+        const text = errorText(err)
+        // После cmd_id не-временный сбой опроса (например 500) -- тоже «ушла,
+        // итога нет»; своими остаются только «сессия истекла» и «команда исчезла».
+        setError(sentRef.current && text !== SESSION_TEXT && text !== COMMAND_GONE_TEXT ? SENT_NO_RESULT_TEXT : text)
+        setErrorCode(sentRef.current ? null : (err?.code ?? null))
       }
     } finally {
       if (aliveRef.current) setBusy(false)
