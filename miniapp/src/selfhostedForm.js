@@ -4,6 +4,7 @@
 // наружу не отдаёт: вместо него password_set.
 
 import { placeText } from './places.js'
+import { isRussianText } from './errorText.js'
 import { pluralRu } from './labels.js'
 import { whenText } from './when.js'
 
@@ -318,7 +319,9 @@ const SELFHOSTED_ERRORS = {
 }
 
 export function selfhostedErrorText(err) {
-  return err?.serverMessage || SELFHOSTED_ERRORS[err?.code] || 'Не получилось. Попробуйте ещё раз.'
+  // Английская фраза общей middleware («admin only») человеку не показывается (MINI-09).
+  const said = isRussianText(err?.serverMessage) ? String(err.serverMessage).trim() : ''
+  return said || SELFHOSTED_ERRORS[err?.code] || 'Не получилось. Попробуйте ещё раз.'
 }
 
 // Поле формы, которое отверг сервер (400 invalid_field с field). Незнакомое
