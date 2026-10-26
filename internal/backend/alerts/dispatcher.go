@@ -139,6 +139,10 @@ func (di *Dispatcher) rememberHard(userID int64, checkName, text string, kb tg.I
 // доставки -- тоже: карточке, которую вот-вот закроет ответ, строка
 // тишины ни к чему. Автомат не прочитался -- как раньше, дополняем.
 func (di *Dispatcher) NoteAlertAction(userID int64, checkName, statusLine string) {
+	// Автомат читается до di.mu, не под ним: база под мьютексом держала бы
+	// Last/rememberHard на время запроса. Окно безвредно: восстановление,
+	// вклинившееся после чтения, забудет эту память в своей доставке, а
+	// новая тревога после «не hard» запомнит свой текст заново.
 	if di.d != nil {
 		if st, err := di.d.State().Get(userID, checkName); err == nil && st.CurrentStatus != "hard" {
 			return
