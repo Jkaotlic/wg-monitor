@@ -193,7 +193,7 @@ func (a *BackupAlerter) send(ctx context.Context, text string) bool {
 }
 
 func (a *BackupAlerter) forget() {
-	for _, k := range []string{"stale", "failed", "verify"} {
+	for _, k := range []string{"stale", "failed", "verify", "sealed_key"} {
 		a.set(backupAlertKeyPrefix+k, "")
 		delete(a.lastSent, k)
 	}

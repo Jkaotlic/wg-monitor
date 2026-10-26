@@ -534,3 +534,28 @@ func TestBackupAlertSealedKeyMissing(t *testing.T) {
 		t.Fatalf("без признака «ключа нет» тревоги про ключ быть не должно: %v", got)
 	}
 }
+
+// Ревью задачи 14: «в порядке» сбрасывает и метку тревоги про ключ -- ключ,
+// снова пропавший в пределах суток, снова даёт тревогу.
+func TestBackupAlertSealedKeyMissingAgainAfterRecovery(t *testing.T) {
+	r := newAlertRig(t)
+	r.healthy()
+	closed := false
+	missing := func() {
+		r.status(func(s *backup.Status) { s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = &closed, true })
+	}
+	missing()
+	a := r.alerter()
+	a.Tick(context.Background())
+	r.healthy()
+	r.status(func(s *backup.Status) { s.Verify.SealedStoresOpen, s.Verify.SealedKeyMissing = nil, false })
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	missing()
+	r.clk.advance(time.Hour)
+	a.Tick(context.Background())
+	got := r.texts()
+	if len(got) != 3 || !strings.Contains(got[0], "Ключа шифрования нет") || got[1] != "Бэкап снова в порядке." || !strings.Contains(got[2], "Ключа шифрования нет") {
+		t.Fatalf("%q", got)
+	}
+}
