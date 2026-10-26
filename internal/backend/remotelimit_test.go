@@ -434,3 +434,25 @@ func hitVia(h http.Handler, remote, xff string) {
 	}
 	h.ServeHTTP(httptest.NewRecorder(), req)
 }
+
+// Обмен веб-ссылки стоит за тем же входным лимитом, поэтому считается ровно
+// один раз на запрос (не дважды: ни лимитом, ни самим обработчиком).
+func TestWebLinkRedeemCountsForwardedPresenceOnce(t *testing.T) {
+	o := useLocalForwardedObs(t)
+	mux := NewMux(Deps{DashboardToken: "t"})
+	do := func(xff string) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/web-link/redeem", strings.NewReader(`{"token":"x"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.168.1.1:1"
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	do("203.0.113.77")
+	do("203.0.113.78")
+	do("")
+	if o.present.Value() != 2 || o.absent.Value() != 1 {
+		t.Fatalf("present=%d absent=%d, want 2 и 1", o.present.Value(), o.absent.Value())
+	}
+}
