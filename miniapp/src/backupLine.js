@@ -108,7 +108,7 @@ export function backupKeyLines(fleet) {
   if (verify.sealed_stores_open === false) {
     lines.push(
       verify.sealed_key_missing
-        ? { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS и своих VPS из бэкапа не откроются', tone: 'danger' }
+        ? { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS, своих VPS и коды HideMy из бэкапа не откроются', tone: 'danger' }
         : { text: 'Хранилища не открываются текущим ключом', tone: 'danger' },
     )
   }

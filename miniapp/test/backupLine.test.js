@@ -231,7 +231,7 @@ describe('строки про ключ шифрования в карточке 
   it('ключа нет на сервере -- своя строка, не «ключ не тот»', () => {
     expect(keyLines({ known: true, verify: verify({ sealed_stores_open: false, sealed_key_missing: true }) })).toEqual([
       REMIND,
-      { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS и своих VPS из бэкапа не откроются', tone: 'danger' },
+      { text: 'Ключа шифрования нет на сервере — ключи кабинетов, панелей VPS, своих VPS и коды HideMy из бэкапа не откроются', tone: 'danger' },
     ])
   })
 })
