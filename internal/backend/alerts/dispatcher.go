@@ -178,16 +178,33 @@ func (di *Dispatcher) SetNow(fn func() time.Time) {
 // Handle reacts to one FSM transition for one (user, check). The full
 // wire.Check is passed (not just an extracted detail string) so the
 // formatter can render rich per-category text from Details.
+//
+// Handle = Apply + доставка на месте. Отчёт роутера зовёт Apply и шлёт в
+// фоне (FRESH-04); остальные -- Handle.
 func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error {
+	deliver, err := di.Apply(userID, nickname, checkName, tr, check)
+	if err != nil || deliver == nil {
+		return err
+	}
+	return deliver(ctx)
+}
+
+// Apply -- синхронная часть Handle: автомат и отметки в базе. Возвращает
+// доставку в Telegram (nil -- слать нечего), которую вызывающий запускает
+// когда и где хочет. Запись автомата обязана случиться до ответа на отчёт:
+// следующий отчёт читает её как prev, и отложенная запись дала бы дубль
+// тревоги (BUG-02). Доставка с повторами длится до полуминуты, а агент ждёт
+// ответа на отчёт 10 с (FRESH-04).
+func (di *Dispatcher) Apply(userID int64, nickname, checkName string, tr state.Transition, check wire.Check) (func(ctx context.Context) error, error) {
 	switch tr.Kind {
 	case state.Noop, state.Soft:
-		return di.d.State().Save(userID, checkName, tr.Next)
+		return nil, di.d.State().Save(userID, checkName, tr.Next)
 	case state.SoftFlap:
 		today := di.now().UTC().Format("2006-01-02")
 		if err := di.d.State().IncSoftFlap(userID, checkName, today); err != nil {
-			return err
+			return nil, err
 		}
-		return di.d.State().Save(userID, checkName, tr.Next)
+		return nil, di.d.State().Save(userID, checkName, tr.Next)
 	case state.Hard:
 		// Save FSM transition FIRST, отправка в TG — после. Иначе при
 		// 5xx/429 от TG возвращалась ошибка ДО Save, FSM оставался в
@@ -202,17 +219,19 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			di.onHard(userID, checkName)
 		}
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
-			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
+			return nil, fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
 		}
 		// Новая поломка: недоставленное «восстановилось» прошлой уже не к
 		// месту.
 		if err := di.d.OwedReplies().Delete(userID, checkName); err != nil {
 			slog.Warn("не удалось снять долг «восстановилось»", "user_id", userID, "check", checkName, "err", err)
 		}
-		if _, err := di.DeliverHard(ctx, userID, nickname, checkName, next, check); err != nil {
-			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
-		}
-		return nil
+		return func(ctx context.Context) error {
+			if _, err := di.DeliverHard(ctx, userID, nickname, checkName, next, check); err != nil {
+				return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
+			}
+			return nil
+		}, nil
 	case state.Recovery:
 		// Same ordering invariant как Hard: state-Save до TG-send. Если
 		// TG отвалится, recovery фактически уже сохранён в FSM; следующий
@@ -230,7 +249,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		next.LastAlertAt = nil
 		next.Acked = false // defensive (FSM also sets this in Recovery transition)
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
-			return fmt.Errorf("save Recovery state %s/%s: %w", nickname, checkName, err)
+			return nil, fmt.Errorf("save Recovery state %s/%s: %w", nickname, checkName, err)
 		}
 		text := FormatRecovery(RecoveryArgs{
 			Nickname:    nickname,
@@ -240,34 +259,41 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			Check:       check,
 		})
 		di.forgetHard(userID, checkName)
-		// Починка идёт или уже дописала «Починил» в саму тревогу -- второе
-		// «восстановилось» ответом было бы шумом. Вопрос одноразовый.
-		if di.covered != nil && di.covered(userID, checkName) {
-			slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
-				"user_id", userID, "check", checkName)
-		} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
-			// Не дошло никому: автомат уже в ok, напоминаний не будет.
-			// Долг повторит обход напоминаний (realert) ответом на ту же
-			// тревогу -- поэтому переписку не забываем. Саму тревогу
-			// человек не получал -- долга нет (M-7).
-			if !di.hardNeverDelivered(userID, checkName, prev, prevErr) {
-				if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
-					slog.Error("не удалось запомнить недоставленное «восстановилось»",
-						"user_id", userID, "check", checkName, "err", putErr)
-				}
-			} else {
-				slog.Info("«восстановилось» не дошло, тревога тоже не доходила: долга нет",
-					"user_id", userID, "check", checkName)
+		return func(ctx context.Context) error {
+			return di.deliverRecovery(ctx, userID, nickname, checkName, text, next, prev, prevErr)
+		}, nil
+	}
+	return nil, nil
+}
+
+// deliverRecovery -- доставка «восстановилось» после записи автомата в Apply.
+func (di *Dispatcher) deliverRecovery(ctx context.Context, userID int64, nickname, checkName, text string, next, prev db.IncidentState, prevErr error) error {
+	// Починка идёт или уже дописала «Починил» в саму тревогу -- второе
+	// «восстановилось» ответом было бы шумом. Вопрос одноразовый.
+	if di.covered != nil && di.covered(userID, checkName) {
+		slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
+			"user_id", userID, "check", checkName)
+	} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
+		// Не дошло никому: автомат уже в ok, напоминаний не будет.
+		// Долг повторит обход напоминаний (realert) ответом на ту же
+		// тревогу -- поэтому переписку не забываем. Саму тревогу
+		// человек не получал -- долга нет (M-7).
+		if !di.hardNeverDelivered(userID, checkName, prev, prevErr) {
+			if putErr := di.d.OwedReplies().Put(userID, checkName, text, di.now()); putErr != nil {
+				slog.Error("не удалось запомнить недоставленное «восстановилось»",
+					"user_id", userID, "check", checkName, "err", putErr)
 			}
-			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
+		} else {
+			slog.Info("«восстановилось» не дошло, тревога тоже не доходила: долга нет",
+				"user_id", userID, "check", checkName)
 		}
-		// Переписка по этой проверке закончилась: следующая поломка начнёт
-		// свою ветку с чистого листа.
-		if err := di.d.AlertMessages().Clear(userID, checkName); err != nil {
-			slog.Warn("не удалось забыть переписку по проверке",
-				"user_id", userID, "check", checkName, "err", err)
-		}
-		return nil
+		return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
+	}
+	// Переписка по этой проверке закончилась: следующая поломка начнёт
+	// свою ветку с чистого листа.
+	if err := di.d.AlertMessages().Clear(userID, checkName); err != nil {
+		slog.Warn("не удалось забыть переписку по проверке",
+			"user_id", userID, "check", checkName, "err", err)
 	}
 	return nil
 }

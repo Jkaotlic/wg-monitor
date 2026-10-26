@@ -28,6 +28,12 @@ type fakeDisp struct {
 	db     *db.DB
 }
 
+// Apply -- как Handle: фейк ничего не доставляет, запись и учёт вызова --
+// синхронная часть, доставки нет.
+func (f *fakeDisp) Apply(uid int64, nick, check string, tr state.Transition, c wire.Check) (func(context.Context) error, error) {
+	return nil, f.Handle(context.Background(), uid, nick, check, tr, c)
+}
+
 func (f *fakeDisp) Handle(_ context.Context, uid int64, _, check string, tr state.Transition, c wire.Check) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2040,6 +2046,8 @@ func postFailingCheck(t *testing.T, srv *httptest.Server, tok, checkName string)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: %d", resp.StatusCode)
 	}
+	// Починка стартует в фоне, после доставки тревоги (FRESH-04).
+	waitRelayPoolEmpty(t)
 }
 
 // Переход в hard по упавшему туннелю запускает починку сам.
@@ -2092,6 +2100,7 @@ func TestHardTransition_PassesTunnelName(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	waitRelayPoolEmpty(t)
 
 	mu.Lock()
 	defer mu.Unlock()

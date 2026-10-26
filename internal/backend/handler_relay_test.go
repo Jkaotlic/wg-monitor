@@ -58,3 +58,32 @@ func TestSpawnRelay_RunsWhenPoolHasRoom(t *testing.T) {
 	}
 	waitRelayPoolEmpty(t)
 }
+
+// FRESH-04: тревога из /v1/report при занятом пуле не бросается, как прочие
+// уведомления, а доставляется на месте: отметка last_alert_at уже стоит, и
+// брошенная тревога пришла бы лишь напоминанием через 6 часов.
+func TestSpawnAlertDelivery_InlineWhenPoolSaturated(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	release := make(chan struct{})
+	for i := 0; i < relayConcurrencyLimit; i++ {
+		spawnRelay(d, "fill", func(ctx context.Context) { <-release })
+	}
+
+	var ran atomic.Bool
+	var hadDeadline atomic.Bool
+	spawnAlertDelivery(d, "dispatch", func(ctx context.Context) {
+		_, ok := ctx.Deadline()
+		hadDeadline.Store(ok)
+		ran.Store(true)
+	})
+	if !ran.Load() {
+		t.Fatal("тревога при занятом пуле брошена, а не доставлена на месте")
+	}
+	if !hadDeadline.Load() {
+		t.Fatal("доставка на месте без срока: зависший Telegram держал бы отчёт вечно")
+	}
+
+	close(release)
+	waitRelayPoolEmpty(t)
+}

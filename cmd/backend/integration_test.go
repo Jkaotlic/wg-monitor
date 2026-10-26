@@ -268,6 +268,10 @@ func (noopDispatcher) Handle(_ context.Context, _ int64, _, _ string, _ state.Tr
 	return nil
 }
 
+func (noopDispatcher) Apply(int64, string, string, state.Transition, wire.Check) (func(context.Context) error, error) {
+	return nil, nil
+}
+
 // TestIntegration_DiagNow_FreshRunNoRestart verifies the diag_now state
 // machine end-to-end after v0.30's task 2: every tap runs a fresh diagnostic
 // pass and never restarts a VPN tunnel.
