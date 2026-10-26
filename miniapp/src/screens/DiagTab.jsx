@@ -99,7 +99,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           Обновить
         </button>
       </div>
-      <ErrorLine text={error ? 'Не удалось обновить проверки — показано то, что было.' : ''} onRetry={load} />
+      <ErrorLine text={error ? 'Не удалось обновить проверки — показано то, что было.' : ''} />
       <p class="router-lastseen">
         {rows.length} {rows.length === 1 ? 'вопрос' : 'вопросов'} роутеру
         {age != null ? ` · последний отчёт ${agoText(age)}` : ''}

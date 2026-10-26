@@ -35,8 +35,10 @@ describe('MINI-07: ошибка обновления вкладки «Прове
     await flush()
     expect(root.querySelector('h1').textContent).toBe('Проверки')
     expect(root.querySelector('.error-line').textContent).toContain('Не удалось обновить')
+    // «Обновить» рядом уже есть -- второй кнопки повтора у строки нет.
+    expect(button(root, 'Повторить')).toBeUndefined()
     mocks.fail = false
-    await act(async () => button(root, 'Повторить').click())
+    await act(async () => button(root, 'Обновить').click())
     await flush()
     expect(root.querySelector('.error-line')).toBe(null)
     render(null, root)
