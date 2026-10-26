@@ -722,3 +722,18 @@ func TestActionRestoreBackupRejectsYesOutsideCurrent(t *testing.T) {
 		t.Fatalf("подключений: %d", *connects)
 	}
 }
+
+func TestPiHealthTimeoutTextInSeconds(t *testing.T) {
+	if got := piSeconds(60 * time.Second); got != "60 с" {
+		t.Fatalf("got %q", got)
+	}
+	stubRestoreConfirm(t, true)
+	shortHealthWait(t)
+	fake := newFakeRemote()
+	fake.reply = piReply("ok\n", "000")
+	stubRestoreConnect(t, fake)
+	err := restoreBackupToCurrentVPS(piState(), nil, inspectPiArchive(t, piArchiveMembers()), false)
+	if err == nil || !strings.Contains(err.Error(), "/healthz за 0 с (") {
+		t.Fatalf("err=%v", err)
+	}
+}

@@ -193,7 +193,7 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	if err := stepVerifyHTTPWithin(s, piHealthURL(state.Backend.Domain), piHealthTimeout); err != nil {
 		return fmt.Errorf("бэкенд не ответил на /healthz за %s (%w).\n"+
 			"бэкенд ещё не ответил — возможно, он ещё запускается: посмотрите docker logs %s, прежде чем откатывать.\n%s",
-			piHealthTimeout, err, piBackendContainer, piRollbackHint(base, stamp, names))
+			piSeconds(piHealthTimeout), err, piBackendContainer, piRollbackHint(base, stamp, names))
 	}
 	PrintOK("восстановление на Pi завершено")
 	PrintInfo("сохранённые пароли роутеров после восстановления вводятся заново")
@@ -321,6 +321,11 @@ func piCheckFreeSpace(s remoteExec, base string, staged int64) error {
 	}
 	PrintOK("место на диске Pi: нужно " + piMB(need) + ", свободно " + piMB(free))
 	return nil
+}
+
+// piSeconds -- срок для человека: «60 с», а не «1m0s».
+func piSeconds(d time.Duration) string {
+	return fmt.Sprintf("%d с", int64(d.Round(time.Second)/time.Second))
 }
 
 func piMB(n int64) string {
