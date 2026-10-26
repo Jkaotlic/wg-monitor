@@ -1,6 +1,9 @@
 package provision
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // StepMarker prefixes every structured progress line the relay writes to
 // stdout, e.g. "__WG_STEP__ arch_detected arm64". It is the wire contract
@@ -150,6 +153,10 @@ const (
 	ErrCodeSessionActive  = "session_active"
 )
 
+// errCodes is every code ParseErrLine accepts; TestErrCodes_MatchRelay
+// checks it equals the set err_code in awgm-relay.py can return.
+var errCodes = []string{ErrCodeRootAuthFailed, ErrCodeAuthFailed, ErrCodeSessionActive}
+
 // ParseErrLine parses one already-trimmed relay line as an ErrMarker line
 // carrying this job's nonce. Like ParseStepLine the marker must be a strict
 // prefix; a line without the nonce, with another nonce, or an empty job
@@ -168,9 +175,8 @@ func ParseErrLine(line, nonce string) (code string, ok bool) {
 	if len(fields) != 2 || fields[0] != nonce {
 		return "", false
 	}
-	switch fields[1] {
-	case ErrCodeRootAuthFailed, ErrCodeAuthFailed, ErrCodeSessionActive:
-		return fields[1], true
+	if !slices.Contains(errCodes, fields[1]) {
+		return "", false
 	}
-	return "", false
+	return fields[1], true
 }
