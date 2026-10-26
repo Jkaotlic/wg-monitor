@@ -554,3 +554,102 @@ func TestAutorepair_SealedCabinetSpeaksAboutKey(t *testing.T) {
 		t.Fatalf("код %d, хотим 503 cabinet_key_missing: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// MINI-02: тому, у кого нет права выдачи с панели своего сервера, вариант не
+// показывается, но экран узнаёт, что источник скрыт, а не пуст: иначе
+// «включена со своего сервера» читается как «только перезапуск».
+func TestAutorepair_Awg3SourceHiddenWithoutRight(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	if err := env.d.TunnelRepairSettings().Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: true, Provider: "awg3", Option: "main/awg1", UpdatedBy: cabOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	rec := env.do(t, cabOwner, http.MethodGet, path, "")
+	r := decodeAutorepair(t, rec.Body.Bytes())
+	if !r.SourceHidden || r.Option != "" || r.Provider != "awg3" || !r.Enabled {
+		t.Fatalf("без права: ждали source_hidden, пустой вариант, awg3: %s", rec.Body.String())
+	}
+	if op := decodeAutorepair(t, env.do(t, cabOperator, http.MethodGet, path, "").Body.Bytes()); op.SourceHidden || op.Option != "main/awg1" {
+		t.Fatalf("допущенному источник не скрывается: %+v", op)
+	}
+}
+
+// MINI-02: подтверждение без права на панель (keep_source) оставляет
+// источник, выбранный допущенным, и его право выпуска (UpdatedBy -- движок
+// выпускает от его имени); имя VPN-туннеля переписывается, как при обычном
+// включении, стоп снимается.
+func TestAutorepair_PutKeepSourcePreservesAwg3(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	repo := env.d.TunnelRepairSettings()
+	if err := repo.Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Старый", Enabled: true,
+		Provider: "awg3", Option: "main/awg1", AllowRelocate: true, UpdatedBy: cabOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nick := env.nickname(t)
+	kv := linkrepair.Attempts{KV: env.d.KV()}
+	if err := kv.Record(nick, "tunnel_awg12", false); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"keep_source":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+	s, ok, err := repo.Get(env.ownedID, "awg12")
+	if err != nil || !ok || !s.Enabled || s.Provider != "awg3" || s.Option != "main/awg1" || !s.AllowRelocate || s.UpdatedBy != cabOperator {
+		t.Fatalf("источник стёрт: %+v ok=%v err=%v", s, ok, err)
+	}
+	if s.TunnelName != "Дача" {
+		t.Fatalf("имя не подтверждено: %q", s.TunnelName)
+	}
+	if ok, why := kv.Allow(nick, "tunnel_awg12"); !ok {
+		t.Fatalf("подтверждение снимает стоп, а стоит: %s", why)
+	}
+	resp := decodeAutorepair(t, rec.Body.Bytes())
+	if !resp.SourceHidden || resp.Provider != "awg3" || resp.RenamePending != "" {
+		t.Fatalf("ответ: %+v", resp)
+	}
+
+	// Выключение -- как прежде: источник на месте.
+	rec = env.do(t, cabOwner, http.MethodPut, path, `{"enabled":false,"keep_source":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("выключение: код %d: %s", rec.Code, rec.Body.String())
+	}
+	if s, _, _ := repo.Get(env.ownedID, "awg12"); s.Enabled || s.Provider != "awg3" || s.Option != "main/awg1" {
+		t.Fatalf("выключение тронуло источник: %+v", s)
+	}
+}
+
+// MINI-02: keep_source годится только для записанного своего сервера; иначе
+// 400 bad_keep_source и запись не тронута.
+func TestAutorepair_PutKeepSourceRejected(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	seedAutorepairTunnel(t, env, "awg13", "Склад")
+	repo := env.d.TunnelRepairSettings()
+	if err := repo.Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: false, Provider: "hidemyname", Option: "nl", UpdatedBy: cabOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair", `{"enabled":true,"keep_source":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_keep_source") {
+		t.Fatalf("не свой сервер: код %d, хотим 400 bad_keep_source: %s", rec.Code, rec.Body.String())
+	}
+	if s, _, _ := repo.Get(env.ownedID, "awg12"); s.Enabled || s.Provider != "hidemyname" || s.Option != "nl" || s.UpdatedBy != cabOperator {
+		t.Fatalf("отказ тронул запись: %+v", s)
+	}
+	rec = env.do(t, cabOwner, http.MethodPut, "/v1/miniapp/routers/{id}/tunnels/awg13/autorepair", `{"enabled":true,"keep_source":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_keep_source") {
+		t.Fatalf("без записи: код %d, хотим 400 bad_keep_source: %s", rec.Code, rec.Body.String())
+	}
+	if _, ok, _ := repo.Get(env.ownedID, "awg13"); ok {
+		t.Fatal("отказ записал настройку")
+	}
+}
