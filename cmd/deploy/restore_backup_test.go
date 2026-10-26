@@ -470,3 +470,18 @@ func TestBuildRestoreRemoteScriptRollbackRemovesWalFirst(t *testing.T) {
 		t.Fatalf("в откате rm -f wal/shm должен идти раньше возврата state.db:\n%s", body)
 	}
 }
+
+func TestRestoreToCurrentVPSRefusesDockerLayoutBeforeAnySSH(t *testing.T) {
+	state := &State{}
+	state.Backend.Host = "198.51.100.10"
+	state.Backend.SourceBind = "127.0.0.1:8080"
+	// secrets = nil: любое обращение к SSH/хранилищу паролей упало бы паникой.
+	err := restoreBackupToCurrentVPS(state, nil, &RestoreBackup{})
+	if !errors.Is(err, errRestoreDockerLayout) {
+		t.Fatalf("err=%v, want errRestoreDockerLayout", err)
+	}
+	want := "Этот бэкенд работает в докере (Raspberry Pi): мастер восстанавливает только раскладку VPS с systemd. Как восстановить вручную — DEPLOY.md, раздел «Восстановление бэкапа на Pi»."
+	if err.Error() != want {
+		t.Fatalf("text=%q", err.Error())
+	}
+}

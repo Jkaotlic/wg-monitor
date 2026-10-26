@@ -628,7 +628,14 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 	}
 }
 
+// errRestoreDockerLayout: мастер знает только раскладку VPS с systemd; на докере
+// (Pi) заменять базу без проверки на живом стенде опаснее, чем сделать руками.
+var errRestoreDockerLayout = errors.New("Этот бэкенд работает в докере (Raspberry Pi): мастер восстанавливает только раскладку VPS с systemd. Как восстановить вручную — DEPLOY.md, раздел «Восстановление бэкапа на Pi».")
+
 func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
+	if strings.TrimSpace(state.Backend.SourceBind) != "" {
+		return errRestoreDockerLayout
+	}
 	if state.Backend.Host == "" {
 		return fmt.Errorf("backend VPS is not configured in wizard.toml")
 	}

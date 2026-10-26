@@ -243,6 +243,52 @@ whether the restore succeeds or not.
 This flow is for the VPS (systemd) layout. For the Docker layout see
 [Восстановление из малого архива](#восстановление-из-малого-архива).
 
+### Восстановление бэкапа на Pi
+
+Мастер на докер-раскладке (Raspberry Pi) восстановление не делает и отказывает до
+любых изменений. Делайте руками; пути — от корня раскладки (`~/wg-monitor`, у root —
+`/root/wg-monitor`), внутри контейнера каталог `data/` виден как `/data`. Значения в
+`<...>` подставьте свои. Для малого архива короче шаг-в-шаг есть в
+[Восстановление из малого архива](#восстановление-из-малого-архива); ниже — полный порядок.
+
+```bash
+cd ~/wg-monitor
+# 1. остановить контейнер бэкенда (как он запущен на площадке)
+docker compose stop            # или: docker stop <имя контейнера>
+
+# 2. распаковать архив во временный каталог и проверить базу
+bin/wg-monitor-backend backup extract --archive <архив.tgz.enc> \
+  --passphrase-file secrets/backup-passphrase.txt --to data/restore-tmp
+sqlite3 data/restore-tmp/state.db 'PRAGMA integrity_check;'      # ждём: ok
+
+# 3. сохранить текущее и положить файлы в /data тома (на хосте — data/)
+[ -f data/state.db ] && cp -p data/state.db data/state.db.bak.$(date +%Y%m%d)
+rm -f data/state.db-wal data/state.db-shm
+install -m 600 data/restore-tmp/state.db data/state.db
+for f in amnezia-premium.json amnezia-selfhosted.json awg3-panels.json hidemyname.json; do
+  [ -f data/restore-tmp/$f ] && install -m 600 data/restore-tmp/$f data/$f
+done
+
+# 4. права: владелец и группа как у самого каталога data/ (так делает fileown.MatchDir)
+sudo chown --reference=data data/state.db data/*.json
+ls -l data/                    # владелец должен совпадать с соседними файлами
+
+# 5. вернуть revive.key из своего хранилища (в архиве его нет)
+install -m 600 <ваш revive.key> secrets/revive.key
+sudo chown --reference=secrets/bot-token.txt secrets/revive.key
+
+# 6. запустить и проверить
+rm -rf data/restore-tmp
+docker compose start
+curl -fsS http://<адрес бэкенда в контейнере, например 127.0.0.1:<порт>>/healthz
+```
+
+На пустой машине сначала верните `backend.yaml` в `config/`, токены
+(`bot-token.txt`, `wizard-token.txt`, `dashboard-token.txt`) в `secrets/`, а в
+`backend.yaml` оставьте пути хранилищ в `/data/...`. Если `/healthz` не отвечает —
+смотрите `docker logs wg-monitor-backend`, а прежнюю базу верните из `state.db.bak.<дата>`.
+После восстановления сохранённые пароли роутеров вводятся заново.
+
 `--to-new-vps` bootstraps the new host first: `wgmonitor` user, systemd units,
 backend binary from the current release, Caddy route, bot token from the local
 secret store, wizard token, and the backup timer. If the backend domain changes,
