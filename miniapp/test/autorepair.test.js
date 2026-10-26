@@ -351,7 +351,14 @@ describe('source_hidden (MINI-02)', () => {
   })
   it('лист прячет выбор источника', () => {
     expect(enableFields(hidden())).toEqual([])
-    expect(enableFields(hidden({ enabled: false }))).toEqual([])
+    // Выключенная настройка без права на панель -- обычный выбор, без
+    // своего сервера и без keep_source.
+    const off = hidden({ enabled: false })
+    const [sel] = enableFields(off)
+    expect(sel.name).toBe('source')
+    expect(sel.options.map((o) => o.value)).toEqual(['', 'amnezia|nl'])
+    expect(enableBody({ source: 'amnezia|nl' }, off)).toEqual({ enabled: true, provider: 'amnezia', option: 'nl', allow_relocate: false })
+    expect(enableBody({ source: '' }, off)).not.toHaveProperty('keep_source')
   })
   it('лист не отсылает к полю источника и называет свой сервер', () => {
     const t = enableSheetText(hidden({ rename_pending: 'Старый' }), 'Дача', null)

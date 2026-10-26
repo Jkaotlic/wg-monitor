@@ -73,7 +73,7 @@ export function autorepairRow(resp) {
       value = 'ждёт подтверждения'
       hint = `VPN-туннель переименован (был ${quote(r.rename_pending)}): пока вы не подтвердите автопочинку, я только перезапускаю его, конфиг не выпускаю.`
     } else if (r.blocked) value = `стоит: ${r.blocked}`
-    else if (r.source_hidden && r.provider === 'awg3') value = `включена · из ${sourceLabel(r.sources, 'awg3', '')}`
+    else if (sourceHidden(r)) value = `включена · из ${sourceLabel(r.sources, 'awg3', '')}`
     else if (!r.provider || !r.option) value = 'только перезапуск'
     else value = `включена · из ${sourceLabel(r.sources, r.provider, r.option)}`
     // Смена локации легла на роутер, но проверку не прошла (v0.55, A4.3):
@@ -131,8 +131,10 @@ export function backupFor(snapshot, tunnelID) {
 }
 
 // Источник «свой сервер» записан, но вариант этому человеку не показан.
+// Только у включённой настройки (подтверждение после переименования):
+// выключенную он включает заново со своим источником -- обычным выбором.
 function sourceHidden(resp) {
-  return Boolean(resp?.source_hidden) && resp?.provider === 'awg3'
+  return Boolean(resp?.source_hidden) && Boolean(resp?.enabled) && resp?.provider === 'awg3'
 }
 
 function okSources(resp) {

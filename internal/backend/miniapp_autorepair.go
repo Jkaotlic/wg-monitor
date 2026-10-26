@@ -356,7 +356,11 @@ func miniappAutorepairBuild(ctx context.Context, d Deps, tg int64, u *db.User, t
 		// с этой панели разрешена выдача: остальным -- что источник «свой
 		// сервер», без подробностей чужой панели.
 		if s.Provider == RepairProviderAwg3 && !miniappCanIssueAwg3(d, tg, u.ID, miniappAutorepairPanelOf(s.Option)) {
-			resp.Option, resp.SourceHidden = "", true
+			resp.Option = ""
+			// Скрытый источник подтверждают только у включённой настройки
+			// (после переименования): выключенную без права на панель
+			// включают заново со своим источником.
+			resp.SourceHidden = s.Enabled
 		}
 		if o, ok, err := d.DB.TunnelOrigins().Get(u.ID, tunnelID); err == nil && ok && o.Unconfirmed &&
 			o.Provider == s.Provider && o.Variant == s.Option && resp.Option != "" {
@@ -490,9 +494,11 @@ func miniappAutorepairPutHandler(d Deps) http.HandlerFunc {
 				// (MINI-02): источник и право выпуска остаются за тем, кто его
 				// выбрал, -- движок выпускает конфиг от имени UpdatedBy. Права
 				// на панель у подтверждающего нет по определению, его не сверяем.
-				if !found || cur.Provider != RepairProviderAwg3 {
+				// Только у включённой настройки: выключенную keep_source снова
+				// включил бы от чужого имени (или от того, кому выпуск запрещён).
+				if !found || !cur.Enabled || cur.Provider != RepairProviderAwg3 {
 					writeJSONError(w, http.StatusBadRequest, "bad_keep_source",
-						"источник автопочинки уже другой -- откройте настройку заново и выберите источник")
+						"Включить автопочинку со своего сервера может только тот, кому разрешена выдача с его панели: выберите другой источник.")
 					return
 				}
 				next.Provider, next.Option, next.AllowRelocate, next.UpdatedBy =

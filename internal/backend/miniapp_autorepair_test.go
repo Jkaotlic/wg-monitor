@@ -653,3 +653,47 @@ func TestAutorepair_PutKeepSourceRejected(t *testing.T) {
 		t.Fatal("отказ записал настройку")
 	}
 }
+
+// MINI-02, ревью: выключенную настройку своего сервера keep_source не
+// включает -- иначе тот, кому выдача с панели не разрешена, включил бы
+// выпуск от имени выбравшего. Ответ GET не просит подтверждения.
+func TestAutorepair_PutKeepSourceRejectedWhenDisabled(t *testing.T) {
+	env := autorepairEnv(t)
+	seedAutorepairTunnel(t, env, "awg12", "Дача")
+	repo := env.d.TunnelRepairSettings()
+	if err := repo.Put(db.TunnelRepairSetting{
+		UserID: env.ownedID, TunnelID: "awg12", TunnelName: "Дача", Enabled: false,
+		Provider: "awg3", Option: "main/awg1", UpdatedBy: cabOperator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/miniapp/routers/{id}/tunnels/awg12/autorepair"
+	if r := decodeAutorepair(t, env.do(t, cabOwner, http.MethodGet, path, "").Body.Bytes()); r.SourceHidden || r.Option != "" {
+		t.Fatalf("выключенная настройка: source_hidden=%v option=%q", r.SourceHidden, r.Option)
+	}
+	rec := env.do(t, cabOwner, http.MethodPut, path, `{"enabled":true,"keep_source":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "bad_keep_source") {
+		t.Fatalf("код %d, хотим 400 bad_keep_source: %s", rec.Code, rec.Body.String())
+	}
+	if words := latinOutsideGuillemets(errMessage(t, rec.Body.Bytes())); len(words) > 0 {
+		t.Fatalf("латиница в отказе: %v", words)
+	}
+	s, _, _ := repo.Get(env.ownedID, "awg12")
+	if s.Enabled || s.Provider != "awg3" || s.Option != "main/awg1" || s.UpdatedBy != cabOperator {
+		t.Fatalf("отказ тронул запись: %+v", s)
+	}
+}
+
+func errMessage(t *testing.T, body []byte) string {
+	t.Helper()
+	var e map[string]any
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("ответ не разобрать: %v: %s", err, body)
+	}
+	for _, k := range []string{"message", "error"} {
+		if v, ok := e[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return string(body)
+}
