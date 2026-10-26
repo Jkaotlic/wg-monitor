@@ -1,5 +1,6 @@
 import { fetchCommandResult, isTransient } from './api.js'
 import { AGENT_OLDER_THAN_APP } from './labels.js'
+import { retryPauseMs } from './jobPoll.js'
 
 // Ожидание итога команды, которую поставил не /commands, а свой маршрут
 // сервера (удаление VPN-туннеля, загрузка .conf): ответ у них тот же {cmd_id},
@@ -20,7 +21,7 @@ export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSe
     } catch (err) {
       // Временный сбой релея: команда уже у роутера, ждём дальше до дедлайна.
       if (!isTransient(err)) throw err
-      if (alive()) await sleep(pauseMs)
+      if (alive()) await sleep(retryPauseMs(err, pauseMs, until - now()))
       continue
     }
     if (!alive()) return null
@@ -55,7 +56,7 @@ export async function repeatWhilePending(
     } catch (err) {
       // Временный сбой (релей, 429): повторить с паузой, пока не вышел дедлайн.
       if (!isTransient(err) || !alive() || now() >= until) throw err
-      await sleep(pauseMs)
+      await sleep(retryPauseMs(err, pauseMs, until - now()))
       continue
     }
     if (!pending(resp)) return { resp, settled: true }

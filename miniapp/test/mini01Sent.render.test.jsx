@@ -13,7 +13,10 @@ vi.mock('../src/api.js', async (importOriginal) => ({
   fetchCommandResult: () => {
     mocks.pollCalls++
     const r = mocks.poll.length > 1 ? mocks.poll.shift() : mocks.poll[0]
-    return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
+    if (r instanceof Error) return Promise.reject(r)
+    // Пустой ответ -- как долгий опрос сервера: ждёт хоп, а не крутит цикл.
+    if (r === null) return new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+    return Promise.resolve(r)
   },
 }))
 
@@ -113,6 +116,32 @@ describe('useCommand: сбой опроса после постановки', ()
     await act(async () => { await api.run('x') })
     expect(api.sent).toBe(true)
     expect(text()).toBe(SENT_PHRASE)
+  })
+
+  it('429 на опросе -- следующий опрос через JOB_POLL_RATE_LIMIT_MS, не через обычную паузу', async () => {
+    const { JOB_POLL_RATE_LIMIT_MS, JOB_POLL_MS } = await import('../src/jobPoll.js')
+    mocks.poll = [new ApiError(429, 'rate_limited', 'x'), { status: 'ok', output: '' }]
+    await mount()
+    let p
+    await act(async () => { p = api.run('x') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(JOB_POLL_MS + 100) })
+    expect(mocks.pollCalls).toBe(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(JOB_POLL_RATE_LIMIT_MS) })
+    await p
+    expect(mocks.pollCalls).toBe(2)
+    expect(api.result.status).toBe('ok')
+  })
+
+  it('пауза повтора не перелетает дедлайн', async () => {
+    mocks.poll = [new ApiError(502, 'unknown', 'x')]
+    await mount()
+    let p
+    let done = false
+    await act(async () => { p = api.run('x', {}, { deadlineMs: 500 }).then(() => { done = true }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(600) })
+    expect(done).toBe(true)
+    await p
+    expect(mocks.pollCalls).toBe(1)
   })
 
   it('commandFailText: sent и общая ошибка -- фраза «ушла»', () => {

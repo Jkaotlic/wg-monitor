@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { sendCommand, fetchCommandResult, isTransient, COMMAND_GONE_TEXT } from './api.js'
 import { asleepNote, SENT_NO_RESULT_TEXT } from './maintenance.js'
 import { errorText, SESSION_TEXT } from './errorText.js'
-import { JOB_POLL_MS } from './jobPoll.js'
+import { JOB_POLL_MS, retryPauseMs } from './jobPoll.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -85,7 +85,7 @@ export function useCommand(routerID) {
           if (!isTransient(err)) throw err
           lostPoll = true
           if (!aliveRef.current) return null
-          await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS))
+          await new Promise((resolve) => setTimeout(resolve, retryPauseMs(err, JOB_POLL_MS, until - Date.now())))
           continue
         }
         if (!aliveRef.current) return null

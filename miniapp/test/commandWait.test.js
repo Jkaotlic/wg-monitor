@@ -172,3 +172,37 @@ describe('repeatWhilePending: временные сбои', () => {
     expect(out).toEqual({ resp: { state: 'done' }, settled: true })
   })
 })
+
+describe('пауза повтора: остаток дедлайна и 429', () => {
+  const clock = () => {
+    const c = { t: 0, sleeps: [] }
+    c.now = () => c.t
+    c.sleep = (ms) => { c.sleeps.push(ms); c.t += ms; return Promise.resolve() }
+    return c
+  }
+  it('waitCommand: пауза не перелетает дедлайн', async () => {
+    const { ApiError } = await import('../src/api.js')
+    const c = clock()
+    mocks.replies = [new ApiError(502, 'unknown', 'x')]
+    expect(await waitCommand(7, 'c1', { deadlineMs: 1000, now: c.now, sleep: c.sleep })).toBe(null)
+    expect(c.sleeps).toEqual([1000])
+  })
+  it('waitCommand: после 429 -- JOB_POLL_RATE_LIMIT_MS', async () => {
+    const { ApiError } = await import('../src/api.js')
+    const { JOB_POLL_RATE_LIMIT_MS } = await import('../src/jobPoll.js')
+    const c = clock()
+    mocks.replies = [new ApiError(429, 'rate_limited', 'x'), { status: 'ok', output: '' }]
+    expect(await waitCommand(7, 'c1', { now: c.now, sleep: c.sleep })).toEqual({ status: 'ok', output: '' })
+    expect(c.sleeps).toEqual([JOB_POLL_RATE_LIMIT_MS])
+  })
+  it('repeatWhilePending: 429 ждёт дольше, пауза не перелетает дедлайн', async () => {
+    const { ApiError } = await import('../src/api.js')
+    const { JOB_POLL_RATE_LIMIT_MS } = await import('../src/jobPoll.js')
+    const c = clock()
+    const seq = [new ApiError(429, 'rate_limited', 'x'), new ApiError(503, 'unknown', 'x'), { state: 'done' }]
+    const once = () => { const r = seq.shift(); return r instanceof Error ? Promise.reject(r) : Promise.resolve(r) }
+    const out = await repeatWhilePending(once, { pending: (r) => r.state === 'checking', deadlineMs: 6000, now: c.now, sleep: c.sleep })
+    expect(out).toEqual({ resp: { state: 'done' }, settled: true })
+    expect(c.sleeps).toEqual([JOB_POLL_RATE_LIMIT_MS, 1000])
+  })
+})

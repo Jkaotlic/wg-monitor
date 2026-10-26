@@ -176,3 +176,20 @@ describe('GAP-02: пауза после 429 длиннее обычной', () =
     expect(JOB_POLL_RATE_LIMIT_MS).toBe(5000)
   })
 })
+
+describe('retryPauseMs: пауза повтора не длиннее остатка и после 429 длиннее', () => {
+  it('обычная пауза, если до дедлайна далеко', async () => {
+    const { retryPauseMs } = await import('../src/jobPoll.js')
+    expect(retryPauseMs({ status: 502 }, 1500, 60_000)).toBe(1500)
+  })
+  it('429 -- JOB_POLL_RATE_LIMIT_MS', async () => {
+    const { retryPauseMs } = await import('../src/jobPoll.js')
+    expect(retryPauseMs({ status: 429 }, 1500, 60_000)).toBe(JOB_POLL_RATE_LIMIT_MS)
+  })
+  it('не длиннее остатка до дедлайна, не меньше нуля', async () => {
+    const { retryPauseMs } = await import('../src/jobPoll.js')
+    expect(retryPauseMs({ status: 502 }, 1500, 400)).toBe(400)
+    expect(retryPauseMs({ status: 429 }, 1500, 2000)).toBe(2000)
+    expect(retryPauseMs({ status: 502 }, 1500, -50)).toBe(0)
+  })
+})
