@@ -52,15 +52,15 @@ describe('автопочинка: ошибка загрузки', () => {
     root.remove()
   })
 
-  // Тому, кому править нельзя (роль известна и не owner/admin), строка про сбой
-  // бесполезна: повторить и включить он всё равно не сможет.
-  it('зритель без прав правки сбоя не видит; неизвестная роль -- как раньше', async () => {
-    for (const [role, shown] of [['viewer', false], [undefined, true], ['admin', true]]) {
+  // Править автопочинку вправе любая роль роутера (бэкенд проверяет только
+  // допуск к роутеру), поэтому сбой чтения видят все, кто видит VPN-туннель.
+  it('сбой чтения виден и оператору, и владельцу', async () => {
+    for (const role of ['operator', 'owner']) {
       const root = document.createElement('div')
       document.body.appendChild(root)
       await act(async () => render(<TunnelScreen routerID={4} asleep={false} snapshot={SNAP} tunnelID="awg12" role={role} openSheet={() => {}} onClose={() => {}} />, root))
       await flush()
-      expect(!!root.querySelector('.tunnel-autorepair-error')).toBe(shown)
+      expect(!!root.querySelector('.tunnel-autorepair-error')).toBe(true)
       render(null, root)
       root.remove()
     }

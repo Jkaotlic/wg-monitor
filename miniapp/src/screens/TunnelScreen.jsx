@@ -270,7 +270,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
           {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
 
-        {fresh && arLoadFailed && !ar && typeof openSheet === 'function' && (!role || mayManageTunnels(role)) && (
+        {fresh && arLoadFailed && !ar && typeof openSheet === 'function' && (
           <div class="tunnel-autorepair-error">
             <ErrorLine text="Не удалось узнать, включена ли автопочинка." onRetry={() => setArReload((n) => n + 1)} />
           </div>
