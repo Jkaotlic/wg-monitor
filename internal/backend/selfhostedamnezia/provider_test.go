@@ -263,3 +263,40 @@ func mapAddrSet(t *testing.T, raw map[string]bool) map[netip.Addr]bool {
 	}
 	return out
 }
+
+// BACK-06: пробел в начале или конце пароля SSH -- часть пароля, хранится как введён.
+func TestStoreUpsertKeepsSSHPasswordWhitespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "selfhosted.json")
+	store, err := LoadStore(path, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := Instance{ID: "home", EndpointHost: "vpn.example.com", EndpointPort: 47567,
+		SSHHost: "203.0.113.5", SSHUser: "root", SSHPassword: " p@ss "}
+	if err := store.Upsert(inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveStore(path, store); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadStore(path, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := loaded.Get("home")
+	if got.SSHPassword != " p@ss " {
+		t.Fatalf("пароль обрезан: %q", got.SSHPassword)
+	}
+}
+
+func TestStoreUpsertRejectsBlankSSHPassword(t *testing.T) {
+	store, err := LoadStore(filepath.Join(t.TempDir(), "s.json"), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := Instance{ID: "home", EndpointHost: "vpn.example.com", EndpointPort: 47567,
+		SSHHost: "203.0.113.5", SSHUser: "root", SSHPassword: "   "}
+	if err := store.Upsert(inst); err == nil {
+		t.Fatal("пароль из одних пробелов должен отклоняться")
+	}
+}
