@@ -150,8 +150,13 @@ var verifyHTTPTimeout = 12 * time.Second
 // connection-refused for a short window after systemctl start succeeds, so
 // give the listener a few seconds before surfacing the failure.
 func stepVerifyHTTP(s remoteExec, url string) error {
+	return stepVerifyHTTPWithin(s, url, verifyHTTPTimeout)
+}
+
+// stepVerifyHTTPWithin -- то же с явным сроком ожидания.
+func stepVerifyHTTPWithin(s remoteExec, url string, timeout time.Duration) error {
 	cmd := curlHTTPCodeCommand(url)
-	deadline := time.Now().Add(verifyHTTPTimeout)
+	deadline := time.Now().Add(timeout)
 	var lastOut string
 	var lastErr error
 	for {

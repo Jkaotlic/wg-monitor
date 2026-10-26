@@ -64,9 +64,9 @@ func stubRestoreConfirm(t *testing.T, answer bool) *int {
 
 func shortHealthWait(t *testing.T) {
 	t.Helper()
-	prev := verifyHTTPTimeout
-	verifyHTTPTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { verifyHTTPTimeout = prev })
+	prev, prevPi := verifyHTTPTimeout, piHealthTimeout
+	verifyHTTPTimeout, piHealthTimeout = 10*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { verifyHTTPTimeout, piHealthTimeout = prev, prevPi })
 }
 
 // piReply -- ответы «здорового» Pi: контейнер есть, база цела, /healthz 200.
@@ -228,6 +228,38 @@ func TestRestoreToPiHealthFailureTellsHowToReturnBak(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("подсказка без %q: %v", want, err)
 		}
+	}
+	msg := err.Error()
+	first := "бэкенд ещё не ответил — возможно, он ещё запускается: посмотрите docker logs wg-monitor-backend, прежде чем откатывать"
+	if i := strings.Index(msg, first); i < 0 || i > strings.Index(msg, "cp -p data/state.db.bak.") {
+		t.Fatalf("сначала «ещё запускается», потом рецепт отката: %v", msg)
+	}
+}
+
+func TestRestoreToPiWaitsForSlowBackend(t *testing.T) {
+	if piHealthTimeout != 60*time.Second {
+		t.Fatalf("ожидание /healthz на Pi %v, want 60s", piHealthTimeout)
+	}
+	stubRestoreConfirm(t, true)
+	shortHealthWait(t)
+	prev := piHealthTimeout
+	piHealthTimeout = 5 * time.Second
+	t.Cleanup(func() { piHealthTimeout = prev })
+	fake := newFakeRemote()
+	polls := 0
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.Contains(cmd, "http_code") {
+			polls++
+			if polls < 3 {
+				return "000", "", 0, nil // контейнер ещё поднимается
+			}
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+		t.Fatalf("медленный старт -- не провал: %v", err)
 	}
 }
 

@@ -28,6 +28,10 @@ const (
 	piScriptRollbackFailed      = 12 // откат не удался: контейнер не запускается
 )
 
+// piHealthTimeout -- сколько ждать /healthz после запуска контейнера на Pi:
+// на Raspberry Pi бэкенд поднимается дольше, чем на VPS. Тесты сокращают.
+var piHealthTimeout = 60 * time.Second
+
 // restoreConfirm -- вопрос оператору; тесты подменяют.
 var restoreConfirm = Confirm
 
@@ -174,8 +178,10 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	if _, err := s.MustRun("docker start " + piBackendContainer); err != nil {
 		return fmt.Errorf("контейнер не запустился: %w\n%s", err, piRollbackHint(base, stamp, names))
 	}
-	if err := stepVerifyHTTP(s, piHealthURL(state.Backend.Domain)); err != nil {
-		return fmt.Errorf("бэкенд не ответил на /healthz: %w\n%s", err, piRollbackHint(base, stamp, names))
+	if err := stepVerifyHTTPWithin(s, piHealthURL(state.Backend.Domain), piHealthTimeout); err != nil {
+		return fmt.Errorf("бэкенд не ответил на /healthz за %s (%w).\n"+
+			"бэкенд ещё не ответил — возможно, он ещё запускается: посмотрите docker logs %s, прежде чем откатывать.\n%s",
+			piHealthTimeout, err, piBackendContainer, piRollbackHint(base, stamp, names))
 	}
 	PrintOK("восстановление на Pi завершено")
 	PrintInfo("сохранённые пароли роутеров после восстановления вводятся заново")
