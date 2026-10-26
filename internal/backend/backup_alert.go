@@ -41,6 +41,9 @@ const (
 
 	backupRecoveredText = "Бэкап снова в порядке."
 	backupAlertFooter   = "Подробности — в приложении, в «Парке», карточка «Бэкенд»."
+	// backupSealedKeyMissingText -- недельная проверка нашла в архиве
+	// зашифрованные хранилища, а ключа шифрования на сервере нет.
+	backupSealedKeyMissingText = "Ключа шифрования нет на сервере — после восстановления ключи кабинетов, панелей VPS, своих VPS и коды HideMy не прочитать. Верните на сервер прежний ключ шифрования (secrets/revive.key) и храните его копию отдельно от бэкапа."
 )
 
 // BackupAlertKV -- хранилище состояния тревог (db.KVRepo).
@@ -260,6 +263,11 @@ func (a *BackupAlerter) reasons(now, watch time.Time) ([]backupAlertReason, aler
 			text += "Архивы есть, но по ним могут не восстановиться. "
 		}
 		out = append(out, backupAlertReason{"verify", text + backupAlertFooter})
+	}
+	// v0.62 (BACK-04): ключа шифрования на сервере нет -- архив цел и
+	// проверка прошла, но зашифрованные хранилища из него не открыть.
+	if st.Verify.LastRunAt != "" && st.Verify.SealedKeyMissing {
+		out = append(out, backupAlertReason{"sealed_key", backupSealedKeyMissingText + " " + backupAlertFooter})
 	}
 	return out, state
 }
