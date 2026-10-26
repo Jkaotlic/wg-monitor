@@ -9,6 +9,9 @@
 // резерв считается здесь из снимка, который экран и так держит.
 // option_unconfirmed -- вариант настройки стоит на роутере, но проверку не
 // прошёл (смена локации без доказательства).
+// source_hidden -- источник «свой сервер», но вариант этому человеку не
+// показан (нет права выдачи с панели): option пуст, а автопочинка всё равно
+// выпускает со своего сервера; подтверждение шлёт keep_source (MINI-02).
 //
 // Правило текстов владельцу: латиница вне «ёлочек» -- только «VPN». Имена
 // кабинетов («Amnezia Premium», «HideMy.name») и панелей приходят от сервера
@@ -70,6 +73,7 @@ export function autorepairRow(resp) {
       value = 'ждёт подтверждения'
       hint = `VPN-туннель переименован (был ${quote(r.rename_pending)}): пока вы не подтвердите автопочинку, я только перезапускаю его, конфиг не выпускаю.`
     } else if (r.blocked) value = `стоит: ${r.blocked}`
+    else if (r.source_hidden && r.provider === 'awg3') value = `включена · из ${sourceLabel(r.sources, 'awg3', '')}`
     else if (!r.provider || !r.option) value = 'только перезапуск'
     else value = `включена · из ${sourceLabel(r.sources, r.provider, r.option)}`
     // Смена локации легла на роутер, но проверку не прошла (v0.55, A4.3):
@@ -126,6 +130,11 @@ export function backupFor(snapshot, tunnelID) {
   return { known: true, name: '', carrier: '', reserve: false, self: false }
 }
 
+// Источник «свой сервер» записан, но вариант этому человеку не показан.
+function sourceHidden(resp) {
+  return Boolean(resp?.source_hidden) && resp?.provider === 'awg3'
+}
+
 function okSources(resp) {
   return (resp?.sources ?? []).filter((s) => s.ok && (s.options ?? []).length > 0)
 }
@@ -158,7 +167,13 @@ function initialPick(resp) {
 export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve = Boolean(carrier), self = false) {
   const sources = okSources(resp)
   const name = `«${tunnelName}»`
-  const reissue = sources.length > 0 ? ', а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере' : ''
+  // Источник скрыт (MINI-02): поля выбора нет, источник остаётся прежним --
+  // его и называем.
+  const hidden = sourceHidden(resp)
+  const hiddenLabel = hidden ? sourceLabel(resp?.sources, 'awg3', '') : ''
+  const reissue = hidden
+    ? `, а если не поможет — выпущу конфиг заново из ${hiddenLabel} и заменю конфиг на роутере`
+    : sources.length > 0 ? ', а если не поможет и ниже выбран источник — выпущу конфиг заново из него и заменю конфиг на роутере' : ''
   let what
   if (reserve && self) {
     what = `Если VPN-туннель ${name} упадёт, я перезапущу его${reissue}. Он запасной, но сейчас трафик идёт через него самого: первый VPN-туннель цепочки не отвечает, а порядок VPN-туннелей я не меняю.`
@@ -184,7 +199,12 @@ export function enableSheetText(resp, tunnelName, backup, carrier = '', reserve 
       { h: 'Что будет делать', text: what },
       // Цена своя у каждого источника, а источник человек меняет в поле:
       // она живёт в подсказке поля (costText) и следует выбору.
-      { h: 'Чего стоит', text: 'Перезапуск ничего не тратит. Цена выпуска зависит от источника — она написана под полем «Откуда выпускать конфиг заново».' },
+      {
+        h: 'Чего стоит',
+        text: hidden
+          ? `Перезапуск ничего не тратит. Источник остаётся прежним — ${hiddenLabel}. ${costText(resp, 'awg3')}`
+          : 'Перезапуск ничего не тратит. Цена выпуска зависит от источника — она написана под полем «Откуда выпускать конфиг заново».',
+      },
       { h: 'Кому напишу', text: 'Владельцу, операторам и админу — в личку бота: что упало, что делаю и чем кончилось. Если понадобится ваше участие, напишу отдельно, со звуком.' },
       { h: 'Как выключить', text: 'Кнопкой «Выключить автопочинку» на этом экране, в любой момент.' },
     ],
@@ -218,6 +238,9 @@ export function costText(resp, provider) {
 // Поля localSheet: источник (select; только подключённые) и галочка «можно
 // сменить локацию» -- только у кабинетов (у своего сервера локации нет).
 export function enableFields(resp) {
+  // Источник скрыт (MINI-02): выбирать не из чего -- подтверждение оставляет
+  // источник, выбранный тем, кому панель разрешена.
+  if (sourceHidden(resp)) return []
   const options = [{ value: '', label: 'Без источника — только перезапуск' }]
   for (const s of okSources(resp)) {
     for (const o of s.options) {
@@ -249,7 +272,10 @@ export function enableReady() {
   return true
 }
 
-export function enableBody(values) {
+// resp -- ответ GET: при скрытом источнике тело просит оставить записанный
+// (keep_source), а не шлёт пустой провайдер, который стёр бы его (MINI-02).
+export function enableBody(values, resp) {
+  if (sourceHidden(resp)) return { enabled: true, keep_source: true }
   const [provider, option] = splitPick(values?.source)
   return { enabled: true, provider, option, allow_relocate: CABINETS.includes(provider) && values?.allow_relocate === true }
 }

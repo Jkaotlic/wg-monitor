@@ -92,7 +92,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
         fields: enableFields(ar),
         fieldsReady: enableReady,
         errorText: (err) => errorText(err),
-        perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values)),
+        perform: (_typed, values) => putAutorepair(routerID, target.id, enableBody(values, ar)),
         onDone: (resp) => {
           if (alive.current && resp) setAr(resp)
         },
