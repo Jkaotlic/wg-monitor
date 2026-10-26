@@ -59,17 +59,38 @@ class MainMarkerTest(unittest.TestCase):
                 f.write(cfg_text)
             return subprocess.run([sys.executable, RELAY, job], capture_output=True, text=True, timeout=30)
 
+    NONCE = "0123456789abcdef"
+
     def test_marker_in_stdout_on_classified_error(self):
         relay = load_relay()
         out, err = io.StringIO(), io.StringIO()
-        relay.report_error(relay.RelayError(relay.ROOT_LOGIN_REFUSED), out, err)
-        self.assertEqual(out.getvalue(), "__WG_ERR__ root_auth_failed\n")
+        relay.report_error(relay.RelayError(relay.ROOT_LOGIN_REFUSED), out, err, nonce=self.NONCE)
+        self.assertEqual(out.getvalue(), "__WG_ERR__ 0123456789abcdef root_auth_failed\n")
         self.assertIn("root_auth_failed", err.getvalue())
+
+    def test_no_marker_without_nonce(self):
+        # v0.62 T10: в задании нет err_nonce (старый backend) -- метку не
+        # печатаем: без нонса backend её не отличит от вывода роутера.
+        relay = load_relay()
+        for nonce in (None, ""):
+            out, err = io.StringIO(), io.StringIO()
+            relay.report_error(relay.RelayError(relay.ROOT_LOGIN_REFUSED), out, err, nonce=nonce)
+            self.assertEqual(out.getvalue(), "")
+            self.assertIn("root_auth_failed", err.getvalue())
+
+    def test_nonce_taken_from_job(self):
+        relay = load_relay()
+        self.assertEqual(relay.job_err_nonce({"err_nonce": self.NONCE}), self.NONCE)
+        self.assertEqual(relay.job_err_nonce({}), "")
+        self.assertEqual(relay.job_err_nonce({"err_nonce": 5}), "")
+        # Нонс с пробелом/переводом строки сломал бы разбор строки метки.
+        self.assertEqual(relay.job_err_nonce({"err_nonce": "ab cd"}), "")
+        self.assertEqual(relay.job_err_nonce({"err_nonce": "ab\ncd"}), "")
 
     def test_no_marker_on_unclassified_error(self):
         relay = load_relay()
         out, err = io.StringIO(), io.StringIO()
-        relay.report_error(relay.RelayError("websocket closed"), out, err)
+        relay.report_error(relay.RelayError("websocket closed"), out, err, nonce=self.NONCE)
         self.assertEqual(out.getvalue(), "")
         self.assertIn("websocket closed", err.getvalue())
 

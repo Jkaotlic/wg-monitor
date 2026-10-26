@@ -2,6 +2,9 @@ package provision
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -185,11 +188,16 @@ func (d Deps) run(jobID string, req StartReq) {
 	// BACK-01). It only matters when the run fails: a stray marker on a
 	// successful run is ignored.
 	var errCode string
+	// errNonce ties ErrMarker lines to this job (v0.62 T10): the relay
+	// streams the router's terminal output to the same stdout, and only the
+	// runner and the relay know this value. Empty when JobJSON could not
+	// carry it — then every marker is ignored and the hint stays generic.
+	jobJSON, errNonce := withErrNonce(req.JobJSON)
 
 	onLine := func(line string) {
 		tail = appendTail(tail, line)
 
-		if code, ok := ParseErrLine(strings.TrimSpace(line)); ok {
+		if code, ok := ParseErrLine(strings.TrimSpace(line), errNonce); ok {
 			errCode = code
 			return
 		}
@@ -234,7 +242,7 @@ func (d Deps) run(jobID string, req StartReq) {
 		}
 	}
 
-	rc, relayErr := d.Relay(installCtx, req.RelayPath, req.JobJSON, onLine)
+	rc, relayErr := d.Relay(installCtx, req.RelayPath, jobJSON, onLine)
 
 	if commitErr != nil {
 		d.fail(jobID, req, StepConfigWritten, commitErr, noExitCode, tail)
@@ -456,4 +464,27 @@ func terminalConnectHint(relayErr error) string {
 	default:
 		return "не удалось подключиться к AWG Manager terminal — проверь awgm_url и доступность роутера"
 	}
+}
+
+// withErrNonce returns jobJSON with a fresh "err_nonce" field (16 hex chars
+// from crypto/rand) and that nonce. A jobJSON that is not a JSON object, or
+// a failed rand read, comes back unchanged with an empty nonce: the relay
+// then prints no ErrMarker and the runner accepts none.
+func withErrNonce(jobJSON []byte) ([]byte, string) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(jobJSON, &fields); err != nil || fields == nil {
+		return jobJSON, ""
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return jobJSON, ""
+	}
+	nonce := hex.EncodeToString(b[:])
+	quoted, _ := json.Marshal(nonce)
+	fields["err_nonce"] = quoted
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return jobJSON, ""
+	}
+	return out, nonce
 }

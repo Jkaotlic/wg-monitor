@@ -850,9 +850,10 @@ def run_bootstrap(sock, cfg):
     raise RelayError("bootstrap script timeout waiting for marker")
 
 def main():
-    global TLS_CONFIG
+    global TLS_CONFIG, ERR_NONCE
     cfg = load_config(sys.argv[1])
     TLS_CONFIG = cfg
+    ERR_NONCE = job_err_nonce(cfg)
     if cfg.get("mode") == "deferred_bootstrap":
         run_deferred_bootstrap(cfg, sys.argv[1])
         return
@@ -888,8 +889,21 @@ def main():
 # stdout+stderr у backend один, а ошибка процесса -- голое «exit status 1»,
 # поэтому класс отказа передаётся отдельной строкой. Коды -- ровно те, что
 # знает provision.ParseErrLine.
+#
+# v0.62 T10: строка -- «__WG_ERR__ <nonce> <code>», nonce -- err_nonce из
+# задания. Вывод терминала роутера идёт в тот же stdout, и роутер мог бы
+# напечатать метку сам (оживление тогда стёрло бы сохранённый root-пароль).
+# Нет нонса в задании -- метку не печатаем вовсе.
 ERR_MARKER = "__WG_ERR__ "
+ERR_NONCE = ""
 _AWGM_AUTH_HTTP = re.compile(r"^awgm \S+ \S+: HTTP (401|403):")
+_NONCE_RE = re.compile(r"^[0-9A-Za-z]{1,64}$")
+
+def job_err_nonce(cfg):
+    n = cfg.get("err_nonce") if isinstance(cfg, dict) else None
+    if isinstance(n, str) and _NONCE_RE.match(n):
+        return n
+    return ""
 
 def err_code(e):
     if not isinstance(e, RelayError):
@@ -903,12 +917,13 @@ def err_code(e):
         return "session_active"
     return None
 
-def report_error(e, out=None, err=None):
+def report_error(e, out=None, err=None, nonce=None):
     out = out if out is not None else sys.stdout
     err = err if err is not None else sys.stderr
+    nonce = ERR_NONCE if nonce is None else nonce
     code = err_code(e)
-    if code:
-        print(ERR_MARKER + code, file=out)
+    if code and nonce:
+        print(ERR_MARKER + nonce + " " + code, file=out)
         out.flush()
     print(str(e), file=err)
 
