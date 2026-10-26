@@ -302,3 +302,20 @@ func TestActionRestoreBackupOnPiUsesDockerInspection(t *testing.T) {
 		t.Fatalf("замена не дошла:\n%s", strings.Join(fake.calls, "\n"))
 	}
 }
+
+func TestRestoreToNewVPSRefusesDockerStateBeforeAnything(t *testing.T) {
+	connects := stubRestoreConnect(t, newFakeRemote())
+	// dl = nil и secrets = nil: любой шаг дальше отказа упал бы паникой.
+	err := restoreBackupToNewVPS(piState(), nil, nil, &RestoreBackup{})
+	if !errors.Is(err, errRestoreNewVPSFromDocker) {
+		t.Fatalf("err=%v, want errRestoreNewVPSFromDocker", err)
+	}
+	if *connects != 0 {
+		t.Fatalf("подключений: %d", *connects)
+	}
+	for _, want := range []string{"Raspberry Pi", "/data", "Restore to current VPS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("в тексте нет %q: %s", want, err)
+		}
+	}
+}

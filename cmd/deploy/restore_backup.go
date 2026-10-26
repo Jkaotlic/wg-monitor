@@ -690,7 +690,18 @@ func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *Resto
 	return verifyRestoredBackend(s, state.Backend.Domain)
 }
 
+// errRestoreNewVPSFromDocker: мастер настроен на Pi, а бэкап Pi несёт пути
+// контейнера -- поднять из него VPS с systemd значит положить нерабочий
+// backend.yaml. Отказ до любых вопросов и подключений. Текст -- фраза для
+// человека целиком.
+//
+//lint:ignore ST1005 законченная фраза для человека: с заглавной и с точкой.
+var errRestoreNewVPSFromDocker = errors.New("Мастер настроен на бэкенд в докере (Raspberry Pi): восстановление на новую VPS отсюда не делается — в бэкапе Pi пути контейнера (/data/...), которых на VPS с systemd нет. Восстановить на этот же Pi — режим [1] Restore to current VPS (--to-current-vps); переезд с Pi на VPS мастер не делает.")
+
 func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, backup *RestoreBackup) error {
+	if isDockerBackend(state) {
+		return errRestoreNewVPSFromDocker
+	}
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
 		return err
