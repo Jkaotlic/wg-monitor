@@ -213,6 +213,11 @@ const relayConcurrencyLimit = 32
 // is shared across the by-value Deps copies every handler receives.
 var relaySem = make(chan struct{}, relayConcurrencyLimit)
 
+// relayWG считает все фоновые уведомления и доставки тревог -- и те, что
+// ушли на месте при полном пуле: они тоже пишут в базу (отметки доставки),
+// и остановка бэкенда ждёт их до d.Close() (WaitRelayDrain).
+var relayWG sync.WaitGroup
+
 // spawnRelay runs fn in a bounded background goroutine parented to the relay
 // (shutdown) context with a 10s timeout. When the relay pool is saturated the
 // notification is dropped (and logged) instead of spawning an unbounded
@@ -264,14 +269,17 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 		defer cancel()
 		fn(ctx)
 	}
+	relayWG.Add(1)
 	select {
 	case relaySem <- struct{}{}:
 	default:
 		d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
+		defer relayWG.Done()
 		run()
 		return
 	}
 	go func() {
+		defer relayWG.Done()
 		defer func() { <-relaySem }()
 		run()
 	}()
@@ -323,15 +331,13 @@ func alertQueueLen() int {
 	return len(alertQueue.tails)
 }
 
-// WaitRelayDrain ждёт, пока опустеет общий пул relay: фоновые доставки
-// тревог и уведомления пишут в базу (отметки доставки), поэтому остановка
-// бэкенда ждёт их до d.Close(). Без ограничения по времени -- его ставит
-// вызывающий (waitBounded); контекст доставок к этому моменту уже отменён,
-// так что они заканчиваются быстро.
+// WaitRelayDrain ждёт конца всех фоновых уведомлений и доставок тревог,
+// включая ушедшие на месте при полном пуле: они пишут в базу (отметки
+// доставки), поэтому остановка бэкенда ждёт их до d.Close(). Без
+// ограничения по времени -- его ставит вызывающий; контекст доставок к
+// этому моменту уже отменён, так что они заканчиваются быстро.
 func WaitRelayDrain() {
-	for len(relaySem) > 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	relayWG.Wait()
 }
 
 // alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
@@ -340,7 +346,9 @@ const alertDeliveryTimeout = 30 * time.Second
 
 // goRelay запускает fn с местом в relaySem, уже занятым вызывающим.
 func goRelay(d Deps, timeout time.Duration, fn func(ctx context.Context)) {
+	relayWG.Add(1)
 	go func() {
+		defer relayWG.Done()
 		defer func() { <-relaySem }()
 		ctx, cancel := context.WithTimeout(relayParent(d), timeout)
 		defer cancel()
