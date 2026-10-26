@@ -257,6 +257,17 @@ func spawnAlertDelivery(d Deps, label string, fn func(ctx context.Context)) {
 	goRelay(d, alertDeliveryTimeout, fn)
 }
 
+// WaitRelayDrain ждёт, пока опустеет общий пул relay: фоновые доставки
+// тревог и уведомления пишут в базу (отметки доставки), поэтому остановка
+// бэкенда ждёт их до d.Close(). Без ограничения по времени -- его ставит
+// вызывающий (waitBounded); контекст доставок к этому моменту уже отменён,
+// так что они заканчиваются быстро.
+func WaitRelayDrain() {
+	for len(relaySem) > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
 // повторами (sendWithRetry пережидает retry_after при 429).
 const alertDeliveryTimeout = 30 * time.Second

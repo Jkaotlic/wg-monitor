@@ -508,6 +508,11 @@ func main() {
 	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
+	// Фоновые доставки тревог из /v1/report (пул relay) пишут в базу:
+	// ждём их до d.Close(), но ограниченно -- их держит Telegram.
+	if !waitBounded(backend.WaitRelayDrain, 10*time.Second) {
+		logger.Warn("доставки тревог: пул relay не опустел за 10 с, останавливаемся без них")
+	}
 	// Мягкое напоминание пишет отметки в базу: ждём его до d.Close(), но
 	// ограниченно -- рассылку держит Telegram с его таймаутами.
 	if maintPoller != nil && !waitBounded(maintPoller.WaitForExit, 10*time.Second) {
