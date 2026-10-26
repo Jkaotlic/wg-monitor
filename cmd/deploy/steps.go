@@ -142,12 +142,16 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	return nil
 }
 
+// verifyHTTPTimeout -- сколько stepVerifyHTTP ждёт 200 после рестарта.
+// Тесты сокращают, чтобы провал не ждал 12 секунд.
+var verifyHTTPTimeout = 12 * time.Second
+
 // stepVerifyHTTP: curl URL, expect 200. Backend restarts can return
 // connection-refused for a short window after systemctl start succeeds, so
 // give the listener a few seconds before surfacing the failure.
-func stepVerifyHTTP(s *SSH, url string) error {
+func stepVerifyHTTP(s remoteExec, url string) error {
 	cmd := curlHTTPCodeCommand(url)
-	deadline := time.Now().Add(12 * time.Second)
+	deadline := time.Now().Add(verifyHTTPTimeout)
 	var lastOut string
 	var lastErr error
 	for {
@@ -179,7 +183,7 @@ func curlHTTPCodeCommand(url string) string {
 	return "curl -sS -o /dev/null -w '%{http_code}' " + shellSingleQuote(url)
 }
 
-func stepVerifyBackendHealth(s *SSH, domain string) error {
+func stepVerifyBackendHealth(s remoteExec, domain string) error {
 	if err := stepVerifyHTTP(s, backendHealthURL(domain)); err != nil {
 		return err
 	}
@@ -258,7 +262,7 @@ func stepEnsureDir(s *SSH, path, owner string) error {
 }
 
 // stepUploadFile uploads bytes via UploadSFTP and chmod's.
-func stepUploadFile(s *SSH, remotePath string, data []byte, mode string) error {
+func stepUploadFile(s remoteExec, remotePath string, data []byte, mode string) error {
 	// Был ли файл до загрузки: провал chmod стирает только свежий файл.
 	// Проверка не удалась -- считаем, что был: живой файл дороже.
 	existed := true

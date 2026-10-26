@@ -25,6 +25,23 @@ type SSH struct {
 	host   string
 }
 
+// remoteExec -- то, чем шаги мастера пользуются на сервере: команды и
+// загрузка файла. *SSH его реализует, тесты подставляют фейк и видят все
+// команды по порядку, не трогая живых машин.
+type remoteExec interface {
+	Run(cmd string) (stdout, stderr string, rc int, err error)
+	MustRun(cmd string) (string, error)
+	UploadSFTPMode(remotePath string, data []byte, mode string) error
+}
+
+// remoteSession -- remoteExec, которое надо закрыть по окончании.
+type remoteSession interface {
+	remoteExec
+	Close() error
+}
+
+var _ remoteSession = (*SSH)(nil)
+
 const defaultSSHCommandTimeout = 10 * time.Minute
 
 // ConnectSSH dials host:port. alias is used as the known_hosts lookup key

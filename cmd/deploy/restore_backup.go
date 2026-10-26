@@ -650,6 +650,16 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 //lint:ignore ST1005 законченная фраза для человека: с заглавной и с точкой.
 var errRestoreDockerLayout = errors.New("Этот бэкенд работает в докере (Raspberry Pi): мастер восстанавливает только раскладку VPS с systemd. Как восстановить вручную — DEPLOY.md, раздел «Восстановление бэкапа на Pi».")
 
+// connectRestoreBackend -- SSH к текущему бэкенду для восстановления. Тесты
+// подменяют его фейком и считают, было ли подключение вообще.
+var connectRestoreBackend = func(state *State, secrets *SecretStore) (remoteSession, error) {
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return nil, err
+	}
+	return connectBackendSSH(state, secrets, kh)
+}
+
 func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
 	if strings.TrimSpace(state.Backend.SourceBind) != "" {
 		return errRestoreDockerLayout
@@ -657,12 +667,8 @@ func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *Resto
 	if state.Backend.Host == "" {
 		return fmt.Errorf("backend VPS is not configured in wizard.toml")
 	}
-	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
-	if err != nil {
-		return err
-	}
 	PrintStep(1, 4, "SSH to current VPS")
-	s, err := connectBackendSSH(state, secrets, kh)
+	s, err := connectRestoreBackend(state, secrets)
 	if err != nil {
 		return err
 	}
@@ -827,7 +833,7 @@ const restoreStagingPrefix = "/tmp/wg-monitor-restore."
 
 // removeRestoreStaging убирает каталог выгрузки на сервере; ошибка уборки
 // ничего не меняет в исходе восстановления, но о ней говорим.
-func removeRestoreStaging(s *SSH, staging string) {
+func removeRestoreStaging(s remoteExec, staging string) {
 	if !restoreStagingRe.MatchString(staging) {
 		return
 	}
@@ -839,7 +845,7 @@ func removeRestoreStaging(s *SSH, staging string) {
 // uploadRestoreBackupFiles выгружает базу, конфиг и хранилища в новый каталог
 // mktemp -d (0700, имя не угадать) и возвращает его путь. При любом провале
 // выгрузки каталог убирается.
-func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, err error) {
+func uploadRestoreBackupFiles(s remoteExec, backup *RestoreBackup) (staging string, err error) {
 	out, err := s.MustRun("mktemp -d " + restoreStagingPrefix + "XXXXXXXXXX")
 	if err != nil {
 		return "", err
@@ -879,7 +885,7 @@ func uploadRestoreBackupFiles(s *SSH, backup *RestoreBackup) (staging string, er
 	return staging, nil
 }
 
-func applyRestoreBackupOnRemote(s *SSH, staging string, extras []RestoreExtraFile) error {
+func applyRestoreBackupOnRemote(s remoteExec, staging string, extras []RestoreExtraFile) error {
 	if !restoreStagingRe.MatchString(staging) {
 		return fmt.Errorf("unexpected staging directory %q", staging)
 	}
@@ -951,7 +957,7 @@ rm -rf %[6]s
 `, stamp, preflight.String(), rollback.String(), backupOld.String(), install.String(), staging)
 }
 
-func verifyRestoredBackend(s *SSH, domain string) error {
+func verifyRestoredBackend(s remoteExec, domain string) error {
 	out, err := s.MustRun("systemctl is-active wg-monitor-backend")
 	var healthErr error
 	if strings.TrimSpace(domain) != "" {

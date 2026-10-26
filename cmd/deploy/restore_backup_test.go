@@ -475,8 +475,12 @@ func TestRestoreToCurrentVPSRefusesDockerLayoutBeforeAnySSH(t *testing.T) {
 	state := &State{}
 	state.Backend.Host = "198.51.100.10"
 	state.Backend.SourceBind = "127.0.0.1:8080"
+	connects := stubRestoreConnect(t, newFakeRemote())
 	// secrets = nil: любое обращение к SSH/хранилищу паролей упало бы паникой.
 	err := restoreBackupToCurrentVPS(state, nil, &RestoreBackup{})
+	if *connects != 0 {
+		t.Fatalf("SSH до отказа: %d подключений", *connects)
+	}
 	if !errors.Is(err, errRestoreDockerLayout) {
 		t.Fatalf("err=%v, want errRestoreDockerLayout", err)
 	}

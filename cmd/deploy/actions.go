@@ -2459,7 +2459,7 @@ func vpsUserExists(bs *SSH, nick string) (bool, error) {
 	return strings.TrimSpace(out) == "1", nil
 }
 
-func ensureRemoteSQLite3(bs *SSH) error {
+func ensureRemoteSQLite3(bs remoteExec) error {
 	if _, _, rc, _ := bs.Run("command -v sqlite3 >/dev/null 2>&1"); rc == 0 {
 		return nil
 	}
