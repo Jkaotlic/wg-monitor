@@ -192,8 +192,8 @@ func piRunRestoreScript(s remoteExec, base, stamp string, names []string) error 
 			what = "таймаут"
 		}
 		return fmt.Errorf("%s во время замены, исход неизвестен. Сначала проверьте на Pi:\n"+
-			"  ls -d %s/%s   # каталога нет -- скрипт доработал: сам откатил при сбое и запустил бэкенд\n"+
-			"  pgrep -af 'restore-tmp'   # скрипт ещё идёт -- дождитесь его конца\n"+
+			"  ls -d %s/%s   # каталога нет — скрипт доработал; проверьте ниже, запущен ли бэкенд\n"+
+			"  pgrep -af '[r]estore-tmp'   # скрипт ещё идёт -- дождитесь его конца\n"+
 			"  docker ps -a --filter name=%s\n"+
 			"Только если каталог остался, а скрипта уже нет -- %s", what, base, piRestoreTmp, piBackendContainer, piRollbackHint(base, stamp, names))
 	}

@@ -474,7 +474,7 @@ func TestRestoreToPiScriptTransportErrorOutcomeUnknown(t *testing.T) {
 			t.Fatal("ожидалась ошибка")
 		}
 		msg := err.Error()
-		for _, want := range []string{"исход неизвестен", tc.want, "ls -d /root/wg-monitor/data/restore-tmp", "pgrep"} {
+		for _, want := range []string{"исход неизвестен", tc.want, "ls -d /root/wg-monitor/data/restore-tmp", "pgrep -af '[r]estore-tmp'", "проверьте ниже, запущен ли бэкенд"} {
 			if !strings.Contains(msg, want) {
 				t.Fatalf("нет %q: %s", want, msg)
 			}
