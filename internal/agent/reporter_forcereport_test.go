@@ -124,3 +124,32 @@ func TestReporterForceReportGivesUpWithContextWhileWaiting(t *testing.T) {
 		t.Fatal("ForceReport висит за замком дольше срока команды")
 	}
 }
+
+// Срок команды кончился в паузе после пинка пингчека (500 мс) -- отчёт не
+// отправлен, ForceReport обязан вернуть ошибку, а не успех.
+func TestReporterForceReportCancelledDuringSettleIsError(t *testing.T) {
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	awg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer awg.Close()
+	r := NewReporter(ReporterConfig{
+		Sender:    NewClient(srv.URL, "t", "test", 2*time.Second),
+		Version:   "test",
+		Interval:  time.Hour,
+		AwgClient: awgmgr.New(awg.URL),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := r.ForceReport(ctx); err == nil {
+		t.Fatal("срок кончился в паузе после пингчека, а ForceReport ответил успехом")
+	}
+	if posts.Load() != 0 {
+		t.Fatalf("POST отчёта %d, want 0", posts.Load())
+	}
+}
