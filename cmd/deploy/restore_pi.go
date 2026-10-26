@@ -35,6 +35,9 @@ var piHealthTimeout = 60 * time.Second
 // restoreConfirm -- вопрос оператору; тесты подменяют.
 var restoreConfirm = Confirm
 
+// restoreStdinIsTerminal -- можно ли спросить оператора; тесты подменяют.
+var restoreStdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
+
 func isDockerBackend(state *State) bool {
 	return state != nil && strings.TrimSpace(state.Backend.SourceBind) != ""
 }
@@ -100,7 +103,7 @@ func piRestoreStores(extras []RestoreExtraFile) []RestoreExtraFile {
 	return out
 }
 
-func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup) error {
+func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup, yes bool) error {
 	base := backupPathsForState(state).LayoutRoot
 	if !restoreDestinationRe.MatchString(base) || path.Clean(base) != base {
 		return fmt.Errorf("unexpected Raspberry Pi layout root %q", base)
@@ -108,7 +111,12 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	if strings.TrimSpace(state.Backend.Host) == "" {
 		return fmt.Errorf("backend host is not configured in wizard.toml")
 	}
-	if !restoreConfirm("Восстановить на Pi? Бэкенд будет остановлен", false) {
+	// Без терминала спросить некого: «нет» от пустого stdin -- не отказ
+	// оператора, и выход 0 без восстановления обманул бы cron/скрипт.
+	if !yes && !restoreStdinIsTerminal() {
+		return errors.New("восстановление на Pi требует подтверждения в терминале; запустите с --yes, если уверены")
+	}
+	if !yes && !restoreConfirm("Восстановить на Pi? Бэкенд будет остановлен", false) {
 		PrintInfo("восстановление на Pi отменено, на сервере ничего не менялось")
 		return nil
 	}
@@ -132,7 +140,7 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	}
 	if !running {
 		PrintWarn("контейнер " + piBackendContainer + " сейчас не запущен")
-		if !restoreConfirm("Контейнер "+piBackendContainer+" сейчас не запущен; в конце восстановления мастер его запустит. Продолжить?", false) {
+		if !yes && !restoreConfirm("Контейнер "+piBackendContainer+" сейчас не запущен; в конце восстановления мастер его запустит. Продолжить?", false) {
 			PrintInfo("восстановление на Pi отменено, на сервере ничего не менялось")
 			return nil
 		}

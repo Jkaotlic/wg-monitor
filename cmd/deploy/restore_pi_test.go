@@ -58,8 +58,16 @@ func stubRestoreConfirm(t *testing.T, answer bool) *int {
 		n++
 		return answer
 	}
+	stubStdinTerminal(t, true)
 	t.Cleanup(func() { restoreConfirm = prev })
 	return &n
+}
+
+func stubStdinTerminal(t *testing.T, tty bool) {
+	t.Helper()
+	prev := restoreStdinIsTerminal
+	restoreStdinIsTerminal = func() bool { return tty }
+	t.Cleanup(func() { restoreStdinIsTerminal = prev })
 }
 
 func shortHealthWait(t *testing.T) {
@@ -92,7 +100,7 @@ func TestRestoreToPiDeclinedMakesNoSSH(t *testing.T) {
 	asks := stubRestoreConfirm(t, false)
 	connects := stubRestoreConnect(t, newFakeRemote())
 	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err != nil {
 		t.Fatalf("отказ оператора -- не ошибка: %v", err)
 	}
 	if *asks != 1 {
@@ -110,7 +118,7 @@ func TestRestoreToPiRunsManualProcedureInOrder(t *testing.T) {
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
 
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err != nil {
 		t.Fatalf("restore: %v\n%s", err, strings.Join(fake.calls, "\n"))
 	}
 	order := []string{
@@ -191,7 +199,7 @@ func TestRestoreToPiIntegrityFailureNeverStopsBackend(t *testing.T) {
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
 
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "integrity_check") {
 		t.Fatalf("err=%v, want отказ по integrity_check", err)
 	}
@@ -220,7 +228,7 @@ func TestRestoreToPiHealthFailureTellsHowToReturnBak(t *testing.T) {
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
 
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil {
 		t.Fatal("провал /healthz -- ошибка")
 	}
@@ -258,7 +266,7 @@ func TestRestoreToPiWaitsForSlowBackend(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err != nil {
 		t.Fatalf("медленный старт -- не провал: %v", err)
 	}
 }
@@ -274,7 +282,7 @@ func TestRestoreToPiPreflightFailureStopsNothing(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "sqlite3") {
 		t.Fatalf("err=%v", err)
 	}
@@ -294,7 +302,7 @@ func TestRestoreToPiStageFailureNeverStopsBackend(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err == nil || !strings.Contains(err.Error(), "бэкенд не останавливался") {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err == nil || !strings.Contains(err.Error(), "бэкенд не останавливался") {
 		t.Fatalf("err=%v", err)
 	}
 	if fake.indexOfCall("docker stop") >= 0 || fake.indexOfCall("docker start") >= 0 {
@@ -313,7 +321,7 @@ func TestRestoreToPiStopFailureStartsBackAndCleans(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err == nil {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err == nil {
 		t.Fatal("ожидалась ошибка")
 	}
 	all := strings.Join(fake.calls, "\n")
@@ -345,7 +353,7 @@ func TestRestoreToPiScriptFailureCodes(t *testing.T) {
 		}
 		stubRestoreConnect(t, fake)
 		b := inspectPiArchive(t, piArchiveMembers())
-		err := restoreBackupToCurrentVPS(piState(), nil, b)
+		err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tc.wrong) {
 			t.Fatalf("rc=%d: err=%v", tc.rc, err)
 		}
@@ -447,7 +455,7 @@ func TestRestoreToPiRollbackFailureDoesNotStart(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "откат не удался — вернуть руками:") || !strings.Contains(err.Error(), "cp -p data/state.db.bak.") {
 		t.Fatalf("err=%v", err)
 	}
@@ -464,6 +472,7 @@ func TestRestoreToPiStoppedContainerIsAnnouncedAndAsked(t *testing.T) {
 		return len(prompts) == 1 // первое «да», второе «нет»
 	}
 	t.Cleanup(func() { restoreConfirm = prev })
+	stubStdinTerminal(t, true)
 	fake := newFakeRemote()
 	fake.reply = func(cmd string) (string, string, int, error) {
 		if strings.Contains(cmd, "docker inspect") {
@@ -473,7 +482,7 @@ func TestRestoreToPiStoppedContainerIsAnnouncedAndAsked(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(prompts) != 2 || !strings.Contains(prompts[1], "не запущен") || !strings.Contains(prompts[1], "запустит") {
@@ -503,7 +512,7 @@ func TestRestoreToPiScriptTransportErrorOutcomeUnknown(t *testing.T) {
 		}
 		stubRestoreConnect(t, fake)
 		b := inspectPiArchive(t, piArchiveMembers())
-		err := restoreBackupToCurrentVPS(piState(), nil, b)
+		err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 		if err == nil {
 			t.Fatal("ожидалась ошибка")
 		}
@@ -536,7 +545,7 @@ func TestRestoreToPiScriptEmptyStderrCode(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "(код 10)") || strings.Contains(err.Error(), "код 10:") {
 		t.Fatalf("err=%v", err)
 	}
@@ -561,7 +570,7 @@ func TestRestoreToPiRefusesWhenDiskTooSmall(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "мало места на диске Pi: нужно ") || !strings.Contains(err.Error(), ", свободно 4.0 МБ") {
 		t.Fatalf("err=%v", err)
 	}
@@ -582,11 +591,63 @@ func TestRestoreToPiSpaceCheckUnreadableRefuses(t *testing.T) {
 	}
 	stubRestoreConnect(t, fake)
 	b := inspectPiArchive(t, piArchiveMembers())
-	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
 	if err == nil || !strings.Contains(err.Error(), "свободное место") {
 		t.Fatalf("err=%v", err)
 	}
 	if strings.Contains(strings.Join(fake.calls, "\n"), "upload:") {
 		t.Fatal("выгрузка без проверки места")
+	}
+}
+
+func TestRestoreToPiWithoutTerminalRefusesUnlessYes(t *testing.T) {
+	asks := stubRestoreConfirm(t, false) // EOF на stdin -- «нет»
+	stubStdinTerminal(t, false)
+	connects := stubRestoreConnect(t, newFakeRemote())
+	b := inspectPiArchive(t, piArchiveMembers())
+	err := restoreBackupToCurrentVPS(piState(), nil, b, false)
+	if err == nil || !strings.Contains(err.Error(), "восстановление на Pi требует подтверждения в терминале; запустите с --yes, если уверены") {
+		t.Fatalf("без терминала -- ошибка, а не тихий выход 0: err=%v", err)
+	}
+	if *asks != 0 || *connects != 0 {
+		t.Fatalf("вопросов %d, подключений %d", *asks, *connects)
+	}
+}
+
+func TestRestoreToPiYesSkipsBothQuestions(t *testing.T) {
+	asks := stubRestoreConfirm(t, false)
+	stubStdinTerminal(t, false)
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.Contains(cmd, "docker inspect") {
+			return "false\n", "", 0, nil // контейнер не запущен -- второй вопрос тоже снят
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	if err := restoreBackupToCurrentVPS(piState(), nil, b, true); err != nil {
+		t.Fatalf("restore --yes: %v", err)
+	}
+	if *asks != 0 {
+		t.Fatalf("с --yes спрошено %d раз", *asks)
+	}
+	if fake.indexOfCall("mv -f data/restore-tmp/state.db data/state.db") < 0 {
+		t.Fatalf("замена не дошла:\n%s", strings.Join(fake.calls, "\n"))
+	}
+}
+
+func TestActionRestoreBackupPassesYes(t *testing.T) {
+	stubRestoreConfirm(t, false)
+	stubStdinTerminal(t, false)
+	fake := newFakeRemote()
+	fake.reply = piReply("ok\n", "200")
+	stubRestoreConnect(t, fake)
+	archive := writeRestoreBackupArchive(t, piArchiveMembers())
+	if err := actionRestoreBackup(piState(), nil, nil, RestoreBackupOptions{ArchivePath: archive, Mode: "current", Yes: true}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if fake.indexOfCall("mv -f data/restore-tmp/state.db data/state.db") < 0 {
+		t.Fatalf("замена не дошла:\n%s", strings.Join(fake.calls, "\n"))
 	}
 }

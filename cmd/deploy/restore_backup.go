@@ -56,6 +56,9 @@ type RestoreBackupOptions struct {
 	ArchivePath string
 	Mode        string
 	DryRun      bool
+	// Yes (--yes) -- согласие заранее: без терминала восстановление на Pi
+	// иначе отказывается, а не «отменяется» молча.
+	Yes bool
 }
 
 type restoreBackendConfig struct {
@@ -645,7 +648,7 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 
 	switch mode {
 	case "current", "current-vps":
-		return restoreBackupToCurrentVPS(state, secrets, backup)
+		return restoreBackupToCurrentVPS(state, secrets, backup, opts.Yes)
 	case "new", "new-vps":
 		return restoreBackupToNewVPS(state, secrets, dl, backup)
 	default:
@@ -663,9 +666,9 @@ var connectRestoreBackend = func(state *State, secrets *SecretStore) (remoteSess
 	return connectBackendSSH(state, secrets, kh)
 }
 
-func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
+func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup, yes bool) error {
 	if isDockerBackend(state) {
-		return restoreBackupToPi(state, secrets, backup)
+		return restoreBackupToPi(state, secrets, backup, yes)
 	}
 	if state.Backend.Host == "" {
 		return fmt.Errorf("backend VPS is not configured in wizard.toml")
