@@ -1,6 +1,10 @@
 import { fetchCommandResult, isTransient } from './api.js'
 import { AGENT_OLDER_THAN_APP } from './labels.js'
-import { retryPauseMs } from './jobPoll.js'
+import { JOB_POLL_MS, retryPauseMs } from './jobPoll.js'
+
+// Пауза между опросами после временного сбоя релея -- одна на useCommand и
+// на экраны со своим маршрутом.
+export const COMMAND_POLL_PAUSE_MS = JOB_POLL_MS
 
 // Ожидание итога команды, которую поставил не /commands, а свой маршрут
 // сервера (удаление VPN-туннеля, загрузка .conf): ответ у них тот же {cmd_id},
@@ -11,7 +15,10 @@ import { retryPauseMs } from './jobPoll.js'
 //
 // alive() -- жив ли экран: закрытый экран не ждёт и чужой ответ не принимает.
 // null -- не дождались (дедлайн или экран ушёл); ошибка сети -- исключение.
-export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSec = 10, alive = () => true, now = () => Date.now(), sleep = pause, pauseMs = 1500 } = {}) {
+// onPoll(failed) -- после каждого опроса: был ли он временным сбоем. Так
+// вызывающий отличает «итога нет, потому что последний опрос не дошёл» от
+// «итога нет, роутер молчит» (useCommand: «ушла, итога нет»).
+export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSec = 10, alive = () => true, now = () => Date.now(), sleep = pause, pauseMs = COMMAND_POLL_PAUSE_MS, onPoll = () => {} } = {}) {
   const until = now() + deadlineMs
   while (alive() && now() < until) {
     const remainingSec = Math.max(1, Math.ceil((until - now()) / 1000))
@@ -21,10 +28,12 @@ export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSe
     } catch (err) {
       // Временный сбой релея: команда уже у роутера, ждём дальше до дедлайна.
       if (!isTransient(err)) throw err
+      onPoll(true)
       if (alive()) await sleep(retryPauseMs(err, pauseMs, until - now()))
       continue
     }
     if (!alive()) return null
+    onPoll(false)
     if (res) return res
   }
   return null

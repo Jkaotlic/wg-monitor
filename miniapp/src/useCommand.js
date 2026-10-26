@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { sendCommand, fetchCommandResult, isTransient, COMMAND_GONE_TEXT } from './api.js'
+import { sendCommand, COMMAND_GONE_TEXT } from './api.js'
+import { waitCommand } from './commandWait.js'
 import { asleepNote, SENT_NO_RESULT_TEXT, COMMAND_DEADLINE_TEXT } from './maintenance.js'
 import { errorText, SESSION_TEXT } from './errorText.js'
-import { JOB_POLL_MS, retryPauseMs } from './jobPoll.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -66,42 +66,23 @@ export function useCommand(routerID) {
         setSent(true)
         setSleepNote(asleepNote(posted))
       }
-      const until = Date.now() + deadlineMs
+      // Опрос и повторы после временных сбоев релея -- общий цикл commandWait.
       let lostPoll = false
-      while (Date.now() < until) {
-        // Bounded hop: the backend caps wait_sec at 12 anyway
-        // (miniappMaxCommandWaitSec, miniapp_commands.go) -- релей KeenDNS
-        // рвёт всё, что дольше 15 секунд, и обрыв здесь читался бы как
-        // ошибка, а не «ещё не готово». Capping the
-        // LAST hop to whatever time remains keeps the loop from overshooting
-        // the deadline by a near-full hop when the deadline is close.
-        const remainingSec = Math.max(1, Math.ceil((until - Date.now()) / 1000))
-        let res
-        try {
-          res = await fetchCommandResult(routerID, id, Math.min(waitSec, remainingSec))
-        } catch (err) {
-          // Временный сбой релея на опросе: команда уже у роутера, ждём
-          // дальше до дедлайна, с паузой, чтобы не молотить мёртвый релей.
-          if (!isTransient(err)) throw err
-          lostPoll = true
-          if (!aliveRef.current) return null
-          await new Promise((resolve) => setTimeout(resolve, retryPauseMs(err, JOB_POLL_MS, until - Date.now())))
-          continue
-        }
-        if (!aliveRef.current) return null
-        // Удачный опрос снимает отметку сбоя: к тексту «ушла, итога нет»
-        // ведёт только сбой ПОСЛЕДНЕГО опроса, а не любой давний.
-        lostPoll = false
-        if (res) {
-          // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
-          const tagged = { ...res, for_router: routerID }
-          setResult(tagged)
-          return tagged
-        }
+      const res = await waitCommand(routerID, id, {
+        deadlineMs,
+        waitSec,
+        alive: () => aliveRef.current,
+        onPoll: (failed) => { lostPoll = failed },
+      })
+      if (res) {
+        // Для какого роутера спрашивали: экран мог переключиться, пока ответ шёл.
+        const tagged = { ...res, for_router: routerID }
+        setResult(tagged)
+        return tagged
       }
-      if (aliveRef.current) {
-        setError(lostPoll ? SENT_NO_RESULT_TEXT : COMMAND_DEADLINE_TEXT)
-      }
+      // Экран закрыт -- состояние не трогаем.
+      if (!aliveRef.current) return null
+      setError(lostPoll ? SENT_NO_RESULT_TEXT : COMMAND_DEADLINE_TEXT)
     } catch (err) {
       if (aliveRef.current) {
         // Фраза для человека, а не «/routers/7/commands failed: 400» (v0.50).
