@@ -33,7 +33,7 @@ func TestRestorePreviewNamesSealedStoresWithoutKey(t *testing.T) {
 	preview := RenderRestoreBackupPreview(b)
 	for _, want := range []string{
 		"sealed stores: amnezia-premium.json, awg3-panels.json",
-		"без прежнего revive.key не откроются: ключи кабинетов, панелей VPS",
+		"без прежнего revive.key не откроются: ключи кабинетов и панелей VPS",
 		"saved router passwords must be entered again",
 	} {
 		if !strings.Contains(preview, want) {

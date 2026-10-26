@@ -207,7 +207,7 @@ func TestBackupManifestNamesSealedStores(t *testing.T) {
 	manifest := string(tarMember(t, f.decryptArchive(t, fixtureSmallName), "manifest.txt"))
 	for _, want := range []string{
 		"sealed_stores=amnezia-premium.json,amnezia-selfhosted.json,awg3-panels.json,hidemyname.json\n",
-		"sealed_stores_note=без прежнего revive.key не откроются: ключи кабинетов, панелей VPS, своих VPS, кодов HideMy\n",
+		"sealed_stores_note=без прежнего revive.key не откроются: ключи кабинетов, панелей VPS, своих VPS и коды HideMy\n",
 		"revive_key_note=" + reviveKeyNotInBackupNote + "\n",
 	} {
 		if !strings.Contains(manifest, want) {

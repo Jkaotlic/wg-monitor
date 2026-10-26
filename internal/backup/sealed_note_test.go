@@ -9,9 +9,11 @@ func TestSealedStoresNote(t *testing.T) {
 	}{
 		{nil, ""},
 		{[]string{"hidemyname.json", "awg3-panels.json", "amnezia-selfhosted.json", "amnezia-premium.json"},
-			"без прежнего revive.key не откроются: ключи кабинетов, панелей VPS, своих VPS, кодов HideMy"},
+			"без прежнего revive.key не откроются: ключи кабинетов, панелей VPS, своих VPS и коды HideMy"},
+		{[]string{"hidemyname.json"}, "без прежнего revive.key не откроются: коды HideMy"},
+		{[]string{"awg3-panels.json", "amnezia-premium.json"}, "без прежнего revive.key не откроются: ключи кабинетов и панелей VPS"},
 		{[]string{"awg3-panels.json"}, "без прежнего revive.key не откроются: ключи панелей VPS"},
-		{[]string{"amnezia-premium.json", "future-store.json"}, "без прежнего revive.key не откроются: ключи кабинетов, future-store.json"},
+		{[]string{"amnezia-premium.json", "future-store.json"}, "без прежнего revive.key не откроются: ключи кабинетов и future-store.json"},
 	} {
 		if got := SealedStoresNote(c.names); got != c.want {
 			t.Errorf("SealedStoresNote(%v) = %q, ждали %q", c.names, got, c.want)
