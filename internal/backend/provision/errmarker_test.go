@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +54,11 @@ func (n *nonceRelay) run(ctx context.Context, relayPath string, jobJSON []byte, 
 
 func runErrMarkerJob(t *testing.T, relay RelayFunc, budget time.Duration) Job {
 	t.Helper()
+	return runErrMarkerJobWith(t, relay, budget, []byte(`{"mode":"x","nickname":"router-errmarker"}`))
+}
+
+func runErrMarkerJobWith(t *testing.T, relay RelayFunc, budget time.Duration, jobJSON []byte) Job {
+	t.Helper()
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
 	deps := Deps{
 		Store:    NewStore(),
@@ -63,7 +70,7 @@ func runErrMarkerJob(t *testing.T, relay RelayFunc, budget time.Duration) Job {
 	id, err := deps.Start(StartReq{
 		Kind:          KindProvision,
 		Nickname:      "router-errmarker",
-		JobJSON:       []byte(`{"mode":"x","nickname":"router-errmarker"}`),
+		JobJSON:       jobJSON,
 		InstallBudget: budget,
 		VerifyBudget:  time.Second,
 	})
@@ -141,6 +148,31 @@ func TestDefaultRelay_ErrMarker(t *testing.T) {
 	job := runErrMarkerJob(t, relay, 10*time.Second)
 	if job.Hint != HintRootAuthFailed {
 		t.Fatalf("Hint = %q, want %q", job.Hint, HintRootAuthFailed)
+	}
+}
+
+// Вся цепочка: runner кладёт нонс -> настоящий встроенный awgm-relay.py
+// падает на 401 панели -> метка с нонсом -> подсказка про вход в awg-manager.
+func TestDefaultRelay_EmbeddedRelay_NonceEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/login" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer panel.Close()
+	job, _ := json.Marshal(map[string]string{"base_url": panel.URL, "login": "admin", "password": "secret"})
+	relay := func(ctx context.Context, _ string, jobJSON []byte, onLine func(string)) (int, error) {
+		return DefaultRelay(ctx, "", jobJSON, onLine)
+	}
+	got := runErrMarkerJobWith(t, relay, 20*time.Second, job)
+	if got.State != StateFailed || got.Hint != HintAuthFailed {
+		t.Fatalf("State=%q Hint=%q, want failed + %q; tail=%q", got.State, got.Hint, HintAuthFailed, got.Tail)
 	}
 }
 

@@ -1,4 +1,4 @@
-import importlib.util, io, os, socket, subprocess, sys, tempfile, threading, unittest
+import http.server, importlib.util, io, json, os, socket, subprocess, sys, tempfile, threading, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELAY = os.path.join(HERE, "awgm-relay.py")
@@ -138,6 +138,54 @@ class MainMarkerTest(unittest.TestCase):
         relay.report_error(relay.RelayError("websocket closed"), out, err, nonce=self.NONCE)
         self.assertEqual(out.getvalue(), "")
         self.assertIn("websocket closed", err.getvalue())
+
+    def run_relay_against_panel(self, job_extra):
+        """Подпроцесс relay против локальной «панели», которая отвечает 401 на
+        вход: main падает классифицированной ошибкой auth_failed по
+        настоящему пути __main__ -> report_error."""
+
+        class Panel(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                code = 401 if self.path == "/api/auth/login" else 200
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Panel)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            job = {"base_url": "http://127.0.0.1:%d" % srv.server_address[1], "login": "admin", "password": "secret"}
+            job.update(job_extra)
+            env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower()}
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "job.json")
+                with open(path, "w") as f:
+                    json.dump(job, f)
+                return subprocess.run([sys.executable, RELAY, path], capture_output=True, text=True, timeout=30, env=env)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_main_prints_marker_with_job_nonce(self):
+        res = self.run_relay_against_panel({"err_nonce": self.NONCE})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("__WG_ERR__ 0123456789abcdef auth_failed\n", res.stdout)
+        self.assertIn("HTTP 401", res.stderr)
+
+    def test_main_no_marker_without_job_nonce(self):
+        res = self.run_relay_against_panel({})
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertNotIn("__WG_ERR__", res.stdout)
+        self.assertIn("HTTP 401", res.stderr)
 
     def test_process_exits_1_without_marker_on_bad_job(self):
         res = self.run_relay("not json")
