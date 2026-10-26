@@ -259,11 +259,19 @@ func stepEnsureDir(s *SSH, path, owner string) error {
 
 // stepUploadFile uploads bytes via UploadSFTP and chmod's.
 func stepUploadFile(s *SSH, remotePath string, data []byte, mode string) error {
+	// Был ли файл до загрузки: провал chmod стирает только свежий файл.
+	// Проверка не удалась -- считаем, что был: живой файл дороже.
+	existed := true
+	if isSecretMode(mode) {
+		if _, _, rc, err := s.Run(existsBeforeUploadCommand(remotePath)); err == nil && rc != 0 {
+			existed = false
+		}
+	}
 	if err := s.UploadSFTPMode(remotePath, data, mode); err != nil {
 		PrintFail("upload: " + err.Error())
 		return err
 	}
-	if _, err := s.MustRun(chmodUploadedCommand(remotePath, mode)); err != nil {
+	if _, err := s.MustRun(chmodUploadedCommand(remotePath, mode, existed)); err != nil {
 		PrintFail(err.Error())
 		return err
 	}

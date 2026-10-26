@@ -409,15 +409,26 @@ func uploadSFTPCommandMode(remotePath, mode string) string {
 	return uploadSFTPCommand(remotePath)
 }
 
-// chmodUploadedCommand: если chmod секретного файла не удался, файл удаляется,
-// а не остаётся с неверными правами.
-func chmodUploadedCommand(remotePath, mode string) string {
+// chmodUploadedCommand: если chmod секретного файла не удался, файл, которого
+// до загрузки не было, удаляется, а не остаётся с неверными правами. Файл,
+// который был (existed), не трогаем: dd перезаписал его на месте с прежними
+// правами, а rm унёс бы живой /etc/wg-monitor/backend.yaml.
+func chmodUploadedCommand(remotePath, mode string, existed bool) string {
 	q := shellSingleQuote(remotePath)
 	cmd := "chmod " + mode + " " + q
-	if isSecretMode(mode) {
-		return cmd + " || { rm -f " + q + "; exit 1; }"
+	if !isSecretMode(mode) {
+		return cmd
 	}
-	return cmd
+	if existed {
+		return cmd + " || exit 1"
+	}
+	return cmd + " || { rm -f " + q + "; exit 1; }"
+}
+
+// existsBeforeUploadCommand -- проверка до загрузки: был ли файл на месте.
+// Код выхода 0 -- был.
+func existsBeforeUploadCommand(remotePath string) string {
+	return "test -e " + shellSingleQuote(remotePath)
 }
 
 // progressDots prints one '.' to its writer per 1 MiB consumed, and a
