@@ -571,7 +571,7 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 	if len(sealed) > 0 && !keyInArchive {
 		// v0.62 (BACK-04): ключ шифрования хранилищ в архив не кладётся --
 		// без прежнего revive.key на сервере они не откроются.
-		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " -- " + backup.SealedStoresNote(sealed)
+		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " (won't open without the old revive.key: it is not in the backup)"
 	}
 	if b.Manifest["kind"] == "small" {
 		out += "\nkind: small (no event history: after restore the screens stay empty until agents report, up to a minute)"

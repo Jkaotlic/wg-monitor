@@ -32,13 +32,16 @@ func TestRestorePreviewNamesSealedStoresWithoutKey(t *testing.T) {
 	defer cleanup()
 	preview := RenderRestoreBackupPreview(b)
 	for _, want := range []string{
-		"sealed stores: amnezia-premium.json, awg3-panels.json",
-		"без прежнего revive.key не откроются: ключи кабинетов и панелей VPS",
+		"sealed stores: amnezia-premium.json, awg3-panels.json (won't open without the old revive.key: it is not in the backup)",
 		"saved router passwords must be entered again",
 	} {
 		if !strings.Contains(preview, want) {
 			t.Errorf("в превью нет %q:\n%s", want, preview)
 		}
+	}
+	// Превью целиком на одном языке (английском), как соседние строки.
+	if strings.ContainsAny(preview, "абвгдежзийклмнопрстуфхцчшщъыьэюя") {
+		t.Fatalf("кириллица в превью:\n%s", preview)
 	}
 	if strings.Contains(preview, "not-really-ciphertext") {
 		t.Fatal("содержимое хранилища в превью")
@@ -58,7 +61,7 @@ func TestRestorePreviewNamesSealedStoresWithoutKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup2()
-	if p := RenderRestoreBackupPreview(b2); strings.Contains(p, "не откроются") {
+	if p := RenderRestoreBackupPreview(b2); strings.Contains(p, "won't open") {
 		t.Fatalf("превью архива с ключом:\n%s", p)
 	}
 
