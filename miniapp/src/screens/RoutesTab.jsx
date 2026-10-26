@@ -23,9 +23,10 @@ import {
   otherSourceRow,
   otherSourceSummary,
   rebindSheetText,
+  rebindSubtitle,
 } from '../routes.js'
 import { fetchRouterSettings, fetchRouterChecksWithIncidents } from '../api.js'
-import { rulesCount, tunnelTargetLabel } from '../labels.js'
+import { tunnelTargetLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -224,10 +225,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
     const options = rebindTargets(rows, src.id)
     return {
       title: 'Куда перенести',
-      subtitle:
-        src.id === OTHER_SOURCE_ID
-          ? `Всё, что сейчас идёт напрямую через провайдера (${rulesCount(src.total)})`
-          : `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
+      subtitle: rebindSubtitle(src),
       options: options.map((dst) => {
         // Текст -- честный: обратный перенос унесёт и правила, уже стоявшие
         // на цели, а из «Напрямую (WAN)» обратной дороги в приложении нет.

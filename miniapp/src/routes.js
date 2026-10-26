@@ -680,20 +680,36 @@ export function otherSourceSummary(row) {
 // ни туда, ни обратно (canRebindTunnel).
 export function rebindSheetText(src, dst) {
   const title = `Перенести всё в «${dst.name}»?`
-  const n = src?.total ?? 0
+  const policy = src?.id === OTHER_SOURCE_ID ? 0 : (src?.policyRules ?? 0)
+  const n = (src?.total ?? 0) - policy
   if (src?.id === OTHER_SOURCE_ID) {
     return {
       title,
       body: `${rulesCount(n)} из «${OTHER_SOURCE_NAME}» ${singular(n) ? 'пойдёт' : 'пойдут'} через VPN-туннель «${dst.name}». Обратно в «${OTHER_SOURCE_NAME}» приложение правила не переносит.`,
     }
   }
-  const moved = `${rulesCount(n)} ${singular(n) ? 'уедет' : 'уедут'} из «${src.name}» в «${dst.name}». В «${src.name}» не останется ничего.`
+  const moved = `${rulesCount(n)} ${singular(n) ? 'уедет' : 'уедут'} из «${src.name}» в «${dst.name}». ${
+    policy > 0
+      ? `Правила общего набора (${policy}) останутся — их переносит «Сделать главным».`
+      : `В «${src.name}» не останется ничего.`
+  }`
   const already = Math.max(0, (dst.total ?? 0) - (dst.policyRules ?? 0))
   const undo =
     already > 0
       ? `Отменить можно обратным переносом, но он заберёт и ${rulesCount(already)}, ${pluralRu(already, 'которое уже было', 'которые уже были', 'которые уже были')} на «${dst.name}».`
       : `Отменить можно обратным переносом с «${dst.name}».`
   return { title, body: `${moved} ${undo}` }
+}
+
+// Подзаголовок выбора цели: то, что реально уедет, и что останется.
+export function rebindSubtitle(src) {
+  if (src?.id === OTHER_SOURCE_ID) {
+    return `Всё, что сейчас идёт напрямую через провайдера (${rulesCount(src.total)})`
+  }
+  const policy = src?.policyRules ?? 0
+  const own = (src?.total ?? 0) - policy
+  const tail = policy > 0 ? `; правила общего набора (${policy}) останутся` : ''
+  return `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(own)})${tail}`
 }
 
 // Имя VPN-туннеля по привязке правила (интерфейсу); незнакомое -- как есть.
