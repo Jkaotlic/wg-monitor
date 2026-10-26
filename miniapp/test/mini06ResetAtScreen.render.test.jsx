@@ -11,11 +11,12 @@ const RESET = 'DNS reset → reference DoT\n\nснимок «до»: /opt/etc/wg
 const RESET_NO_SNAP = 'DNS reset → reference DoT\n'
 
 const split = (ts) => ({ check_name: 'dns_split', ts, details: { checked_at: ts, zones: { ru: 'yandex_dot' }, resolves: 'ok' } })
-const mocks = vi.hoisted(() => ({ calls: 0, after: [] }))
+const mocks = vi.hoisted(() => ({ calls: 0, after: [], router: null }))
 const BEFORE = [{ check_name: 'dns_split', ts: '2025-09-11T14:00:00Z', details: { checked_at: '2025-09-11T14:00:00Z', zones: { ru: 'other' }, resolves: 'ok' } }]
 
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
+  fetchRouter: () => (mocks.router ? Promise.resolve({ router: mocks.router }) : Promise.reject(new Error('offline'))),
   fetchRouterSettings: () => Promise.resolve({ role: 'admin', agent_version: 'v0.57.0' }),
   fetchRouterChecks: () => Promise.resolve({ checks: mocks.calls++ === 0 ? BEFORE : mocks.after, tunnels: [] }),
 }))
@@ -54,7 +55,7 @@ async function afterReset(resetOutput) {
 }
 const values = (root) => [...root.querySelectorAll('.card-rows .data-row')].map((r) => r.textContent)
 
-beforeEach(() => { mocks.calls = 0 })
+beforeEach(() => { mocks.calls = 0; mocks.router = null })
 
 describe('MINI-06: resetAt доходит до строк «после сброса»', () => {
   it('телефон сильно впереди роутера -- отчёт новее снимка всё равно свежий', async () => {
@@ -76,6 +77,26 @@ describe('MINI-06: resetAt доходит до строк «после сбро�
     mocks.after = [split('2025-09-11T14:10:00Z')]
     const root = await afterReset(RESET_NO_SNAP)
     expect(root.textContent).toContain('1 из 1')
+    render(null, root)
+  })
+
+  // Часы роутера на 10 минут впереди: бэкенд зажимает метку отчёта до серверного
+  // времени, а снимок «до» записан по часам роутера (14:13:20). Серверное время
+  // ответа на сброс -- 14:03:25, отчёт с серверной меткой 14:05 всё равно свежий.
+  it('роутер впереди сервера -- серверная (зажатая) метка отчёта свежая', async () => {
+    mocks.router = { last_seen_at: '2025-09-11T14:03:25Z', last_seen_age_sec: 0 }
+    mocks.after = [split('2025-09-11T14:05:00Z')]
+    const root = await afterReset(RESET)
+    expect(root.textContent).not.toContain('ждём отчёта')
+    expect(root.textContent).toContain('1 из 1')
+    render(null, root)
+  })
+
+  it('оценка серверного времени есть, но отчёт старше сброса -- ждём', async () => {
+    mocks.router = { last_seen_at: '2025-09-11T14:03:25Z', last_seen_age_sec: 0 }
+    mocks.after = [split('2025-09-11T14:02:00Z')]
+    const root = await afterReset(RESET)
+    expect(root.textContent).toContain('ждём отчёта')
     render(null, root)
   })
 })

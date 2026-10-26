@@ -131,6 +131,19 @@ export function snapshotResetAt(snapshotPath) {
   return m ? Number(m[1]) * 1000 : null
 }
 
+// Момент сброса для сравнения с метками отчётов. Бэкенд зажимает метку отчёта
+// до серверного времени, когда часы роутера уходят вперёд больше чем на 2
+// минуты, - тогда метки проверок серверные, а снимок «до» по часам роутера, и
+// строки застряли бы в «ждём отчёта». Поэтому resetAt = min(снимок, серверное
+// время на момент ответа о сбросе). replyMs - часы телефона при ответе о
+// сбросе; offsetMs - сдвиг сервера от телефона (serverClockOffset). Нет оценки -
+// остаётся снимок.
+export function serverAwareResetAt(snapshotMs, replyMs, offsetMs) {
+  if (snapshotMs == null) return null
+  if (typeof offsetMs !== 'number' || !Number.isFinite(replyMs)) return snapshotMs
+  return Math.min(snapshotMs, replyMs + offsetMs)
+}
+
 export function parseReset(result) {
   const output = String(result?.output ?? '')
   const m = SNAPSHOT.exec(output)

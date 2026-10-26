@@ -1,6 +1,7 @@
 import { agentReplyText, agentOwnText, errorText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
+import { fetchRouter, fetchRouterChecks, fetchRouterSettings } from '../api.js'
+import { serverClockOffset } from '../serverClock.js'
 import { placeText } from '../places.js'
 import { agentGateNote } from '../agentConfig.js'
 import { useCommand } from '../useCommand.js'
@@ -20,6 +21,7 @@ import {
   parseProbes,
   parseReset,
   snapshotResetAt,
+  serverAwareResetAt,
   probeRows,
   referenceUnreachable,
   skippedServersText,
@@ -138,7 +140,21 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         onResult: (res) => {
           const parsedReset = parseReset(res)
           setReset(parsedReset)
-          setResetAt(snapshotResetAt(parsedReset.snapshot))
+          const snapMs = snapshotResetAt(parsedReset.snapshot)
+          setResetAt(snapMs)
+          // Часы роутера могли уйти вперёд сервера: метки отчётов тогда
+          // серверные. Оценка серверного времени на момент ответа -- по
+          // ответу сервера про роутер.
+          const replyMs = Date.now()
+          if (snapMs != null) {
+            Promise.resolve()
+              .then(() => fetchRouter(routerID))
+              .then((r) => {
+                const offset = serverClockOffset(r?.router, Date.now())
+                setResetAt(serverAwareResetAt(snapMs, replyMs, offset))
+              })
+              .catch(() => {})
+          }
           setAfter(null)
           if (res?.status !== 'err') loadAfter()
         },
