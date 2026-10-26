@@ -181,9 +181,18 @@ func (d Deps) run(jobID string, req StartReq) {
 	var tail []string
 	var commitErr error
 	committed := false
+	// errCode is the relay's structured failure class (ErrMarker line,
+	// BACK-01). It only matters when the run fails: a stray marker on a
+	// successful run is ignored.
+	var errCode string
 
 	onLine := func(line string) {
 		tail = appendTail(tail, line)
+
+		if code, ok := ParseErrLine(strings.TrimSpace(line)); ok {
+			errCode = code
+			return
+		}
 
 		// Cross-task requirement (from Task 3/B3's review): trim leading and
 		// trailing whitespace and \r before parsing — a PTY echoes the
@@ -245,6 +254,15 @@ func (d Deps) run(jobID string, req StartReq) {
 		effErr := relayErr
 		if errors.Is(installCtx.Err(), context.DeadlineExceeded) {
 			effErr = context.DeadlineExceeded
+		} else if errCode != "" {
+			// BACK-01: relayErr from DefaultRelay is a bare "exit status N";
+			// the relay's ErrMarker code is what terminalConnectHint can
+			// actually classify. A timeout still wins (checked above).
+			if relayErr != nil {
+				effErr = fmt.Errorf("%s: %w", errCode, relayErr)
+			} else {
+				effErr = errors.New(errCode)
+			}
 		}
 		d.fail(jobID, req, activeStep, effErr, rc, tail)
 		return
@@ -412,12 +430,13 @@ const HintAuthFailed = "root-пароль или awgm-логин не подош
 // сохранённый пароль root; 401 панели (сменили ключ) пароля root не касается.
 const HintRootAuthFailed = "root-пароль не подошёл"
 
-// terminalConnectHint distinguishes the two relay-reported terminal_connected
-// failure classes the design spec calls out by keying off relayErr's text —
-// there is no structured error code from the relay to switch on instead
-// (RelayFunc returns a plain error). A nil relayErr, or text matching
-// neither known class, gets a generic connectivity hint rather than one of
-// the two specific ones.
+// terminalConnectHint distinguishes the relay-reported terminal_connected
+// failure classes by keying off relayErr's text. In production that text
+// carries the relay's structured ErrMarker code (run prefixes relayErr with
+// it — see ParseErrLine, BACK-01), since DefaultRelay's own error is only
+// "exit status N"; the free-text substrings below remain for relay stubs and
+// older relay copies. A nil relayErr, or text matching no known class, gets a
+// generic connectivity hint rather than one of the specific ones.
 func terminalConnectHint(relayErr error) string {
 	if relayErr == nil {
 		return "не удалось подключиться к AWG Manager terminal — проверь awgm_url и доступность роутера"

@@ -884,9 +884,37 @@ def main():
         except Exception as e:
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
 
+# BACK-01: структурная метка отказа для backend (provision.ErrMarker). Поток
+# stdout+stderr у backend один, а ошибка процесса -- голое «exit status 1»,
+# поэтому класс отказа передаётся отдельной строкой. Коды -- ровно те, что
+# знает provision.ParseErrLine.
+ERR_MARKER = "__WG_ERR__ "
+_AWGM_AUTH_HTTP = re.compile(r"^awgm \S+ \S+: HTTP (401|403):")
+
+def err_code(e):
+    if not isinstance(e, RelayError):
+        return None
+    msg = str(e)
+    if msg == ROOT_LOGIN_REFUSED:
+        return "root_auth_failed"
+    if msg == "awgm login: success=false" or _AWGM_AUTH_HTTP.match(msg):
+        return "auth_failed"
+    if "already has an active session" in msg:
+        return "session_active"
+    return None
+
+def report_error(e, out=None, err=None):
+    out = out if out is not None else sys.stdout
+    err = err if err is not None else sys.stderr
+    code = err_code(e)
+    if code:
+        print(ERR_MARKER + code, file=out)
+        out.flush()
+    print(str(e), file=err)
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(str(e), file=sys.stderr)
+        report_error(e)
         sys.exit(1)
