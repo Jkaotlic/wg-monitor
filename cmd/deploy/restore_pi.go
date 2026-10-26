@@ -123,6 +123,9 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	if err != nil {
 		return err
 	}
+	if err := piCheckFreeSpace(s, base, piStagedBytes(backup, stores)); err != nil {
+		return err
+	}
 	if !running {
 		PrintWarn("контейнер " + piBackendContainer + " сейчас не запущен")
 		if !restoreConfirm("Контейнер "+piBackendContainer+" сейчас не запущен; в конце восстановления мастер его запустит. Продолжить?", false) {
@@ -249,6 +252,56 @@ func piRestorePreflight(s remoteExec, base string) (running bool, err error) {
 	return strings.TrimSpace(out) == "true", nil
 }
 
+// piStagedBytes -- сколько займут на Pi база и хранилища из архива.
+func piStagedBytes(backup *RestoreBackup, stores []RestoreExtraFile) int64 {
+	var n int64
+	for _, p := range append([]string{backup.StateDBPath}, piExtraPaths(stores)...) {
+		if st, err := os.Stat(p); err == nil {
+			n += st.Size()
+		}
+	}
+	return n
+}
+
+func piExtraPaths(stores []RestoreExtraFile) []string {
+	out := make([]string, 0, len(stores))
+	for _, e := range stores {
+		out = append(out, e.LocalPath)
+	}
+	return out
+}
+
+// piNeedBytes: копия прежней базы с -wal (.bak), запас на ещё одну такую же
+// (откат копирует .bak во временный файл) и выгруженный архив.
+func piNeedBytes(liveDB, staged int64) int64 {
+	return 2*liveDB + staged
+}
+
+// piCheckFreeSpace -- только чтение: хватит ли места на файловой системе
+// data/ под копию прежней базы и распакованный архив. Не хватит -- отказ до
+// выгрузки и останова; не удалось узнать -- тоже отказ, а не угадывание.
+func piCheckFreeSpace(s remoteExec, base string, staged int64) error {
+	cmd := "cd " + shellSingleQuote(base) + ` && n=0; for f in data/state.db data/state.db-wal; do if [ -f "$f" ]; then n=$((n + $(wc -c < "$f"))); fi; done; echo "$n $(df -Pk data | awk 'NR==2{print $4}')"`
+	out, _, rc, err := s.Run(cmd)
+	if err != nil {
+		return fmt.Errorf("проверка до остановки: %w", err)
+	}
+	var live, availKB int64
+	if n, _ := fmt.Sscan(strings.TrimSpace(out), &live, &availKB); rc != 0 || n != 2 || live < 0 || availKB < 0 {
+		return errors.New("проверка до остановки не прошла, ничего не менялось: не удалось узнать свободное место на диске Pi (df -Pk data)")
+	}
+	need, free := piNeedBytes(live, staged), availKB*1024
+	if free < need {
+		return fmt.Errorf("мало места на диске Pi: нужно %s, свободно %s -- ничего не менялось, бэкенд не останавливался", piMB(need), piMB(free))
+	}
+	PrintOK("место на диске Pi: нужно " + piMB(need) + ", свободно " + piMB(free))
+	return nil
+}
+
+func piMB(n int64) string {
+	return fmt.Sprintf("%.1f МБ", float64(n)/(1<<20))
+}
+
 // piStageArchive -- как `rm -rf data/restore-tmp` + extract в DEPLOY.md:
 // архив уже расшифрован и разобран мастером, на Pi уходят база и хранилища.
 func piStageArchive(s remoteExec, tmp string, backup *RestoreBackup, stores []RestoreExtraFile) error {
@@ -296,12 +349,14 @@ func piStartBack(s remoteExec, cause error) error {
 // (chown --reference=data, как fileown.MatchDir), затем сохраняется текущее
 // (база вместе с -wal/-shm под именами state.db.bak.<ts>-wal/-shm, чтобы копия
 // открывалась как цельная база), и только потом mv на место. Провал после
-// начала замены -- откат из копий. Каталог распаковки убирается, контейнер
+// начала замены -- откат из копий; провал до замены -- копии этого прогона
+// (метка stamp) убираются, чтобы половинная копия не съела место. Каталог распаковки убирается, контейнер
 // запускается при любом исходе. secrets/ (revive.key) не трогается.
 func buildPiRestoreScript(base, stamp string, stores []string) string {
-	var prep, backupOld, install, rollback strings.Builder
+	var prep, backupOld, install, rollback, dropBak strings.Builder
 	for _, name := range stores {
 		live := "data/" + name
+		fmt.Fprintf(&dropBak, " %s.bak.%s", live, stamp)
 		fmt.Fprintf(&prep, "chmod 600 %s/%s\nchown --reference=data %s/%s\n", piRestoreTmp, name, piRestoreTmp, name)
 		fmt.Fprintf(&backupOld, "if [ -f %s ]; then cp -p %s %s.bak.%s; fi\n", live, live, live, stamp)
 		fmt.Fprintf(&install, "mv -f %s/%s %s\n", piRestoreTmp, name, live)
@@ -318,7 +373,7 @@ rollback() {
 	if [ -f data/state.db.bak.%[2]s-shm ]; then { cp -p data/state.db.bak.%[2]s-shm data/state.db-shm.rb.%[2]s && mv -f data/state.db-shm.rb.%[2]s data/state.db-shm; } || rbfail=1; fi
 %[6]s	return $rbfail
 }
-trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then if rollback; then rc=%[9]d; else rc=%[11]d; fi; else rc=%[10]d; fi; fi; rm -rf %[3]s || true; if [ "$rc" != %[11]d ]; then docker start %[7]s >/dev/null 2>&1 || true; fi; exit $rc' EXIT
+trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then if rollback; then rc=%[9]d; else rc=%[11]d; fi; else rc=%[10]d; rm -f data/state.db.bak.%[2]s data/state.db.bak.%[2]s-wal data/state.db.bak.%[2]s-shm%[12]s || true; fi; fi; rm -rf %[3]s || true; if [ "$rc" != %[11]d ]; then docker start %[7]s >/dev/null 2>&1 || true; fi; exit $rc' EXIT
 test -s %[3]s/state.db
 chmod 600 %[3]s/state.db
 chown --reference=data %[3]s/state.db
@@ -329,7 +384,7 @@ if [ -f data/state.db-shm ]; then cp -p data/state.db-shm data/state.db.bak.%[2]
 rm -f data/state.db-wal data/state.db-shm
 mv -f %[3]s/state.db data/state.db
 %[8]s`, shellSingleQuote(base), stamp, piRestoreTmp, prep.String(), backupOld.String(), rollback.String(), piBackendContainer, install.String(),
-		piScriptFailedAfterReplace, piScriptFailedBeforeReplace, piScriptRollbackFailed)
+		piScriptFailedAfterReplace, piScriptFailedBeforeReplace, piScriptRollbackFailed, dropBak.String())
 }
 
 // piRollbackHint -- как вернуть прежнюю базу руками, если новая не поднялась.

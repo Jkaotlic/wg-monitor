@@ -79,6 +79,8 @@ func piReply(integrity, http string) func(string) (string, string, int, error) {
 			return integrity, "", 0, nil
 		case strings.Contains(cmd, "http_code"):
 			return http, "", 0, nil
+		case strings.Contains(cmd, "df -Pk"):
+			return "4096 10485760\n", "", 0, nil // база 4 КБ, свободно 10 ГБ
 		case strings.HasPrefix(cmd, "test -e "):
 			return "", "", 1, nil
 		}
@@ -512,5 +514,47 @@ func TestPiRestoreScriptTrapCleanupCannotSkipStart(t *testing.T) {
 	script := buildPiRestoreScript("/root/wg-monitor", "20261026T010203Z", nil)
 	if !strings.Contains(script, "rm -rf data/restore-tmp || true; if [ \"$rc\" != 12 ]") {
 		t.Fatalf("уборка в ловушке не защищена:\n%s", script)
+	}
+}
+
+func TestRestoreToPiRefusesWhenDiskTooSmall(t *testing.T) {
+	stubRestoreConfirm(t, true)
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.Contains(cmd, "df -Pk") {
+			// база с -wal 3 МБ, свободно 4 МБ: нужно 2*3 МБ + архив.
+			return "3145728 4096\n", "", 0, nil
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	if err == nil || !strings.Contains(err.Error(), "мало места на диске Pi: нужно ") || !strings.Contains(err.Error(), ", свободно 4.0 МБ") {
+		t.Fatalf("err=%v", err)
+	}
+	all := strings.Join(fake.calls, "\n")
+	if strings.Contains(all, "upload:") || strings.Contains(all, "install -d") || fake.indexOfCall("docker stop") >= 0 || fake.indexOfCall("docker start") >= 0 {
+		t.Fatalf("при нехватке места ничего не меняется:\n%s", all)
+	}
+}
+
+func TestRestoreToPiSpaceCheckUnreadableRefuses(t *testing.T) {
+	stubRestoreConfirm(t, true)
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.Contains(cmd, "df -Pk") {
+			return "garbage\n", "", 0, nil
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	if err == nil || !strings.Contains(err.Error(), "свободное место") {
+		t.Fatalf("err=%v", err)
+	}
+	if strings.Contains(strings.Join(fake.calls, "\n"), "upload:") {
+		t.Fatal("выгрузка без проверки места")
 	}
 }

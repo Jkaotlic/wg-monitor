@@ -200,3 +200,70 @@ func TestPiRestoreScriptInShFailedCleanupStillStarts(t *testing.T) {
 		t.Fatalf("успех с провалом уборки: rc=%d started=%v", ok.rc, ok.started(t))
 	}
 }
+
+func TestPiRestoreScriptInShHalfBackupRemovedBeforeReplace(t *testing.T) {
+	// Копия -wal не легла (кончилось место): замены не было -- копии этого
+	// прогона убираются, база и хранилища прежние.
+	r := runPiScriptInSh(t, piOldAndNew(t), "", "data/state.db.bak.20261026T010203Z-wal")
+	if r.rc != piScriptFailedBeforeReplace {
+		t.Fatalf("rc=%d, want %d", r.rc, piScriptFailedBeforeReplace)
+	}
+	if r.read(t, "data/state.db") != "OLD" || r.read(t, "data/state.db-wal") != "OLDWAL" || r.read(t, "data/awg3-panels.json") != "OLDSTORE" {
+		t.Fatal("база тронута")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(r.base, "data", "*.bak.*")); len(matches) != 0 {
+		t.Fatalf("остались половинные копии этого прогона: %v", matches)
+	}
+	if !r.started(t) {
+		t.Fatal("контейнер не запущен")
+	}
+}
+
+func TestPiRestoreScriptInShKeepsOtherRunsBackups(t *testing.T) {
+	// Копии прошлых восстановлений (другая метка) уборка не трогает.
+	r := runPiScriptInSh(t, func(data string) {
+		piOldAndNew(t)(data)
+		writeFiles(t, data, map[string]string{"state.db.bak.20250101T000000Z": "PREV"})
+	}, "", "data/state.db.bak.20261026T010203Z-wal")
+	if r.read(t, "data/state.db.bak.20250101T000000Z") != "PREV" {
+		t.Fatal("чужая копия убрана")
+	}
+}
+
+// localSh -- remoteExec, который выполняет команду настоящим sh на этой машине.
+type localSh struct{}
+
+func (localSh) Run(cmd string) (string, string, int, error) {
+	var stderr strings.Builder
+	c := exec.Command("sh", "-c", cmd)
+	c.Stderr = &stderr
+	out, err := c.Output()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return string(out), stderr.String(), ee.ExitCode(), nil
+	}
+	return string(out), stderr.String(), 0, err
+}
+func (l localSh) MustRun(cmd string) (string, error) {
+	out, _, _, err := l.Run(cmd)
+	return out, err
+}
+func (localSh) UploadSFTPMode(string, []byte, string) error { return nil }
+
+func TestPiCheckFreeSpaceCommandInSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("нужен POSIX sh")
+	}
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFiles(t, filepath.Join(base, "data"), map[string]string{"state.db": strings.Repeat("x", 3000), "state.db-wal": "yy"})
+	if err := piCheckFreeSpace(localSh{}, base, 1); err != nil {
+		t.Fatalf("место есть, а проверка отказала: %v", err)
+	}
+	err := piCheckFreeSpace(localSh{}, base, 1<<62)
+	if err == nil || !strings.Contains(err.Error(), "мало места на диске Pi: нужно ") {
+		t.Fatalf("err=%v", err)
+	}
+}
