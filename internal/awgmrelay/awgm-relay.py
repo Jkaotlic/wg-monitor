@@ -178,6 +178,15 @@ def ws_connect(cfg, jar):
     response = read_until(raw, b"\r\n\r\n")
     first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
     if " 101 " not in first:
+        try:
+            raw.close()
+        except Exception:
+            pass
+        # v0.62 T10: 401/403 на рукопожатии -- отказ входа в панель, та же
+        # форма, что у request(), чтобы err_code дал auth_failed.
+        parts = first.split(" ", 2)
+        if len(parts) >= 2 and parts[1] in ("401", "403"):
+            raise RelayError("awgm GET %s: HTTP %s: terminal ws handshake refused: %s" % (target.path or "/", parts[1], first))
         raise RelayError("awgm terminal ws handshake failed: " + response[:500].decode("utf-8", "replace"))
     raw.settimeout(1.0)
     return raw

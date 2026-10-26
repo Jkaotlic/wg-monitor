@@ -1,4 +1,4 @@
-import importlib.util, io, os, subprocess, sys, tempfile, unittest
+import importlib.util, io, os, socket, subprocess, sys, tempfile, threading, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELAY = os.path.join(HERE, "awgm-relay.py")
@@ -47,6 +47,51 @@ class ErrCodeTest(unittest.TestCase):
         self.assertIsNone(self.code("websocket closed"))
         self.assertIsNone(self.code("bootstrap script timeout waiting for marker"))
         self.assertIsNone(self.relay.err_code(ValueError("boom")))
+
+
+class HandshakeAuthTest(unittest.TestCase):
+    """v0.62 T10: 401/403 на рукопожатии websocket терминала -- это отказ
+    входа в панель awg-manager (auth_failed), а не безымянный сбой."""
+
+    def handshake_with(self, status_line):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def serve():
+            conn, _ = srv.accept()
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(1024)
+                if not chunk:
+                    break
+                data += chunk
+            conn.sendall(status_line.encode("ascii") + b"\r\nContent-Length: 0\r\n\r\n")
+            conn.close()
+            srv.close()
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        relay = load_relay()
+        cfg = {"base_url": "http://127.0.0.1:%d" % port, "login": "admin", "password": "secret"}
+        with self.assertRaises(relay.RelayError) as ctx:
+            relay.ws_connect(cfg, [])
+        t.join(5)
+        return relay, ctx.exception
+
+    def test_401_is_auth_failed(self):
+        relay, e = self.handshake_with("HTTP/1.1 401 Unauthorized")
+        self.assertEqual(relay.err_code(e), "auth_failed")
+
+    def test_403_is_auth_failed(self):
+        relay, e = self.handshake_with("HTTP/1.1 403 Forbidden")
+        self.assertEqual(relay.err_code(e), "auth_failed")
+
+    def test_other_status_has_no_code(self):
+        relay, e = self.handshake_with("HTTP/1.1 502 Bad Gateway")
+        self.assertIsNone(relay.err_code(e))
+        self.assertIn("handshake failed", str(e))
 
 
 class MainMarkerTest(unittest.TestCase):
