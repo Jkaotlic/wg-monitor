@@ -1170,3 +1170,57 @@ func TestDashboardSummaryRoutersWithoutRecipientsIgnoresAdmin(t *testing.T) {
 		t.Fatalf("роутеры без адресата=%v, ждали router-orphan при настроенном админе", got.Notify.RoutersWithoutRecipients)
 	}
 }
+
+// «Могло дойти» в сводке панели -- свой счётчик и строка, не ошибка.
+func TestDashboardSummaryMaybeDeliveredSeparateFromErrors(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	old := lookupDashboardLatestVersion
+	lookupDashboardLatestVersion = func(context.Context) (string, error) { return "", nil }
+	t.Cleanup(func() { lookupDashboardLatestVersion = old })
+	at := time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)
+	stats := heartbeat.Stats{ScansTotal: 3, LastScanAt: time.Now(), ScanEvery: time.Minute,
+		OfflineMaybeDelivered: 2, LastOfflineMaybeDelivered: "context deadline exceeded",
+		LastOfflineMaybeDeliveredRouter: "router-a", LastOfflineMaybeDeliveredAt: at}
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		DashboardToken: "secret",
+		HeartbeatStats: func() heartbeat.Stats { return stats },
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Watchdog map[string]any `json:"watchdog"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	wd := got.Watchdog
+	if wd == nil {
+		t.Fatalf("блока watchdog нет: %s", rec.Body.String())
+	}
+	want := map[string]any{
+		"offline_maybe_delivered_total":       float64(2),
+		"last_offline_maybe_delivered":        "context deadline exceeded",
+		"last_offline_maybe_delivered_router": "router-a",
+		"last_offline_maybe_delivered_at":     "2026-10-26T09:00:00Z",
+		"offline_errors_total":                float64(0),
+	}
+	for k, v := range want {
+		if wd[k] != v {
+			t.Fatalf("%s=%v, ждали %v; watchdog=%v", k, wd[k], v, wd)
+		}
+	}
+	if v, ok := wd["last_offline_error"]; ok && v != "" {
+		t.Fatalf("«могло дойти» попало в последнюю ошибку: %v", v)
+	}
+}
