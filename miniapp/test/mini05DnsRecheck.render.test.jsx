@@ -74,6 +74,16 @@ describe('MINI-05: повторная проверка после сброса D
     render(null, root)
   })
 
+  it('свою русскую фразу агента экран показывает один раз, без своей перед ней', async () => {
+    mocks.answers.force_recheck = { status: 'error', output: 'Отчёт не дошёл до сервера — проверка не обновлена.' }
+    const root = await afterReset()
+    await act(async () => button(root, 'Проверить ещё раз').click())
+    await flush()
+    expect(root.textContent).toContain('Отчёт не дошёл до сервера — проверка не обновлена.')
+    expect(root.textContent).not.toContain('Роутер не выполнил повторную проверку')
+    render(null, root)
+  })
+
   it('ошибка команды видна словами', async () => {
     mocks.errors.force_recheck = 'Сервер не ответил — проверьте связь и повторите.'
     const root = await afterReset()

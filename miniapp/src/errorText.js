@@ -51,3 +51,11 @@ export function agentReplyText(result, fallback) {
   const said = String(result?.output ?? '').trim()
   return isRussianText(said) ? `${fallback} ${said}` : fallback
 }
+
+// Как agentReplyText, но когда агент сам сказал владельцу русскую фразу
+// (force_recheck: «Отчёт не дошёл до сервера — проверка не обновлена.»),
+// экран показывает только её: своя фраза перед ней говорила бы то же дважды.
+export function agentOwnText(result, fallback) {
+  const said = String(result?.output ?? '').trim()
+  return isRussianText(said) ? said : fallback
+}

@@ -1,4 +1,4 @@
-import { agentReplyText } from '../errorText.js'
+import { agentReplyText, agentOwnText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
@@ -161,7 +161,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         </p>
         <ErrorLine text={recheck.error} busy={recheck.busy} onRetry={runRecheck} />
         {recheck.result && recheck.result.status !== 'ok' && (
-          <p class="state state-error">{agentReplyText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
+          <p class="state state-error">{agentOwnText(recheck.result, 'Роутер не переспросил — попробуйте ещё раз через минуту.')}</p>
         )}
       </DiagGroup>
 

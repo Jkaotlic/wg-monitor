@@ -1,4 +1,4 @@
-import { agentReplyText, errorText } from '../errorText.js'
+import { agentReplyText, agentOwnText, errorText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { placeText } from '../places.js'
@@ -114,7 +114,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
     : recheck.error
       ? errorText(recheck.error)
       : recheck.result && recheck.result.status !== 'ok'
-        ? agentReplyText(recheck.result, 'Роутер не выполнил повторную проверку — отчёт не обновлён.')
+        ? agentOwnText(recheck.result, 'Роутер не выполнил повторную проверку — отчёт не обновлён.')
         : ''
 
   function askReset() {
