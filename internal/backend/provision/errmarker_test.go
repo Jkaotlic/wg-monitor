@@ -256,3 +256,17 @@ func TestRunner_JobJSONCarriesErrNonce(t *testing.T) {
 		}
 	}
 }
+
+// withErrNonce не трогает задание, которое не JSON-объект: нонс пустой,
+// метки не принимаются, подсказка общая.
+func TestWithErrNonce_NotAnObject(t *testing.T) {
+	for _, in := range []string{"null", "[1]", "{not json", "", `"str"`, "42"} {
+		out, nonce := withErrNonce([]byte(in))
+		if nonce != "" {
+			t.Errorf("withErrNonce(%q) nonce = %q, want empty", in, nonce)
+		}
+		if string(out) != in {
+			t.Errorf("withErrNonce(%q) changed job to %q", in, out)
+		}
+	}
+}
