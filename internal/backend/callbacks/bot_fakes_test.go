@@ -3,6 +3,7 @@ package callbacks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -16,6 +17,7 @@ type fakeRouterTG struct {
 	mu        sync.Mutex
 	answers   []string
 	edits     []string
+	editIDs   []int64
 	sentMsgs  []string
 	sentModes []string
 	rkSends   []rkSend
@@ -64,11 +66,24 @@ func (f *fakeRouterTG) AnswerCallbackQuery(_ context.Context, _, text string) er
 	return nil
 }
 
-func (f *fakeRouterTG) EditMessageText(_ context.Context, _, _ int64, text, _ string, _ *tg.InlineKeyboardMarkup) error {
+func (f *fakeRouterTG) EditMessageText(_ context.Context, _, msgID int64, text, _ string, _ *tg.InlineKeyboardMarkup) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edits = append(f.edits, text)
+	f.editIDs = append(f.editIDs, msgID)
 	return nil
+}
+
+// editedWith -- сообщение msgID правилось текстом, содержащим sub.
+func (f *fakeRouterTG) editedWith(msgID int64, sub string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, id := range f.editIDs {
+		if id == msgID && strings.Contains(f.edits[i], sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeRouterTG) GetUpdates(context.Context, int64, int) ([]tg.Update, error) { return nil, nil }

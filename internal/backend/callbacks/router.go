@@ -154,7 +154,11 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-	if r.memory != nil {
+	// Память тревоги -- это исходная карточка: строку тишины и снятие
+	// кнопок получает она, только если нажали под ней. Под напоминанием
+	// («Всё ещё …») правится лишь само напоминание -- иначе нить починки
+	// вписала бы строку в карточку, под которой никто не нажимал.
+	if r.memory != nil && !r.pressedUnderReminder(args, q) {
 		r.memory.NoteAlertAction(args.UserID, args.CheckName, statusLine)
 	}
 	newText := q.Message.Text + "\n\n" + statusLine
@@ -162,6 +166,20 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, newText, "", &empty); err != nil {
 		slog.Warn("editMessageText failed (state already updated)", "err", err)
 	}
+}
+
+// pressedUnderReminder -- кнопку нажали не под исходной карточкой тревоги:
+// у этого чата карточка по проверке известна (alert_messages), и это другое
+// сообщение. Напоминания в alert_messages не пишутся. Карточка неизвестна
+// или база не ответила -- считаем карточкой, как до v0.62.
+func (r *Router) pressedUnderReminder(args Args, q *tg.CallbackQuery) bool {
+	msgs, err := r.d.AlertMessages().List(args.UserID, args.CheckName)
+	if err != nil {
+		slog.Warn("silence: карточка тревоги не прочиталась", "router_user_id", args.UserID, "check", args.CheckName, "err", err)
+		return false
+	}
+	card, ok := msgs[q.Message.Chat.ID]
+	return ok && card != q.Message.MessageID
 }
 
 // silenceAllowed -- право заглушить тревогу роутера: админ, владелец или
