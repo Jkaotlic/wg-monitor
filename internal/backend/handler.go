@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -289,11 +290,12 @@ func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx 
 //
 //   - есть место в пуле relay -- фоновая горутина: ждёт предыдущую доставку
 //     проверки, затем свой срок alertDeliveryTimeout (30 с);
-//   - пул полон, а по проверке уже стоит доставка -- фоновая горутина без
-//     места в пуле (таких не больше, чем звеньев цепочки): ждать на месте
-//     значило бы держать ответ на отчёт всю цепочку;
-//   - пул полон, очередь проверки пуста -- доставка на месте, как до v0.62,
-//     под одним сроком alertDeliveryTimeout: отчёт подождёт, тревога дойдёт;
+//   - пул полон -- такая же фоновая горутина без места в пуле, пока их
+//     меньше alertSlotlessLimit (общий потолок на процесс): ответ на отчёт
+//     не ждёт Telegram, а горутины не растут без предела даже у флапающей
+//     проверки;
+//   - выше потолка -- доставка на месте: ожидание предыдущей по проверке и
+//     своя доставка под одним сроком alertDeliveryTimeout;
 //   - идёт слив (WaitRelayDrain) -- любой из путей выше, но без учёта в
 //     relayWG: Add параллельно с Wait запрещён, а бросить тревогу -- потерять.
 func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
@@ -331,25 +333,33 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 		return
 	default:
 	}
-	if prev != nil {
-		// Пул полон, но по проверке уже стоит доставка: ждать её на месте
-		// значило бы держать ответ на отчёт всю цепочку. В фон без места в
-		// пуле -- таких горутин не больше, чем доставок в цепочке.
-		d.Logger.Warn("relay pool saturated; alert queued behind same check, delivering in background", "label", label, "limit", relayConcurrencyLimit)
+	// Пул полон -- в фон без места в пуле, пока таких меньше потолка: ответ
+	// на отчёт не ждёт Telegram, а число горутин ограничено при любой
+	// длине цепочки по проверке.
+	if alertSlotless.Add(1) <= alertSlotlessLimit {
+		d.Logger.Warn("relay pool saturated; delivering alert in background without a slot", "label", label, "limit", relayConcurrencyLimit)
 		go func() {
 			defer untrack()
+			defer alertSlotless.Add(-1)
 			background()
 		}()
 		return
 	}
-	// Пул полон, очередь проверки пуста -- доставка на месте, как до v0.62:
-	// отчёт подождёт, тревога дойдёт. Ожидание и доставка -- под одним
-	// сроком, чтобы ответ на отчёт не держался дольше alertDeliveryTimeout.
-	d.Logger.Warn("relay pool saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit)
+	alertSlotless.Add(-1)
+	// Выше потолка -- на месте: отчёт подождёт, тревога дойдёт. Ожидание
+	// предыдущей доставки проверки и своя доставка -- под одним сроком,
+	// чтобы ответ на отчёт не держался дольше alertDeliveryTimeout.
+	d.Logger.Warn("relay pool and slotless alert cap saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit, "slotless_limit", alertSlotlessLimit)
 	defer untrack()
 	defer release()
 	ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
 	defer cancel()
+	if prev != nil {
+		select {
+		case <-prev:
+		case <-ctx.Done():
+		}
+	}
 	fn(ctx)
 }
 
@@ -374,6 +384,14 @@ func WaitRelayDrain() {
 	relayDrain.draining = false
 	relayDrain.mu.Unlock()
 }
+
+// alertSlotlessLimit -- потолок фоновых доставок тревог без места в пуле
+// relay (пул полон): выше него доставка идёт на месте, чтобы горутины не
+// росли без предела при шторме или флапающей проверке.
+const alertSlotlessLimit = 32
+
+// alertSlotless -- сколько таких доставок сейчас идёт.
+var alertSlotless atomic.Int32
 
 // alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
 // повторами (sendWithRetry пережидает retry_after при 429).

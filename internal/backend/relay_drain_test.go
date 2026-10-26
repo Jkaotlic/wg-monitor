@@ -35,15 +35,12 @@ func TestWaitRelayDrain_BlocksWhileDeliveryInFlight(t *testing.T) {
 	}
 }
 
-// Доставка, ушедшая на месте при полном пуле, тоже пишет в базу: слив её
-// ждёт, хотя места в пуле она не занимает.
+// Доставка, ушедшая на месте (пул и потолок фоновых без пула заняты), тоже
+// пишет в базу: слив её ждёт, хотя места в пуле она не занимает.
 func TestWaitRelayDrain_CountsInlineDelivery(t *testing.T) {
 	waitRelayPoolEmpty(t)
 	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
-	fill := make(chan struct{})
-	for i := 0; i < relayConcurrencyLimit; i++ {
-		spawnRelay(d, "fill", func(ctx context.Context) { <-fill })
-	}
+	fill := fillAlertSlotless(t, d)
 	inlineStarted := make(chan struct{})
 	inlineRelease := make(chan struct{})
 	go spawnAlertDelivery(d, "dispatch", 1, "drain-inline", func(ctx context.Context) {

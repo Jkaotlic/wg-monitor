@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -73,9 +74,10 @@ func TestSpawnRelay_RunsWhenPoolHasRoom(t *testing.T) {
 }
 
 // FRESH-04: тревога из /v1/report при занятом пуле не бросается, как прочие
-// уведомления, а доставляется на месте: отметка last_alert_at уже стоит, и
-// брошенная тревога пришла бы лишь напоминанием через 6 часов.
-func TestSpawnAlertDelivery_InlineWhenPoolSaturated(t *testing.T) {
+// уведомления: отметка last_alert_at уже стоит, и брошенная тревога пришла бы
+// лишь напоминанием через 6 часов. При полном пуле и пустой очереди проверки
+// она уходит в фон без места в пуле -- ответ на отчёт не ждёт Telegram.
+func TestSpawnAlertDelivery_BackgroundWhenPoolSaturated(t *testing.T) {
 	waitRelayPoolEmpty(t)
 	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
 	release := make(chan struct{})
@@ -83,20 +85,75 @@ func TestSpawnAlertDelivery_InlineWhenPoolSaturated(t *testing.T) {
 		spawnRelay(d, "fill", func(ctx context.Context) { <-release })
 	}
 
-	var ran atomic.Bool
-	var hadDeadline atomic.Bool
-	spawnAlertDelivery(d, "dispatch", 1, "dns", func(ctx context.Context) {
+	delivered := make(chan bool, 1)
+	hold := make(chan struct{})
+	returned := make(chan struct{})
+	go func() {
+		spawnAlertDelivery(d, "dispatch", 1, "dns-bg", func(ctx context.Context) {
+			<-hold // Telegram отвечает медленно
+			_, ok := ctx.Deadline()
+			delivered <- ok
+		})
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		close(hold)
+		close(release)
+		t.Fatal("ответ на отчёт ждёт доставку тревоги при полном пуле")
+	}
+	close(hold)
+	select {
+	case ok := <-delivered:
+		if !ok {
+			t.Fatal("доставка в фоне без срока")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("тревога при занятом пуле не доставлена")
+	}
+	close(release)
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
+}
+
+// fillAlertSlotless занимает пул и все места фоновых доставок без пула;
+// закрытие возвращённого канала их отпускает.
+func fillAlertSlotless(t *testing.T, d Deps) chan struct{} {
+	t.Helper()
+	release := make(chan struct{})
+	for i := 0; i < relayConcurrencyLimit; i++ {
+		spawnRelay(d, "fill", func(ctx context.Context) { <-release })
+	}
+	for i := 0; i < alertSlotlessLimit; i++ {
+		spawnAlertDelivery(d, "dispatch", 1, fmt.Sprintf("fill-%d", i), func(ctx context.Context) { <-release })
+	}
+	return release
+}
+
+// Выше потолка фоновых доставок без пула -- доставка на месте, под сроком:
+// горутины не растут без предела, тревога всё равно доходит.
+func TestSpawnAlertDelivery_InlineAboveSlotlessCap(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
+	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	release := fillAlertSlotless(t, d)
+	defer func() {
+		close(release)
+		waitRelayPoolEmpty(t)
+		waitRelayDrained(t)
+	}()
+
+	var ran, hadDeadline atomic.Bool
+	spawnAlertDelivery(d, "dispatch", 1, "dns-inline", func(ctx context.Context) {
 		_, ok := ctx.Deadline()
 		hadDeadline.Store(ok)
 		ran.Store(true)
 	})
 	if !ran.Load() {
-		t.Fatal("тревога при занятом пуле брошена, а не доставлена на месте")
+		t.Fatal("выше потолка тревога не доставлена на месте")
 	}
 	if !hadDeadline.Load() {
 		t.Fatal("доставка на месте без срока: зависший Telegram держал бы отчёт вечно")
 	}
-
-	close(release)
-	waitRelayPoolEmpty(t)
 }
