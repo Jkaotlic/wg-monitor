@@ -56,6 +56,7 @@ describe('isTransient', () => {
   it('прочее -- нет', () => {
     for (const s of [400, 401, 403, 404, 409, 500]) expect(isTransient(new ApiError(s, 'x', 'x'))).toBe(false)
     expect(isTransient(null)).toBe(false)
+    expect(isTransient(new Error('boom'))).toBe(false)
   })
 })
 

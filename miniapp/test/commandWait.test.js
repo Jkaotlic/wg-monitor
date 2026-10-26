@@ -146,3 +146,29 @@ describe('commandOutcome: partial импорта', () => {
     expect(commandOutcome(res, rest).tone).toBe('error')
   })
 })
+
+describe('waitCommand: временные сбои опроса', () => {
+  it('502 и 0 повторяет с паузой, затем итог', async () => {
+    const { ApiError } = await import('../src/api.js')
+    const sleeps = []
+    mocks.replies = [new ApiError(502, 'unknown', 'x'), new ApiError(0, 'unknown', 'x'), { status: 'ok', output: '' }]
+    const res = await waitCommand(7, 'c1', { sleep: (ms) => { sleeps.push(ms); return Promise.resolve() } })
+    expect(res).toEqual({ status: 'ok', output: '' })
+    expect(sleeps.length).toBe(2)
+  })
+  it('не временный сбой -- исключение', async () => {
+    const { ApiError } = await import('../src/api.js')
+    mocks.replies = [new ApiError(403, 'forbidden', 'x')]
+    await expect(waitCommand(7, 'c1')).rejects.toThrow()
+  })
+})
+
+describe('repeatWhilePending: временные сбои', () => {
+  it('503 от once повторяется', async () => {
+    const { ApiError } = await import('../src/api.js')
+    const seq = [new ApiError(503, 'unknown', 'x'), { state: 'done' }]
+    const once = () => { const r = seq.shift(); return r instanceof Error ? Promise.reject(r) : Promise.resolve(r) }
+    const out = await repeatWhilePending(once, { pending: (r) => r.state === 'checking', sleep: () => Promise.resolve() })
+    expect(out).toEqual({ resp: { state: 'done' }, settled: true })
+  })
+})

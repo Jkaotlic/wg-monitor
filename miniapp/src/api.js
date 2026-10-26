@@ -24,7 +24,10 @@ export class ApiError extends Error {
 // ожидания (useCommand, commandWait, jobPoll): повтор до дедлайна, а не отказ.
 export function isTransient(err) {
   if (err == null) return false
-  const s = err.status ?? 0
+  // Без status -- только настоящий сбой fetch (TypeError); произвольная
+  // ошибка кода временной не считается и не прячется за повторами.
+  if (err.status == null) return err instanceof TypeError
+  const s = err.status
   return s === 0 || s === 429 || s === 502 || s === 503 || s === 504
 }
 

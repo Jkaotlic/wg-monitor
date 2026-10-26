@@ -1,4 +1,4 @@
-import { fetchCommandResult } from './api.js'
+import { fetchCommandResult, isTransient } from './api.js'
 import { AGENT_OLDER_THAN_APP } from './labels.js'
 
 // Ожидание итога команды, которую поставил не /commands, а свой маршрут
@@ -10,11 +10,19 @@ import { AGENT_OLDER_THAN_APP } from './labels.js'
 //
 // alive() -- жив ли экран: закрытый экран не ждёт и чужой ответ не принимает.
 // null -- не дождались (дедлайн или экран ушёл); ошибка сети -- исключение.
-export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSec = 10, alive = () => true, now = () => Date.now() } = {}) {
+export async function waitCommand(routerID, cmdID, { deadlineMs = 90_000, waitSec = 10, alive = () => true, now = () => Date.now(), sleep = pause, pauseMs = 1500 } = {}) {
   const until = now() + deadlineMs
   while (alive() && now() < until) {
     const remainingSec = Math.max(1, Math.ceil((until - now()) / 1000))
-    const res = await fetchCommandResult(routerID, cmdID, Math.min(waitSec, remainingSec))
+    let res
+    try {
+      res = await fetchCommandResult(routerID, cmdID, Math.min(waitSec, remainingSec))
+    } catch (err) {
+      // Временный сбой релея: команда уже у роутера, ждём дальше до дедлайна.
+      if (!isTransient(err)) throw err
+      if (alive()) await sleep(pauseMs)
+      continue
+    }
     if (!alive()) return null
     if (res) return res
   }
@@ -42,7 +50,14 @@ export async function repeatWhilePending(
   const until = now() + deadlineMs
   let resp = null
   while (alive()) {
-    resp = await once()
+    try {
+      resp = await once()
+    } catch (err) {
+      // Временный сбой (релей, 429): повторить с паузой, пока не вышел дедлайн.
+      if (!isTransient(err) || !alive() || now() >= until) throw err
+      await sleep(pauseMs)
+      continue
+    }
     if (!pending(resp)) return { resp, settled: true }
     if (!alive() || now() >= until) break
     await sleep(pauseMs)
