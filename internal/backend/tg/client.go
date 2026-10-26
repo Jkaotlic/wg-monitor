@@ -152,6 +152,10 @@ type sendMessageReq struct {
 	Text             string `json:"text"`
 	ParseMode        string `json:"parse_mode,omitempty"`
 	ReplyToMessageID *int64 `json:"reply_to_message_id,omitempty"`
+	// AllowSendingWithoutReply: без него ответ на сообщение, которое владелец
+	// удалил у себя, Telegram отклоняет 400 «message to be replied not found»
+	// (FRESH-01). Ставится только вместе с привязкой.
+	AllowSendingWithoutReply bool `json:"allow_sending_without_reply,omitempty"`
 }
 
 type sendMessageResult struct {
@@ -162,11 +166,12 @@ type sendMessageResult struct {
 // Pass nil for threadID to post in General; pass nil for replyTo for top-level msgs.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
 	body, _ := json.Marshal(sendMessageReq{
-		ChatID:           chatID,
-		MessageThreadID:  threadID,
-		Text:             text,
-		ParseMode:        parseMode,
-		ReplyToMessageID: replyTo,
+		ChatID:                   chatID,
+		MessageThreadID:          threadID,
+		Text:                     text,
+		ParseMode:                parseMode,
+		ReplyToMessageID:         replyTo,
+		AllowSendingWithoutReply: replyTo != nil,
 	})
 	var out sendMessageResult
 	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
@@ -176,12 +181,16 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, threadID *int64,
 }
 
 type sendMessageWithKBReq struct {
-	ChatID           int64                 `json:"chat_id"`
-	MessageThreadID  *int64                `json:"message_thread_id,omitempty"`
-	Text             string                `json:"text"`
-	ParseMode        string                `json:"parse_mode,omitempty"`
-	ReplyToMessageID *int64                `json:"reply_to_message_id,omitempty"`
-	ReplyMarkup      *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	ChatID           int64  `json:"chat_id"`
+	MessageThreadID  *int64 `json:"message_thread_id,omitempty"`
+	Text             string `json:"text"`
+	ParseMode        string `json:"parse_mode,omitempty"`
+	ReplyToMessageID *int64 `json:"reply_to_message_id,omitempty"`
+	// AllowSendingWithoutReply: без него ответ на сообщение, которое владелец
+	// удалил у себя, Telegram отклоняет 400 «message to be replied not found»
+	// (FRESH-01). Ставится только вместе с привязкой.
+	AllowSendingWithoutReply bool                  `json:"allow_sending_without_reply,omitempty"`
+	ReplyMarkup              *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 	// DisableNotification -- сообщение без звука (мягкое напоминание v0.57).
 	// omitempty: обычная отправка поля не несёт вовсе, запрос прежний.
 	DisableNotification bool `json:"disable_notification,omitempty"`
@@ -191,12 +200,13 @@ type sendMessageWithKBReq struct {
 // markup must be non-nil; for plain messages use SendMessage.
 func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *InlineKeyboardMarkup) (int64, error) {
 	body, _ := json.Marshal(sendMessageWithKBReq{
-		ChatID:           chatID,
-		MessageThreadID:  threadID,
-		Text:             text,
-		ParseMode:        parseMode,
-		ReplyToMessageID: replyTo,
-		ReplyMarkup:      markup,
+		ChatID:                   chatID,
+		MessageThreadID:          threadID,
+		Text:                     text,
+		ParseMode:                parseMode,
+		ReplyToMessageID:         replyTo,
+		AllowSendingWithoutReply: replyTo != nil,
+		ReplyMarkup:              markup,
 	})
 	var out sendMessageResult
 	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
@@ -210,13 +220,14 @@ func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 // пищит. Для мягких напоминаний «есть что обновить», которые не тревога.
 func (c *Client) SendSilentMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *InlineKeyboardMarkup) (int64, error) {
 	body, _ := json.Marshal(sendMessageWithKBReq{
-		ChatID:              chatID,
-		MessageThreadID:     threadID,
-		Text:                text,
-		ParseMode:           parseMode,
-		ReplyToMessageID:    replyTo,
-		ReplyMarkup:         markup,
-		DisableNotification: true,
+		ChatID:                   chatID,
+		MessageThreadID:          threadID,
+		Text:                     text,
+		ParseMode:                parseMode,
+		ReplyToMessageID:         replyTo,
+		AllowSendingWithoutReply: replyTo != nil,
+		ReplyMarkup:              markup,
+		DisableNotification:      true,
 	})
 	var out sendMessageResult
 	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
@@ -284,12 +295,16 @@ func (c *Client) EditMessageReplyMarkup(ctx context.Context, chatID, messageID i
 // ReplyKeyboardMarkup, ReplyKeyboardRemove}. Encoded as raw json.RawMessage
 // avoids polymorphic struct fields and keeps the wire format clean.
 type sendMessageWithRMReq struct {
-	ChatID           int64           `json:"chat_id"`
-	MessageThreadID  *int64          `json:"message_thread_id,omitempty"`
-	Text             string          `json:"text"`
-	ParseMode        string          `json:"parse_mode,omitempty"`
-	ReplyToMessageID *int64          `json:"reply_to_message_id,omitempty"`
-	ReplyMarkup      json.RawMessage `json:"reply_markup,omitempty"`
+	ChatID           int64  `json:"chat_id"`
+	MessageThreadID  *int64 `json:"message_thread_id,omitempty"`
+	Text             string `json:"text"`
+	ParseMode        string `json:"parse_mode,omitempty"`
+	ReplyToMessageID *int64 `json:"reply_to_message_id,omitempty"`
+	// AllowSendingWithoutReply: без него ответ на сообщение, которое владелец
+	// удалил у себя, Telegram отклоняет 400 «message to be replied not found»
+	// (FRESH-01). Ставится только вместе с привязкой.
+	AllowSendingWithoutReply bool            `json:"allow_sending_without_reply,omitempty"`
+	ReplyMarkup              json.RawMessage `json:"reply_markup,omitempty"`
 }
 
 // SendMessageWithReplyKeyboard sends a message with any kind of reply_markup
@@ -309,12 +324,13 @@ func (c *Client) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64,
 		rawMarkup = raw
 	}
 	body, _ := json.Marshal(sendMessageWithRMReq{
-		ChatID:           chatID,
-		MessageThreadID:  threadID,
-		Text:             text,
-		ParseMode:        parseMode,
-		ReplyToMessageID: replyTo,
-		ReplyMarkup:      rawMarkup,
+		ChatID:                   chatID,
+		MessageThreadID:          threadID,
+		Text:                     text,
+		ParseMode:                parseMode,
+		ReplyToMessageID:         replyTo,
+		AllowSendingWithoutReply: replyTo != nil,
+		ReplyMarkup:              rawMarkup,
 	})
 	var out sendMessageResult
 	if err := c.sendWithRetry(ctx, "sendMessage", body, &out); err != nil {
