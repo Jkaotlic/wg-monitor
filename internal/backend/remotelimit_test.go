@@ -417,6 +417,7 @@ func TestRemoteRateLimitCountsForwardedPresence(t *testing.T) {
 
 // useLocalForwardedObs подменяет глобальные счётчики своим экземпляром на время
 // теста: опубликованный expvar не читается и не сбрасывается.
+// Подменяется пакетный указатель, поэтому нельзя звать из t.Parallel-тестов.
 func useLocalForwardedObs(t *testing.T) *forwardedObs {
 	t.Helper()
 	o := &forwardedObs{present: new(expvar.Int), absent: new(expvar.Int)}
