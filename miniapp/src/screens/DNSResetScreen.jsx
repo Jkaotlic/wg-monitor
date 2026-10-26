@@ -1,5 +1,5 @@
 import { agentReplyText, agentOwnText, errorText } from '../errorText.js'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouter, fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { serverClockOffset } from '../serverClock.js'
 import { placeText } from '../places.js'
@@ -72,6 +72,10 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const [resetAt, setResetAt] = useState(null)
   // '' -- ещё не копировали, 'ok' / 'fail' -- итог последнего нажатия.
   const [copyState, setCopyState] = useState('')
+  // Поздний ответ про роутер не должен трогать закрытый экран или перебивать новый сброс.
+  const aliveRef = useRef(true)
+  const resetSeq = useRef(0)
+  useEffect(() => () => { aliveRef.current = false }, [])
 
   function copyCommands() {
     copyText(dnsReferenceCommands()).then((ok) => setCopyState(ok ? 'ok' : 'fail'))
@@ -140,6 +144,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         onResult: (res) => {
           const parsedReset = parseReset(res)
           setReset(parsedReset)
+          const seq = ++resetSeq.current
           const snapMs = snapshotResetAt(parsedReset.snapshot)
           setResetAt(snapMs)
           // Часы роутера могли уйти вперёд сервера: метки отчётов тогда
@@ -150,6 +155,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
             Promise.resolve()
               .then(() => fetchRouter(routerID))
               .then((r) => {
+                if (!aliveRef.current || seq !== resetSeq.current) return
                 const offset = serverClockOffset(r?.router, Date.now())
                 setResetAt(serverAwareResetAt(snapMs, replyMs, offset))
               })

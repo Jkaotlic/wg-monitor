@@ -138,10 +138,15 @@ export function snapshotResetAt(snapshotPath) {
 // время на момент ответа о сбросе). replyMs - часы телефона при ответе о
 // сбросе; offsetMs - сдвиг сервера от телефона (serverClockOffset). Нет оценки -
 // остаётся снимок.
+const CLAMP_AHEAD_MS = 2 * 60_000
+
 export function serverAwareResetAt(snapshotMs, replyMs, offsetMs) {
   if (snapshotMs == null) return null
   if (typeof offsetMs !== 'number' || !Number.isFinite(replyMs)) return snapshotMs
-  return Math.min(snapshotMs, replyMs + offsetMs)
+  const estimate = replyMs + offsetMs
+  // Бэкенд зажимает метку отчёта, только когда часы роутера впереди больше
+  // чем на 2 минуты; меньшее расхождение метки не меняет - они по часам роутера.
+  return snapshotMs - estimate > CLAMP_AHEAD_MS ? estimate : snapshotMs
 }
 
 export function parseReset(result) {

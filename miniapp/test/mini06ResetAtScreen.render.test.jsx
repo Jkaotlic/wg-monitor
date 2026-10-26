@@ -94,7 +94,25 @@ describe('MINI-06: resetAt доходит до строк «после сбро�
 
   it('оценка серверного времени есть, но отчёт старше сброса -- ждём', async () => {
     mocks.router = { last_seen_at: '2025-09-11T14:03:25Z', last_seen_age_sec: 0 }
-    mocks.after = [split('2025-09-11T14:02:00Z')]
+    mocks.after = [split('2025-09-11T14:03:20Z')]
+    const root = await afterReset(RESET)
+    expect(root.textContent).toContain('ждём отчёта')
+    render(null, root)
+  })
+
+  // Роутер впереди меньше чем на 2 минуты бэкенд не зажимает: метки отчётов
+  // тоже по часам роутера, и отсечка остаётся снимком.
+  it('роутер впереди на минуту -- снимок остаётся отсечкой, отчёт до сброса не свежий', async () => {
+    mocks.router = { last_seen_at: '2025-09-11T14:12:20Z', last_seen_age_sec: 0 }
+    mocks.after = [split('2025-09-11T14:12:50Z')]
+    const root = await afterReset(RESET)
+    expect(root.textContent).toContain('ждём отчёта')
+    render(null, root)
+  })
+
+  it('сервер впереди роутера -- снимок остаётся отсечкой', async () => {
+    mocks.router = { last_seen_at: '2025-09-11T14:20:00Z', last_seen_age_sec: 0 }
+    mocks.after = [split('2025-09-11T14:10:00Z')]
     const root = await afterReset(RESET)
     expect(root.textContent).toContain('ждём отчёта')
     render(null, root)
