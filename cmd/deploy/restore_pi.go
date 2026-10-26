@@ -118,8 +118,16 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	defer s.Close()
 
 	PrintStep(2, 6, "Проверка до остановки")
-	if err := piRestorePreflight(s, base); err != nil {
+	running, err := piRestorePreflight(s, base)
+	if err != nil {
 		return err
+	}
+	if !running {
+		PrintWarn("контейнер " + piBackendContainer + " сейчас не запущен")
+		if !restoreConfirm("Контейнер "+piBackendContainer+" сейчас не запущен; в конце восстановления мастер его запустит. Продолжить?", false) {
+			PrintInfo("восстановление на Pi отменено, на сервере ничего не менялось")
+			return nil
+		}
 	}
 
 	// Выгрузка и проверка архива -- пока бэкенд работает: битый архив или
@@ -204,25 +212,28 @@ func piHealthURL(domain string) string {
 }
 
 // piRestorePreflight -- только чтение: всё нужное есть, иначе контейнер не
-// останавливаем вовсе.
-func piRestorePreflight(s remoteExec, base string) error {
+// останавливаем вовсе. running -- запущен ли контейнер сейчас.
+func piRestorePreflight(s remoteExec, base string) (running bool, err error) {
 	checks := []struct{ cmd, why string }{
 		{"test -d " + shellSingleQuote(base+"/data"), "нет каталога " + base + "/data"},
 		{"command -v sqlite3 >/dev/null 2>&1", "на Pi нет sqlite3 -- поставьте пакет sqlite3, без него базу из архива не проверить"},
 		{"command -v docker >/dev/null 2>&1", "на Pi нет docker"},
 		{"docker inspect -f '{{.State.Running}}' " + piBackendContainer, "нет контейнера " + piBackendContainer},
 	}
+	var out string
 	for _, c := range checks {
-		_, _, rc, err := s.Run(c.cmd)
+		var rc int
+		out, _, rc, err = s.Run(c.cmd)
 		if err != nil {
-			return fmt.Errorf("проверка до остановки: %w", err)
+			return false, fmt.Errorf("проверка до остановки: %w", err)
 		}
 		if rc != 0 {
-			return errors.New("проверка до остановки не прошла, ничего не менялось: " + c.why)
+			return false, errors.New("проверка до остановки не прошла, ничего не менялось: " + c.why)
 		}
 	}
 	PrintOK("sqlite3, docker и каталог data/ на месте")
-	return nil
+	// Последняя проверка -- docker inspect: её вывод true/false.
+	return strings.TrimSpace(out) == "true", nil
 }
 
 // piStageArchive -- как `rm -rf data/restore-tmp` + extract в DEPLOY.md:

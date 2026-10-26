@@ -419,3 +419,32 @@ func TestRestoreToPiRollbackFailureDoesNotStart(t *testing.T) {
 		t.Fatalf("при неудачном откате контейнер не запускается:\n%s", strings.Join(fake.calls, "\n"))
 	}
 }
+
+func TestRestoreToPiStoppedContainerIsAnnouncedAndAsked(t *testing.T) {
+	var prompts []string
+	prev := restoreConfirm
+	restoreConfirm = func(p string, _ bool) bool {
+		prompts = append(prompts, p)
+		return len(prompts) == 1 // первое «да», второе «нет»
+	}
+	t.Cleanup(func() { restoreConfirm = prev })
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.Contains(cmd, "docker inspect") {
+			return "false\n", "", 0, nil
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	if err := restoreBackupToCurrentVPS(piState(), nil, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 || !strings.Contains(prompts[1], "не запущен") || !strings.Contains(prompts[1], "запустит") {
+		t.Fatalf("prompts=%q", prompts)
+	}
+	all := strings.Join(fake.calls, "\n")
+	if strings.Contains(all, "upload:") || strings.Contains(all, "docker stop") || strings.Contains(all, "docker start") {
+		t.Fatalf("после отказа ничего не делается:\n%s", all)
+	}
+}
