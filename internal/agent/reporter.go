@@ -79,6 +79,13 @@ type Reporter struct {
 	// lastRegularAt -- когда начат последний плановый (не хук) отчёт. Хук-
 	// отчёты его не двигают: плановый ритм держит автомат тревог.
 	lastRegularAt time.Time
+	// lastDeliveredStartAt -- когда начат сбор последнего ДОСТАВЛЕННОГО
+	// планового (не хук) отчёта. По нему ForceReport решает, свежий ли отчёт
+	// дошёл, пока он ждал замка: дошедший, но собранный до нажатия -- нет.
+	lastDeliveredStartAt time.Time
+	// forceLockPoll -- как часто ForceReport заглядывает за занятый замок
+	// (тесты удлиняют, чтобы очередь была детерминированной).
+	forceLockPoll time.Duration
 
 	lastAuthErrorAt        time.Time
 	consecutiveAuthRejects int
@@ -146,6 +153,7 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		wake:               make(chan struct{}, 1),
 		now:                time.Now,
 		newTicker:          realTicker,
+		forceLockPoll:      50 * time.Millisecond,
 	}
 	r.loadState()
 	return r
@@ -189,9 +197,10 @@ func (r *Reporter) regularOverdue() bool {
 // команда не должна отвечать успехом.
 //
 // Замок отправки ждётся под ctx (срок команды): плановый отчёт, висящий на
-// медленном роутере, не съедает весь срок молча. Если пока ждали, плановый
-// отчёт дошёл до сервера (после нажатия) -- это и есть свежая проверка:
-// успех без второго POST.
+// медленном роутере, не съедает весь срок молча. Если пока ждали, дошёл
+// плановый отчёт, НАЧАТЫЙ после нажатия, -- это и есть свежая проверка:
+// успех без второго POST. Отчёт, собранный до нажатия (POST лишь закончился
+// после), не засчитывается: экран показал бы старое -- шлём свой.
 func (r *Reporter) ForceReport(ctx context.Context) error {
 	asked := time.Now()
 	for !r.sendOnceMu.TryLock() {
@@ -204,7 +213,7 @@ func (r *Reporter) ForceReport(ctx context.Context) error {
 				return nil
 			}
 			return ctx.Err()
-		case <-time.After(forceReportLockPoll):
+		case <-time.After(r.forceLockPoll):
 		}
 	}
 	defer r.sendOnceMu.Unlock()
@@ -214,15 +223,12 @@ func (r *Reporter) ForceReport(ctx context.Context) error {
 	return r.sendOnceLocked(ctx, "", true)
 }
 
-// forceReportLockPoll -- как часто ForceReport заглядывает за занятый замок.
-const forceReportLockPoll = 50 * time.Millisecond
-
-// reportLandedSince -- плановый (не хук) отчёт дошёл до сервера после t:
-// lastReportAt ставится только по успешной доставке.
+// reportLandedSince -- доставлен плановый (не хук) отчёт, сбор которого
+// начат после t.
 func (r *Reporter) reportLandedSince(t time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.lastReportAt.After(t)
+	return r.lastDeliveredStartAt.After(t)
 }
 
 // SendNow -- внеплановый отчёт без принудительного Resumed (AG-05): после
@@ -364,6 +370,7 @@ func (r *Reporter) sendOnceLocked(ctx context.Context, trigger string, kick bool
 		// Хук-отчёт не сдвигает отсчёт отвала: иначе первый плановый после
 		// сна потерял бы Resumed=true.
 		r.lastReportAt = now
+		r.lastDeliveredStartAt = start
 	}
 	r.consecutiveAuthRejects = 0
 	r.lastAuthErrorAt = time.Time{}
