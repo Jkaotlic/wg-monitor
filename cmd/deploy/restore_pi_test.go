@@ -712,6 +712,9 @@ func TestActionRestoreBackupRejectsYesOutsideCurrent(t *testing.T) {
 		{ArchivePath: archive, Mode: "new", Yes: true},
 		{ArchivePath: archive, Mode: "dry-run", DryRun: true, Yes: true},
 		{ArchivePath: archive, Yes: true},
+		// --dry-run --to-current-vps --yes: режим перезаписан на current, но
+		// DryRun стоит.
+		{ArchivePath: archive, Mode: "current", DryRun: true, Yes: true},
 	} {
 		err := actionRestoreBackup(piState(), nil, nil, opts)
 		if err == nil || !strings.Contains(err.Error(), "--yes подтверждает только --to-current-vps") {

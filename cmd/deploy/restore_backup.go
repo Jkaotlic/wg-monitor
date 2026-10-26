@@ -602,7 +602,7 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 }
 
 func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opts RestoreBackupOptions) error {
-	if m := strings.ToLower(strings.TrimSpace(opts.Mode)); opts.Yes && m != "current" && m != "current-vps" {
+	if m := strings.ToLower(strings.TrimSpace(opts.Mode)); opts.Yes && (opts.DryRun || (m != "current" && m != "current-vps")) {
 		// Вопрос «Восстановить?» есть только у восстановления на текущий
 		// сервер; без режима выбор режима остался бы вопросом.
 		return fmt.Errorf("--yes подтверждает только --to-current-vps: с --dry-run, --to-new-vps или без режима флаг не применяется")
