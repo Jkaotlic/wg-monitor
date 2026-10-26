@@ -179,9 +179,10 @@ func TestRunner_TunnelPower_RequiresTunnelID(t *testing.T) {
 	}
 }
 
-// AG-05: действия с туннелем просят внеплановый отчёт (ReportNow), а не
-// force_recheck (ForceRecheck -- отчёт с проверкой доставки и пинком
-// пингчека, только для «Проверить ещё раз»).
+// AG-05: после действия с туннелем агент шлёт внеплановый отчёт через
+// ReportNow. ForceRecheck (пинок пингчека и проверка доставки) нужен только
+// команде force_recheck -- кнопке «Проверить ещё раз», и действия с туннелем
+// его не зовут.
 func TestRunner_TunnelActions_ReportNowNotForceResumed(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tunnels/get" {
