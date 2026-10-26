@@ -259,11 +259,37 @@ func TestPiCheckFreeSpaceCommandInSh(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFiles(t, filepath.Join(base, "data"), map[string]string{"state.db": strings.Repeat("x", 3000), "state.db-wal": "yy"})
-	if err := piCheckFreeSpace(localSh{}, base, 1); err != nil {
+	if err := piCheckFreeSpace(localSh{}, base, nil, 1); err != nil {
 		t.Fatalf("место есть, а проверка отказала: %v", err)
 	}
-	err := piCheckFreeSpace(localSh{}, base, 1<<62)
+	err := piCheckFreeSpace(localSh{}, base, nil, 1<<62)
 	if err == nil || !strings.Contains(err.Error(), "мало места на диске Pi: нужно ") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// В оценку места входят все копии .bak этого прогона: база с -wal и -shm и
+// заменяемые хранилища; отсутствующие файлы -- ноль.
+func TestPiLiveBytesCountsShmAndStores(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("нужен POSIX sh")
+	}
+	base := t.TempDir()
+	data := filepath.Join(base, "data")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFiles(t, data, map[string]string{
+		"state.db":         strings.Repeat("d", 100),
+		"state.db-wal":     strings.Repeat("w", 10),
+		"state.db-shm":     strings.Repeat("s", 5),
+		"awg3-panels.json": strings.Repeat("p", 1000),
+	})
+	live, free, err := piLiveBytes(localSh{}, base, []string{"awg3-panels.json", "hidemyname.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live != 1115 || free <= 0 {
+		t.Fatalf("live=%d free=%d, want live=1115", live, free)
 	}
 }

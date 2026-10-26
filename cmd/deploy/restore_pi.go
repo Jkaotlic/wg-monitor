@@ -139,7 +139,11 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	if err != nil {
 		return err
 	}
-	if err := piCheckFreeSpace(s, base, piStagedBytes(backup, stores)); err != nil {
+	storeNames := make([]string, 0, len(stores))
+	for _, e := range stores {
+		storeNames = append(storeNames, e.Name)
+	}
+	if err := piCheckFreeSpace(s, base, storeNames, piStagedBytes(backup, stores)); err != nil {
 		return err
 	}
 	if !running {
@@ -177,10 +181,7 @@ func restoreBackupToPi(state *State, secrets *SecretStore, backup *RestoreBackup
 	}
 
 	PrintStep(5, 6, "Замена базы и хранилищ")
-	names := make([]string, 0, len(stores))
-	for _, e := range stores {
-		names = append(names, e.Name)
-	}
+	names := storeNames
 	if err := piRunRestoreScript(s, base, stamp, names); err != nil {
 		return err
 	}
@@ -296,26 +297,47 @@ func piExtraPaths(stores []RestoreExtraFile) []string {
 	return out
 }
 
-// piNeedBytes: копия прежней базы с -wal (.bak), запас на ещё одну такую же
-// (откат копирует .bak во временный файл) и выгруженный архив.
-func piNeedBytes(liveDB, staged int64) int64 {
-	return 2*liveDB + staged
+// piNeedBytes: копии .bak всего, что заменяется (база с -wal/-shm и
+// хранилища), запас на ещё столько же (откат копирует .bak во временный
+// файл) и выгруженный архив.
+func piNeedBytes(live, staged int64) int64 {
+	return 2*live + staged
+}
+
+// piLiveBytes -- только чтение: сколько весит на Pi то, что скрипт замены
+// скопирует в .bak (state.db, -wal, -shm и заменяемые хранилища), и сколько
+// свободно на файловой системе data/.
+func piLiveBytes(s remoteExec, base string, stores []string) (live, free int64, err error) {
+	files := []string{"data/state.db", "data/state.db-wal", "data/state.db-shm"}
+	for _, name := range stores {
+		files = append(files, "data/"+name)
+	}
+	quoted := make([]string, len(files))
+	for i, f := range files {
+		quoted[i] = shellSingleQuote(f)
+	}
+	cmd := "cd " + shellSingleQuote(base) + " && n=0; for f in " + strings.Join(quoted, " ") +
+		`; do if [ -f "$f" ]; then n=$((n + $(wc -c < "$f"))); fi; done; echo "$n $(df -Pk data | awk 'NR==2{print $4}')"`
+	out, _, rc, err := s.Run(cmd)
+	if err != nil {
+		return 0, 0, fmt.Errorf("проверка до остановки: %w", err)
+	}
+	var availKB int64
+	if n, _ := fmt.Sscan(strings.TrimSpace(out), &live, &availKB); rc != 0 || n != 2 || live < 0 || availKB < 0 {
+		return 0, 0, errors.New("проверка до остановки не прошла, ничего не менялось: не удалось узнать свободное место на диске Pi (df -Pk data)")
+	}
+	return live, availKB * 1024, nil
 }
 
 // piCheckFreeSpace -- только чтение: хватит ли места на файловой системе
-// data/ под копию прежней базы и распакованный архив. Не хватит -- отказ до
+// data/ под копии .bak и распакованный архив. Не хватит -- отказ до
 // выгрузки и останова; не удалось узнать -- тоже отказ, а не угадывание.
-func piCheckFreeSpace(s remoteExec, base string, staged int64) error {
-	cmd := "cd " + shellSingleQuote(base) + ` && n=0; for f in data/state.db data/state.db-wal; do if [ -f "$f" ]; then n=$((n + $(wc -c < "$f"))); fi; done; echo "$n $(df -Pk data | awk 'NR==2{print $4}')"`
-	out, _, rc, err := s.Run(cmd)
+func piCheckFreeSpace(s remoteExec, base string, stores []string, staged int64) error {
+	live, free, err := piLiveBytes(s, base, stores)
 	if err != nil {
-		return fmt.Errorf("проверка до остановки: %w", err)
+		return err
 	}
-	var live, availKB int64
-	if n, _ := fmt.Sscan(strings.TrimSpace(out), &live, &availKB); rc != 0 || n != 2 || live < 0 || availKB < 0 {
-		return errors.New("проверка до остановки не прошла, ничего не менялось: не удалось узнать свободное место на диске Pi (df -Pk data)")
-	}
-	need, free := piNeedBytes(live, staged), availKB*1024
+	need := piNeedBytes(live, staged)
 	if free < need {
 		return fmt.Errorf("мало места на диске Pi: нужно %s, свободно %s -- ничего не менялось, бэкенд не останавливался", piMB(need), piMB(free))
 	}
