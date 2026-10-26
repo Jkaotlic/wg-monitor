@@ -24,6 +24,7 @@ const (
 	// где осталась база.
 	piScriptFailedBeforeReplace = 10 // провал до замены: база не тронута
 	piScriptFailedAfterReplace  = 11 // провал после начала замены, откат удался
+	piScriptRollbackFailed      = 12 // откат не удался: контейнер не запускается
 )
 
 // restoreConfirm -- вопрос оператору; тесты подменяют.
@@ -182,6 +183,9 @@ func piRunRestoreScript(s remoteExec, base, stamp string, names []string) error 
 	switch rc {
 	case 0:
 		return nil
+	case piScriptRollbackFailed:
+		// Запускать бэкенд на полувозвращённой базе нельзя -- только руками.
+		return fmt.Errorf("замена не удалась (%s), откат не удался — вернуть руками:\n%s", why, piRollbackHint(base, stamp, names))
 	case piScriptFailedAfterReplace:
 		// Скрипт уже откатил и запустил контейнер; ещё один start безопасен.
 		return piStartBack(s, fmt.Errorf("замена не удалась (%s): прежняя база возвращена из копии state.db.bak.%s", why, stamp))
@@ -277,18 +281,20 @@ func buildPiRestoreScript(base, stamp string, stores []string) string {
 		fmt.Fprintf(&prep, "chmod 600 %s/%s\nchown --reference=data %s/%s\n", piRestoreTmp, name, piRestoreTmp, name)
 		fmt.Fprintf(&backupOld, "if [ -f %s ]; then cp -p %s %s.bak.%s; fi\n", live, live, live, stamp)
 		fmt.Fprintf(&install, "mv -f %s/%s %s\n", piRestoreTmp, name, live)
-		fmt.Fprintf(&rollback, "\tif [ -f %[1]s.bak.%[2]s ]; then cp -p %[1]s.bak.%[2]s %[1]s || true; else rm -f %[1]s; fi\n", live, stamp)
+		fmt.Fprintf(&rollback, "\tif [ -f %[1]s.bak.%[2]s ]; then { cp -p %[1]s.bak.%[2]s %[1]s.rb.%[2]s && mv -f %[1]s.rb.%[2]s %[1]s; } || rbfail=1; else rm -f %[1]s || rbfail=1; fi\n", live, stamp)
 	}
 	return fmt.Sprintf(`set -eu
 cd %[1]s
 replaced=0
 rollback() {
-	rm -f data/state.db-wal data/state.db-shm
-	if [ -f data/state.db.bak.%[2]s ]; then cp -p data/state.db.bak.%[2]s data/state.db || true; else rm -f data/state.db; fi
-	if [ -f data/state.db.bak.%[2]s-wal ]; then cp -p data/state.db.bak.%[2]s-wal data/state.db-wal || true; fi
-	if [ -f data/state.db.bak.%[2]s-shm ]; then cp -p data/state.db.bak.%[2]s-shm data/state.db-shm || true; fi
-%[6]s}
-trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then rollback; rc=%[9]d; else rc=%[10]d; fi; fi; rm -rf %[3]s; docker start %[7]s >/dev/null 2>&1 || true; exit $rc' EXIT
+	rbfail=0
+	rm -f data/state.db-wal data/state.db-shm || rbfail=1
+	if [ -f data/state.db.bak.%[2]s ]; then { cp -p data/state.db.bak.%[2]s data/state.db.rb.%[2]s && mv -f data/state.db.rb.%[2]s data/state.db; } || rbfail=1; else rm -f data/state.db || rbfail=1; fi
+	if [ -f data/state.db.bak.%[2]s-wal ]; then { cp -p data/state.db.bak.%[2]s-wal data/state.db-wal.rb.%[2]s && mv -f data/state.db-wal.rb.%[2]s data/state.db-wal; } || rbfail=1; fi
+	if [ -f data/state.db.bak.%[2]s-shm ]; then { cp -p data/state.db.bak.%[2]s-shm data/state.db-shm.rb.%[2]s && mv -f data/state.db-shm.rb.%[2]s data/state.db-shm; } || rbfail=1; fi
+%[6]s	return $rbfail
+}
+trap 'rc=$?; if [ "$rc" != 0 ]; then if [ "$replaced" = 1 ]; then if rollback; then rc=%[9]d; else rc=%[11]d; fi; else rc=%[10]d; fi; fi; rm -rf %[3]s; if [ "$rc" != %[11]d ]; then docker start %[7]s >/dev/null 2>&1 || true; fi; exit $rc' EXIT
 test -s %[3]s/state.db
 chmod 600 %[3]s/state.db
 chown --reference=data %[3]s/state.db
@@ -299,7 +305,7 @@ if [ -f data/state.db-shm ]; then cp -p data/state.db-shm data/state.db.bak.%[2]
 rm -f data/state.db-wal data/state.db-shm
 mv -f %[3]s/state.db data/state.db
 %[8]s`, shellSingleQuote(base), stamp, piRestoreTmp, prep.String(), backupOld.String(), rollback.String(), piBackendContainer, install.String(),
-		piScriptFailedAfterReplace, piScriptFailedBeforeReplace)
+		piScriptFailedAfterReplace, piScriptFailedBeforeReplace, piScriptRollbackFailed)
 }
 
 // piRollbackHint -- как вернуть прежнюю базу руками, если новая не поднялась.

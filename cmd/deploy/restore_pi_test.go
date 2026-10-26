@@ -169,7 +169,7 @@ func TestPiRestoreScriptKeepsOldDBWithWalBeforeReplacing(t *testing.T) {
 		last += 1 + i
 	}
 	// Ловушка выхода: откат только после начала замены, контейнер -- всегда.
-	if !strings.Contains(script, "docker start wg-monitor-backend >/dev/null 2>&1 || true; exit $rc' EXIT") {
+	if !strings.Contains(script, "docker start wg-monitor-backend >/dev/null 2>&1 || true; fi; exit $rc' EXIT") {
 		t.Fatalf("нет ловушки выхода:\n%s", script)
 	}
 	if strings.Index(script, "trap 'rc=") > strings.Index(script, "chmod 600") {
@@ -383,5 +383,39 @@ func TestRestoreToNewVPSRefusesDockerStateBeforeAnything(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("в тексте нет %q: %s", want, err)
 		}
+	}
+}
+
+func TestPiRestoreScriptRollbackIsAtomicAndReportsFailure(t *testing.T) {
+	script := buildPiRestoreScript("/root/wg-monitor", "20261026T010203Z", []string{"awg3-panels.json"})
+	for _, want := range []string{
+		"{ cp -p data/state.db.bak.20261026T010203Z data/state.db.rb.20261026T010203Z && mv -f data/state.db.rb.20261026T010203Z data/state.db; } || rbfail=1",
+		"{ cp -p data/awg3-panels.json.bak.20261026T010203Z data/awg3-panels.json.rb.20261026T010203Z && mv -f data/awg3-panels.json.rb.20261026T010203Z data/awg3-panels.json; } || rbfail=1",
+		"if rollback; then rc=11; else rc=12; fi",
+		`if [ "$rc" != 12 ]; then docker start wg-monitor-backend`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("нет %q:\n%s", want, script)
+		}
+	}
+}
+
+func TestRestoreToPiRollbackFailureDoesNotStart(t *testing.T) {
+	stubRestoreConfirm(t, true)
+	fake := newFakeRemote()
+	fake.reply = func(cmd string) (string, string, int, error) {
+		if strings.HasPrefix(cmd, "set -eu") {
+			return "", "cp: No space left on device\n", piScriptRollbackFailed, nil
+		}
+		return piReply("ok\n", "200")(cmd)
+	}
+	stubRestoreConnect(t, fake)
+	b := inspectPiArchive(t, piArchiveMembers())
+	err := restoreBackupToCurrentVPS(piState(), nil, b)
+	if err == nil || !strings.Contains(err.Error(), "откат не удался — вернуть руками:") || !strings.Contains(err.Error(), "cp -p data/state.db.bak.") {
+		t.Fatalf("err=%v", err)
+	}
+	if fake.indexOfCall("run: docker start") >= 0 {
+		t.Fatalf("при неудачном откате контейнер не запускается:\n%s", strings.Join(fake.calls, "\n"))
 	}
 }
