@@ -3,7 +3,7 @@ package backend
 import (
 	"os"
 	"os/exec"
-	"runtime"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,9 +11,14 @@ import (
 // FRESH-06: бот не ходит в API кабинета Amnezia Premium (решение оператора
 // 16.10), и клиента кабинета в сборке нет. Тест сторожит, чтобы он не вернулся.
 func TestBackendDoesNotLinkAmneziaCabinet(t *testing.T) {
-	goBin := runtime.GOROOT() + "/bin/go"
-	if _, err := os.Stat(goBin); err != nil {
-		t.Skipf("go не найден: %v", err)
+	// go test кладёт свой GOROOT в окружение теста; запасной путь -- PATH.
+	goBin := filepath.Join(os.Getenv("GOROOT"), "bin", "go")
+	if _, err := os.Stat(goBin); err != nil || os.Getenv("GOROOT") == "" {
+		p, lerr := exec.LookPath("go")
+		if lerr != nil {
+			t.Skipf("go не найден: GOROOT=%q, PATH: %v", os.Getenv("GOROOT"), lerr)
+		}
+		goBin = p
 	}
 	cmd := exec.Command(goBin, "list", "-deps", "./cmd/backend")
 	cmd.Dir = "../.."

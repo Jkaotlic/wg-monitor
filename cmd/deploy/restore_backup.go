@@ -630,6 +630,9 @@ func actionRestoreBackup(state *State, secrets *SecretStore, dl *Downloader, opt
 
 // errRestoreDockerLayout: мастер знает только раскладку VPS с systemd; на докере
 // (Pi) заменять базу без проверки на живом стенде опаснее, чем сделать руками.
+// Текст целиком показывается оператору как фраза, а не оборачивается.
+//
+//lint:ignore ST1005 законченная фраза для человека: с заглавной и с точкой.
 var errRestoreDockerLayout = errors.New("Этот бэкенд работает в докере (Raspberry Pi): мастер восстанавливает только раскладку VPS с systemd. Как восстановить вручную — DEPLOY.md, раздел «Восстановление бэкапа на Pi».")
 
 func restoreBackupToCurrentVPS(state *State, secrets *SecretStore, backup *RestoreBackup) error {
