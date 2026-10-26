@@ -50,6 +50,8 @@ describe('строка «Сторож»', () => {
     expect(both.tone).toBe('warn')
     expect(both.sub).toContain('1 отправка не ушла')
     expect(both.sub).toContain('1 отправка могла дойти')
+    expect(watchdogLine(fleet({ ...WD, offline_maybe_delivered: 5 })).sub).toContain('5 отправок могло дойти')
+    expect(watchdogLine(fleet({ ...WD, offline_maybe_delivered: 21 })).sub).toContain('21 отправка могла дойти')
   })
 
   it('старый бэкенд без новых счётчиков -- не выдумываем нули', () => {

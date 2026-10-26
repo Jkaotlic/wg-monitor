@@ -34,7 +34,7 @@ export function watchdogLine(fleet) {
   // владельца. Это не ошибка: своя строка и тон не меняется.
   const maybe = num(wd.offline_maybe_delivered) ? wd.offline_maybe_delivered : 0
   if (maybe > 0) {
-    sub.push(`${maybe} ${pluralRu(maybe, 'отправка могла дойти', 'отправки могли дойти', 'отправок могли дойти')}: ответ Telegram не пришёл`)
+    sub.push(`${maybe} ${pluralRu(maybe, 'отправка могла дойти', 'отправки могли дойти', 'отправок могло дойти')}: ответ Telegram не пришёл`)
   }
 
   const dead = wd.alive === false
