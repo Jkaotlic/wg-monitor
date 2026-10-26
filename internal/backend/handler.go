@@ -294,8 +294,9 @@ func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx 
 //     меньше alertSlotlessLimit (общий потолок на процесс): ответ на отчёт
 //     не ждёт Telegram, а горутины не растут без предела даже у флапающей
 //     проверки;
-//   - выше потолка -- доставка на месте: ожидание предыдущей по проверке и
-//     своя доставка под одним сроком alertDeliveryTimeout;
+//   - выше потолка -- доставка на месте тем же порядком: ожидание
+//     предыдущей по проверке (до остановки бэкенда), затем свой срок
+//     alertDeliveryTimeout; отчёт ждёт, но тревога не теряется;
 //   - идёт слив (WaitRelayDrain) -- любой из путей выше, но без учёта в
 //     relayWG: Add параллельно с Wait запрещён, а бросить тревогу -- потерять.
 func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn func(ctx context.Context)) {
@@ -346,21 +347,14 @@ func spawnAlertDelivery(d Deps, label string, userID int64, checkName string, fn
 		return
 	}
 	alertSlotless.Add(-1)
-	// Выше потолка -- на месте: отчёт подождёт, тревога дойдёт. Ожидание
-	// предыдущей доставки проверки и своя доставка -- под одним сроком,
-	// чтобы ответ на отчёт не держался дольше alertDeliveryTimeout.
+	// Выше потолка -- на месте: отчёт подождёт, тревога дойдёт. Та же
+	// логика, что в фоне: предыдущую доставку проверки ждём до остановки
+	// бэкенда, а свой срок alertDeliveryTimeout отсчитываем после неё --
+	// общий срок на оба шага долгая предыдущая съела бы, и тревога ушла бы
+	// с истёкшим контекстом (потерялась).
 	d.Logger.Warn("relay pool and slotless alert cap saturated; delivering alert inline", "label", label, "limit", relayConcurrencyLimit, "slotless_limit", alertSlotlessLimit)
 	defer untrack()
-	defer release()
-	ctx, cancel := context.WithTimeout(relayParent(d), alertDeliveryTimeout)
-	defer cancel()
-	if prev != nil {
-		select {
-		case <-prev:
-		case <-ctx.Done():
-		}
-	}
-	fn(ctx)
+	background()
 }
 
 // alertQueueLen -- сколько очередей доставки не закончено (для тестов).
@@ -394,8 +388,9 @@ const alertSlotlessLimit = 32
 var alertSlotless atomic.Int32
 
 // alertDeliveryTimeout -- бюджет доставки одной тревоги: рассылка с
-// повторами (sendWithRetry пережидает retry_after при 429).
-const alertDeliveryTimeout = 30 * time.Second
+// повторами (sendWithRetry пережидает retry_after при 429). Переменная --
+// тесты сокращают.
+var alertDeliveryTimeout = 30 * time.Second
 
 // goRelay запускает fn с местом в relaySem, уже занятым вызывающим.
 // Учёт в relayWG (relayTrack) уже сделан вызывающим.

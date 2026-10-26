@@ -2,12 +2,15 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 )
 
 // waitRelayPoolEmpty blocks until the shared relay semaphore has drained, so
@@ -155,5 +158,46 @@ func TestSpawnAlertDelivery_InlineAboveSlotlessCap(t *testing.T) {
 	}
 	if !hadDeadline.Load() {
 		t.Fatal("доставка на месте без срока: зависший Telegram держал бы отчёт вечно")
+	}
+}
+
+// Выше потолка доставка на месте ждёт предыдущую той же проверки без срока
+// (только остановка бэкенда), а свой срок alertDeliveryTimeout отсчитывает
+// уже после: иначе долгая предыдущая съедала бы его, и тревога уходила с
+// истёкшим контекстом -- терялась.
+func TestSpawnAlertDelivery_InlineOwnDeadlineAfterPrev(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	waitRelayDrained(t)
+	prevTimeout := alertDeliveryTimeout
+	alertDeliveryTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { alertDeliveryTimeout = prevTimeout })
+	d := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	release := fillAlertSlotless(t, d)
+	defer func() {
+		close(release)
+		waitRelayPoolEmpty(t)
+		waitRelayDrained(t)
+	}()
+
+	// Предыдущая доставка той же проверки держится дольше срока.
+	_, prevDone := alerts.EnqueueDelivery(1, "dns-chain")
+	go func() {
+		time.Sleep(3 * alertDeliveryTimeout)
+		prevDone()
+	}()
+	var ctxErr error
+	ran := false
+	spawnAlertDelivery(d, "dispatch", 1, "dns-chain", func(ctx context.Context) {
+		ran = true
+		ctxErr = ctx.Err()
+		if _, ok := ctx.Deadline(); !ok {
+			ctxErr = errors.New("без срока")
+		}
+	})
+	if !ran {
+		t.Fatal("тревога на месте не доставлена")
+	}
+	if ctxErr != nil {
+		t.Fatalf("доставка на месте получила негодный контекст: %v", ctxErr)
 	}
 }
