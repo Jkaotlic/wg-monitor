@@ -58,7 +58,9 @@ func (a Attempts) load(nickname, checkName string) (attemptLog, error) {
 	if raw == "" {
 		return log, nil
 	}
-	_ = json.Unmarshal([]byte(raw), &log)
+	if err := json.Unmarshal([]byte(raw), &log); err != nil {
+		return attemptLog{}, fmt.Errorf("история попыток битая: %w", err)
+	}
 	return log, nil
 }
 

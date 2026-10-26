@@ -197,3 +197,17 @@ func TestAttempts_ReadErrorNeverOverwrites(t *testing.T) {
 		t.Fatalf("история переписана %d раз вслепую", kv.sets)
 	}
 }
+
+// FRESH-07: битая запись истории -- отказ, а не пустая история: иначе она
+// молча снимает стоп «нужен человек» и потолок попыток.
+func TestAllow_CorruptHistoryRefuses(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	kv := fakeKV{attemptKey("r1", "link"): "{bad"}
+	a := Attempts{KV: kv, Now: func() time.Time { return now }}
+	if ok, why := a.Allow("r1", "link"); ok || why != WhyAttemptsUnread {
+		t.Fatalf("Allow = %v, %q; want false, %q", ok, why, WhyAttemptsUnread)
+	}
+	if _, _, _, err := a.verdict("r1", "link"); err == nil {
+		t.Fatal("verdict не вернул ошибку на битой истории")
+	}
+}
