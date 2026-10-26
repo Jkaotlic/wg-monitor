@@ -255,7 +255,7 @@ func TestRemoteRateLimitTakesRightmostUntrustedForwarded(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", nil)
 	r.RemoteAddr = "127.0.0.1:5"
 	r.Header.Set("X-Forwarded-For", "203.0.113.99, 198.51.100.4, 10.0.0.2")
-	if got := clientRateKey(r); got != "198.51.100.4" {
+	if got := clientRateKeyOpt(r, true); got != "198.51.100.4" {
 		t.Fatalf("key = %q, want 198.51.100.4", got)
 	}
 }
@@ -349,7 +349,7 @@ func TestClientRateKeyIgnoresRealIPEntirely(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", nil)
 	r.RemoteAddr = "127.0.0.1:4242"
 	r.Header.Set("X-Real-IP", "203.0.113.7")
-	if got := clientRateKey(r); got != "127.0.0.1" {
+	if got := clientRateKeyOpt(r, true); got != "127.0.0.1" {
 		t.Fatalf("key = %q, want 127.0.0.1", got)
 	}
 }

@@ -175,16 +175,13 @@ func trustedHop(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
-// clientRateKey -- ключ лимита: настоящий клиент, а не прокси перед нами.
+// clientRateKeyOpt -- ключ лимита: настоящий клиент, а не прокси перед нами.
 // X-Forwarded-For читается ТОЛЬКО если RemoteAddr -- доверенный прокси (иначе
 // заголовок подделывается одной строкой). В XFF идём справа налево и берём
 // первый недоверенный адрес: клиент может дописать свои адреса слева, но
 // справа ставит запись только наш прокси. X-Real-IP не читается вовсе: при
 // проброске заголовков прокси он целиком в руках клиента. Нет годного
-// заголовка -- RemoteAddr.
-func clientRateKey(r *http.Request) string { return clientRateKeyOpt(r, true) }
-
-// clientRateKeyOpt -- clientRateKey с выключателем: trustForwarded=false
+// заголовка -- RemoteAddr. trustForwarded=false (distrust_forwarded_for)
 // возвращает RemoteAddr, не заглядывая в заголовки.
 func clientRateKeyOpt(r *http.Request, trustForwarded bool) string {
 	remote := remoteRateKey(r.RemoteAddr)
