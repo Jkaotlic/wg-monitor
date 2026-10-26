@@ -651,3 +651,27 @@ func TestActionRestoreBackupPassesYes(t *testing.T) {
 		t.Fatalf("замена не дошла:\n%s", strings.Join(fake.calls, "\n"))
 	}
 }
+
+func TestRestorePreviewOnPiWarnsSealedStoresEvenWithKeyInArchive(t *testing.T) {
+	// На Pi мастер revive.key не ставит никогда: ключ в архиве хранилищам
+	// не поможет, решает ключ, который уже лежит на Pi.
+	members := piArchiveMembers()
+	members["awg3-panels.json"] = "wg-monitor-sealed v1\nnot-really-ciphertext"
+	b := inspectPiArchive(t, members)
+	p := RenderRestoreBackupPreview(b)
+	want := "sealed stores: awg3-panels.json (open only if secrets/revive.key on the Pi is still the old one: the restore never installs revive.key on the Pi)"
+	if !strings.Contains(p, want) {
+		t.Fatalf("в превью нет %q:\n%s", want, p)
+	}
+	if strings.ContainsAny(p, "абвгдежзийклмнопрстуфхцчшщъыьэюя") {
+		t.Fatalf("кириллица в превью:\n%s", p)
+	}
+	delete(members, "revive.key")
+	if p := RenderRestoreBackupPreview(inspectPiArchive(t, members)); !strings.Contains(p, want) {
+		t.Fatalf("без ключа в архиве то же:\n%s", p)
+	}
+	members["awg3-panels.json"] = `{"panels":[]}`
+	if p := RenderRestoreBackupPreview(inspectPiArchive(t, members)); strings.Contains(p, "sealed stores") {
+		t.Fatalf("открытые хранилища -- строки нет:\n%s", p)
+	}
+}

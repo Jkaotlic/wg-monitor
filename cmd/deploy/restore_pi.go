@@ -46,7 +46,11 @@ func isDockerBackend(state *State) bool {
 // backend.yaml пути контейнера (/data/...), хранилища ложатся в data/ рядом с
 // базой. revive.key извлекается только для показа -- на Pi его не кладём.
 func InspectRestoreBackupForDocker(archivePath, passphrase string) (*RestoreBackup, func(), error) {
-	return inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAMLForDocker, resolveDockerRestoreExtras)
+	b, cleanup, err := inspectRestoreBackup(archivePath, passphrase, validateRestoreBackendYAMLForDocker, resolveDockerRestoreExtras)
+	if b != nil {
+		b.ForDocker = true
+	}
+	return b, cleanup, err
 }
 
 func validateRestoreBackendYAMLForDocker(p string) error {

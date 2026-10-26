@@ -35,6 +35,9 @@ type RestoreBackup struct {
 	Extras []RestoreExtraFile
 	// Warnings -- что из архива восстановить не получится и почему.
 	Warnings []string
+	// ForDocker -- архив разобран для докер-раскладки (Raspberry Pi): там
+	// мастер revive.key не ставит, ключ хранилищ -- тот, что уже на Pi.
+	ForDocker bool
 }
 
 // RestoreExtraFile -- файл из архива, который восстановление кладёт на
@@ -580,7 +583,11 @@ func RenderRestoreBackupPreview(b *RestoreBackup) string {
 		emptyDash(strings.Join(stores, ", ")),
 		reviveKey,
 	)
-	if len(sealed) > 0 && !keyInArchive {
+	if len(sealed) > 0 && b.ForDocker {
+		// На Pi ключ из архива не ставится никогда: откроет хранилища только
+		// прежний secrets/revive.key, если он на Pi остался.
+		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " (open only if secrets/revive.key on the Pi is still the old one: the restore never installs revive.key on the Pi)"
+	} else if len(sealed) > 0 && !keyInArchive {
 		// v0.62 (BACK-04): ключ шифрования хранилищ в архив не кладётся --
 		// без прежнего revive.key на сервере они не откроются.
 		out += "\nsealed stores: " + strings.Join(sealed, ", ") + " (won't open without the old revive.key: it is not in the backup)"
