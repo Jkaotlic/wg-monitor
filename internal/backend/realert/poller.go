@@ -185,6 +185,10 @@ func (p *Poller) sendOwedReply(ctx context.Context, now time.Time, o db.OwedRepl
 	return true
 }
 
+// beforeHardQueue -- шов для тестов: зовётся между чтением состояния и
+// постановкой карточки в очередь проверки. В проде nil.
+var beforeHardQueue func()
+
 // SetNotifySink подменяет рассылку. Только для тестов.
 func (p *Poller) SetNotifySink(s realertSink) { p.notify = s }
 
@@ -432,13 +436,28 @@ func (p *Poller) tick(ctx context.Context) {
 			// Очередь доставок проверки общая с отчётом (карточка,
 			// «восстановилось»): впереди доставка -- карточку не шлём, обход
 			// не ждёт, повтор на следующем; состояние перечитается заново.
+			if beforeHardQueue != nil {
+				beforeHardQueue()
+			}
 			release, ok := alerts.TryEnqueueDelivery(sh.UserID, sh.CheckName)
 			if !ok {
 				slog.Info("realert: доставка по проверке уже идёт, карточка -- на следующем обходе",
 					"user_id", sh.UserID, "check", sh.CheckName)
 				continue
 			}
-			_, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, st, check)
+			// Место в очереди занято -- снимок st мог устареть: доставка из
+			// отчёта закончилась между чтением и постановкой (проверка ожила
+			// или карточка уже ушла). Перечитываем и шлём, только если тревога
+			// всё ещё hard и не отправлена -- иначе дубль карточки.
+			fresh, ferr := p.d.State().Get(sh.UserID, sh.CheckName)
+			if ferr != nil || fresh.CurrentStatus != "hard" || fresh.LastAlertAt != nil || fresh.HardSince == nil {
+				release()
+				if ferr != nil {
+					slog.Warn("realert: state reread failed", "user_id", sh.UserID, "check", sh.CheckName, "err", ferr)
+				}
+				continue
+			}
+			_, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, fresh, check)
 			release()
 			if err != nil {
 				if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {

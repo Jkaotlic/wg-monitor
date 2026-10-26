@@ -150,3 +150,40 @@ func TestRealertOwedReplyWaitsQueuedDelivery(t *testing.T) {
 		t.Fatalf("очередь не освобождена: %d", n)
 	}
 }
+
+// Между чтением состояния и местом в очереди доставка из отчёта успела
+// закончиться: проверка ожила (или карточка уже ушла). Снимок устарел --
+// карточку не шлём, иначе пришёл бы дубль или карточка ожившей проверки.
+func TestRealertDeliverHardRereadsStateInQueue(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   func(now time.Time) db.IncidentState
+	}{
+		{"ожила", func(time.Time) db.IncidentState {
+			return db.IncidentState{CurrentStatus: "ok", ConsecutiveOKs: 2}
+		}},
+		{"карточка уже ушла", func(now time.Time) db.IncidentState {
+			hs := now.Add(-time.Hour)
+			return db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs, LastAlertAt: &now}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, uid, f, p, now := undeliveredHard(t)
+			beforeHardQueue = func() {
+				st := tc.st(now)
+				st.UserID, st.CheckName = uid, "awg_handshake"
+				if err := d.State().Save(uid, "awg_handshake", st); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { beforeHardQueue = nil })
+			tickBounded(t, p)
+			if n := f.count(); n != 0 {
+				t.Fatalf("карточка по устаревшему снимку ушла: %d сообщений", n)
+			}
+			if n := alerts.DeliveryQueueLen(); n != 0 {
+				t.Fatalf("очередь не освобождена: %d", n)
+			}
+		})
+	}
+}
