@@ -1038,8 +1038,9 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		// Установка прошивки не берёт аргументов вовсе: агент ставит то, что
 		// роутер сам считает доступным. Всё, что прислал клиент, -- лишнее.
 		return map[string]any{}, true
-	case "route_templates":
-		// Каталог читается без параметров; всё, что прислал клиент, -- лишнее.
+	case "route_templates", "route_geo_tags":
+		// Каталог и гео-теги читаются без параметров; всё, что прислал
+		// клиент, -- лишнее (путь к гео-файлу агент берёт у роутера сам).
 		return map[string]any{}, true
 	case "tunnel_analyze":
 		// До агента доезжает только конфиг. Предел с запасом: конфиг
@@ -1108,6 +1109,18 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		out := map[string]any{"kind": kind, "route_id": routeID}
+		if h := strings.TrimSpace(argString(args, "preview_hash")); h != "" {
+			out["preview_hash"] = h
+		}
+		return out, true
+	case "route_migrate", "route_migrate_plan":
+		// До агента доезжают только id статики и хеш превью.
+		routeID := strings.TrimSpace(argString(args, "route_id"))
+		if !wizardRouteTargetIDLooksSafe(routeID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_id", "route_id must be a safe route id")
+			return nil, false
+		}
+		out := map[string]any{"route_id": routeID}
 		if h := strings.TrimSpace(argString(args, "preview_hash")); h != "" {
 			out["preview_hash"] = h
 		}

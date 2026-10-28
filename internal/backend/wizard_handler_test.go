@@ -1706,6 +1706,26 @@ func TestSanitizeRouteTemplatesTakesNoArgs(t *testing.T) {
 	}
 }
 
+func TestSanitizeRouteGeoTagsTakesNoArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_geo_tags", map[string]any{"path": "/etc/passwd"})
+	if !ok || len(got) != 0 {
+		t.Fatalf("got = %v ok = %v, ожидались пустые аргументы", got, ok)
+	}
+}
+
+func TestSanitizeRouteMigrateArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_migrate", map[string]any{"route_id": " st_1 ", "preview_hash": "abc", "лишнее": 1})
+	if !ok || got["route_id"] != "st_1" || got["preview_hash"] != "abc" || len(got) != 2 {
+		t.Fatalf("got = %v ok = %v", got, ok)
+	}
+	rec = httptest.NewRecorder()
+	if _, ok := sanitizeWizardCommandArgs(rec, "route_migrate_plan", map[string]any{"route_id": "a b;rm"}); ok {
+		t.Fatal("небезопасный route_id обязан получить отказ")
+	}
+}
+
 func TestSanitizeRoutePolicyPromoteArgs(t *testing.T) {
 	rec := httptest.NewRecorder()
 	got, ok := sanitizeWizardCommandArgs(rec, "route_policy_promote", map[string]any{
