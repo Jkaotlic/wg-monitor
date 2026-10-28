@@ -416,6 +416,7 @@ function routeOutcomeLabel(action, output) {
       return promoteOutcome(payload)
     case 'route_add':
     case 'route_delete':
+    case 'route_migrate':
       return applyOutcome(action, payload)
     default:
       return ''
@@ -471,7 +472,17 @@ function promoteOutcome(policy) {
 function applyOutcome(action, res) {
   const name = (res.route_name || res.route_id || '').trim()
   if (!name) return ''
-  const base = action === 'route_add' ? `Правило «${name}» создано` : `Правило «${name}» убрано`
+  // Агент оставил статику: новое правило не нашлось на роутере. Это не
+  // «перенесён с оговоркой», а «не перенесён» -- и человек должен это знать.
+  if (action === 'route_migrate' && res.not_applied) {
+    return `Маршрут «${name}» не перенесён: новое правило HydraRoute Neo не подтвердилось, старый маршрут оставлен. Загляните в список правил — там может остаться лишнее.`
+  }
+  const base =
+    action === 'route_add'
+      ? `Правило «${name}» создано`
+      : action === 'route_migrate'
+        ? `Маршрут «${name}» перенесён в HydraRoute Neo`
+        : `Правило «${name}» убрано`
   const warning = (res.warning || '').trim()
   return warning ? `${base}, но с оговоркой: ${warning}` : base
 }

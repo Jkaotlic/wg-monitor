@@ -381,6 +381,7 @@ const COMMAND_NAMES = {
   dns_reset: 'сброс DNS',
   route_add: 'добавление правила',
   route_delete: 'удаление правила',
+  route_migrate: 'перенос маршрута в HydraRoute Neo',
   route_rebind: 'перенос правил',
   route_policy_promote: 'смена главного VPN-туннеля',
   update_agent_config: 'изменение настроек агента',
