@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -160,6 +161,87 @@ func RouteTemplatesJSON(ctx context.Context, c *awgmgr.Client) (string, error) {
 	return string(b), nil
 }
 
+// RouteGeoTagsJSON отдаёт все гео-теги HydraRoute Neo роутера одним списком:
+// экран ищет по ним сам, без похода к роутеру на каждую букву. У роутера бывает
+// два комплекта файлов (свой awg-manager и внешний HydraRoute) -- теги
+// сливаются по типу и имени, число записей берётся наибольшее. Нечитаемый
+// файл пропускается; не прочитался ни один -- ошибка, а не пустой список.
+func RouteGeoTagsJSON(ctx context.Context, c *awgmgr.Client) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("route_geo_tags: awg-manager client is required")
+	}
+	files, err := c.GeoFiles(ctx)
+	if err != nil {
+		return "", fmt.Errorf("route_geo_tags: geo files: %w", err)
+	}
+	merged := map[string]wire.RouteGeoTag{}
+	read := 0
+	var lastErr error
+	for _, f := range files {
+		kind := strings.ToLower(strings.TrimSpace(f.Type))
+		if (kind != "geosite" && kind != "geoip") || strings.TrimSpace(f.Path) == "" {
+			continue
+		}
+		tags, err := c.GeoTags(ctx, f.Path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		read++
+		for _, t := range tags {
+			name := strings.ToUpper(strings.TrimSpace(t.Name))
+			if name == "" {
+				continue
+			}
+			key := kind + ":" + name
+			if prev, ok := merged[key]; !ok || t.Count > prev.Count {
+				merged[key] = wire.RouteGeoTag{Kind: kind, Name: name, Count: t.Count}
+			}
+		}
+	}
+	if read == 0 && lastErr != nil {
+		return "", fmt.Errorf("route_geo_tags: %w", lastErr)
+	}
+	out := wire.RouteGeoTags{Tags: make([]wire.RouteGeoTag, 0, len(merged))}
+	for _, t := range merged {
+		out.Tags = append(out.Tags, t)
+	}
+	sort.Slice(out.Tags, func(i, j int) bool {
+		if out.Tags[i].Kind != out.Tags[j].Kind {
+			return out.Tags[i].Kind < out.Tags[j].Kind
+		}
+		return out.Tags[i].Name < out.Tags[j].Name
+	})
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// allRouteTargetsCIDR -- все ли цели сети. Static с доменом -- ошибка
+// вызывающего: она обязана дойти до отказа «must be CIDR or IP», а не тихо
+// стать DNS-правилом HR Neo.
+func allRouteTargetsCIDR(targets []string) bool {
+	for _, target := range targets {
+		if normalizeRouteTarget(target).Type != "cidr" {
+			return false
+		}
+	}
+	return len(targets) > 0
+}
+
+// hrNeoActive -- установлен ли и работает ли HydraRoute Neo. Ошибка чтения
+// значит «нет»: старая сборка без эндпоинта и роутер без Neo ведут себя
+// одинаково, и правило уходит в NDMS, как и раньше.
+func hrNeoActive(ctx context.Context, c *awgmgr.Client) bool {
+	if c == nil {
+		return false
+	}
+	hr, err := c.HydraRouteStatus(ctx)
+	return err == nil && hr.Installed && hr.Running
+}
+
 func RouteDeletePlanJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteDeleteRequest) (string, error) {
 	plan, err := buildRouteDeletePlan(ctx, c, req)
 	if err != nil {
@@ -222,6 +304,23 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 	req.TunnelID = strings.TrimSpace(req.TunnelID)
 	req.TemplateID = strings.TrimSpace(req.TemplateID)
 	req.Targets = cleanRouteTargets(req.Targets)
+	// Движок DNS-правила -- свойство роутера, а не набора и не экрана: при
+	// установленном и работающем HydraRoute Neo правило идёт в него (жалоба
+	// оператора 27.10.2026 -- каталог молча заводил всё в NDMS, потому что
+	// экран решал по гео-тегам набора, а с awg-manager 2.17.2 их там нет).
+	// До разворота набора: с флагом он берёт и свои гео-теги.
+	//
+	// Сети -- туда же (оператор 28.10.2026: «гидра роут это поддерживает»):
+	// правило HR Neo несёт их в subnets, и статический маршрут NDMS при
+	// работающем Neo становится его правилом. Экран по-прежнему шлёт сети как
+	// static -- старый агент так заведёт их в NDMS, а не сломанным правилом.
+	switch {
+	case req.Kind == "static" && allRouteTargetsCIDR(req.Targets) && hrNeoActive(ctx, c):
+		req.Kind = "dns"
+		req.UseHRNeo = true
+	case !req.UseHRNeo && (req.Kind == "dns" || (req.Kind == "" && req.TemplateID != "")):
+		req.UseHRNeo = hrNeoActive(ctx, c)
+	}
 	if req.TemplateID != "" {
 		var err error
 		req, err = materializeRouteTemplate(ctx, c, req)
@@ -234,6 +333,18 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 	}
 	if req.Name == "" || req.TunnelID == "" || len(req.Targets) == 0 {
 		return wire.RouteAddPlan{}, fmt.Errorf("route_add_plan: name, tunnel_id and targets are required")
+	}
+	if req.Kind == "dns" && !req.UseHRNeo {
+		for _, target := range req.Targets {
+			if _, _, geo := splitGeoTag(target); geo {
+				return wire.RouteAddPlan{}, fmt.Errorf("route_add_plan: geo tag %q needs HydraRoute Neo, and it is not running on this router", target)
+			}
+			// DNS-правило NDMS разворачивает только имена: сеть в нём молча
+			// ничего не ведёт. Без Neo сеть -- это статический маршрут.
+			if normalizeRouteTarget(target).Type == "cidr" {
+				return wire.RouteAddPlan{}, fmt.Errorf("route_add_plan: network %q in a DNS rule needs HydraRoute Neo; without it use a static route", target)
+			}
+		}
 	}
 	if req.Kind == "static" {
 		for _, target := range req.Targets {
@@ -457,7 +568,10 @@ func liveRouteSummaries(ctx context.Context, c *awgmgr.Client) ([]wire.RouteRule
 		// цель приезжает дважды. В превью это читается как две разные цели,
 		// поэтому повторы схлопываются здесь -- один раз для всех, кто
 		// пользуется этим списком.
-		targets := dedupeRouteTargets(append(append([]string{}, r.Domains...), r.ManualDomains...))
+		// Сети правила HR Neo (и geoip-теги) лежат в subnets: без них превью
+		// не видит пересечения с ними, а сверка не находит только что
+		// созданное правило из одних сетей.
+		targets := dedupeRouteTargets(append(append(append([]string{}, r.Domains...), r.ManualDomains...), r.Subnets...))
 		out = append(out, normalizeRouteRuleSummary(wire.RouteRuleSummary{
 			ID: r.ID, Name: r.Name, Kind: "dns", Backend: r.Backend, Enabled: r.Enabled, Bind: bind, Targets: rawTargets(targets),
 		}))

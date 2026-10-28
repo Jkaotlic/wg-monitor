@@ -43,3 +43,46 @@ func TestLiveRouteTemplates(t *testing.T) {
 		t.Fatal("каталог пуст -- экран покажет пустоту")
 	}
 }
+
+// Живая сверка гео-тегов и выбора движка. Только чтение: план не пишет на
+// роутер ничего (RoutingRefresh и создание -- только в RouteAddJSON).
+//
+//	AWGM_URL=http://192.168.0.1:2222 AWGM_TUNNEL=<id> go test -tags manual ./internal/agent/actions/ -run LiveRouteGeo -v
+func TestLiveRouteGeo(t *testing.T) {
+	base := os.Getenv("AWGM_URL")
+	if base == "" {
+		t.Skip("нужен AWGM_URL")
+	}
+	c := awgmgr.New(base)
+	out, err := RouteGeoTagsJSON(context.Background(), c)
+	if err != nil {
+		t.Fatalf("route_geo_tags: %v", err)
+	}
+	var got wire.RouteGeoTags
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, tag := range got.Tags {
+		kinds[tag.Kind]++
+	}
+	t.Logf("гео-тегов %d (%v), ответ %d байт", len(got.Tags), kinds, len(out))
+	tunnel := os.Getenv("AWGM_TUNNEL")
+	if tunnel == "" {
+		return
+	}
+	for _, probe := range []struct {
+		kind    string
+		targets []string
+	}{{"dns", []string{"example.com"}}, {"dns", []string{"geosite:YOUTUBE", "geoip:YOUTUBE"}}, {"static", []string{"203.0.113.0/24"}}} {
+		targets := probe.targets
+		plan, err := buildRouteAddPlan(context.Background(), c, wire.RouteAddRequest{Kind: probe.kind, Name: "probe", TunnelID: tunnel, Targets: targets})
+		if err != nil {
+			t.Fatalf("plan %v: %v", targets, err)
+		}
+		t.Logf("план %s %v: kind=%s backend=%s use_hr_neo=%v can_apply=%v overlaps=%d", probe.kind, targets, plan.Request.Kind, plan.Route.Backend, plan.Request.UseHRNeo, plan.CanApply, len(plan.Overlaps))
+		for _, o := range plan.Overlaps {
+			t.Logf("  %s %s %s ← %s", o.Severity, o.Target.Type, o.Target.Value, o.Existing.Name)
+		}
+	}
+}
