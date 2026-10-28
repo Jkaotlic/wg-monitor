@@ -32,7 +32,7 @@ import { Chip } from '../ui/Chip.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
-import { deletePlanSummary } from '../routeAdd.js'
+import { deletePlanSummary, migratePlanSummary, canMigrateRule } from '../routeAdd.js'
 import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, openAnswer, NOT_A_SITE } from '../routeLookup.js'
 import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
@@ -120,6 +120,11 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   // удаление правила, которого он не видит целиком, -- это удаление вслепую.
   const plan = useCommand(routerID)
   const [pendingRule, setPendingRule] = useState(null)
+  // Перенос статики в HydraRoute Neo: своя команда превью, чтобы не путать
+  // её ответ с превью удаления.
+  const migrate = useCommand(routerID)
+  const [pendingMigrate, setPendingMigrate] = useState(null)
+  const [migrateFailed, setMigrateFailed] = useState(null)
   // План удаления не пришёл (MINI-04): правило, которое можно запросить заново.
   const [planFailed, setPlanFailed] = useState(null)
 
@@ -205,6 +210,51 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
       ? errorText(plan.error)
       : agentReplyText(plan.result, 'Роутер не показал, что исчезнет, — правило не тронуто.')
     : ''
+
+  useEffect(() => {
+    if (!pendingMigrate) return
+    if (migrate.error || (migrate.result && migrate.result.status !== 'ok')) {
+      setMigrateFailed({ rule: pendingMigrate, text: '' })
+      setPendingMigrate(null)
+      return
+    }
+    if (migrate.result?.status !== 'ok') return
+    const summary = migratePlanSummary(parseRouteSnapshot(migrate.result.output))
+    const rule = pendingMigrate
+    setPendingMigrate(null)
+    // Спор с другим правилом -- переносить нельзя, и причина говорится здесь,
+    // а не после похода на роутер.
+    if (!summary.canApply) {
+      setMigrateFailed({ rule, text: `Перенести «${summary.title}» нельзя. ${summary.notes.join(' ')}` })
+      return
+    }
+    openSheet?.(
+      confirmSheet({
+        routerID,
+        title: `Перенести «${summary.title}» в HydraRoute Neo?`,
+        body: summary.body,
+        action: 'route_migrate',
+        args: { route_id: rule.id, preview_hash: summary.hash },
+        buttonLabel: 'Перенести',
+        commandLabel: 'перенос маршрута в HydraRoute Neo',
+        asleep,
+        onDone: refresh,
+      }),
+    )
+  }, [migrate.result, migrate.error])
+
+  const migrateProblem = migrateFailed
+    ? migrateFailed.text ||
+      (migrate.error
+        ? errorText(migrate.error)
+        : agentReplyText(migrate.result, 'Роутер не показал, что получится, — маршрут не тронут.'))
+    : ''
+
+  const askMigrate = (rule) => {
+    setMigrateFailed(null)
+    setPendingMigrate({ id: rule.id })
+    migrate.run('route_migrate_plan', { route_id: rule.id }, deadline)
+  }
 
   const askDelete = (rule) => {
     setPlanFailed(null)
@@ -578,6 +628,9 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
       {groups.length > 0 && (
         <Section title="Названные сайты и адреса">
           {planProblem && <ErrorLine text={planProblem} busy={plan.busy} onRetry={() => askDelete(planFailed)} />}
+          {migrateProblem && (
+            <ErrorLine text={migrateProblem} busy={migrate.busy} onRetry={() => askMigrate(migrateFailed.rule)} />
+          )}
           {groups.map((g) => (
             <div key={g.bind} class="rules-group">
               <h3 class="rules-bind">{g.label}</h3>
@@ -593,6 +646,16 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
                         onClick={() => askDelete(r)}
                       >
                         Убрать
+                      </button>
+                    )}
+                    {canMutate && canMigrateRule(r, snapshot) && (
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-row"
+                        disabled={migrate.busy}
+                        onClick={() => askMigrate(r)}
+                      >
+                        В HydraRoute
                       </button>
                     )}
                     <span class="tunnel-sub">

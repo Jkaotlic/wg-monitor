@@ -3,7 +3,18 @@ import { useState } from 'preact/hooks'
 import { placeText } from '../places.js'
 import { useCommand } from '../useCommand.js'
 import { tunnelRows, rebindTargets, tunnelRuleSummary } from '../routes.js'
-import { templateGroups, templateChoice, parseManualTargets, addPlanSummary, skippedNote } from '../routeAdd.js'
+import {
+  templateGroups,
+  templateChoice,
+  parseManualTargets,
+  addPlanSummary,
+  skippedNote,
+  manualPlanArgs,
+  geoSearch,
+  geoTarget,
+  geoRuleName,
+  geoCountLabel,
+} from '../routeAdd.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelTargetLabel } from '../labels.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -32,8 +43,13 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
   const [skipped, setSkipped] = useState(0)
   const [choice, setChoice] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [geoTags, setGeoTags] = useState(null)
+  const [geoQuery, setGeoQuery] = useState('')
+  const [geoPicked, setGeoPicked] = useState([])
+  const [geoName, setGeoName] = useState('')
 
   const catalog = useCommand(routerID)
+  const geo = useCommand(routerID)
   const plan = useCommand(routerID)
 
   const hrNeoRunning = Boolean(snapshot?.hr_neo?.installed && snapshot?.hr_neo?.running)
@@ -55,6 +71,37 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
     })
   }
 
+  // Гео-теги читаются один раз за экран: ~1800 имён -- десятки килобайт, и
+  // искать по ним дальше можно на телефоне, без похода к роутеру на каждую букву.
+  function loadGeo() {
+    if (geoTags != null || geo.busy) return
+    geo.run('route_geo_tags', {}, deadline).then((res) => {
+      if (res?.status !== 'ok') return
+      try {
+        setGeoTags(JSON.parse(res.output)?.tags ?? [])
+      } catch {
+        setGeoTags([])
+      }
+    })
+  }
+
+  function openGeo() {
+    setMode('geo')
+    loadGeo()
+  }
+
+  function toggleGeo(target) {
+    setGeoPicked((prev) => (prev.includes(target) ? prev.filter((t) => t !== target) : [...prev, target]))
+  }
+
+  function askGeoPlan() {
+    const ruleName = geoName.trim() || geoRuleName(geoPicked)
+    askPlan(
+      { kind: 'dns', tunnel_id: tunnel.id, targets: geoPicked, name: ruleName, use_hr_neo: true },
+      { title: ruleName, sub: 'по гео-тегам HydraRoute Neo' },
+    )
+  }
+
   function pickTunnel(row) {
     setTunnel(row)
     setStep('what')
@@ -71,7 +118,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
     plan.run('route_add_plan', args, deadline).then((res) => {
       if (res?.status !== 'ok') return
       try {
-        setSummary({ ...addPlanSummary(JSON.parse(res.output)), args })
+        setSummary({ ...addPlanSummary(JSON.parse(res.output), { hrNeoRunning }), args })
       } catch {
         setSummary(null)
       }
@@ -85,16 +132,8 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
   }
 
   function askManualPlan() {
-    const ruleName = name.trim() || manualParsed.targets[0]
-    askPlan(
-      {
-        kind: manualParsed.kind,
-        tunnel_id: tunnel.id,
-        targets: manualParsed.targets,
-        name: ruleName,
-      },
-      { title: ruleName, sub: manualParsed.kind === 'dns' ? 'по имени сайта' : 'по адресу сети' },
-    )
+    const args = manualPlanArgs({ parsed: manualParsed, tunnelID: tunnel.id, name, hrNeoRunning })
+    askPlan(args, { title: args.name, sub: manualParsed.kind === 'dns' ? 'по имени сайта' : 'по адресу сети' })
   }
 
   function apply() {
@@ -102,9 +141,12 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
       confirmSheet({
         routerID,
         title: `Отправить «${summary.title}» в «${tunnel.name}»?`,
-        body: summary.lines.length
-          ? `В обход пойдёт: ${summary.lines.join(' · ')}`
-          : `Правило появится на роутере и будет вести в «${tunnel.name}».`,
+        body: [
+          summary.lines.length
+            ? `В обход пойдёт: ${summary.lines.join(' · ')}`
+            : `Правило появится на роутере и будет вести в «${tunnel.name}».`,
+          summary.engineWarning || summary.engine,
+        ].join('. '),
         action: 'route_add',
         args: { ...summary.args, draft_hash: summary.hash },
         buttonLabel: 'Отправить',
@@ -167,6 +209,13 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
               >
                 Вручную
               </button>
+              {/* Гео-теги разворачивает только HydraRoute Neo: без него
+                  вкладка обещала бы правило, которое ничего не ведёт. */}
+              {hrNeoRunning && (
+                <button type="button" class={`seg-btn${mode === 'geo' ? ' seg-btn-on' : ''}`} onClick={openGeo}>
+                  Гео
+                </button>
+              )}
             </div>
 
             {mode === 'catalog' && (
@@ -196,6 +245,73 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
                   </Section>
                 ))}
               </>
+            )}
+
+            {mode === 'geo' && hrNeoRunning && (
+              <Section title="Гео-теги роутера">
+                <div class="card card-form">
+                  <div class="field">
+                    <label for="route-add-geo">Сервис или страна</label>
+                    <input
+                      id="route-add-geo"
+                      type="search"
+                      value={geoQuery}
+                      placeholder="youtube, telegram, ru"
+                      onInput={(e) => setGeoQuery(e.currentTarget.value)}
+                    />
+                  </div>
+                  {geo.busy && <p class="state">Читаем гео-теги роутера…</p>}
+                  {geo.error && <p class="state state-error">{geo.error}</p>}
+                  {geo.result && geo.result.status !== 'ok' && (
+                    <p class="state state-error">{agentReplyText(geo.result, 'Роутер не отдал гео-теги — попробуйте ещё раз через минуту.')}</p>
+                  )}
+                  {geoTags != null && geoTags.length === 0 && !geo.busy && (
+                    <p class="state">На роутере нет гео-файлов HydraRoute Neo.</p>
+                  )}
+                  {geoPicked.length > 0 && (
+                    <p class="rules-target">{geoPicked.join(', ')}</p>
+                  )}
+                </div>
+                {geoTags != null && geoQuery.trim() !== '' && (() => {
+                  const found = geoSearch(geoTags, geoQuery)
+                  return found.length ? (
+                    <ul class="card list-reset">
+                      {found.map((tag) => {
+                        const target = geoTarget(tag)
+                        const on = geoPicked.includes(target)
+                        return (
+                          <ListRow
+                            key={target}
+                            title={target}
+                            sub={geoCountLabel(tag)}
+                            right={on ? <Chip tone="ok">выбран</Chip> : undefined}
+                            onClick={() => toggleGeo(target)}
+                          />
+                        )
+                      })}
+                    </ul>
+                  ) : (
+                    <p class="state">Такого тега на роутере нет.</p>
+                  )
+                })()}
+                {geoPicked.length > 0 && (
+                  <div class="card card-form">
+                    <div class="field">
+                      <label for="route-add-geo-name">Название правила</label>
+                      <input
+                        id="route-add-geo-name"
+                        type="text"
+                        value={geoName}
+                        placeholder={geoRuleName(geoPicked)}
+                        onInput={(e) => setGeoName(e.currentTarget.value)}
+                      />
+                    </div>
+                    <button type="button" class="btn btn-primary" onClick={askGeoPlan}>
+                      Показать, что изменится
+                    </button>
+                  </div>
+                )}
+              </Section>
             )}
 
             {mode === 'manual' && (
@@ -260,6 +376,8 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
                     Пойдёт в <Q>{tunnel.name}</Q>:
                   </p>
                   {summary.targets && <p class="rules-target">{summary.targets}</p>}
+                  <p class="traffic-detail">{summary.engine}</p>
+                  {summary.engineWarning && <p class="traffic-note">{summary.engineWarning}</p>}
                   {summary.notes.map((note) => (
                     <p key={note} class="traffic-note">{note}</p>
                   ))}

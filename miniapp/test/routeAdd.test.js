@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { templateGroups, addPlanSummary, deletePlanSummary, parseManualTargets, templateChoice, skippedNote } from '../src/routeAdd.js'
+import { templateGroups, addPlanSummary, deletePlanSummary, parseManualTargets, templateChoice, skippedNote, manualPlanArgs, geoSearch, geoTarget, geoRuleName, geoCountLabel, migratePlanSummary, canMigrateRule } from '../src/routeAdd.js'
 
 describe('templateGroups', () => {
   // На живом роутере 87 наборов в семи категориях. Плоским списком по нему
@@ -140,6 +140,15 @@ describe('templateChoice', () => {
     expect(c.summary).toBe('1 домен')
   })
 
+  // Жалоба оператора 27.10.2026: с awg-manager 2.17.2 в наборах нет гео-тегов,
+  // и флаг, завязанный на них, молча слал всё в NDMS. Движок -- свойство
+  // роутера: работает HR Neo -- правило идёт в него, что бы ни нёс набор.
+  it('набор из одних доменов при работающем HR Neo идёт в HR Neo', () => {
+    const c = templateChoice({ id: 'yt', name: 'YouTube', dns: ['youtube.com'] }, { hrNeoRunning: true })
+    expect(c.args).toEqual({ template_id: 'yt', kind: 'dns', use_hr_neo: true })
+    expect(c.summary).toBe('1 домен')
+  })
+
   it('набор из одних гео-тегов без HR Neo применить нельзя, и экран говорит почему', () => {
     const c = templateChoice(GEO, { hrNeoRunning: false })
     expect(c.canApply).toBe(false)
@@ -166,5 +175,145 @@ describe('skippedNote', () => {
   it('нечего пропускать -- нечего и говорить', () => {
     expect(skippedNote(0)).toBe('')
     expect(skippedNote()).toBe('')
+  })
+})
+
+describe('manualPlanArgs', () => {
+  it('сайты при работающем HR Neo идут в HR Neo', () => {
+    const args = manualPlanArgs({ parsed: parseManualTargets('figma.com'), tunnelID: 'awg1', name: '', hrNeoRunning: true })
+    expect(args).toEqual({ kind: 'dns', tunnel_id: 'awg1', targets: ['figma.com'], name: 'figma.com', use_hr_neo: true })
+  })
+
+  it('без HR Neo -- обычное DNS-правило', () => {
+    const args = manualPlanArgs({ parsed: parseManualTargets('figma.com'), tunnelID: 'awg1', name: 'Фигма', hrNeoRunning: false })
+    expect(args.use_hr_neo).toBe(false)
+    expect(args.name).toBe('Фигма')
+  })
+
+  it('сети остаются статическим маршрутом и флаг не несут', () => {
+    const args = manualPlanArgs({ parsed: parseManualTargets('10.0.0.0/8'), tunnelID: 'awg1', name: '', hrNeoRunning: true })
+    expect(args.kind).toBe('static')
+    expect(args.use_hr_neo).toBe(false)
+  })
+})
+
+describe('geoSearch', () => {
+  const TAGS = [
+    { kind: 'geoip', name: 'YOUTUBE', count: 7 },
+    { kind: 'geosite', name: 'GOOGLE', count: 900 },
+    { kind: 'geosite', name: 'YOUTUBE', count: 55 },
+    { kind: 'geosite', name: 'YOUTUBE-MUSIC', count: 3 },
+    { kind: 'geosite', name: 'CATEGORY-YOUTUBE-RU', count: 2 },
+  ]
+
+  it('без запроса ничего не показывает -- 1800 строк пальцем не листают', () => {
+    expect(geoSearch(TAGS, '  ')).toEqual([])
+  })
+
+  it('точное совпадение, затем начало имени, затем вхождение; geosite раньше geoip', () => {
+    expect(geoSearch(TAGS, 'youtube').map(geoTarget)).toEqual([
+      'geosite:YOUTUBE',
+      'geoip:YOUTUBE',
+      'geosite:YOUTUBE-MUSIC',
+      'geosite:CATEGORY-YOUTUBE-RU',
+    ])
+  })
+
+  it('понимает запрос с префиксом типа и ограничивает выдачу', () => {
+    expect(geoSearch(TAGS, 'geoip:you').map(geoTarget)).toEqual(['geoip:YOUTUBE'])
+    expect(geoSearch(TAGS, 'y', { limit: 2 })).toHaveLength(2)
+  })
+
+  it('пустой или битый список не роняет поиск', () => {
+    expect(geoSearch(null, 'x')).toEqual([])
+  })
+})
+
+describe('geoRuleName / geoCountLabel', () => {
+  it('имя правила -- из имён тегов без повторов', () => {
+    expect(geoRuleName(['geosite:YOUTUBE', 'geoip:YOUTUBE', 'geosite:GOOGLE'])).toBe('YOUTUBE, GOOGLE')
+    expect(geoRuleName([])).toBe('')
+  })
+
+  it('имя не длиннее 64 символов, которые пропускает сервер', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `geosite:CATEGORY-NUMBER-${i}`)
+    expect(geoRuleName(many).length).toBeLessThanOrEqual(64)
+  })
+
+  it('число записей названо словами по типу', () => {
+    expect(geoCountLabel({ kind: 'geosite', count: 55 })).toBe('сайты · 55 записей')
+    expect(geoCountLabel({ kind: 'geoip', count: 1 })).toBe('сети · 1 запись')
+  })
+})
+
+// Оператор 28.10.2026: «если включен гидра роут -- все туда, если его нет -- все
+// в стандарт с предупреждением». Куда пойдёт правило, решает агент; экран
+// читает это из плана (route.backend), а не из своей догадки о роутере.
+describe('addPlanSummary: движок правила', () => {
+  it('правило HydraRoute Neo названо и не предупреждает', () => {
+    const s = addPlanSummary({ route: { name: 'X', backend: 'hydraroute', targets: [{ value: 'a.com' }] }, can_apply: true })
+    expect(s.engine).toBe('Через HydraRoute Neo')
+    expect(s.engineWarning).toBe('')
+  })
+
+  it('без HydraRoute Neo -- стандартная маршрутизация и предупреждение', () => {
+    for (const route of [
+      { name: 'X', backend: 'ndms', kind: 'dns', targets: [{ value: 'a.com' }] },
+      { name: 'Y', kind: 'static', targets: [{ value: '203.0.113.0/24' }] },
+    ]) {
+      const s = addPlanSummary({ route, can_apply: true })
+      expect(s.engine).toBe('Через стандартную маршрутизацию роутера')
+      expect(s.engineWarning).toContain('HydraRoute Neo')
+      expect(s.engineWarning).toContain('не работает')
+    }
+  })
+})
+
+describe('addPlanSummary: старый агент', () => {
+  // Neo на роутере работает, а план пришёл не в него -- значит, агент старый.
+  // Писать «Neo не работает» здесь -- неправда; правда -- обновить агента.
+  it('при работающем Neo и плане мимо него винит агента, а не роутер', () => {
+    const s = addPlanSummary({ route: { name: 'Y', kind: 'static', targets: [{ value: '203.0.113.0/24' }] } }, { hrNeoRunning: true })
+    expect(s.engine).toBe('Через стандартную маршрутизацию роутера')
+    expect(s.engineWarning).toContain('обновите агента')
+    expect(s.engineWarning).not.toContain('не работает')
+  })
+})
+
+// Перенос уже заведённой статики в HydraRoute Neo (оператор 28.10.2026).
+describe('canMigrateRule', () => {
+  const RUNNING = { hr_neo: { installed: true, running: true } }
+  it('только статический маршрут и только при работающем Neo', () => {
+    expect(canMigrateRule({ kind: 'static', id: 's1' }, RUNNING)).toBe(true)
+    expect(canMigrateRule({ kind: 'dns', id: 'd1' }, RUNNING)).toBe(false)
+    expect(canMigrateRule({ kind: 'static', id: 's1' }, { hr_neo: { installed: true, running: false } })).toBe(false)
+    expect(canMigrateRule({ kind: 'static', id: 's1' }, null)).toBe(false)
+  })
+})
+
+describe('migratePlanSummary', () => {
+  it('называет сети целиком и куда они переезжают', () => {
+    const s = migratePlanSummary({
+      from: { name: 'Офис', kind: 'static' },
+      route: { name: 'Офис', backend: 'hydraroute', targets: [{ value: '203.0.113.0/24' }, { value: '198.51.100.7/32' }] },
+      can_apply: true,
+      hash: 'h1',
+    })
+    expect(s.title).toBe('Офис')
+    expect(s.targets).toBe('203.0.113.0/24, 198.51.100.7/32')
+    expect(s.body).toContain('HydraRoute Neo')
+    expect(s.body).toContain('203.0.113.0/24')
+    expect(s.canApply).toBe(true)
+    expect(s.hash).toBe('h1')
+  })
+
+  it('спор с другим правилом блокирует перенос и называется', () => {
+    const s = migratePlanSummary({
+      route: { name: 'Офис', targets: [{ value: '203.0.113.0/24' }] },
+      overlaps: [{ severity: 'block', reason: 'target overlaps existing route bound to a different destination' }],
+      can_apply: false,
+    })
+    expect(s.canApply).toBe(false)
+    expect(s.notes[0]).toMatch(/^Мешает/)
   })
 })

@@ -24,11 +24,34 @@ const defaultHydraRoutePolicyName = "HydraRoute"
 // "opkgtun11") while `tunnelId` is the stable bind id, exactly as the NDMS
 // branch of route_add already sends it. HRPolicyName stays empty so nothing
 // re-reads this rule as policy-bound.
+//
+// Geo tags are written the way awg-manager stores them on a live router
+// (workrouter, 2026-10-27): geosite:* among the domains, geoip:* among the
+// subnets, both in ManualDomains. A geoip tag in Domains is never expanded.
+// Plain networks (203.0.113.0/24, a bare IP) go to the subnets the same way.
 func hrNeoPolicyRoute(name string, targets []string, iface, bindID string) awgmgr.DNSRoute {
+	var domains, subnets, manual []string
+	for _, target := range targets {
+		if kind, tag, ok := splitGeoTag(target); ok {
+			target = kind + ":" + tag
+			if kind == "geoip" {
+				subnets = append(subnets, target)
+				manual = append(manual, target)
+				continue
+			}
+		} else if normalizeRouteTarget(target).Type == "cidr" {
+			subnets = append(subnets, target)
+			manual = append(manual, target)
+			continue
+		}
+		domains = append(domains, target)
+		manual = append(manual, target)
+	}
 	return awgmgr.DNSRoute{
 		Name:          name,
-		Domains:       targets,
-		ManualDomains: targets,
+		Domains:       domains,
+		Subnets:       subnets,
+		ManualDomains: manual,
 		Enabled:       true,
 		Backend:       "hydraroute",
 		HRRouteMode:   "interface",

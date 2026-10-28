@@ -69,6 +69,19 @@ func sandboxOutput(routerID int64, action string, args map[string]any) string {
 		return mustJSON(diagNowReport(time.Now()))
 	case "route_lookup":
 		return mustJSON(routeLookup(argString(args, "domain", "")))
+	// Гео-теги HydraRoute Neo для вкладки «Гео»: горстка из ~1800 живых, чтобы
+	// поиск показал ранжирование и оба типа.
+	case "route_geo_tags":
+		return mustJSON(wire.RouteGeoTags{Tags: []wire.RouteGeoTag{
+			{Kind: "geoip", Name: "RU", Count: 16044},
+			{Kind: "geoip", Name: "TELEGRAM", Count: 12},
+			{Kind: "geoip", Name: "YOUTUBE", Count: 7},
+			{Kind: "geosite", Name: "CATEGORY-YOUTUBE-RU", Count: 2},
+			{Kind: "geosite", Name: "GITHUB", Count: 41},
+			{Kind: "geosite", Name: "TELEGRAM", Count: 30},
+			{Kind: "geosite", Name: "YOUTUBE", Count: 55},
+			{Kind: "geosite", Name: "YOUTUBE-MUSIC", Count: 3},
+		}})
 	// Мастер сверяет адреса выхода этими двумя командами (а не exit_ip_*):
 	// адрес через туннель обязан отличаться от прямого, иначе трафик мимо
 	// VPN, и шаг проверки честно проваливается.

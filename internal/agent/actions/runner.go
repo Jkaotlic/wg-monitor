@@ -1086,6 +1086,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "route_geo_tags":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		out, err := RouteGeoTagsJSON(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "route_add":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -1116,6 +1125,26 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		r.routeMu.Lock()
 		defer r.routeMu.Unlock()
 		out, err := RouteDeleteJSON(ctx, r.AwgClient, req)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return routeApplyCommandStatus(out), out, payload
+	case "route_migrate_plan":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		out, err := RouteMigratePlanJSON(ctx, r.AwgClient, routeMigrateRequestFromArgs(cmd.Args))
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "route_migrate":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		r.routeMu.Lock()
+		defer r.routeMu.Unlock()
+		out, err := RouteMigrateJSON(ctx, r.AwgClient, routeMigrateRequestFromArgs(cmd.Args))
 		if err != nil {
 			return "err", err.Error(), payload
 		}
@@ -1341,6 +1370,13 @@ func routeAddRequestFromArgs(args map[string]any) wire.RouteAddRequest {
 	req.TemplateID, _ = args["template_id"].(string)
 	req.DraftHash, _ = args["draft_hash"].(string)
 	req.Targets = stringSliceArg(args["targets"])
+	return req
+}
+
+func routeMigrateRequestFromArgs(args map[string]any) wire.RouteMigrateRequest {
+	req := wire.RouteMigrateRequest{}
+	req.RouteID, _ = args["route_id"].(string)
+	req.PreviewHash, _ = args["preview_hash"].(string)
 	return req
 }
 

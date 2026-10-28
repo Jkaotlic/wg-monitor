@@ -21,6 +21,10 @@ func normalizeRouteTarget(raw string) wire.RouteTarget {
 		return wire.RouteTarget{Type: "cidr", Value: netip.PrefixFrom(addr, addr.BitLen()).String()}
 	}
 
+	if kind, name, ok := splitGeoTag(value); ok {
+		return wire.RouteTarget{Type: "geo", Value: kind + ":" + name}
+	}
+
 	domain := strings.TrimRight(strings.ToLower(value), ".")
 	ascii, err := domainToASCII(domain)
 	if err != nil || !isComparableDomain(ascii) {
@@ -90,6 +94,8 @@ func routeTargetsOverlap(a, b wire.RouteTarget) bool {
 		return domainsOverlap(a.Value, b.Value)
 	case "cidr":
 		return cidrsOverlap(a.Value, b.Value)
+	case "geo":
+		return a.Value == b.Value
 	default:
 		return false
 	}
@@ -269,4 +275,20 @@ func encodePunycodeDigit(digit int) rune {
 		return '?'
 	}
 	return rune(digits[digit])
+}
+
+// splitGeoTag узнаёт гео-тег HydraRoute Neo ("geosite:YOUTUBE", "geoip:ru").
+// Тип приводится к нижнему регистру, имя -- к верхнему: так их хранят файлы,
+// и "geosite:youtube" с "geosite:YOUTUBE" -- один и тот же тег.
+func splitGeoTag(value string) (kind, name string, ok bool) {
+	k, n, found := strings.Cut(strings.TrimSpace(value), ":")
+	if !found {
+		return "", "", false
+	}
+	k = strings.ToLower(strings.TrimSpace(k))
+	n = strings.ToUpper(strings.TrimSpace(n))
+	if (k != "geosite" && k != "geoip") || n == "" || strings.ContainsAny(n, " \t:/") {
+		return "", "", false
+	}
+	return k, n, true
 }

@@ -30,6 +30,10 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"route_templates", "route_add_plan", "route_add",
 		"route_delete_plan", "route_delete", "route_rebind",
 		"route_policy_promote",
+		// Гео-теги HydraRoute Neo для вкладки «Гео»: только чтение, без аргументов.
+		"route_geo_tags",
+		// Перенос статики в HydraRoute Neo: router-local, через план с хешем.
+		"route_migrate_plan", "route_migrate",
 		// Обслуживание (фаза D1). Четыре читающих: версии, два доктора и
 		// разовый прогон проверки связи. Аргументов не берут вовсе.
 		"version_audit", "router_doctor", "hrneo_doctor", "pingcheck_now",
@@ -497,6 +501,10 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		"route_templates", "route_add_plan", "route_add",
 		"route_delete_plan", "route_delete", "route_rebind",
 		"route_policy_promote",
+		// Гео-теги HydraRoute Neo для вкладки «Гео»: только чтение, без аргументов.
+		"route_geo_tags",
+		// Перенос статики в HydraRoute Neo: router-local, через план с хешем.
+		"route_migrate_plan", "route_migrate",
 		// Обслуживание (фаза D1). Четыре читающих: версии, два доктора и
 		// разовый прогон проверки связи. Аргументов не берут вовсе.
 		"version_audit", "router_doctor", "hrneo_doctor", "pingcheck_now",

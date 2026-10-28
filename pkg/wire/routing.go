@@ -294,6 +294,37 @@ type RouteTemplates struct {
 	Skipped int `json:"skipped,omitempty"`
 }
 
+// RouteGeoTag -- один гео-тег HydraRoute Neo: Kind "geosite" или "geoip",
+// Name как его хранит файл (GOOGLE), Count -- сколько за ним записей.
+type RouteGeoTag struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// RouteGeoTags -- ответ route_geo_tags: теги всех гео-файлов роутера,
+// слитые по kind+name, отсортированные по kind, затем по имени.
+type RouteGeoTags struct {
+	Tags []RouteGeoTag `json:"tags"`
+}
+
+// RouteMigrateRequest -- перенос статического маршрута NDMS в правило
+// HydraRoute Neo (те же сети, тот же туннель).
+type RouteMigrateRequest struct {
+	RouteID     string `json:"route_id"`
+	PreviewHash string `json:"preview_hash,omitempty"`
+}
+
+// RouteMigratePlan -- превью переноса: From -- статический маршрут, Route --
+// правило HR Neo, которое его заменит.
+type RouteMigratePlan struct {
+	From     RouteRuleSummary `json:"from"`
+	Route    RouteRuleSummary `json:"route"`
+	Overlaps []RouteOverlap   `json:"overlaps,omitempty"`
+	CanApply bool             `json:"can_apply"`
+	Hash     string           `json:"hash"`
+}
+
 type RouteDeleteRequest struct {
 	Kind        string `json:"kind"` // dns | static
 	RouteID     string `json:"route_id"`
@@ -320,10 +351,14 @@ type RoutePolicyPromoteRequest struct {
 }
 
 type RouteApplyResult struct {
-	Action         string `json:"action"` // add | delete
+	Action         string `json:"action"` // add | delete | migrate
 	Kind           string `json:"kind"`
 	RouteID        string `json:"route_id"`
 	RouteName      string `json:"route_name"`
 	HRNeoRestarted bool   `json:"hr_neo_restarted,omitempty"`
 	Warning        string `json:"warning,omitempty"`
+	// NotApplied -- правка не состоялась, хотя ошибки нет: перенос создал
+	// правило HR Neo, но не нашёл его в живом списке и оставил статику.
+	// Экран обязан сказать «не перенесён», а не «перенесён с оговоркой».
+	NotApplied bool `json:"not_applied,omitempty"`
 }

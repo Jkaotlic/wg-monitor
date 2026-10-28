@@ -96,3 +96,57 @@ func TestGeoExpand_BodyOverOneMiB(t *testing.T) {
 		t.Fatalf("len = %d, want %d", len(lines), n)
 	}
 }
+
+// Формы ответов сняты с живого awg-manager (workrouter, 27.10.2026): у роутера
+// два комплекта файлов -- свой и внешний HydraRoute, -- поэтому файлов четыре.
+func TestGeoFiles_ParsesList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/hydraroute/geo-files" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"type":"geoip","path":"/opt/etc/awg-manager/geo/geoip_GA.dat","tagCount":311},
+			{"type":"geosite","path":"/opt/etc/awg-manager/geo/geosite_GA.dat","tagCount":1485,"external":false}
+		]}`))
+	}))
+	defer srv.Close()
+	files, err := New(srv.URL).GeoFiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Type != "geoip" || files[1].Path != "/opt/etc/awg-manager/geo/geosite_GA.dat" || files[1].TagCount != 1485 {
+		t.Fatalf("files = %+v", files)
+	}
+}
+
+func TestGeoTags_ParsesAndEscapesPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/hydraroute/geo-tags" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		gotPath = r.URL.Query().Get("path")
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"ADOBE","count":33},{"name":"AE","count":8043}]}`))
+	}))
+	defer srv.Close()
+	tags, err := New(srv.URL).GeoTags(context.Background(), "/opt/etc/geo files/geoip&x.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/opt/etc/geo files/geoip&x.dat" {
+		t.Fatalf("path param = %q", gotPath)
+	}
+	if len(tags) != 2 || tags[1].Name != "AE" || tags[1].Count != 8043 {
+		t.Fatalf("tags = %+v", tags)
+	}
+}
+
+func TestGeoTags_ErrorEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":false,"error":"no such file"}`))
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL).GeoTags(context.Background(), "/nope"); err == nil {
+		t.Fatal("want error on success=false")
+	}
+}

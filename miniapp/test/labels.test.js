@@ -79,6 +79,21 @@ describe('commandOutcomeLabel: маршруты', () => {
     expect(commandOutcomeLabel('route_add', ok(out))).toBe('Правило «AI» создано')
   })
 
+  it('перенос статики назван переносом, а не созданием', () => {
+    const out = JSON.stringify({ action: 'migrate', kind: 'dns', route_id: 'hr:new', route_name: 'Офис' })
+    expect(commandOutcomeLabel('route_migrate', ok(out))).toBe('Маршрут «Офис» перенесён в HydraRoute Neo')
+  })
+
+  // Новое правило не подтвердилось -- агент оставил статику. Сказать
+  // «перенесён» здесь было бы неправдой.
+  it('неподтверждённый перенос назван неперенесённым', () => {
+    const out = JSON.stringify({ action: 'migrate', route_name: 'Офис', not_applied: true, warning: 'HydraRoute Neo rule not confirmed' })
+    const text = commandOutcomeLabel('route_migrate', ok(out))
+    expect(text).toContain('не перенесён')
+    expect(text).toContain('старый маршрут оставлен')
+    expect(text).not.toContain('перенесён в HydraRoute Neo')
+  })
+
   // Агент применяет правку и отдельно сообщает, что после неё не удалось
   // обновить маршрутизацию. Проглотить это значило бы сказать "готово" о
   // роутере, который живёт по старой таблице.

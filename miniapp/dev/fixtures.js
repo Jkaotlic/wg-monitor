@@ -188,6 +188,11 @@ const ROUTE_SNAPSHOT = {
     },
   ],
   rules: [
+    // Статический маршрут NDMS -- под кнопку «В HydraRoute» (перенос, 28.10.2026).
+    {
+      id: 'st_office', name: 'Офис', kind: 'static', enabled: true, bind: 'OpkgTun12',
+      targets: [{ type: 'cidr', value: '203.0.113.0/24' }],
+    },
     {
       id: 'hr:AIgeo', name: 'AIgeo', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute',
       targets: [
@@ -248,6 +253,27 @@ const DIAG_REPORT = {
     awg10: { handshake: { status: 'ok' }, ping: { status: 'ok' }, mtu: { status: 'ok' } },
     awg7: { handshake: { status: 'fail', reason: 'нет рукопожатия 2 часа' }, ping: { status: 'skip', reason: 'туннель выключен' }, mtu: { status: 'ok' } },
   },
+}
+
+// Гео-теги HydraRoute Neo (wire.RouteGeoTags). На живом роутере их ~1800 из
+// двух комплектов файлов; здесь горстка, чтобы поиск показал ранжирование и
+// оба типа тегов.
+const GEO_TAGS = {
+  tags: [
+    { kind: 'geoip', name: 'GOOGLE', count: 1120 },
+    { kind: 'geoip', name: 'RU', count: 16044 },
+    { kind: 'geoip', name: 'TELEGRAM', count: 12 },
+    { kind: 'geoip', name: 'YOUTUBE', count: 7 },
+    { kind: 'geosite', name: 'ANTHROPIC', count: 19 },
+    { kind: 'geosite', name: 'CATEGORY-AI', count: 310 },
+    { kind: 'geosite', name: 'CATEGORY-YOUTUBE-RU', count: 2 },
+    { kind: 'geosite', name: 'GITHUB', count: 41 },
+    { kind: 'geosite', name: 'GOOGLE', count: 900 },
+    { kind: 'geosite', name: 'OPENAI', count: 24 },
+    { kind: 'geosite', name: 'TELEGRAM', count: 30 },
+    { kind: 'geosite', name: 'YOUTUBE', count: 55 },
+    { kind: 'geosite', name: 'YOUTUBE-MUSIC', count: 3 },
+  ],
 }
 
 // Каталог наборов роутера (wire.RouteTemplates). На живом роутере их 87 в
@@ -518,6 +544,22 @@ function commandResult(id) {
   }
   if (lastAction === 'pingcheck_toggle') {
     return { id, status: 'ok', duration_ms: 700, output: `pingcheck ${lastArgs.enable ? 'enabled' : 'disabled'} for ${lastArgs.tunnel_id}` }
+  }
+  if (lastAction === 'route_migrate_plan') {
+    return {
+      id, status: 'ok', duration_ms: 400,
+      output: JSON.stringify({
+        from: { id: 'st_office', name: 'Офис', kind: 'static', enabled: true, bind: 'OpkgTun12', targets: [{ type: 'cidr', value: '203.0.113.0/24' }] },
+        route: { id: 'new:dns:Офис', name: 'Офис', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'opkgtun12', targets: [{ type: 'cidr', value: '203.0.113.0/24' }] },
+        can_apply: true, hash: 'mig1',
+      }),
+    }
+  }
+  if (lastAction === 'route_migrate') {
+    return { id, status: 'ok', duration_ms: 900, output: JSON.stringify({ action: 'migrate', kind: 'dns', route_id: 'hr:Офис', route_name: 'Офис', hr_neo_restarted: true }) }
+  }
+  if (lastAction === 'route_geo_tags') {
+    return { id, status: 'ok', duration_ms: 520, output: JSON.stringify(GEO_TAGS) }
   }
   if (lastAction === 'route_templates') {
     return { id, status: 'ok', duration_ms: 310, output: JSON.stringify(ROUTE_TEMPLATES) }
