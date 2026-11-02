@@ -107,6 +107,12 @@ func TestBackendMainNeverOverridesReleaseChecksums(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("не нашёл cmd/backend: %v", err)
 	}
+	// Боевая связка живёт в пакете wiring: запрет действует и там.
+	wired, err := filepath.Glob(filepath.Join("wiring", "*.go"))
+	if err != nil || len(wired) == 0 {
+		t.Fatalf("не нашёл internal/backend/wiring: %v", err)
+	}
+	files = append(files, wired...)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
