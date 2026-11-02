@@ -265,8 +265,9 @@ func (r *rig) serveBackend(w http.ResponseWriter, req *http.Request) {
 // память тревог пропали, запись в базе и настройки остались. Агент не трогается.
 func (r *rig) restartBackend() {
 	r.t.Helper()
-	r.waitEngineIdle()
+	// Как настоящий SIGTERM: сперва отмена, движок не дожидается ответов агента.
 	r.stopCtx()
+	r.waitEngineIdle()
 	r.backendSrv.CloseClientConnections()
 	backend.WaitRelayDrain()
 	if err := r.db.Close(); err != nil {
@@ -448,7 +449,7 @@ func (r *rig) PostReport(rep wire.Report) {
 }
 
 func (r *rig) engineBusy() bool {
-	if r.core.LinkRepair.Pending.Load() != 0 {
+	if r.core.LinkRepair.Moves.Busy() {
 		return true
 	}
 	if !r.store.TryLock(e2eRouter) {

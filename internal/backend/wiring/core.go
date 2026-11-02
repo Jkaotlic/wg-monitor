@@ -12,7 +12,6 @@ package wiring
 import (
 	"context"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
@@ -179,7 +178,7 @@ func NewCore(in Inputs) *Core {
 		SourceOff:       backend.RepairSourceOff,
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
 		LineDead:        backend.LinkRepairLineDead(d, logger.With("component", "linkrepair")),
-		Pending:         &atomic.Int64{},
+		Moves:           linkrepair.NewMoveState(),
 		Commands:        cmdQueue,
 		Report:          repairs,
 		BaseCtx:         ctx,

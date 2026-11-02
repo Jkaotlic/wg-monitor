@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,7 +412,7 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 		Report:    e.rep,
 		BaseCtx:   context.Background(),
 		AwaitStep: time.Second,
-		Pending:   &atomic.Int64{},
+		Moves:     NewMoveState(),
 	}
 	return e
 }
@@ -1471,7 +1470,7 @@ func TestLadder_PreExitProbeAgentHandshakeOnly(t *testing.T) {
 func (e *ladderEnv) waitUnlocked(t *testing.T) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for e.d.Pending != nil && e.d.Pending.Load() != 0 {
+	for e.d.Moves.Busy() {
 		if time.Now().After(deadline) {
 			t.Fatal("увод не закончился")
 		}
@@ -1602,6 +1601,36 @@ func TestReturnMoved_HeldByCeilingThenReturns(t *testing.T) {
 	e.waitUnlocked(t)
 	if e.cmd.countOf("route_policy_promote") != 1 || e.moved(t) != "" {
 		t.Fatalf("окно отпустило, а возврата нет: %+v, запись %q", e.cmd.sent, e.moved(t))
+	}
+}
+
+// S29: остановка бэкенда посреди ожидания ответа -- не отказ: команда могла уйти,
+// запись остаётся, и попытка не засчитана.
+func TestMoveOnly_CancelKeepsRecord(t *testing.T) {
+	e := newLadder(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.d.BaseCtx = ctx
+	e.cmd.on = map[string]func(*scriptCommander, int){"route_policy_promote": func(c *scriptCommander, _ int) {
+		c.silent = map[string]bool{"route_policy_promote": true}
+		cancel()
+	}}
+	_, _ = e.d.Start(ladderReq())
+	e.waitUnlocked(t)
+	if e.moved(t) == "" {
+		t.Fatal("отмена посчитана отказом: запись снята")
+	}
+	if _, calls := e.rep.snapshot(); len(calls) != 0 {
+		t.Fatalf("при остановке сказано человеку: %+v", calls)
+	}
+}
+
+// WaitMoves отпускает, когда фоновых уводов нет.
+func TestWaitMovesReturnsWhenIdle(t *testing.T) {
+	e := newLadder(t, nil)
+	_, _ = e.d.Start(ladderReq())
+	e.d.WaitMoves()
+	if e.d.Moves.Busy() {
+		t.Fatal("WaitMoves вернулся посреди увода")
 	}
 }
 

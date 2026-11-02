@@ -902,3 +902,257 @@ func TestTwoPoliciesMovedAndReturned(t *testing.T) {
 		t.Fatalf("перестановок: %+v", got)
 	}
 }
+
+// S23. Снимок неполный (сбой чтения) -- это не «человек переставил»: решение
+// откладывается, запись остаётся, следующий отчёт возвращает трафик. А вот
+// настоящее удаление политики запись снимает.
+func TestReturnWaitsForCompleteSnapshot(t *testing.T) {
+	for _, path := range []string{"GET /api/routing/access-policies", "GET /api/routing/tunnels", "GET /api/routing/policy-interfaces"} {
+		t.Run(path, func(t *testing.T) {
+			r := newRig(t, rigOpts{})
+			deadCarrierMoved(t, r)
+			r.awgm.FailPath(path, true)
+			heal(r, carrierID)
+			r.Ticks(failThreshold)
+			r.DrainCommands()
+			wantCalls(t, r, "promote:"+backup1ID)
+			if r.MoveRecord(carrierID) == "" {
+				t.Fatal("снимок неполный, а запись снята: возврат потерян")
+			}
+			r.awgm.FailPath(path, false)
+			r.Tick()
+			r.DrainCommands()
+			wantCalls(t, r, "promote:"+backup1ID, "promote:"+carrierID)
+			wantChain(t, r, standardChain...)
+		})
+	}
+	t.Run("политику удалили", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.awgm.SetPolicy("Other", "OpkgTun11")
+		deadCarrierMoved(t, r)
+		r.awgm.RemovePolicy(policyHR)
+		heal(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		wantCalls(t, r, "promote:"+backup1ID)
+		if got := r.MoveRecord(carrierID); got != "" {
+			t.Errorf("политики нет, а запись живёт: %q", got)
+		}
+	})
+}
+
+// S24. Роутер отказывает в возврате: потолок на этом не сгорает, и текста про
+// падения нет -- туннель не падал.
+func TestRefusedReturnDoesNotBurnCeiling(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	deadCarrierMoved(t, r)
+	r.awgm.RefusePermit(true)
+	heal(r, carrierID)
+	r.Ticks(failThreshold + 3)
+	r.DrainCommands()
+	wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
+	r.awgm.RefusePermit(false)
+	r.Tick()
+	r.DrainCommands()
+	wantChain(t, r, standardChain...)
+	if alertAbout(r.Alerts(), "падает раз за разом") {
+		t.Errorf("туннель не падал, а сказано про падения: %q", r.Alerts())
+	}
+	if !alertAbout(r.Alerts(), "Вернул трафик") {
+		t.Errorf("про возврат не сказано: %q", r.Alerts())
+	}
+}
+
+// S25. На момент Hard снимка нет. FSM нового Hard не даст, поэтому следующий отчёт
+// пробует снова, а здоровые туннели лишних команд не получают.
+func TestMoveRetriedAfterNoSnapshot(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	kill(r, carrierID)
+	r.Ticks(failThreshold - 1)
+	r.awgm.FailPath("GET /api/system/hydraroute-status", true) // снимок фатален без неё
+	r.Tick()
+	r.DrainCommands()
+	wantCalls(t, r)
+	r.awgm.FailPath("GET /api/system/hydraroute-status", false)
+	r.Tick()
+	r.DrainCommands()
+	wantCalls(t, r, "promote:"+backup1ID)
+	if !alertAbout(r.Alerts(), "Увёл трафик") {
+		t.Errorf("про увод не сказано: %q", r.Alerts())
+	}
+	// Больше ничего: туннель уже не первый, команд нет.
+	before := r.exch.dispatched.Load()
+	r.Ticks(3)
+	r.DrainCommands()
+	if got := r.exch.dispatched.Load(); got != before {
+		t.Errorf("после увода агенту ушло ещё %d команд", got-before)
+	}
+}
+
+// Здоровые туннели и запасной в hard не получают ни одной команды от повтора.
+func TestNoRetryCommandsWithoutNeed(t *testing.T) {
+	t.Run("все здоровы", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Ticks(failThreshold + 3)
+		r.DrainCommands()
+		if got := r.exch.dispatched.Load(); got != 0 {
+			t.Errorf("здоровым туннелям ушло %d команд", got)
+		}
+	})
+	t.Run("запасной лежит", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Tick()
+		kill(r, backup1ID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		before := r.exch.dispatched.Load()
+		r.Ticks(3)
+		r.DrainCommands()
+		if got := r.exch.dispatched.Load(); got != before {
+			t.Errorf("повтор ради запасного: %d команд", got-before)
+		}
+	})
+	t.Run("живого резерва нет", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Tick()
+		kill(r, carrierID)
+		kill(r, backup1ID)
+		kill(r, backup2ID)
+		r.awgm.SetTunnel(fakeTunnel{ID: "awg99", Name: "vpn-other", Backend: "kernel", PolicyIface: "OpkgTun99", Iface: "opkgtun99",
+			Status: "running", Enabled: true, HandshakeAge: freshAge, PingStatus: "disabled"})
+		r.awgm.SetMatrix("awg99", true)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		before := r.exch.dispatched.Load()
+		r.Ticks(3)
+		r.DrainCommands()
+		if got := r.exch.dispatched.Load(); got != before {
+			t.Errorf("повтор без резерва: %d команд", got-before)
+		}
+	})
+	t.Run("потолок и сказано один раз", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Tick()
+		for range 3 {
+			if err := r.core.LinkRepair.Attempts.Started(e2eRouter, "tunnel_"+carrierID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		kill(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		log, before := len(r.tg.Log()), r.exch.dispatched.Load()
+		r.Ticks(3)
+		r.DrainCommands()
+		if got := r.exch.dispatched.Load(); got != before {
+			t.Errorf("на потолке спрашиваем роутер каждый отчёт: %d команд", got-before)
+		}
+		if got := len(r.tg.Log()); got != log {
+			t.Errorf("на потолке спам: %q", r.tg.Log())
+		}
+	})
+}
+
+// S26 и S29. Бэкенд остановлен, пока команда увода у агента: отмена -- не отказ,
+// запись остаётся. Новый экземпляр на следующем отчёте доводит увод (цепочка всё
+// ещё ведёт в мёртвый).
+func TestBackendRestartRightAfterHard(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	release := r.awgm.HangPermit()
+	defer release()
+	kill(r, carrierID)
+	r.Ticks(failThreshold)
+	r.waitFor("команда увода у агента", func() bool { return r.awgm.Reads("POST /api/access-policies/permit") > 0 })
+	r.stopCtx() // SIGTERM посреди ожидания
+	r.waitEngineIdle()
+	if r.MoveRecord(carrierID) == "" {
+		t.Fatal("отмена посчитана отказом: запись снята, хотя команда могла уйти")
+	}
+	wantNoPromotions(t, r)
+	r.restartBackend()
+	release()
+	r.Tick()
+	r.DrainCommands()
+	wantCalls(t, r, "promote:"+backup1ID)
+	if r.MoveRecord(carrierID) == "" {
+		t.Error("увод прошёл, а записи нет")
+	}
+	heal(r, carrierID)
+	r.Ticks(2)
+	r.DrainCommands()
+	wantChain(t, r, standardChain...)
+}
+
+// S27. Человек сам убрал мёртвый туннель с первого места: повтор не спорит с ним.
+func TestRetryRespectsHumanReorder(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	kill(r, carrierID)
+	r.Ticks(failThreshold - 1)
+	r.awgm.FailPath("GET /api/system/hydraroute-status", true)
+	r.Tick()
+	r.DrainCommands()
+	r.awgm.FailPath("GET /api/system/hydraroute-status", false)
+	r.awgm.SetPolicy(policyHR, "OpkgTun11", "Wireguard2", "OpkgTun10")
+	before := r.exch.dispatched.Load()
+	r.Ticks(3)
+	r.DrainCommands()
+	wantNoPromotions(t, r)
+	wantChain(t, r, "OpkgTun11", "Wireguard2", "OpkgTun10")
+	if got := r.exch.dispatched.Load(); got != before {
+		t.Errorf("не первый -- команд нет, ушло %d", got-before)
+	}
+}
+
+// S28. Каскад A->B, B->C: порядок после оживления всех -- исходный, кто бы ни ожил
+// первым. Запись первого не теряется, пока трафик стоит ниже по его же цепочке.
+func TestCascadeRestoresOriginalOrder(t *testing.T) {
+	setup := func(t *testing.T) *rig {
+		t.Helper()
+		r := newRig(t, rigOpts{})
+		deadCarrierMoved(t, r) // A -> B
+		r.Tick()
+		kill(r, backup1ID)
+		r.Ticks(failThreshold)
+		r.DrainCommands() // B -> C
+		wantCalls(t, r, "promote:"+backup1ID, "promote:"+backup2ID)
+		wantChain(t, r, "OpkgTun11", "OpkgTun10", "Wireguard2")
+		return r
+	}
+	// Каждый обход с доведением фоновой работы: порядок решает логика, а не гонка.
+	ticks := func(r *rig, n int) {
+		for range n {
+			r.Tick()
+			r.DrainCommands()
+		}
+	}
+	t.Run("первым ожил A", func(t *testing.T) {
+		r := setup(t)
+		heal(r, carrierID)
+		ticks(r, failThreshold)
+		if r.MoveRecord(carrierID) == "" {
+			t.Fatal("запись A потеряна как «перестановка»")
+		}
+		wantChain(t, r, "OpkgTun11", "OpkgTun10", "Wireguard2")
+		heal(r, backup1ID)
+		ticks(r, failThreshold)
+		wantChain(t, r, standardChain...)
+		if r.MoveRecord(carrierID) != "" || r.MoveRecord(backup1ID) != "" {
+			t.Error("записи остались")
+		}
+	})
+	t.Run("первым ожил B", func(t *testing.T) {
+		r := setup(t)
+		heal(r, backup1ID)
+		ticks(r, failThreshold)
+		wantChain(t, r, "OpkgTun10", "OpkgTun11", "Wireguard2")
+		heal(r, carrierID)
+		ticks(r, failThreshold)
+		wantChain(t, r, standardChain...)
+		if r.MoveRecord(carrierID) != "" || r.MoveRecord(backup1ID) != "" {
+			t.Error("записи остались")
+		}
+	})
+}

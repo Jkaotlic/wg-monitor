@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
@@ -131,9 +130,8 @@ type Deps struct {
 	// LineDead -- звено мертво по своей последней проверке tunnel_<id> (Д3):
 	// резервом оно не считается. nil -- мёртвых не знаем.
 	LineDead func(routerID int64, tunnelID string) bool
-	// Pending -- сколько уводов идёт в фоне (снимок читается ещё без замка
-	// роутера); nil -- не считать.
-	Pending  *atomic.Int64
+	// Moves -- уводы и возвраты, идущие в фоне; nil -- не считать.
+	Moves    *MoveState
 	Commands replace.Commander
 	Report   Reporter
 	// BaseCtx принадлежит процессу, а не запросу: починка переживает

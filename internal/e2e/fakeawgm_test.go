@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -62,13 +63,15 @@ type fakeAWGM struct {
 	calls         []string // журнал мутаций по порядку
 	unknown       []string // пути, которых подделка не знает
 	onRestart     func(id string)
-	permitRefused bool          // роутер отказывает в перестановке
-	permitHang    chan struct{} // перестановка висит, пока канал не закрыт
+	permitRefused bool            // роутер отказывает в перестановке
+	failing       map[string]bool // запросы ("GET /api/...") с ответом 500
+	reads         map[string]int  // сколько раз читали запрос
+	permitHang    chan struct{}   // перестановка висит, пока канал не закрыт
 }
 
 func newFakeAWGM(t *testing.T) *fakeAWGM {
 	t.Helper()
-	f := &fakeAWGM{matrix: map[string]bool{}}
+	f := &fakeAWGM{matrix: map[string]bool{}, failing: map[string]bool{}, reads: map[string]int{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -160,6 +163,27 @@ func (f *fakeAWGM) OnRestart(fn func(id string)) {
 	f.onRestart = fn
 }
 
+// FailPath -- запрос ("GET /api/...") отвечает 500, пока не снято.
+func (f *fakeAWGM) FailPath(key string, fail bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failing[key] = fail
+}
+
+// RemovePolicy -- политику удалили на роутере.
+func (f *fakeAWGM) RemovePolicy(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.policies = slices.DeleteFunc(f.policies, func(p *fakePolicy) bool { return p.Name == name })
+}
+
+// Reads -- сколько раз читали запрос ("GET /api/...").
+func (f *fakeAWGM) Reads(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[key]
+}
+
 // RefusePermit -- роутер отвечает отказом на перестановку звеньев.
 func (f *fakeAWGM) RefusePermit(refuse bool) {
 	f.mu.Lock()
@@ -235,6 +259,12 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 	)
 	key := r.Method + " " + r.URL.Path
 	f.mu.Lock()
+	f.reads[key]++
+	if f.failing[key] {
+		f.mu.Unlock()
+		http.Error(w, `{"success":false,"message":"read failed"}`, http.StatusInternalServerError)
+		return
+	}
 	switch key {
 	case "GET /api/tunnels/all":
 		out = envelope(map[string]any{"external": []any{}, "system": []any{}, "tunnels": f.tunnelsJSONLocked()})

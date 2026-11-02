@@ -351,6 +351,9 @@ func main() {
 		waits = append(waits, shutdownWait{name: "оживление: фоновые проверки", wait: reviveSvc.Wait})
 	}
 	waits = append(waits, shutdownWait{name: "доставки тревог", wait: backend.WaitRelayDrain})
+	// Увод и возврат пишут запись об уводе: ctx уже отменён, ответов агента они не
+	// ждут, а потеря записи стоила бы возврата.
+	waits = append(waits, shutdownWait{name: "увод трафика", wait: core.LinkRepair.WaitMoves})
 	if maintPoller != nil {
 		waits = append(waits, shutdownWait{name: "maintnotify", wait: maintPoller.WaitForExit})
 	}

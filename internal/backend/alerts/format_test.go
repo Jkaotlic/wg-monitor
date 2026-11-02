@@ -75,7 +75,7 @@ func TestFormatHardGenericFallback(t *testing.T) {
 		HardSince:   hardSince,
 		Check:       wire.Check{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "handshake age 312s > 180s"}},
 	})
-	for _, want := range []string{"🔴", "vasya", "Что не работает:", "handshake age 312s", "проверок подряд без ответа: 3"} {
+	for _, want := range []string{"🔴", "vasya", "Что не работает:", "Проверка сообщила о сбое", "проверок подряд без ответа: 3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
@@ -721,7 +721,7 @@ func TestFormatHardCarrierSpareFacts(t *testing.T) {
 // Сырая ошибка с адресом -- в журнал, не владельцу (B6).
 func TestFormatHardNoRawErrorForOwner(t *testing.T) {
 	raw := `awgmgr GET /api/system/info: Get "http://127.0.0.1:2222/api/system/info": EOF`
-	for _, check := range []string{"awg_manager", "tunnels", "hydraroute"} {
+	for _, check := range []string{"awg_manager", "tunnels", "hydraroute", "какая-то_новая_проверка"} {
 		got := FormatHard(HardArgs{Nickname: "router-a", CheckName: check, HardSince: time.Now(),
 			Check: wire.Check{Name: check, Status: "fail", Details: map[string]any{"error": raw}}})
 		if strings.Contains(got, "awgmgr") || strings.Contains(got, "http://") || strings.Contains(got, "EOF") {

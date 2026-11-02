@@ -925,8 +925,9 @@ func writeResolverGuardWhatBroke(b *strings.Builder, d map[string]any) {
 }
 
 func writeGenericWhatBroke(b *strings.Builder, d map[string]any) {
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "  %s\n", errStr)
+	// Сырая ошибка -- в журнал (Dispatcher.DeliverHard), как у панели роутера.
+	if strOrEmpty(d, "error") != "" {
+		b.WriteString("  Проверка сообщила о сбое. Подробности -- в журнале бота.\n")
 	} else {
 		b.WriteString("  Проверка сказала, что есть сбой, но агент не прислал подробностей.\n")
 	}
@@ -1500,15 +1501,6 @@ func checkCategory(name string) string {
 		return "awgm_unstick"
 	}
 	return "generic"
-}
-
-// trimBodyDump strips a trailing "(body=…)" segment from awgmgr error
-// messages — useful in agent logs but visual noise in Telegram alerts.
-func trimBodyDump(s string) string {
-	if i := strings.Index(s, " (body="); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 func strSlice(d map[string]any, key string) []string {

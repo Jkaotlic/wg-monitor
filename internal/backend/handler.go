@@ -1323,6 +1323,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				if err := d.LinkRepair.Attempts.Clear(nick, c.Name); err != nil {
 					d.Logger.Warn("автопочинка: стоп не снялся", "nickname", nick, "check", c.Name, "err", err)
 				}
+				d.LinkRepair.ClearMoveSaid(nick, c.Name)
 			}
 			// Починка стартует ПОСЛЕ отправки тревоги: человек обязан узнать
 			// о поломке независимо от того, справится автоматика или нет.
@@ -1354,14 +1355,24 @@ func reportHandler(d Deps) http.HandlerFunc {
 			// Д2 (v0.64): VPN-туннель жив, а трафик с него уведён -- вернуть. Не
 			// только на самом Recovery: занятый замок, молчание агента и рестарт
 			// бэкенда откладывают возврат на следующий отчёт, а не теряют его.
-			var returnTraffic func()
+			var trafficStep func()
 			if c.Status == "ok" && tr.Next.CurrentStatus == "ok" && (tr.Kind == state.Recovery || tr.Kind == state.Noop) &&
 				d.LinkRepair != nil && d.LinkRepair.HasMove(nick, c.Name) {
 				tunnelName, _ := c.Details["tunnel_name"].(string)
 				backReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
-				returnTraffic = func() { d.LinkRepair.ReturnMoved(backReq) }
+				trafficStep = func() { d.LinkRepair.ReturnMoved(backReq) }
 			}
-			if deliver != nil || startRepair != nil || returnTraffic != nil {
+			// Увод на Hard не состоялся (снимка не было, бэкенд перезапустился):
+			// нового Hard автомат не даст, а трафик стоит в мёртвом звене. Само
+			// условие считается по этому же отчёту -- агенту ни одной команды,
+			// если туннель не первое звено или резерва нет.
+			if tr.Kind == state.Noop && tr.Next.CurrentStatus == "hard" && c.Status == "fail" && d.LinkRepair != nil &&
+				reportStuckOnDeadLink(rep.Checks, strings.TrimPrefix(c.Name, miniappTunnelPrefix)) {
+				tunnelName, _ := c.Details["tunnel_name"].(string)
+				retryReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
+				trafficStep = func() { d.LinkRepair.RetryMove(retryReq) }
+			}
+			if deliver != nil || startRepair != nil || trafficStep != nil {
 				checkName, kind := c.Name, tr.Kind
 				spawnAlertDelivery(d, "dispatch", uid, checkName, func(ctx context.Context) {
 					if deliver != nil {
@@ -1371,8 +1382,9 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 					if startRepair != nil {
 						// Доставку оборвала остановка бэкенда: движок починки
-						// в окне слива никто не дождётся, он стартует при
-						// следующем отчёте после перезапуска.
+						// в окне слива никто не дождётся. Лесенка до следующего
+						// Hard не начнётся, а увод на следующих отчётах повторит
+						// RetryMove.
 						if ctx.Err() != nil || relayDraining() {
 							d.Logger.Info("автопочинка не начата: бэкенд останавливается",
 								"nickname", nick, "check", checkName)
@@ -1382,8 +1394,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 					// Сперва «восстановилось», потом возврат: то же правило, что у
 					// починки, и та же осторожность при остановке.
-					if returnTraffic != nil && ctx.Err() == nil && !relayDraining() {
-						returnTraffic()
+					if trafficStep != nil && ctx.Err() == nil && !relayDraining() {
+						trafficStep()
 					}
 				})
 			}
@@ -1459,6 +1471,35 @@ func reportHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// reportStuckOnDeadLink -- по самому отчёту: VPN-туннель id стоит первым звеном
+// цепочки, а в ней есть живой по своей проверке запасной. Сводка политик едет в
+// проверке hydraroute; нет её (старый агент, сбой чтения) -- нет и повтора.
+func reportStuckOnDeadLink(checks []wire.Check, id string) bool {
+	var policies []wire.PolicyBrief
+	status := make(map[string]string, len(checks))
+	for _, c := range checks {
+		status[c.Name] = c.Status
+		if c.Name != "hydraroute" || c.Details == nil {
+			continue
+		}
+		raw, err := json.Marshal(c.Details["policies"])
+		if err != nil || json.Unmarshal(raw, &policies) != nil {
+			return false
+		}
+	}
+	for _, p := range policies {
+		if len(p.Links) == 0 || p.Links[0].TunnelID != id {
+			continue
+		}
+		for _, l := range p.Links[1:] {
+			if l.TunnelID != "" && l.TunnelID != id && l.Role != "unavailable" && status[miniappTunnelPrefix+l.TunnelID] == "ok" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkSummary(checks []wire.Check) []string {
