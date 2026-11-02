@@ -39,7 +39,7 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 			]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
-		case "/api/monitoring/matrix":
+		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -271,7 +271,7 @@ func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 			]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
-		case "/api/monitoring/matrix":
+		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -465,7 +465,7 @@ func TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag(t *testing.T) 
 			]}`))
 		case "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
-		case "/api/monitoring/matrix":
+		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -507,7 +507,7 @@ func TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
-		case "/api/monitoring/matrix":
+		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
 		default:
@@ -1056,5 +1056,44 @@ func TestTunnelsCheck_IdleNoteOnlyOnStaleHandshake(t *testing.T) {
 	}
 	if note, _ := got["tunnel_awg11"].Details["note"].(string); note == "" {
 		t.Fatalf("простаивающий резерв должен объяснять, почему жив: %+v", got["tunnel_awg11"].Details)
+	}
+}
+
+// Контур S13: правила на политике идут за её живым звеном, а не за первым, кто
+// заявил основной маршрут. После увода трафика они не остаются за мёртвым.
+func TestTunnelsCheck_PolicyRulesCreditedToLiveLink(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg50","name":"main","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg2","ndmsName":"Wireguard2","lastHandshake":"` + now + `","pingCheck":{"status":"disabled"}},
+				{"id":"awg10","name":"reserve","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"opkgtun10","lastHandshake":"` + now + `","pingCheck":{"status":"disabled"}}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"hr:a","enabled":true,"backend":"hydraroute","hrRouteMode":"policy","hrPolicyName":"HydraRoute","routes":null}]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"direct"}}}`))
+		case "/api/routing/access-policies":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"HydraRoute","interfaces":[{"name":"OpkgTun10","label":"reserve","order":0},{"name":"Wireguard2","label":"main","order":1}]}]}`))
+		case "/api/routing/policy-interfaces":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"OpkgTun10","label":"reserve","up":true},{"name":"Wireguard2","label":"main","up":true}]}`))
+		case "/api/monitoring/matrix":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	got := probeStatuses(t, srv)
+	if n := got["tunnel_awg10"].Details["routes_dns"]; n != 1 {
+		t.Fatalf("правило политики за живым первым звеном: %v (%+v)", n, got["tunnel_awg10"].Details)
+	}
+	if _, has := got["tunnel_awg50"].Details["routes_dns"]; has {
+		t.Fatalf("правило осталось за вторым звеном: %+v", got["tunnel_awg50"].Details)
 	}
 }

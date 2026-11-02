@@ -29,6 +29,62 @@ type HardArgs struct {
 	// строкой обещает дописать ход починки сюда же (notify.Repairs правит
 	// это сообщение).
 	AutoRepair bool
+	// Traffic -- где сейчас идёт трафик; nil -- не знаем.
+	Traffic *TrafficFacts
+}
+
+// TrafficFacts -- что известно о трафике в момент тревоги про VPN-туннель.
+// Считает backend теми же функциями, что и экран: живой сосед сам по себе не
+// значит, что трафик уже на нём -- без работающего ping-check политика так и ведёт
+// его в мёртвое первое звено, пока движок не уведёт. Поэтому «трафик идёт через»
+// тревога говорит только про Via.
+type TrafficFacts struct {
+	// Via -- упал запасной (тот же признак, что reserve_only_alert на экране), а
+	// трафик идёт через этот живой VPN-туннель.
+	Via string
+	// Spare -- упало звено, несущее трафик; это первый живой запасной той же
+	// цепочки. Трафик на нём ещё не идёт.
+	Spare string
+	// NoSpare -- упало звено, несущее трафик, а живого запасного в цепочке нет.
+	NoSpare bool
+}
+
+// Ключи TrafficFacts в копии details: через них факт доходит до функций текста,
+// не меняя сигнатуры десятка соседних категорий.
+const (
+	trafficViaKey     = "traffic_via"
+	trafficSpareKey   = "traffic_spare"
+	trafficNoSpareKey = "traffic_no_spare"
+)
+
+func withTraffic(d map[string]any, f *TrafficFacts) map[string]any {
+	if f == nil {
+		return d
+	}
+	out := make(map[string]any, len(d)+2)
+	for k, v := range d {
+		out[k] = v
+	}
+	if f.Via != "" {
+		out[trafficViaKey] = f.Via
+	}
+	if f.Spare != "" {
+		out[trafficSpareKey] = f.Spare
+	}
+	if f.NoSpare {
+		out[trafficNoSpareKey] = true
+	}
+	return out
+}
+
+// noLiveSpare -- живого запасного нет: цепочка знает это точно (сосед вне цепочки
+// подхватить трафик не может), без цепочки судим по соседям.
+func noLiveSpare(d map[string]any, ns []NeighborSummary) bool {
+	if no, _ := d[trafficNoSpareKey].(bool); no {
+		return true
+	}
+	_, ok := liveSpare(ns)
+	return !ok
 }
 
 // AutoRepairLine -- последняя строка тревоги, когда автопочинка включена.
@@ -64,24 +120,25 @@ func FormatHard(a HardArgs) string {
 	if a.IsMobile {
 		mobileBadge = "📱"
 	}
-	tone := toneFor(a.CheckName, a.Check.Details, a.Neighbors)
-	headline := categoryHeadline(a.CheckName, a.Check.Details, a.Neighbors)
+	details := withTraffic(a.Check.Details, a.Traffic)
+	tone := toneFor(a.CheckName, details, a.Neighbors)
+	headline := categoryHeadline(a.CheckName, details, a.Neighbors)
 
 	sections := []CardSection{{
 		Title: tone.ProblemTitle,
 		Lines: linesFromWriter(func(b *strings.Builder) {
-			writeWhatBroke(b, a.CheckName, a.Check.Details, a.Neighbors)
+			writeWhatBroke(b, a.CheckName, details, a.Neighbors)
 		}),
 	}}
-	if impact := impactFor(a.CheckName, a.Check.Details, a.Neighbors); impact != "" {
+	if impact := impactFor(a.CheckName, details, a.Neighbors); impact != "" {
 		sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
 	}
 
-	if h := diagnose(a.CheckName, a.Check.Details, a.Neighbors); h != "" {
+	if h := diagnose(a.CheckName, details, a.Neighbors); h != "" {
 		sections = append(sections, CardSection{Title: "Что я думаю", Lines: []string{h}})
 	}
 
-	if adv := suggestAction(a.CheckName, a.Check.Details, a.Neighbors); adv != "" {
+	if adv := suggestAction(a.CheckName, details, a.Neighbors); adv != "" {
 		sections = append(sections, CardSection{Title: notify.AdviceTitle, Lines: []string{adv}})
 	}
 	if a.AutoRepair {
@@ -215,6 +272,8 @@ type RealertArgs struct {
 	Check        wire.Check
 	Neighbors    []NeighborSummary
 	RealertEvery time.Duration
+	// Traffic -- как в HardArgs: напоминание говорит про трафик то же, что тревога.
+	Traffic *TrafficFacts
 }
 
 // FormatRealert renders a STILL-DOWN reminder. Skips the "что я думаю" /
@@ -225,21 +284,22 @@ func FormatRealert(args RealertArgs) string {
 	if args.IsMobile {
 		mobileBadge = "📱"
 	}
-	tone := toneFor(args.CheckName, args.Check.Details, args.Neighbors)
-	headline := categoryHeadline(args.CheckName, args.Check.Details, args.Neighbors)
+	details := withTraffic(args.Check.Details, args.Traffic)
+	tone := toneFor(args.CheckName, details, args.Neighbors)
+	headline := categoryHeadline(args.CheckName, details, args.Neighbors)
 
 	var sections []CardSection
 	if args.Check.Name != "" {
 		sections = append(sections, CardSection{
 			Title: tone.ProblemTitle,
 			Lines: linesFromWriter(func(b *strings.Builder) {
-				writeWhatBroke(b, args.CheckName, args.Check.Details, args.Neighbors)
+				writeWhatBroke(b, args.CheckName, details, args.Neighbors)
 			}),
 		})
-		if impact := impactFor(args.CheckName, args.Check.Details, args.Neighbors); impact != "" {
+		if impact := impactFor(args.CheckName, details, args.Neighbors); impact != "" {
 			sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
 		}
-		if adv := suggestAction(args.CheckName, args.Check.Details, args.Neighbors); adv != "" {
+		if adv := suggestAction(args.CheckName, details, args.Neighbors); adv != "" {
 			sections = append(sections, CardSection{Title: "Что делать", Lines: []string{adv}})
 		}
 	}
@@ -315,10 +375,13 @@ func linesFromWriter(write func(*strings.Builder)) []string {
 func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
-		if len(ns) > 0 && !neighborsAlive(ns) {
-			return "🔴"
+		// Жёлтая -- только когда трафик и правда идёт мимо упавшего. Живой сосед
+		// сам по себе ничего не доказывает: пока движок не увёл, трафик ведётся в
+		// мёртвое первое звено.
+		if strOrEmpty(d, trafficViaKey) != "" {
+			return "🟡"
 		}
-		return "🟡"
+		return "🔴"
 	case "dns":
 		total, _ := intOrZero(d, "endpoints")
 		failed, _ := intOrZero(d, "failed_count")
@@ -375,13 +438,12 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 	switch checkCategory(checkName) {
 	case "tunnel":
 		name := quotedTunnelName(d)
-		// Упавший VPN-туннель -- ещё не потерянный обход. Пока жив соседний,
-		// трафик идёт через него, и «не на связи» тревожным тоном гонит
-		// человека чинить то, что у него работает. Приложение в этот же момент
-		// говорит, что работает запасной VPN-туннель, -- два голоса одной
-		// системы обязаны говорить одно и то же.
-		if spare, ok := liveSpare(ns); ok {
-			return fmt.Sprintf("VPN-туннель %s упал, обход идёт через «%s»", name, spareHumanName(spare))
+		// Упал запасной: обход работает, и тревожный тон гнал бы человека чинить
+		// то, что у него работает. Приложение в этот момент говорит то же самое
+		// (reserve_only_alert). Про упавшее несущее звено «обход идёт» не
+		// говорим: живой сосед ещё не значит, что трафик на нём.
+		if via := strOrEmpty(d, trafficViaKey); via != "" {
+			return fmt.Sprintf("Запасной VPN-туннель %s не работает, трафик идёт через «%s»", name, via)
 		}
 		return fmt.Sprintf("VPN-туннель %s не отвечает", name)
 	case "dns":
@@ -668,9 +730,6 @@ func writeHydraRouteWhatBroke(b *strings.Builder, d map[string]any) {
 	default:
 		b.WriteString("  HydraRoute не установлен\n")
 	}
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "  Сообщение: %s\n", errStr)
-	}
 }
 
 func writeAwgManagerWhatBroke(b *strings.Builder, d map[string]any) {
@@ -690,14 +749,16 @@ func writeAwgManagerWhatBroke(b *strings.Builder, d map[string]any) {
 		}
 		fmt.Fprintf(b, "  awg-manager · %s\n", strings.Join(parts, " · "))
 	}
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "  Сообщение: %s\n", errStr)
+	// Сырая ошибка (адрес, текст клиента) -- в журнал (Dispatcher.DeliverHard):
+	// владельцу она ни о чём не говорит.
+	if strOrEmpty(d, "error") != "" {
+		b.WriteString("  Панель роутера не ответила на запрос бота\n")
 	}
 }
 
 func writeAwgmgrAPIWhatBroke(b *strings.Builder, d map[string]any) {
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "  Ошибка API: %s\n", trimBodyDump(errStr))
+	if strOrEmpty(d, "error") != "" {
+		b.WriteString("  Панель роутера не отдала список VPN-туннелей\n")
 	}
 	if cnt, ok := intOrZero(d, "tunnel_count"); ok && cnt > 0 {
 		fmt.Fprintf(b, "  VPN-туннелей видно: %d\n", cnt)
@@ -927,13 +988,17 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 	case "dns":
 		return "Домены могут не открываться или уходить не туда: сайты, приложения и правила HR-Neo зависят от DNS."
 	case "tunnel":
-		// Пока жив запасной VPN-туннель, обход работает -- и человеку надо
-		// сказать именно это, а не пугать его тем, чего он не увидит. Но и
-		// молчать нельзя: запасной остался один, и вторая поломка оставит его
-		// без обхода вовсе.
-		if spare, ok := liveSpare(ns); ok {
-			return fmt.Sprintf("Пока ничего: обход идёт через запасной VPN-туннель «%s», сайты открываются как обычно. "+
-				"Починить упавший VPN-туннель всё равно стоит — запасной остался один.", spareHumanName(spare))
+		// Упал запасной -- ничего не сломано, но подхватить трафик стало некому:
+		// и пугать незачем, и молчать нельзя.
+		if via := strOrEmpty(d, trafficViaKey); via != "" {
+			return fmt.Sprintf("Пока ничего: трафик идёт через «%s», сайты открываются как обычно. "+
+				"Но если «%s» упадёт, этот запасной VPN-туннель трафик не подхватит.", via, via)
+		}
+		spareNote := ""
+		if no, _ := d[trafficNoSpareKey].(bool); no {
+			spareNote = " Живого запасного VPN-туннеля нет — увести трафик некуда."
+		} else if sp := strOrEmpty(d, trafficSpareKey); sp != "" {
+			spareNote = fmt.Sprintf(" Запасной VPN-туннель «%s» на связи.", sp)
 		}
 		var parts []string
 		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
@@ -946,9 +1011,9 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 		// внимание»: с ней любое число звучит правильно, а «%d правил» давало
 		// «3 правил» и «идут 1 правило».
 		if len(parts) > 0 {
-			return "Через этот VPN-туннель идут правила: " + strings.Join(parts, " и ") + " — они не работают, пока VPN-туннель не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
+			return "Через этот VPN-туннель идут правила: " + strings.Join(parts, " и ") + " — они не работают, пока VPN-туннель не поднимется. Обычные сайты, банки и госуслуги открываются как всегда." + spareNote
 		}
-		return "То, что должно ходить через этот VPN-туннель, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
+		return "То, что должно ходить через этот VPN-туннель, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда." + spareNote
 	case "hydraroute":
 		return "Правила по именам сайтов перестают направлять их в нужные VPN-туннели: часть сайтов пойдёт напрямую или не откроется."
 	case "awg_manager", "awgmgr_api":
@@ -1237,10 +1302,13 @@ func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	if hasConflict && conflict {
 		return "У этого VPN-туннеля адрес совпал с адресом другого VPN-туннеля — сам он не поднимется. Нажмите «Починить» в приложении: оно перевыпустит настройки VPN-туннеля заново."
 	}
+	if via := strOrEmpty(d, trafficViaKey); via != "" {
+		return "Спешки нет: трафик идёт через «" + via + "». Нажмите «Починить» в приложении, чтобы запасной VPN-туннель снова был готов подхватить трафик."
+	}
 	if !hasAge {
 		// Про увод трафика говорим только когда уводить есть куда: обещать
 		// обход, которого нет, -- то же враньё, что и молчать о нём.
-		if _, ok := liveSpare(ns); ok {
+		if !noLiveSpare(d, ns) {
 			return "Нажмите «Починить» в приложении — оно уведёт трафик на запасной VPN-туннель и перевыпустит настройки упавшего VPN-туннеля. Если и после этого связи нет, провайдер может резать такой трафик."
 		}
 		return "Нажмите «Починить» в приложении — оно перевыпустит настройки VPN-туннеля заново. Если и после этого связи нет, провайдер может резать такой трафик."
@@ -1248,7 +1316,7 @@ func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	var base string
 	if age > 600 {
 		base = "Нажмите «Починить» в приложении — обычно помогает."
-		if _, ok := liveSpare(ns); ok {
+		if !noLiveSpare(d, ns) {
 			base += " Пока чинит, трафик пойдёт через запасной VPN-туннель."
 		}
 	} else {

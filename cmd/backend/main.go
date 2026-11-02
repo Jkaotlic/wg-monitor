@@ -259,6 +259,7 @@ func main() {
 	rp := realert.NewPoller(d, tgClient, realertConfig(cfg))
 	// Тревога, не дошедшая никому, повторяется карточкой самой тревоги.
 	rp.SetHardDeliverer(disp)
+	rp.SetTrafficFacts(backend.AlertTrafficFacts(d))
 	go func() {
 		if err := rp.Run(ctx); err != nil {
 			logger.Error("realert poller exited", "err", err)

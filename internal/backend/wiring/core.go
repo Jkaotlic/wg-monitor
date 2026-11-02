@@ -12,6 +12,7 @@ package wiring
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
@@ -162,6 +163,7 @@ func NewCore(in Inputs) *Core {
 		tgClient, d, disp, time.Now)
 	repairs.SetMiniAppBaseURL(cfg.PublicBaseURL)
 	disp.SetAutoRepairHint(backend.AutoRepairHint(d))
+	disp.SetTrafficFacts(backend.AlertTrafficFacts(d))
 	disp.SetCovered(repairs.TakeCovered)
 	disp.SetHardHook(repairs.Uncover)
 	// «Тише на час» в боте -- в память тревог, от которой правит починка.
@@ -176,6 +178,8 @@ func NewCore(in Inputs) *Core {
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
 		SourceOff:       backend.RepairSourceOff,
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
+		LineDead:        backend.LinkRepairLineDead(d, logger.With("component", "linkrepair")),
+		Pending:         &atomic.Int64{},
 		Commands:        cmdQueue,
 		Report:          repairs,
 		BaseCtx:         ctx,

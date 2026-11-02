@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/timeline"
 )
@@ -293,6 +294,64 @@ func miniappServiceDots(d Deps, routerID int64, incidents []dashboardIncident) (
 		out = append(out, miniappCheckDot{CheckName: row.CheckName, Status: row.Status})
 	}
 	return out, miniappReserveOnlyAlert(rows, incidents)
+}
+
+// AlertTrafficFacts -- что тревога про VPN-туннель говорит о трафике (v0.64, B5,
+// B7). Те же строки и тот же признак, что у экрана (miniappCurrentRows,
+// miniappReserveOnlyAlert): второго определения «запасного» нет. nil -- сводки
+// политик нет или строки не прочитались: тревога тогда про трафик не утверждает.
+func AlertTrafficFacts(database *db.DB) func(userID int64, checkName string) *alerts.TrafficFacts {
+	return func(userID int64, checkName string) *alerts.TrafficFacts {
+		id, ok := strings.CutPrefix(checkName, miniappTunnelPrefix)
+		if !ok || id == "" {
+			return nil
+		}
+		rows, err := database.Events().LatestEventsByPrefixSince(userID, "", time.Now().UTC().Add(-miniappEventsWindow))
+		if err != nil {
+			return nil
+		}
+		rows = miniappCurrentRows(Deps{DB: database}, userID, rows)
+		var tunnels []miniappTunnel
+		var hd miniappHydraDetails
+		for _, row := range rows {
+			if tu, ok := miniappTunnelFromEvent(row); ok {
+				tunnels = append(tunnels, tu)
+			}
+			if row.CheckName == "hydraroute" && json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil {
+				return nil
+			}
+		}
+		if miniappReserveOnlyAlert(rows, []dashboardIncident{{CheckName: checkName}}) {
+			// Несущий сам лежит -- сказать «трафик идёт через него» нельзя.
+			if carrier, _ := miniappPolicyCarrier(tunnels, hd); carrier != nil && carrier.Status == "ok" {
+				return &alerts.TrafficFacts{Via: orTunnelID(carrier)}
+			}
+			return nil
+		}
+		for i := range hd.Policies {
+			p := &hd.Policies[i]
+			if p.ActiveTunnelID != id || miniappPolicyExecuted(p, hd) <= 0 {
+				continue
+			}
+			for _, l := range p.Links {
+				if l.Role != "fallback" || l.TunnelID == "" || l.TunnelID == id {
+					continue
+				}
+				if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.Status == "ok" {
+					return &alerts.TrafficFacts{Spare: orTunnelID(t)}
+				}
+			}
+			return &alerts.TrafficFacts{NoSpare: true}
+		}
+		return nil
+	}
+}
+
+func orTunnelID(t *miniappTunnel) string {
+	if t.Name != "" {
+		return t.Name
+	}
+	return t.TunnelID
 }
 
 // miniappReserveOnlyAlert: тревоги есть, и каждая -- по туннелю, который

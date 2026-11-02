@@ -76,6 +76,22 @@ func AutoRepairHint(database *db.DB) func(userID int64, checkName string) bool {
 	}
 }
 
+// LinkRepairLineDead -- звено мертво по своей последней проверке (Д3, v0.64):
+// последняя строка tunnel_<id> в базе -- fail. Ошибка чтения -- «не знаем», и
+// такой резерв не вычёркивается: не увести трафик с мёртвого хуже.
+func LinkRepairLineDead(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID string) bool {
+	return func(routerID int64, tunnelID string) bool {
+		row, ok, err := database.Events().LatestEvent(routerID, miniappTunnelPrefix+tunnelID)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("linkrepair: проверка звена не прочиталась", "router_id", routerID, "tunnel_id", tunnelID, "err", err)
+			}
+			return false
+		}
+		return ok && row.Status == "fail"
+	}
+}
+
 // LinkRepairSettings -- настройка автопочинки туннеля глазами движка. Ошибка
 // чтения -- «выключено»: починка без явного согласия хуже, чем её отсутствие.
 func LinkRepairSettings(database *db.DB, logger *slog.Logger) func(routerID int64, tunnelID string) (linkrepair.Setting, bool) {

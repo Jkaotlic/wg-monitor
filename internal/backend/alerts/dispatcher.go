@@ -66,6 +66,8 @@ type Dispatcher struct {
 	autoHint func(userID int64, checkName string) bool
 	covered  func(userID int64, checkName string) bool
 	onHard   func(userID int64, checkName string)
+	// trafficFacts -- где сейчас идёт трафик (см. TrafficFacts); nil -- не знаем.
+	trafficFacts func(userID int64, checkName string) *TrafficFacts
 
 	// lastHard -- текст и кнопки последней HARD-тревоги по проверке. Только
 	// в памяти: правка Telegram заменяет текст целиком, и починке, чтобы
@@ -96,6 +98,12 @@ func (di *Dispatcher) SetAutoRepairHint(fn func(userID int64, checkName string) 
 // одноразовый: ответ true гасит метку. Вызывается до первой тревоги.
 func (di *Dispatcher) SetCovered(fn func(userID int64, checkName string) bool) {
 	di.covered = fn
+}
+
+// SetTrafficFacts -- где сейчас идёт трафик и есть ли запасной (backend, по
+// последним проверкам): тревога и экран судят об этом одной функцией.
+func (di *Dispatcher) SetTrafficFacts(fn func(userID int64, checkName string) *TrafficFacts) {
+	di.trafficFacts = fn
 }
 
 // SetHardHook -- что сделать при каждой новой HARD-тревоге до её отправки
@@ -350,6 +358,14 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 	if di.autoHint != nil {
 		args.AutoRepair = di.autoHint(userID, checkName)
 	}
+	if di.trafficFacts != nil && strings.HasPrefix(checkName, "tunnel_") {
+		args.Traffic = di.trafficFacts(userID, checkName)
+	}
+	// Сырая причина -- оператору в журнал (v0.64, B6): владельцу в тревоге адрес и
+	// текст ошибки ни о чём не говорят.
+	if raw := strOrEmpty(check.Details, "error"); raw != "" {
+		slog.Info("тревога: причина проверки", "nickname", nickname, "check", checkName, "error", raw)
+	}
 	if u, err := di.d.Users().GetByID(userID); err == nil {
 		args.IsMobile = u.IsMobile()
 	} else {
@@ -471,6 +487,9 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 		if r.CheckName == excludeCheck {
 			continue
 		}
+		// Status -- вердикт проверки соседа, а не его ping-check: на роутере с
+		// выключенным ping-check тот всегда "disabled", и живой резерв терял бы
+		// статус живого (контур S1).
 		ns := NeighborSummary{CheckName: r.CheckName, Status: r.Status}
 		if r.DetailsJSON != "" && r.DetailsJSON != "null" {
 			var details map[string]any
@@ -478,9 +497,6 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 				ns.TunnelName, _ = details["tunnel_name"].(string)
 				ns.NDMSName, _ = details["ndms_name"].(string)
 				ns.Interface, _ = details["interface"].(string)
-				if pcStatus, ok := details["ping_check_status"].(string); ok && pcStatus != "" {
-					ns.Status = pcStatus
-				}
 				if v, ok := details["handshake_age_sec"].(float64); ok {
 					ns.HandshakeAge = int(v)
 				}

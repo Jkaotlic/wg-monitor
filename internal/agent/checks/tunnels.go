@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -272,6 +273,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		return nil
 	}
 	defaultIface := resolveDefaultIface(tunnels, activeDefaultID, graced)
+	policyCarrier := newPolicyCarrierLookup(ctx, c, tunnels)
 	out := map[string]routeCounts{}
 	bump := func(iface string, dns, hr, stat int) {
 		if iface == "" {
@@ -302,9 +304,16 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 			bump(firstNonEmptyTunnel(r.Routes[0].Interface, r.Routes[0].TunnelID), 1, hr, 0)
 			continue
 		}
-		// Fall-through HR-Neo rule → follows global policy → default tunnel.
-		if isHR && r.HRPolicyName != "" && defaultIface != "" {
-			bump(defaultIface, 1, 1, 0)
+		// Fall-through HR-Neo rule → follows its policy: credited to the chain's
+		// live link. Первый заявивший основной маршрут тут не ответ: после увода
+		// трафика правила оставались бы за мёртвым туннелем, и экран звал бы живой
+		// обход аварией (контур S13). Цепочку не узнать -- прежнее правило.
+		if isHR && r.HRPolicyName != "" {
+			if iface, ok := policyCarrier(r.HRPolicyName); ok {
+				bump(iface, 1, 1, 0)
+			} else if defaultIface != "" {
+				bump(defaultIface, 1, 1, 0)
+			}
 		}
 	}
 	for _, r := range statics {
@@ -314,6 +323,61 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		bump(r.TunnelID, 0, 0, 1)
 	}
 	return out
+}
+
+// newPolicyCarrierLookup -- интерфейс VPN-туннеля, на котором сейчас держится
+// политика: первое поднятое звено её цепочки. Политики читаются лениво -- только
+// когда встретилось правило на политике, и один раз на обход. ok=false -- не знаем:
+// политики не прочитались, такой нет, живого звена нет. Живое звено мимо VPN (WAN)
+// -- ok с пустым интерфейсом: правила ведут не в туннель, приписывать некому.
+func newPolicyCarrierLookup(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel) func(policy string) (string, bool) {
+	var (
+		loaded   bool
+		policies []awgmgr.AccessPolicy
+		up       map[string]bool
+	)
+	return func(policy string) (string, bool) {
+		if !loaded {
+			loaded = true
+			ps, err := c.AccessPolicies(ctx)
+			if err != nil {
+				return "", false
+			}
+			ifaces, err := c.PolicyInterfaces(ctx)
+			if err != nil {
+				return "", false
+			}
+			policies, up = ps, make(map[string]bool, len(ifaces))
+			for _, i := range ifaces {
+				up[strings.ToLower(strings.TrimSpace(i.Name))] = i.Up
+			}
+		}
+		for _, p := range policies {
+			if !strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(policy)) {
+				continue
+			}
+			links := append([]awgmgr.AccessPolicyInterface(nil), p.Interfaces...)
+			sort.SliceStable(links, func(i, j int) bool { return links[i].Order < links[j].Order })
+			for _, l := range links {
+				if !up[strings.ToLower(strings.TrimSpace(l.Name))] {
+					continue
+				}
+				return policyLinkIface(l, tunnels), true
+			}
+		}
+		return "", false
+	}
+}
+
+// policyLinkIface -- интерфейс туннеля звена: у nativewg звено называется
+// NDMS-именем, у opkg-туннеля NDMS-имени нет, и связь идёт по интерфейсу или метке.
+func policyLinkIface(l awgmgr.AccessPolicyInterface, tunnels []awgmgr.Tunnel) string {
+	for _, tu := range tunnels {
+		if strings.EqualFold(l.Name, tu.NDMSName) || strings.EqualFold(l.Name, tu.InterfaceName) || (l.Label != "" && l.Label == tu.Name) {
+			return tu.InterfaceName
+		}
+	}
+	return ""
 }
 
 // resolveDefaultIface returns the interface of the tunnel awg-manager actually

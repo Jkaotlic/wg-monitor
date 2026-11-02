@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +104,12 @@ func (c *scriptCommander) AwaitResult(_ context.Context, _ int64, id string, _ t
 		out = exitDirect
 	}
 	return &wire.CommandResult{ID: id, Status: "ok", Output: out}, true
+}
+
+func (c *scriptCommander) countOf(action string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.counts[action]
 }
 
 func (c *scriptCommander) snapshotLocked() string {
@@ -296,6 +303,7 @@ func (t recThread) NeedHuman(_ context.Context, text, action string) {
 	t.r.add(recCall{"need", text, action})
 }
 func (t recThread) NotStarted(_ context.Context, why string) { t.r.add(recCall{"notstarted", why, ""}) }
+func (t recThread) Moved(_ context.Context, text string)     { t.r.add(recCall{"moved", text, ""}) }
 
 // final ждёт итогового вызова нити (done или need): движок закрывает
 // задание и говорит с людьми не одним действием.
@@ -405,6 +413,7 @@ func newLadder(t *testing.T, set *Setting) *ladderEnv {
 		Report:    e.rep,
 		BaseCtx:   context.Background(),
 		AwaitStep: time.Second,
+		Pending:   &atomic.Int64{},
 	}
 	return e
 }
@@ -1458,19 +1467,155 @@ func TestLadder_PreExitProbeAgentHandshakeOnly(t *testing.T) {
 
 // ---- Start ----
 
-func TestStart_AutoOffSilent(t *testing.T) {
+// waitUnlocked ждёт конца фоновой работы движка: замок роутера отпущен.
+func (e *ladderEnv) waitUnlocked(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for e.d.Pending != nil && e.d.Pending.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("увод не закончился")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for !e.d.Store.TryLock("роутер") {
+		if time.Now().After(deadline) {
+			t.Fatal("движок не отпустил замок")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	e.d.Store.Unlock("роутер")
+}
+
+func (e *ladderEnv) moved(t *testing.T) string {
+	t.Helper()
+	raw, err := e.d.Attempts.KV.Get(movedKey("роутер", "tunnel_awg12"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// Д1: автопочинка выключена, а первое звено упало при живом резерве -- увод, и
+// больше ни шага; лесенка и своё задание ему не положены.
+func TestStart_AutoOffMovesOnly(t *testing.T) {
 	for _, set := range []*Setting{nil, {Enabled: false, Provider: "amnezia", Option: "nl"}} {
 		e := newLadder(t, set)
 		_, err := e.d.Start(ladderReq())
 		if !errors.Is(err, ErrAutoDisabled) {
 			t.Fatalf("ждали ErrAutoDisabled, получили %v", err)
 		}
-		if e.cmd.count() != 0 {
-			t.Fatalf("роутеру ушло %d команд", e.cmd.count())
+		e.waitUnlocked(t)
+		if e.cmd.countOf("route_policy_promote") != 1 || e.cmd.countOf("tunnel_restart") != 0 || e.cmd.countOf("tunnel_import") != 0 {
+			t.Fatalf("ждали только увод, ушло %+v", e.cmd.sent)
 		}
-		if begins, _ := e.rep.snapshot(); len(begins) != 0 {
-			t.Fatalf("выключенная автопочинка заговорила: %v", begins)
+		_, calls := e.rep.snapshot()
+		if len(calls) != 1 || calls[0].Kind != "moved" || !strings.Contains(calls[0].Text, "«Работа»") {
+			t.Fatalf("про увод не сказано: %+v", calls)
 		}
+		if e.moved(t) == "" {
+			t.Fatal("записи об уводе нет")
+		}
+	}
+}
+
+// Упал резерв или запасного нет: движок молчит, попытка не тратится.
+func TestStart_AutoOffSilentWhenNothingToMove(t *testing.T) {
+	for name, tune := range map[string]func(*ladderEnv){
+		"резерв":     func(e *ladderEnv) { e.cmd.reserve = true },
+		"нет живого": func(e *ladderEnv) { e.cmd.noBackup = true },
+		"живой мёртв по пробе": func(e *ladderEnv) {
+			e.d.LineDead = func(_ int64, id string) bool { return id == "awg10" }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newLadder(t, nil)
+			tune(e)
+			_, _ = e.d.Start(ladderReq())
+			e.waitUnlocked(t)
+			if e.cmd.countOf("route_policy_promote") != 0 {
+				t.Fatalf("уводили: %+v", e.cmd.sent)
+			}
+			if begins, _ := e.rep.snapshot(); len(begins) != 0 {
+				t.Fatalf("выключенная автопочинка заговорила: %v", begins)
+			}
+			if over, n, _ := e.d.Attempts.overLimit("роутер", "tunnel_awg12"); over || n != 0 {
+				t.Fatalf("попытка потрачена: %d", n)
+			}
+		})
+	}
+}
+
+// Запись -- до команды: падение между ними не потеряет возврат.
+func TestMoveOnly_RecordBeforePromote(t *testing.T) {
+	e := newLadder(t, nil)
+	var atPromote string
+	e.cmd.on = map[string]func(*scriptCommander, int){"route_policy_promote": func(*scriptCommander, int) {
+		atPromote, _ = e.d.Attempts.KV.Get(movedKey("роутер", "tunnel_awg12"))
+	}}
+	_, _ = e.d.Start(ladderReq())
+	e.waitUnlocked(t)
+	if atPromote == "" {
+		t.Fatal("в момент команды записи об уводе нет")
+	}
+}
+
+// Запись не легла -- не уводим: увод без записи безвозвратен.
+func TestMoveOnly_RecordWriteFailureNoPromote(t *testing.T) {
+	e := newLadder(t, nil)
+	e.d.Attempts = Attempts{KV: &setFailKV{safeKV{m: map[string]string{}}}}
+	_, _ = e.d.Start(ladderReq())
+	e.waitUnlocked(t)
+	if e.cmd.countOf("route_policy_promote") != 0 {
+		t.Fatalf("увод без записи: %+v", e.cmd.sent)
+	}
+	_, calls := e.rep.snapshot()
+	if len(calls) != 1 || calls[0].Kind != "need" || !strings.Contains(calls[0].Text, "не увёл") {
+		t.Fatalf("человеку не сказано: %+v", calls)
+	}
+}
+
+// Потолок: возврат ждёт, пока окно отпустит, запись не снимается, и сказано один раз.
+func TestReturnMoved_HeldByCeilingThenReturns(t *testing.T) {
+	e := newLadder(t, nil)
+	now := time.Now()
+	e.d.Attempts.Now = func() time.Time { return now }
+	e.cmd.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[{"name":"Набор","interfaces":[{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","available":true},{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","available":true}]}]}`
+	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Набор", Backup: "awg10", BackupName: "Работа"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for range attemptLimit {
+		_ = e.d.Attempts.Started("роутер", "tunnel_awg12")
+	}
+	for range 3 {
+		e.d.ReturnMoved(ladderReq())
+		e.waitUnlocked(t)
+	}
+	if e.cmd.countOf("route_policy_promote") != 0 || e.moved(t) == "" {
+		t.Fatalf("потолок не держит: %+v, запись %q", e.cmd.sent, e.moved(t))
+	}
+	_, calls := e.rep.snapshot()
+	if len(calls) != 1 || !strings.Contains(calls[0].Text, "Трафик оставил на запасном") {
+		t.Fatalf("про удержание сказано не один раз: %+v", calls)
+	}
+	now = now.Add(attemptWindow + time.Minute)
+	e.d.ReturnMoved(ladderReq())
+	e.waitUnlocked(t)
+	if e.cmd.countOf("route_policy_promote") != 1 || e.moved(t) != "" {
+		t.Fatalf("окно отпустило, а возврата нет: %+v, запись %q", e.cmd.sent, e.moved(t))
+	}
+}
+
+// Д3: мёртвое по своей проверке звено резервом не считается.
+func TestPickBackup_SkipsDead(t *testing.T) {
+	pol := wire.RoutePolicySummary{Interfaces: []wire.RoutePolicyInterface{
+		{TunnelID: "awg12", Available: true}, {TunnelID: "awg10", Available: true}, {TunnelID: "awg11", Available: true},
+	}}
+	got, ok := pickBackup(pol, "awg12", func(id string) bool { return id == "awg10" })
+	if !ok || got != "awg11" {
+		t.Fatalf("резерв %q %v", got, ok)
+	}
+	if _, ok := pickBackup(pol, "awg12", func(string) bool { return true }); ok {
+		t.Fatal("все мертвы, а резерв нашёлся")
 	}
 }
 
@@ -1623,6 +1768,7 @@ func (b *blockingReporter) Begin(context.Context, int64, string) Thread { return
 func (b *blockingReporter) Progress(context.Context, string)            {}
 func (b *blockingReporter) Done(context.Context, string)                {}
 func (b *blockingReporter) NeedHuman(context.Context, string, string)   {}
+func (b *blockingReporter) Moved(context.Context, string)               {}
 func (b *blockingReporter) NotStarted(ctx context.Context, _ string) {
 	dl, _ := ctx.Deadline()
 	b.deadline <- dl
@@ -1720,7 +1866,7 @@ func TestPickBackup(t *testing.T) {
 			{Bind: "nwg2", TunnelID: "awg10", Role: "fallback", Available: true, Order: 4},
 		},
 	}
-	got, ok := pickBackup(pol, "awg12")
+	got, ok := pickBackup(pol, "awg12", nil)
 	if !ok {
 		t.Fatal("резерв обязан найтись")
 	}
@@ -1735,7 +1881,7 @@ func TestPickBackup_NoneWhenAlone(t *testing.T) {
 			{Bind: "nwg1", TunnelID: "awg12", Role: "active", Available: false},
 		},
 	}
-	if _, ok := pickBackup(pol, "awg12"); ok {
+	if _, ok := pickBackup(pol, "awg12", nil); ok {
 		t.Fatal("одна линия -- резерва нет, и это нормальный случай")
 	}
 }

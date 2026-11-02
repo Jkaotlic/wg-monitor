@@ -1351,7 +1351,17 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				}
 			}
-			if deliver != nil || startRepair != nil {
+			// Д2 (v0.64): VPN-туннель жив, а трафик с него уведён -- вернуть. Не
+			// только на самом Recovery: занятый замок, молчание агента и рестарт
+			// бэкенда откладывают возврат на следующий отчёт, а не теряют его.
+			var returnTraffic func()
+			if c.Status == "ok" && tr.Next.CurrentStatus == "ok" && (tr.Kind == state.Recovery || tr.Kind == state.Noop) &&
+				d.LinkRepair != nil && d.LinkRepair.HasMove(nick, c.Name) {
+				tunnelName, _ := c.Details["tunnel_name"].(string)
+				backReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
+				returnTraffic = func() { d.LinkRepair.ReturnMoved(backReq) }
+			}
+			if deliver != nil || startRepair != nil || returnTraffic != nil {
 				checkName, kind := c.Name, tr.Kind
 				spawnAlertDelivery(d, "dispatch", uid, checkName, func(ctx context.Context) {
 					if deliver != nil {
@@ -1369,6 +1379,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 							return
 						}
 						startRepair()
+					}
+					// Сперва «восстановилось», потом возврат: то же правило, что у
+					// починки, и та же осторожность при остановке.
+					if returnTraffic != nil && ctx.Err() == nil && !relayDraining() {
+						returnTraffic()
 					}
 				})
 			}

@@ -418,7 +418,7 @@ func TestDispatcherSurfacesNonHealableTGError(t *testing.T) {
 
 // TestBuildNeighborSummaries: shared helper used by both dispatcher and
 // realert; covers the four interesting paths — empty, exclusion of self,
-// ping_check_status override, malformed JSON tolerated (LOGIC-08, TEST-04).
+// status stays the check verdict, malformed JSON tolerated (LOGIC-08, TEST-04).
 func TestBuildNeighborSummaries(t *testing.T) {
 	rows := []db.EventRow{
 		{CheckName: "tunnel_self", Status: "fail", DetailsJSON: `{"tunnel_name":"self"}`},
@@ -437,13 +437,23 @@ func TestBuildNeighborSummaries(t *testing.T) {
 	if got["tunnel_a"].TunnelName != "alpha" || got["tunnel_a"].HandshakeAge != 42 {
 		t.Errorf("alpha row: %+v", got["tunnel_a"])
 	}
-	// ping_check_status override: stored Status was "fail", details promoted to "dead".
-	if got["tunnel_b"].Status != "dead" {
-		t.Errorf("beta status override: %+v", got["tunnel_b"])
+	// Статус -- вердикт проверки, ping-check его не затирает (контур S1, B7).
+	if got["tunnel_b"].Status != "fail" {
+		t.Errorf("beta status: %+v", got["tunnel_b"])
 	}
 	// malformed JSON tolerated: stored Status preserved.
 	if got["tunnel_c"].Status != "ok" {
 		t.Errorf("tunnel_c with bad JSON should keep stored Status: %+v", got["tunnel_c"])
+	}
+}
+
+// На боевой форме ping-check выключен у всех: живой резерв обязан остаться живым.
+func TestBuildNeighborSummaries_PingCheckDisabledKeepsVerdict(t *testing.T) {
+	out := BuildNeighborSummaries([]db.EventRow{
+		{CheckName: "tunnel_a", Status: "ok", DetailsJSON: `{"tunnel_name":"alpha","ping_check_status":"disabled"}`},
+	}, "tunnel_self")
+	if len(out) != 1 || !isLiveStatus(out[0].Status) {
+		t.Fatalf("живой резерв потерял статус: %+v", out)
 	}
 }
 

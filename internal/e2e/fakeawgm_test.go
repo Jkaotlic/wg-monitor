@@ -62,6 +62,8 @@ type fakeAWGM struct {
 	calls         []string // журнал мутаций по порядку
 	unknown       []string // пути, которых подделка не знает
 	onRestart     func(id string)
+	permitRefused bool          // роутер отказывает в перестановке
+	permitHang    chan struct{} // перестановка висит, пока канал не закрыт
 }
 
 func newFakeAWGM(t *testing.T) *fakeAWGM {
@@ -156,6 +158,31 @@ func (f *fakeAWGM) OnRestart(fn func(id string)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.onRestart = fn
+}
+
+// RefusePermit -- роутер отвечает отказом на перестановку звеньев.
+func (f *fakeAWGM) RefusePermit(refuse bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.permitRefused = refuse
+}
+
+// HangPermit -- перестановка не отвечает, пока не вызвана возвращённая функция;
+// после неё роутер отказывает: команда так и не выполнена.
+func (f *fakeAWGM) HangPermit() (release func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch := make(chan struct{})
+	f.permitHang = ch
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.permitHang = nil
+			f.mu.Unlock()
+			close(ch)
+		})
+	}
 }
 
 // Promotions -- все принятые «сделать главным» по порядку.
@@ -257,7 +284,19 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 			out = envelope(map[string]any{"directIp": "203.0.113.10", "vpnIp": "198.51.100.50", "endpointIp": "198.51.100.60", "ipChanged": true})
 		}
 	case "POST /api/access-policies/permit":
-		status, out = f.permitLocked(r)
+		if ch := f.permitHang; ch != nil {
+			f.mu.Unlock()
+			select {
+			case <-ch:
+			case <-r.Context().Done():
+			}
+			f.mu.Lock()
+			status, out = http.StatusInternalServerError, map[string]any{"success": false, "message": "permit failed"}
+		} else if f.permitRefused {
+			status, out = http.StatusInternalServerError, map[string]any{"success": false, "message": "permit failed"}
+		} else {
+			status, out = f.permitLocked(r)
+		}
 	case "POST /api/control/restart":
 		id := r.URL.Query().Get("id")
 		f.calls = append(f.calls, "restart:"+id)
@@ -374,7 +413,8 @@ func (f *fakeAWGM) pingStatusLocked() []map[string]any {
 func (f *fakeAWGM) dnsRoutesLocked() []map[string]any {
 	out := []map[string]any{}
 	for _, p := range f.policies {
-		for _, name := range []string{"sites", "video"} {
+		for _, base := range []string{"sites", "video"} {
+			name := base + "-" + p.Name
 			out = append(out, map[string]any{
 				"id": "hr:" + name, "name": name, "domains": []string{"geosite:" + name}, "manualDomains": []string{"geosite:" + name},
 				"routes": nil, "enabled": true, "createdAt": "", "updatedAt": "", "backend": "hydraroute",

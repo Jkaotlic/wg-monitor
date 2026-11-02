@@ -984,3 +984,20 @@ func TestThread_PicksUpCardDeliveredAfterBegin(t *testing.T) {
 		t.Fatalf("правка не той карточки: %+v", tgc.edits[0])
 	}
 }
+
+// Увод без автопочинки: факт сверху, «правила не работают» из тревоги уходит
+// (уже неправда), совет остаётся, а «восстановилось» потом придёт обычным ответом.
+func TestComposeRepairMovedDropsImpact(t *testing.T) {
+	base := "🔴 [роутер]: VPN-туннель «Дача» не отвечает\nпроверка: VPN-туннель\n\n" +
+		"Что не работает:\n  • x\n\nЧто это ломает:\n  • они не работают\n\nЧто делать:\n  • Нажмите «Починить»"
+	got := composeRepair(base, phaseMoved, "Увёл трафик на запасной VPN-туннель «Работа».")
+	if !strings.HasPrefix(got, "↪️ Увёл трафик") {
+		t.Fatalf("факт не первой строкой: %q", got)
+	}
+	if strings.Contains(got, "они не работают") {
+		t.Fatalf("осталось «не работают»: %q", got)
+	}
+	if !strings.Contains(got, "Нажмите «Починить»") {
+		t.Fatalf("совет пропал: %q", got)
+	}
+}

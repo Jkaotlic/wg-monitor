@@ -83,6 +83,9 @@ type rigOpts struct {
 	AgentVersion string
 	// BareRouter -- не заводить туннели и политику: тест настроит сам.
 	BareRouter bool
+	// AwaitStep -- сколько движок ждёт ответа агента; 0 -- боевое умолчание.
+	// Для сценария «роутер не ответил»: ждать боевые минуты незачем.
+	AwaitStep time.Duration
 }
 
 // exchange считает обмены агента с бэкендом на самом HTTP-стыке: отвечает на
@@ -138,6 +141,8 @@ type rig struct {
 	loopDone   chan struct{}
 	agentAlive bool
 
+	awaitStep time.Duration
+
 	cookieMu sync.Mutex
 	cookie   *http.Cookie
 }
@@ -145,7 +150,7 @@ type rig struct {
 // newRig поднимает Telegram, awg-manager, бэкенд из настоящей связки и агента.
 func newRig(t *testing.T, opts rigOpts) *rig {
 	t.Helper()
-	r := &rig{t: t, dir: t.TempDir(), tg: newFakeTG(t), awgm: newFakeAWGM(t)}
+	r := &rig{t: t, dir: t.TempDir(), tg: newFakeTG(t), awgm: newFakeAWGM(t), awaitStep: opts.AwaitStep}
 	r.backendSrv = httptest.NewServer(http.HandlerFunc(r.serveBackend))
 	r.backendURL = r.backendSrv.URL
 	r.cfg = r.loadBackendConfig()
@@ -234,6 +239,7 @@ func (r *rig) startBackend() {
 	// движок ждёт 15 с. StartLinkRepair -- значение метода, копия движка, поэтому
 	// привязывается заново.
 	r.core.LinkRepair.Probe.HandshakeWait = 5 * time.Millisecond
+	r.core.LinkRepair.AwaitStep = r.awaitStep
 	r.core.Mux.StartLinkRepair = r.core.LinkRepair.Start
 	h := backend.NewMux(r.core.Mux)
 	r.handler.Store(&h)
@@ -373,8 +379,9 @@ func (r *rig) shutdown() {
 		r.t.Logf("экран: %s\n%s", s.RouterJSON, s.EventsJSON)
 	}
 	r.killAgent()
-	r.waitEngineIdle()
+	// Сперва отмена, потом ожидание: движок мог ждать ответа уже замолчавшего агента.
 	r.stopCtx()
+	r.waitEngineIdle()
 	r.backendSrv.CloseClientConnections()
 	backend.WaitRelayDrain()
 	r.backendSrv.Close()
@@ -441,6 +448,9 @@ func (r *rig) PostReport(rep wire.Report) {
 }
 
 func (r *rig) engineBusy() bool {
+	if r.core.LinkRepair.Pending.Load() != 0 {
+		return true
+	}
 	if !r.store.TryLock(e2eRouter) {
 		return true
 	}
@@ -656,4 +666,14 @@ func (r *rig) AgeLastSeen(d time.Duration) {
 	if _, err := r.db.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, time.Now().UTC().Add(-d), r.routerID); err != nil {
 		r.t.Fatal(err)
 	}
+}
+
+// MoveRecord -- запись об уводе в настоящей базе ("" -- записи нет).
+func (r *rig) MoveRecord(tunnelID string) string {
+	r.t.Helper()
+	raw, err := r.db.KV().Get("linkrepair:moved:" + e2eRouter + ":tunnel_" + tunnelID)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return raw
 }
