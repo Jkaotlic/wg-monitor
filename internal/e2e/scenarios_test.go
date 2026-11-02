@@ -9,6 +9,10 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
+// retryPause -- пауза движка между попытками после отказа или молчания
+// (linkrepair.moveRetryPause).
+const retryPause = 5*time.Minute + time.Second
+
 // failThreshold -- боевой порог автомата (state.fail_threshold по умолчанию):
 // столько подряд провалов до Hard.
 const failThreshold = 3
@@ -658,6 +662,7 @@ func TestMoveReturnsWhenRecoveryAlreadyPassed(t *testing.T) {
 	}
 	r.restartBackend()
 	r.awgm.RefusePermit(false)
+	r.AdvanceClock(retryPause)
 	r.Tick()
 	r.DrainCommands()
 	wantChain(t, r, standardChain...)
@@ -859,10 +864,244 @@ func TestMissedPromote(t *testing.T) {
 		r.Ticks(failThreshold)
 		r.waitEngineIdle()
 		r.settle()
-		check(t, r, "не подтвердил")
+		// Выполнил ли роутер, неизвестно: ни «увёл», ни «не увёл», и запись остаётся.
+		alerts := r.Alerts()
+		if !alertAbout(alerts, "не подтвердил") || !alertAbout(alerts, "проверяю") {
+			t.Errorf("молчание роутера названо не так: %q", alerts)
+		}
+		for _, bad := range []string{"Увёл", "не увёл", "не открывается"} {
+			if alertAbout(alerts, bad) {
+				t.Errorf("утверждается %q, а неизвестно: %q", bad, alerts)
+			}
+		}
+		if r.MoveRecord(carrierID) == "" {
+			t.Fatal("молчание посчитано отказом: запись снята")
+		}
 		release()
 		r.DrainCommands()
+		// Снимок: первым так и стоит мёртвый -- команды не было, пробуем снова.
+		wantNoPromotions(t, r)
+		r.AdvanceClock(retryPause)
+		r.Tick()
+		r.DrainCommands()
+		wantCalls(t, r, "promote:"+backup1ID)
+		if !alertAbout(r.Alerts(), "Увёл трафик") {
+			t.Errorf("про состоявшийся увод не сказано: %q", r.Alerts())
+		}
 	})
+}
+
+// S30. Команда выполнена, ответ потерян. Цепочка уже на резерве: следующий отчёт
+// это видит, называет правду, и возврат потом случается.
+func TestPromoteDoneAnswerLost(t *testing.T) {
+	finish := func(t *testing.T, r *rig) {
+		t.Helper()
+		heal(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		wantChain(t, r, standardChain...)
+		if got := r.MoveRecord(carrierID); got != "" {
+			t.Errorf("запись осталась: %q", got)
+		}
+	}
+	t.Run("ответ агента не дошёл до бэкенда", func(t *testing.T) {
+		r := newRig(t, rigOpts{AwaitStep: 700 * time.Millisecond})
+		r.Tick()
+		r.awgm.OnPermit(func() { r.dropResults.Store(true) })
+		kill(r, carrierID)
+		r.Ticks(failThreshold)
+		r.waitEngineIdle()
+		r.settle()
+		r.awgm.OnPermit(nil)
+		wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
+		if r.MoveRecord(carrierID) == "" {
+			t.Fatal("команда выполнена, а записи нет: возврат потерян")
+		}
+		if alertAbout(r.Alerts(), "не увёл") || alertAbout(r.Alerts(), "не открывается") {
+			t.Errorf("сказано «не увёл», а трафик уведён: %q", r.Alerts())
+		}
+		r.dropResults.Store(false)
+		r.Tick() // снимок в самом отчёте решает: первым стоит резерв
+		r.DrainCommands()
+		if !alertAbout(r.Alerts(), "Увёл трафик на запасной VPN-туннель «vpn-backup-one»") {
+			t.Errorf("правда про увод не сказана: %q", r.Alerts())
+		}
+		wantCalls(t, r, "promote:"+backup1ID)
+		finish(t, r)
+	})
+	t.Run("ответ роутера не дошёл до агента", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Tick()
+		r.awgm.LosePermitAnswer(true)
+		kill(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		r.awgm.LosePermitAnswer(false)
+		wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
+		if !alertAbout(r.Alerts(), "Увёл трафик") {
+			t.Errorf("агент не сверил постусловие: %q", r.Alerts())
+		}
+		finish(t, r)
+	})
+}
+
+// S31. Опрос: пока запись ждёт в каскаде, агенту не уходит ни одной команды.
+func TestWaitingCascadeSendsNoCommands(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	deadCarrierMoved(t, r)
+	r.Tick()
+	kill(r, backup1ID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	heal(r, carrierID)
+	r.Ticks(2)
+	r.DrainCommands()
+	before := r.exch.dispatched.Load()
+	r.Ticks(5)
+	r.DrainCommands()
+	if got := r.exch.dispatched.Load(); got != before {
+		t.Errorf("ждущая запись опрашивает роутер: %d команд за 5 отчётов", got-before)
+	}
+	if r.MoveRecord(carrierID) == "" {
+		t.Error("запись потеряна")
+	}
+}
+
+// S32. Отказ на каждый отчёт -- не больше одной команды за паузу.
+func TestRefusalRetriesAtMostOncePerPause(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	r.awgm.RefusePermit(true)
+	kill(r, carrierID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	permits := func() int { return r.awgm.Reads("POST /api/access-policies/permit") }
+	if got := permits(); got != 1 {
+		t.Fatalf("на Hard одна команда, ушло %d", got)
+	}
+	cmds := r.exch.dispatched.Load()
+	r.Ticks(5)
+	r.DrainCommands()
+	if got := permits(); got != 1 {
+		t.Errorf("в паузу ушло ещё %d команд", got-1)
+	}
+	if got := r.exch.dispatched.Load(); got != cmds {
+		t.Errorf("в паузу агенту ушло ещё %d команд", got-cmds)
+	}
+	r.AdvanceClock(retryPause)
+	r.Ticks(5)
+	r.DrainCommands()
+	if got := permits(); got != 2 {
+		t.Errorf("за паузу -- одна попытка, всего %d", got)
+	}
+}
+
+// S33. Отказ и молчание чередуются: человеку одно сообщение на эпизод.
+func TestAlternatingFailuresSayOnce(t *testing.T) {
+	r := newRig(t, rigOpts{AwaitStep: 700 * time.Millisecond})
+	r.Tick()
+	r.awgm.RefusePermit(true)
+	kill(r, carrierID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	log := len(r.tg.Log())
+	for i := range 4 {
+		r.AdvanceClock(retryPause)
+		if i%2 == 0 {
+			r.awgm.RefusePermit(false)
+			release := r.awgm.HangPermit()
+			r.Tick()
+			r.waitEngineIdle()
+			release()
+			r.DrainCommands()
+		} else {
+			r.awgm.RefusePermit(true)
+			r.Tick()
+			r.DrainCommands()
+		}
+	}
+	if got := r.tg.Log(); len(got) != log {
+		t.Errorf("чередование шлёт новое: было %d, стало %d: %q", log, len(got), got[log:])
+	}
+}
+
+// S34. Частичный увод: одна политика ушла, другая нет. «Не увёл, не открывается»
+// неправда, ни сразу, ни на повторе; когда отказ снят, вторая тоже уходит.
+func TestPartialMoveIsNotCalledFailure(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.awgm.SetPolicy("Work", "Wireguard2", "OpkgTun11", "OpkgTun10")
+	r.Tick()
+	r.awgm.RefusePolicy("Work", true)
+	kill(r, carrierID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
+	check := func() {
+		t.Helper()
+		for _, a := range r.tg.Log() {
+			if strings.Contains(a, "не увёл") || strings.Contains(a, "Заблокированное сейчас не открывается") {
+				t.Errorf("часть ушла, а сказано про провал: %q", a)
+			}
+		}
+	}
+	check()
+	if !alertAbout(r.Alerts(), "Увёл трафик на запасной VPN-туннель «vpn-backup-one»") || !alertAbout(r.Alerts(), "не дал увести") {
+		t.Errorf("частичный увод назван неверно: %q", r.Alerts())
+	}
+	r.AdvanceClock(retryPause)
+	r.Tick()
+	r.DrainCommands()
+	check()
+	r.awgm.RefusePolicy("Work", false)
+	r.AdvanceClock(retryPause)
+	r.Tick()
+	r.DrainCommands()
+	check()
+	if got := r.awgm.PolicyLinks("Work"); !slices.Equal(got, []string{"OpkgTun11", "Wireguard2", "OpkgTun10"}) {
+		t.Fatalf("вторая политика не ушла: %v", got)
+	}
+	heal(r, carrierID)
+	r.Ticks(2)
+	r.DrainCommands()
+	wantChain(t, r, standardChain...)
+	if got := r.awgm.PolicyLinks("Work"); !slices.Equal(got, []string{"Wireguard2", "OpkgTun11", "OpkgTun10"}) {
+		t.Fatalf("вторая политика не вернулась: %v", got)
+	}
+}
+
+// S36. Увод мимо мёртвого резерва: [A,B,C] -> [C,A,B]. Возврат восстанавливает
+// исходный порядок целиком, минимальным числом перестановок.
+func TestReturnRestoresFullOrder(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	kill(r, carrierID)
+	kill(r, backup1ID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	wantCalls(t, r, "promote:"+backup2ID)
+	wantChain(t, r, "OpkgTun11", "Wireguard2", "OpkgTun10")
+	heal(r, carrierID)
+	heal(r, backup1ID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	wantChain(t, r, standardChain...)
+	wantCalls(t, r, "promote:"+backup2ID, "promote:"+backup1ID, "promote:"+carrierID)
+}
+
+// S36б. После увода человек переставил запасные: порядок нашими уводами не
+// объяснить, это его решение, ничего не трогаем.
+func TestReturnLeavesHumanReserveOrder(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	deadCarrierMoved(t, r)
+	r.awgm.SetPolicy(policyHR, "OpkgTun10", "OpkgTun11", "Wireguard2")
+	heal(r, carrierID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	wantCalls(t, r, "promote:"+backup1ID)
+	wantChain(t, r, "OpkgTun10", "OpkgTun11", "Wireguard2")
+	if got := r.MoveRecord(carrierID); got != "" {
+		t.Errorf("запись не снята: %q", got)
+	}
 }
 
 // S22. Туннель первым звеном в двух политиках: уводятся обе, возврат обеих. В
@@ -920,12 +1159,30 @@ func TestReturnWaitsForCompleteSnapshot(t *testing.T) {
 				t.Fatal("снимок неполный, а запись снята: возврат потерян")
 			}
 			r.awgm.FailPath(path, false)
+			r.AdvanceClock(retryPause)
 			r.Tick()
 			r.DrainCommands()
 			wantCalls(t, r, "promote:"+backup1ID, "promote:"+carrierID)
 			wantChain(t, r, standardChain...)
 		})
 	}
+	t.Run("сборка без политик (404)", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		deadCarrierMoved(t, r)
+		r.awgm.MissingPath("GET /api/routing/access-policies", true)
+		heal(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		wantCalls(t, r, "promote:"+backup1ID)
+		if r.MoveRecord(carrierID) == "" {
+			t.Fatal("404 на политики принят за «политику удалили»")
+		}
+		r.awgm.MissingPath("GET /api/routing/access-policies", false)
+		r.AdvanceClock(retryPause)
+		r.Tick()
+		r.DrainCommands()
+		wantChain(t, r, standardChain...)
+	})
 	t.Run("политику удалили", func(t *testing.T) {
 		r := newRig(t, rigOpts{})
 		r.awgm.SetPolicy("Other", "OpkgTun11")
@@ -952,6 +1209,7 @@ func TestRefusedReturnDoesNotBurnCeiling(t *testing.T) {
 	r.DrainCommands()
 	wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
 	r.awgm.RefusePermit(false)
+	r.AdvanceClock(retryPause)
 	r.Tick()
 	r.DrainCommands()
 	wantChain(t, r, standardChain...)
@@ -975,6 +1233,14 @@ func TestMoveRetriedAfterNoSnapshot(t *testing.T) {
 	r.DrainCommands()
 	wantCalls(t, r)
 	r.awgm.FailPath("GET /api/system/hydraroute-status", false)
+	// В паузу роутер не спрашиваем: снимка не было минуту назад.
+	cmds := r.exch.dispatched.Load()
+	r.Ticks(2)
+	r.DrainCommands()
+	if got := r.exch.dispatched.Load(); got != cmds {
+		t.Errorf("в паузу ушло %d команд", got-cmds)
+	}
+	r.AdvanceClock(retryPause)
 	r.Tick()
 	r.DrainCommands()
 	wantCalls(t, r, "promote:"+backup1ID)
@@ -1039,6 +1305,7 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 		r.Ticks(failThreshold)
 		r.DrainCommands()
 		log, tries := len(r.tg.Log()), r.awgm.Reads("POST /api/access-policies/permit")
+		r.AdvanceClock(retryPause)
 		r.Ticks(3)
 		r.DrainCommands()
 		if got := len(r.tg.Log()); got != log {
@@ -1048,6 +1315,7 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 			t.Errorf("увод не пробуется снова: было %d, стало %d", tries, got)
 		}
 		r.awgm.RefusePermit(false)
+		r.AdvanceClock(retryPause)
 		r.Tick()
 		r.DrainCommands()
 		wantCalls(t, r, "promote:"+backup1ID)
@@ -1064,6 +1332,7 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 		r.Ticks(failThreshold)
 		r.DrainCommands()
 		log, before := len(r.tg.Log()), r.exch.dispatched.Load()
+		r.AdvanceClock(retryPause)
 		r.Ticks(3)
 		r.DrainCommands()
 		if got := r.exch.dispatched.Load(); got != before {
@@ -1094,6 +1363,7 @@ func TestBackendRestartRightAfterHard(t *testing.T) {
 	wantNoPromotions(t, r)
 	r.restartBackend()
 	release()
+	r.AdvanceClock(retryPause)
 	r.Tick()
 	r.DrainCommands()
 	wantCalls(t, r, "promote:"+backup1ID)
@@ -1117,6 +1387,7 @@ func TestRetryRespectsHumanReorder(t *testing.T) {
 	r.DrainCommands()
 	r.awgm.FailPath("GET /api/system/hydraroute-status", false)
 	r.awgm.SetPolicy(policyHR, "OpkgTun11", "Wireguard2", "OpkgTun10")
+	r.AdvanceClock(retryPause)
 	before := r.exch.dispatched.Load()
 	r.Ticks(3)
 	r.DrainCommands()
@@ -1168,7 +1439,8 @@ func TestCascadeRestoresOriginalOrder(t *testing.T) {
 		r := setup(t)
 		heal(r, backup1ID)
 		ticks(r, failThreshold)
-		wantChain(t, r, "OpkgTun10", "OpkgTun11", "Wireguard2")
+		// Запись B знает порядок на момент своего увода -- до него и восстанавливает.
+		wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
 		heal(r, carrierID)
 		ticks(r, failThreshold)
 		wantChain(t, r, standardChain...)

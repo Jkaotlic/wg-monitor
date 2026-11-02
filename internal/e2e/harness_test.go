@@ -142,6 +142,11 @@ type rig struct {
 	agentAlive bool
 
 	awaitStep time.Duration
+	// clockShift -- на сколько часы движка ушли вперёд: паузу между попытками
+	// контур проходит без сна.
+	clockShift atomic.Int64
+	// dropResults -- ответы агента на команды не доходят до бэкенда.
+	dropResults atomic.Bool
 
 	cookieMu sync.Mutex
 	cookie   *http.Cookie
@@ -240,6 +245,7 @@ func (r *rig) startBackend() {
 	// привязывается заново.
 	r.core.LinkRepair.Probe.HandshakeWait = 5 * time.Millisecond
 	r.core.LinkRepair.AwaitStep = r.awaitStep
+	r.core.LinkRepair.Now = func() time.Time { return time.Now().Add(time.Duration(r.clockShift.Load())) }
 	r.core.Mux.StartLinkRepair = r.core.LinkRepair.Start
 	h := backend.NewMux(r.core.Mux)
 	r.handler.Store(&h)
@@ -248,6 +254,10 @@ func (r *rig) startBackend() {
 
 // serveBackend -- единая точка входа на все перезапуски; считает обмены.
 func (r *rig) serveBackend(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodPost && req.URL.Path == "/v1/cmd/result" && r.dropResults.Load() {
+		http.Error(w, "связь оборвалась", http.StatusBadGateway)
+		return
+	}
 	rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 	(*r.handler.Load()).ServeHTTP(rec, req)
 	switch {
@@ -452,11 +462,7 @@ func (r *rig) engineBusy() bool {
 	if r.core.LinkRepair.Moves.Busy() {
 		return true
 	}
-	if !r.store.TryLock(e2eRouter) {
-		return true
-	}
-	r.store.Unlock(e2eRouter)
-	return false
+	return r.store.Locked(e2eRouter)
 }
 
 func (r *rig) waitEngineIdle() {
@@ -668,6 +674,9 @@ func (r *rig) AgeLastSeen(d time.Duration) {
 		r.t.Fatal(err)
 	}
 }
+
+// AdvanceClock двигает часы движка: пауза между попытками прошла.
+func (r *rig) AdvanceClock(d time.Duration) { r.clockShift.Add(int64(d)) }
 
 // MoveRecord -- запись об уводе в настоящей базе ("" -- записи нет).
 func (r *rig) MoveRecord(tunnelID string) string {

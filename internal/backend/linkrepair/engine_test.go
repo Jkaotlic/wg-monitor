@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,12 @@ func (c *scriptCommander) AwaitResult(_ context.Context, _ int64, id string, _ t
 		out = exitDirect
 	}
 	return &wire.CommandResult{ID: id, Status: "ok", Output: out}, true
+}
+
+func (c *scriptCommander) setReserve(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reserve = v
 }
 
 func (c *scriptCommander) countOf(action string) int {
@@ -1578,8 +1585,9 @@ func TestReturnMoved_HeldByCeilingThenReturns(t *testing.T) {
 	e := newLadder(t, nil)
 	now := time.Now()
 	e.d.Attempts.Now = func() time.Time { return now }
-	e.cmd.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[{"name":"Набор","interfaces":[{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","available":true},{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","available":true}]}]}`
-	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Набор", Backup: "awg10", BackupName: "Работа"}}}); err != nil {
+	e.cmd.snapshot = `{"policy_model":true,"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[{"name":"Набор","interfaces":[{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","available":true},{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","available":true}]}]}`
+	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Набор", Backup: "awg10", BackupName: "Работа",
+		Origin: []string{"awg12", "awg10"}, Expect: []string{"awg10", "awg12"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	for range attemptLimit {
@@ -1621,6 +1629,80 @@ func TestMoveOnly_CancelKeepsRecord(t *testing.T) {
 	}
 	if _, calls := e.rep.snapshot(); len(calls) != 0 {
 		t.Fatalf("при остановке сказано человеку: %+v", calls)
+	}
+}
+
+// Замок пришлось ждать: решение принимается по свежему снимку (S35).
+func TestMoveOnly_RereadsSnapshotAfterLockWait(t *testing.T) {
+	e := newLadder(t, nil)
+	if !e.d.Store.TryLock("роутер") {
+		t.Fatal("замок занят")
+	}
+	_, _ = e.d.Start(ladderReq())
+	deadline := time.Now().Add(5 * time.Second)
+	for e.cmd.countOf("route_status") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("снимок не запрошен")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Пока увод ждал замок, упавший перестал быть первым звеном.
+	e.cmd.setReserve(true)
+	e.d.Store.Unlock("роутер")
+	e.waitUnlocked(t)
+	if e.cmd.countOf("route_policy_promote") != 0 {
+		t.Fatalf("увод по устаревшему снимку: %+v", e.cmd.sent)
+	}
+	if e.cmd.countOf("route_status") < 2 {
+		t.Fatal("снимок не перечитан")
+	}
+}
+
+// Минимальный возврат порядка: неподвижным остаётся только суффикс исходного порядка,
+// идущий в текущем в том же порядке.
+func TestRestorePlan(t *testing.T) {
+	for _, tc := range []struct{ cur, target, want []string }{
+		{[]string{"B", "A", "C"}, []string{"A", "B", "C"}, []string{"A"}},
+		{[]string{"C", "A", "B"}, []string{"A", "B", "C"}, []string{"B", "A"}},
+		{[]string{"C", "B", "A"}, []string{"B", "A", "C"}, []string{"A", "B"}},
+		{[]string{"A", "B", "C"}, []string{"A", "B", "C"}, []string{}},
+		{[]string{"", "A"}, []string{"A", ""}, []string{"A"}},
+	} {
+		got := restorePlan(tc.cur, tc.target)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%v -> %v: %v, хотим %v", tc.cur, tc.target, got, tc.want)
+		}
+		chain := tc.cur
+		for _, id := range got {
+			chain = promoted(chain, id)
+		}
+		if tc.target[0] != "" && !slices.Equal(chain, tc.target) && !slices.Contains(tc.cur, "") {
+			t.Errorf("%v по плану %v дало %v", tc.cur, got, chain)
+		}
+	}
+}
+
+// Сводки политик нет (старый агент): возврат не чаще паузы, и в паузу ни команд, ни
+// записей (S31).
+func TestReturnDue_NoBriefRespectsPause(t *testing.T) {
+	e := newLadder(t, nil)
+	now := time.Now()
+	e.d.Now = func() time.Time { return now }
+	req := ladderReq()
+	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Набор", Backup: "awg10",
+		Origin: []string{"awg12", "awg10"}, Expect: []string{"awg10", "awg12"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.d.ReturnDue(req, nil) {
+		t.Fatal("первая проверка должна пройти")
+	}
+	e.d.stampTry(req)
+	if e.d.ReturnDue(req, nil) {
+		t.Fatal("в паузу опрос запрещён")
+	}
+	now = now.Add(moveRetryPause)
+	if !e.d.ReturnDue(req, nil) {
+		t.Fatal("пауза прошла")
 	}
 }
 
@@ -2404,7 +2486,7 @@ func TestStart_AttemptsReadErrorRefuses(t *testing.T) {
 // VPN-туннель обязан чиниться при следующей поломке.
 func TestLadder_NotInSetNotSticky(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
-	e.cmd.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
+	e.cmd.snapshot = `{"policy_model":true,"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
 
 	_, final := e.run(t, ladderReq())
 

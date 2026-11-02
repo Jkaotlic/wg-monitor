@@ -64,6 +64,10 @@ type fakeAWGM struct {
 	unknown       []string // пути, которых подделка не знает
 	onRestart     func(id string)
 	permitRefused bool            // роутер отказывает в перестановке
+	losePermit    bool            // permit выполнен, ответ потерян
+	permitHook    func()          // зовётся после выполненного permit
+	refusedPolicy map[string]bool // политики, где роутер отказывает
+	missing       map[string]bool // запросы с ответом 404 (сборка без ручки)
 	failing       map[string]bool // запросы ("GET /api/...") с ответом 500
 	reads         map[string]int  // сколько раз читали запрос
 	permitHang    chan struct{}   // перестановка висит, пока канал не закрыт
@@ -71,7 +75,7 @@ type fakeAWGM struct {
 
 func newFakeAWGM(t *testing.T) *fakeAWGM {
 	t.Helper()
-	f := &fakeAWGM{matrix: map[string]bool{}, failing: map[string]bool{}, reads: map[string]int{}}
+	f := &fakeAWGM{matrix: map[string]bool{}, failing: map[string]bool{}, reads: map[string]int{}, refusedPolicy: map[string]bool{}, missing: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -170,6 +174,34 @@ func (f *fakeAWGM) FailPath(key string, fail bool) {
 	f.failing[key] = fail
 }
 
+// MissingPath -- запрос отвечает 404: этой сборке ручка неизвестна.
+func (f *fakeAWGM) MissingPath(key string, missing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.missing[key] = missing
+}
+
+// LosePermitAnswer -- роутер выполняет перестановку, но ответ теряется по дороге.
+func (f *fakeAWGM) LosePermitAnswer(lose bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.losePermit = lose
+}
+
+// OnPermit -- что сделать сразу после выполненной перестановки.
+func (f *fakeAWGM) OnPermit(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.permitHook = fn
+}
+
+// RefusePolicy -- роутер отказывает в перестановке только в этой политике.
+func (f *fakeAWGM) RefusePolicy(name string, refuse bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refusedPolicy[name] = refuse
+}
+
 // RemovePolicy -- политику удалили на роутере.
 func (f *fakeAWGM) RemovePolicy(name string) {
 	f.mu.Lock()
@@ -265,6 +297,11 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"success":false,"message":"read failed"}`, http.StatusInternalServerError)
 		return
 	}
+	if f.missing[key] {
+		f.mu.Unlock()
+		http.Error(w, `{"success":false,"message":"not found"}`, http.StatusNotFound)
+		return
+	}
 	switch key {
 	case "GET /api/tunnels/all":
 		out = envelope(map[string]any{"external": []any{}, "system": []any{}, "tunnels": f.tunnelsJSONLocked()})
@@ -326,6 +363,22 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 			status, out = http.StatusInternalServerError, map[string]any{"success": false, "message": "permit failed"}
 		} else {
 			status, out = f.permitLocked(r)
+			hook, lose := f.permitHook, f.losePermit
+			if hook != nil {
+				f.mu.Unlock()
+				hook()
+				f.mu.Lock()
+			}
+			if lose && status == http.StatusOK {
+				f.mu.Unlock()
+				if hj, ok := w.(http.Hijacker); ok {
+					if c, _, err := hj.Hijack(); err == nil {
+						_ = c.Close()
+						return
+					}
+				}
+				f.mu.Lock()
+			}
 		}
 	case "POST /api/control/restart":
 		id := r.URL.Query().Get("id")
@@ -368,6 +421,9 @@ func (f *fakeAWGM) permitLocked(r *http.Request) (int, any) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		return http.StatusBadRequest, map[string]any{"success": false, "message": "bad json"}
+	}
+	if f.refusedPolicy[body.Name] {
+		return http.StatusInternalServerError, map[string]any{"success": false, "message": "permit failed"}
 	}
 	for _, p := range f.policies {
 		if p.Name != body.Name {

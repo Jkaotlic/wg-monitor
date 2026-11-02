@@ -1352,25 +1352,25 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				}
 			}
-			// Д2 (v0.64): VPN-туннель жив, а трафик с него уведён -- вернуть. Не
-			// только на самом Recovery: занятый замок, молчание агента и рестарт
-			// бэкенда откладывают возврат на следующий отчёт, а не теряют его.
+			// Трафик и VPN-туннель (v0.64). Живой, а трафик с него уведён -- вернуть;
+			// лежит в тревоге -- увод мог не состояться, нового Hard автомат не даст.
+			// Занятый замок, молчание агента и рестарт бэкенда откладывают это на
+			// следующий отчёт, а не теряют. Условия считаются по самому отчёту:
+			// агенту ни одной команды, если делать нечего.
 			var trafficStep func()
-			if c.Status == "ok" && tr.Next.CurrentStatus == "ok" && (tr.Kind == state.Recovery || tr.Kind == state.Noop) &&
-				d.LinkRepair != nil && d.LinkRepair.HasMove(nick, c.Name) {
+			if d.LinkRepair != nil && strings.HasPrefix(c.Name, miniappTunnelPrefix) {
 				tunnelName, _ := c.Details["tunnel_name"].(string)
-				backReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
-				trafficStep = func() { d.LinkRepair.ReturnMoved(backReq) }
-			}
-			// Увод на Hard не состоялся (снимка не было, бэкенд перезапустился):
-			// нового Hard автомат не даст, а трафик стоит в мёртвом звене. Само
-			// условие считается по этому же отчёту -- агенту ни одной команды,
-			// если туннель не первое звено или резерва нет.
-			if tr.Kind == state.Noop && tr.Next.CurrentStatus == "hard" && c.Status == "fail" && d.LinkRepair != nil &&
-				reportStuckOnDeadLink(rep.Checks, strings.TrimPrefix(c.Name, miniappTunnelPrefix)) {
-				tunnelName, _ := c.Details["tunnel_name"].(string)
-				retryReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
-				trafficStep = func() { d.LinkRepair.RetryMove(retryReq) }
+				moveReq := linkrepair.StartReq{RouterID: uid, Nickname: nick, CheckName: c.Name, AgentVersion: rep.AgentVersion, Auto: true, TunnelName: tunnelName}
+				switch {
+				case c.Status == "ok" && tr.Next.CurrentStatus == "ok" && (tr.Kind == state.Recovery || tr.Kind == state.Noop):
+					if d.LinkRepair.HasMove(nick, c.Name) && d.LinkRepair.ReturnDue(moveReq, reportChains(rep.Checks)) {
+						trafficStep = func() { d.LinkRepair.ReturnMoved(moveReq) }
+					}
+				case c.Status == "fail" && tr.Kind == state.Noop && tr.Next.CurrentStatus == "hard":
+					stuck := reportStuckOnDeadLink(rep.Checks, strings.TrimPrefix(c.Name, miniappTunnelPrefix))
+					chains := reportChains(rep.Checks)
+					trafficStep = func() { d.LinkRepair.AfterFailedReport(moveReq, chains, stuck) }
+				}
 			}
 			if deliver != nil || startRepair != nil || trafficStep != nil {
 				checkName, kind := c.Name, tr.Kind
@@ -1384,7 +1384,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 						// Доставку оборвала остановка бэкенда: движок починки
 						// в окне слива никто не дождётся. Лесенка до следующего
 						// Hard не начнётся, а увод на следующих отчётах повторит
-						// RetryMove.
+						// AfterFailedReport.
 						if ctx.Err() != nil || relayDraining() {
 							d.Logger.Info("автопочинка не начата: бэкенд останавливается",
 								"nickname", nick, "check", checkName)
@@ -1473,23 +1473,42 @@ func reportHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-// reportStuckOnDeadLink -- по самому отчёту: VPN-туннель id стоит первым звеном
-// цепочки, а в ней есть живой по своей проверке запасной. Сводка политик едет в
-// проверке hydraroute; нет её (старый агент, сбой чтения) -- нет и повтора.
-func reportStuckOnDeadLink(checks []wire.Check, id string) bool {
-	var policies []wire.PolicyBrief
-	status := make(map[string]string, len(checks))
+// reportPolicies -- сводка политик самого отчёта (едет в проверке hydraroute). nil --
+// нет её: старый агент, сбой чтения.
+func reportPolicies(checks []wire.Check) []wire.PolicyBrief {
 	for _, c := range checks {
-		status[c.Name] = c.Status
 		if c.Name != "hydraroute" || c.Details == nil {
 			continue
 		}
-		raw, err := json.Marshal(c.Details["policies"])
-		if err != nil || json.Unmarshal(raw, &policies) != nil {
-			return false
+		v, ok := c.Details["policies"]
+		if !ok {
+			return nil
 		}
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		var policies []wire.PolicyBrief
+		if json.Unmarshal(raw, &policies) != nil {
+			return nil
+		}
+		return policies
 	}
-	for _, p := range policies {
+	return nil
+}
+
+func reportChains(checks []wire.Check) linkrepair.ReportChains {
+	return linkrepair.ChainsFromBriefs(reportPolicies(checks))
+}
+
+// reportStuckOnDeadLink -- по самому отчёту: VPN-туннель id стоит первым звеном
+// цепочки, а в ней есть живой по своей проверке запасной.
+func reportStuckOnDeadLink(checks []wire.Check, id string) bool {
+	status := make(map[string]string, len(checks))
+	for _, c := range checks {
+		status[c.Name] = c.Status
+	}
+	for _, p := range reportPolicies(checks) {
 		if len(p.Links) == 0 || p.Links[0].TunnelID != id {
 			continue
 		}

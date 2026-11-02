@@ -63,15 +63,21 @@ func RoutePolicyPromoteJSON(ctx context.Context, c *awgmgr.Client, req wire.Rout
 		return "", fmt.Errorf("route_policy_promote: tunnel %q is not in policy %q", tunnelID, policyName)
 	}
 
-	if err := c.PermitPolicyInterface(ctx, policy.Name, iface, 0); err != nil {
-		return "", fmt.Errorf("route_policy_promote: permit %q: %w", iface, err)
-	}
+	permitErr := c.PermitPolicyInterface(ctx, policy.Name, iface, 0)
 
 	fresh, err := c.AccessPoliciesFresh(ctx)
 	if err != nil {
+		if permitErr != nil {
+			return "", fmt.Errorf("route_policy_promote: permit %q: %w", iface, permitErr)
+		}
 		return "", fmt.Errorf("route_policy_promote: verify: %w", err)
 	}
+	// Ошибка permit -- ещё не отказ: ответ мог потеряться после выполнения (контур
+	// S30). Решает постусловие, как и при успехе, который мог быть пустым.
 	after, ok := findAccessPolicy(fresh, policyName)
+	if permitErr != nil && (!ok || len(after.Interfaces) == 0 || !strings.EqualFold(strings.TrimSpace(after.Interfaces[0].Name), iface)) {
+		return "", fmt.Errorf("route_policy_promote: permit %q: %w", iface, permitErr)
+	}
 	if !ok || len(after.Interfaces) == 0 || !strings.EqualFold(strings.TrimSpace(after.Interfaces[0].Name), iface) {
 		return "", fmt.Errorf("route_policy_promote: %q did not become the first link of %q", iface, policyName)
 	}

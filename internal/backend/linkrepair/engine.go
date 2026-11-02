@@ -334,6 +334,7 @@ func (d Deps) Start(req StartReq) (string, error) {
 		// выключенное -- шум. Но трафик с мёртвого первого звена на живой резерв
 		// уводится и так (Д1): своё задание ему не нужно, экран починки молчит.
 		if !set.Enabled {
+			d.stampTry(req)
 			d.startMoveOnly(req, sc)
 			return "", ErrAutoDisabled
 		}
@@ -1252,6 +1253,8 @@ func (d Deps) findPolicies(ctx context.Context, routerID int64, tunnelID string)
 		d.logCommandFailure("route_status", "unparsable", err.Error())
 		return plan, errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
+	plan.chains = snapshotChains(snap)
+	plan.incomplete = len(snap.Warnings) > 0
 	for _, t := range snap.Tunnels {
 		if t.ID == tunnelID && strings.TrimSpace(t.Name) != "" {
 			plan.name = strings.TrimSpace(t.Name)
@@ -1302,6 +1305,11 @@ type policyPlan struct {
 	reserve bool
 	carrier string
 	name    string
+	// chains -- цепочки всех наборов снимка (policyChainKey -> id звеньев по порядку,
+	// "" -- звено мимо VPN). incomplete -- агент сообщил о сбое чтения (Warnings):
+	// по такому снимку ничего не решаем.
+	chains     ReportChains
+	incomplete bool
 }
 
 // policyMove -- набор правил, где трафик уведён на запасной.
