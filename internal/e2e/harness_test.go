@@ -230,6 +230,11 @@ func (r *rig) startBackend() {
 			Now: time.Now, Logger: logger},
 		Awg3Panels: awg3panel.NewService(filepath.Join(r.dir, "awg3-panels.json"), awg3panel.Options{Logger: logger}),
 	})
+	// Сжатие времени, а не подмена логики: между опросами обмена ключами живой
+	// движок ждёт 15 с. StartLinkRepair -- значение метода, копия движка, поэтому
+	// привязывается заново.
+	r.core.LinkRepair.Probe.HandshakeWait = 5 * time.Millisecond
+	r.core.Mux.StartLinkRepair = r.core.LinkRepair.Start
 	h := backend.NewMux(r.core.Mux)
 	r.handler.Store(&h)
 	r.login()
@@ -360,6 +365,13 @@ func (r *rig) reviveAgent(version string) {
 }
 
 func (r *rig) shutdown() {
+	if os.Getenv("E2E_VERBOSE") != "" {
+		for _, line := range r.tg.Log() {
+			r.t.Logf("telegram: %s", line)
+		}
+		s := r.Screen()
+		r.t.Logf("экран: %s\n%s", s.RouterJSON, s.EventsJSON)
+	}
 	r.killAgent()
 	r.waitEngineIdle()
 	r.stopCtx()
@@ -508,8 +520,8 @@ func (r *rig) api(method, path, body string) (int, []byte) {
 	return resp.StatusCode, raw
 }
 
-// Screen -- то, что мини-апп получает для экрана роутера. RouterJSON/EventsJSON
-// -- ответы как есть, для прогона через настоящие функции экрана.
+// Screen -- то, что мини-апп получает для экрана роутера. RouterJSON/EventsJSON/
+// FleetJSON -- ответы как есть, для прогона через настоящие функции экрана.
 type Screen struct {
 	Router struct {
 		Status           string `json:"status"`
@@ -530,6 +542,7 @@ type Screen struct {
 
 	RouterJSON json.RawMessage `json:"-"`
 	EventsJSON json.RawMessage `json:"-"`
+	FleetJSON  json.RawMessage `json:"-"`
 }
 
 // ScreenTunnel -- проекция туннеля (internal/backend/miniapp_tunnels.go).
@@ -593,6 +606,27 @@ func (r *rig) Screen() Screen {
 		r.t.Fatalf("события роутера: %v (%s)", err, raw)
 	}
 	s.EventsJSON = raw
+	// reserve_only_alert приходит только в строке списка роутеров: экран берёт
+	// его оттуда (RouterDetail, reserveOnlyAlert).
+	code, raw = r.api(http.MethodGet, "/v1/miniapp/routers", "")
+	if code != http.StatusOK {
+		r.t.Fatalf("список роутеров: код %d (%s)", code, raw)
+	}
+	var fleet struct {
+		Routers []struct {
+			ID               int64 `json:"id"`
+			ReserveOnlyAlert bool  `json:"reserve_only_alert"`
+		} `json:"routers"`
+	}
+	if err := json.Unmarshal(raw, &fleet); err != nil {
+		r.t.Fatalf("список роутеров: %v (%s)", err, raw)
+	}
+	for _, row := range fleet.Routers {
+		if row.ID == r.routerID {
+			s.Router.ReserveOnlyAlert = row.ReserveOnlyAlert
+		}
+	}
+	s.FleetJSON = raw
 	return s
 }
 

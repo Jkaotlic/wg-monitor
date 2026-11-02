@@ -947,3 +947,114 @@ func TestMatrixVerdictUsesCellTimestamp(t *testing.T) {
 		t.Fatal("cells without ts fall back to the matrix updatedAt")
 	}
 }
+
+// probeStubIdleReserve -- несущий awg10 обменивается ключами, резерв awg11 в
+// политике простаивает: рукопожатие 40 минут назад (WireGuard без трафика его
+// не обновляет).
+func probeStubIdleReserve(t *testing.T, cells string) *httptest.Server {
+	t.Helper()
+	now := time.Now().UTC()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"main","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun10","lastHandshake":"` + now.Add(-17*time.Second).Format(time.RFC3339) + `","pingCheck":{"status":"disabled"}},
+				{"id":"awg11","name":"reserve","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun11","lastHandshake":"` + now.Add(-40*time.Minute).Format(time.RFC3339) + `","pingCheck":{"status":"disabled"}}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"direct"}}}`))
+		case "/api/routing/access-policies":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"HydraRoute","interfaces":[{"name":"opkgtun10","label":"main","order":0},{"name":"opkgtun11","label":"reserve","order":1}]}]}`))
+		case "/api/monitoring/matrix":
+			ts := now.Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[` + strings.ReplaceAll(cells, "TS", ts) + `],"updatedAt":"` + ts + `"}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+}
+
+// Контур S3: цель пробы лежит, несущий обменивается ключами. Старое рукопожатие
+// простаивающего резерва -- не доказательство отказа, а молчащая проба -- не
+// опровержение: проверка говорит «не знаю», и будить человека не за что.
+func TestTunnelsCheck_ProbeTargetDownIdleReserveIsUnverified(t *testing.T) {
+	srv := probeStubIdleReserve(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":null,"ok":false,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":null,"ok":false,"ts":"TS"}`)
+	defer srv.Close()
+	got := probeStatuses(t, srv)
+	c := got["tunnel_awg11"]
+	if c.Status != "ok" || c.Details["unverified"] != true {
+		t.Fatalf("простой резерва при лежащей цели пробы: хотим ok+unverified, вышло %+v", c)
+	}
+	if c := got["tunnel_awg10"]; c.Status != "ok" || c.Details["unverified"] == true {
+		t.Fatalf("несущий со свежим обменом остаётся проверенным ok: %+v", c)
+	}
+}
+
+// Сосед отвечает -- цель жива, и молчание резерва при старом рукопожатии -- уже
+// отказ самого резерва.
+func TestTunnelsCheck_ProbeAliveElsewhereIdleReserveFails(t *testing.T) {
+	srv := probeStubIdleReserve(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":40,"ok":true,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":null,"ok":false,"ts":"TS"}`)
+	defer srv.Close()
+	if c := probeStatuses(t, srv)["tunnel_awg11"]; c.Status != "fail" {
+		t.Fatalf("мёртвый резерв при живой цели: %+v", c)
+	}
+}
+
+// Рукопожатий нет ни у кого, и проба молчит везде: это не цель пробы, а общая
+// авария (пропал WAN). Тревога остаётся.
+func TestTunnelsCheck_AllStaleAndProbeSilentStaysFail(t *testing.T) {
+	now := time.Now().UTC()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"main","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun10","lastHandshake":"` + now.Add(-40*time.Minute).Format(time.RFC3339) + `","pingCheck":{"status":"disabled"}},
+				{"id":"awg11","name":"reserve","type":"awg","status":"running","enabled":true,"interfaceName":"opkgtun11","lastHandshake":"` + now.Add(-40*time.Minute).Format(time.RFC3339) + `","pingCheck":{"status":"disabled"}}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"direct"}}}`))
+		case "/api/routing/access-policies":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"HydraRoute","interfaces":[{"name":"opkgtun10","label":"main","order":0},{"name":"opkgtun11","label":"reserve","order":1}]}]}`))
+		case "/api/monitoring/matrix":
+			ts := now.Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[{"targetId":"t1","tunnelId":"awg10","ok":false,"ts":"` + ts + `"},{"targetId":"t1","tunnelId":"awg11","ok":false,"ts":"` + ts + `"}],"updatedAt":"` + ts + `"}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	got := probeStatuses(t, srv)
+	for _, name := range []string{"tunnel_awg10", "tunnel_awg11"} {
+		if c := got[name]; c.Status != "fail" {
+			t.Fatalf("%s: общая авария глушить нельзя: %+v", name, c)
+		}
+	}
+}
+
+// Контур S2: пометка «устарел от простоя» -- только у того, чьё рукопожатие и
+// правда устарело. На экране она стояла и у несущего с обменом 17 с назад.
+func TestTunnelsCheck_IdleNoteOnlyOnStaleHandshake(t *testing.T) {
+	srv := probeStubIdleReserve(t, `
+		{"targetId":"t1","tunnelId":"awg10","latencyMs":40,"ok":true,"ts":"TS"},
+		{"targetId":"t1","tunnelId":"awg11","latencyMs":40,"ok":true,"ts":"TS"}`)
+	defer srv.Close()
+	got := probeStatuses(t, srv)
+	if note, _ := got["tunnel_awg10"].Details["note"].(string); note != "" {
+		t.Fatalf("свежий обмен ключами, а пометка про простой: %q", note)
+	}
+	if note, _ := got["tunnel_awg11"].Details["note"].(string); note == "" {
+		t.Fatalf("простаивающий резерв должен объяснять, почему жив: %+v", got["tunnel_awg11"].Details)
+	}
+}

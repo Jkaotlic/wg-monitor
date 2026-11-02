@@ -26,7 +26,10 @@ func (h HydraRouteCheck) Run(ctx context.Context, _ Deps) wire.Check {
 	start := time.Now()
 	st, err := h.Client.HydraRouteStatus(ctx)
 	if err != nil {
-		return Fail("hydraroute", start, err.Error(), nil)
+		// Статус не прочитался: об установке и запуске проверка ничего не узнала.
+		// Fail здесь превращался в тревогу «HydraRoute не установлен» при молчащем
+		// awg-manager (контур S11); о самом демоне говорит проверка awg_manager.
+		return Unverified("hydraroute", start, "HydraRoute status unreadable: "+err.Error(), nil)
 	}
 	mechs, mechErr := h.detectRouteMechanisms(ctx)
 	details := map[string]any{

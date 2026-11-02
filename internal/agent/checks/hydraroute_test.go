@@ -270,3 +270,16 @@ func TestHydraRouteCheckNotInstalledWithUnreadableRulesIsUnverified(t *testing.T
 		t.Fatalf("probe error lost: %+v", got.Details)
 	}
 }
+
+// Контур S11: awg-manager не ответил про HydraRoute. «Не установлен» в тревоге
+// при молчащем демоне -- неправда: проверка ничего не узнала, и это не fail.
+func TestHydraRouteCheckStatusUnreadableIsUnverified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	got := (HydraRouteCheck{Client: awgmgr.New(srv.URL)}).Run(context.Background(), Deps{})
+	if got.Status != "ok" || got.Details["unverified"] != true {
+		t.Fatalf("статус HydraRoute не прочитался: хотим ok+unverified, вышло %+v", got)
+	}
+}

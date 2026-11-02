@@ -154,6 +154,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	}
 
 	carrier := newTunnelCarrierLookup(ctx, t.Client, activeDefaultID)
+	probeBlind := matrixTargetDown(matrix, tunnels.Tunnels, maxAge, time.Now())
 
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
@@ -179,7 +180,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
 		// «не знаем», а не «правил нет».
 		rc.Unknown = routeCounts == nil
-		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier)
+		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier, probeBlind)
 		if graced[tu.ID] && chk.Details != nil {
 			// Остановлен недавно: правила за ним сохранены окном терпимости.
 			chk.Details["run_grace"] = true
@@ -359,7 +360,10 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string, graced
 // one is the live egress, so consumers get both `is_active_default` (the answer)
 // and `active_default_known` (whether there IS an answer) rather than being left
 // to guess from intent.
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix, carrier tunnelCarrierLookup) wire.Check {
+//
+// probeBlind -- цель пробы лежит (matrixTargetDown): матрица в этом обходе ни
+// подтвердить, ни опровергнуть ничего не может.
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix, carrier tunnelCarrierLookup, probeBlind bool) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -439,10 +443,13 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	// (статус не running, конфликт адресов, провал pingCheck) матрица не
 	// отменяет -- они про саму линию, а не про её простой.
 	if matrixSaysAlive(matrix, tu.ID, time.Now()) {
-		reasons = dropStaleHandshakeReason(reasons)
-		if len(reasons) == 0 {
+		kept := dropStaleHandshakeReason(reasons)
+		// Пометка -- только если простой и правда был: иначе она стояла и у
+		// несущего со свежим обменом ключами (контур S2).
+		if len(kept) == 0 && len(reasons) > 0 {
 			details["note"] = "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"
 		}
+		reasons = kept
 	}
 	// Обратное тоже верно: свежий обмен ключами ещё не значит, что трафик
 	// идёт. Удалённая сторона может отвечать на обмен, а данные при этом
@@ -455,6 +462,14 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	}
 	if len(reasons) == 0 {
 		return OK(name, start, details)
+	}
+	// Единственная претензия -- простой, а проба не отвечает ни у кого: старое
+	// рукопожатие не доказывает отказ, молчащая проба его не опровергает.
+	// Туннель не виноват, но и живым его назвать нечем -- контур S3: тревога
+	// «точно лежит» на резервах, пока лежит цель пробы.
+	if probeBlind && len(dropStaleHandshakeReason(reasons)) == 0 {
+		details["unverified_problems"] = strings.Join(reasons, "; ")
+		return Unverified(name, start, "проба не отвечает ни через один VPN-туннель: простой нечем отличить от отказа", details)
 	}
 	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) {
 		switch used, known := tunnelCarrierVerdict(tu, carrier); {
@@ -607,6 +622,38 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 		}
 	}
 	return own > 0 && othersAlive
+}
+
+// matrixTargetDown -- свежие пробы есть, ни одна не прошла, а хотя бы один
+// включённый туннель при этом обменивается ключами. Канал живой -- значит,
+// молчит цель пробы, а не туннели. Рукопожатий нет ни у кого -- это уже не цель,
+// а общая авария (пропал WAN), и тревоги остаются.
+func matrixTargetDown(matrix *awgmgr.MonitoringMatrix, tunnels []awgmgr.Tunnel, maxAge time.Duration, now time.Time) bool {
+	if matrix == nil {
+		return false
+	}
+	probed := false
+	for _, c := range matrix.Cells {
+		if !matrixCellFresh(matrix, c, now) {
+			continue
+		}
+		if c.OK {
+			return false
+		}
+		probed = true
+	}
+	if !probed {
+		return false
+	}
+	for _, tu := range tunnels {
+		if !tu.Enabled {
+			continue
+		}
+		if t := tu.LastHandshake.Time(); t != nil && now.Sub(*t) <= maxAge {
+			return true
+		}
+	}
+	return false
 }
 
 // matrixFreshWindow -- насколько свежей должна быть матрица, чтобы её ответу

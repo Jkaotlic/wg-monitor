@@ -57,18 +57,16 @@ type fakeAWGM struct {
 	policies      []*fakePolicy
 	matrix        map[string]bool // id туннеля -> проба прошла; нет ключа -- ячеек нет
 	matrixMissing bool            // старая сборка: 404 на /api/monitoring/matrix
-	matrixAge     time.Duration
-	down          bool // демон молчит: соединение рвётся без ответа
+	down          bool            // демон молчит: соединение рвётся без ответа
 	promotions    []Promotion
 	calls         []string // журнал мутаций по порядку
 	unknown       []string // пути, которых подделка не знает
 	onRestart     func(id string)
-	exitIP        map[string]string
 }
 
 func newFakeAWGM(t *testing.T) *fakeAWGM {
 	t.Helper()
-	f := &fakeAWGM{matrix: map[string]bool{}, exitIP: map[string]string{}}
+	f := &fakeAWGM{matrix: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -105,6 +103,13 @@ func (f *fakeAWGM) SetMatrix(id string, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.matrix[id] = ok
+}
+
+// ClearMatrix -- матрица ещё не пробовала этот туннель (сразу после старта).
+func (f *fakeAWGM) ClearMatrix(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.matrix, id)
 }
 
 // SetMatrixMissing -- сборка без матрицы (awg-manager старше 2.18): 404.
@@ -244,12 +249,13 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 			"eth3": map[string]any{"up": true, "label": "Подключение Ethernet", "priority": 1000},
 		}})
 	case "GET /api/test/ip":
-		id := r.URL.Query().Get("id")
-		vpn := f.exitIP[id]
-		if vpn == "" {
-			vpn = "198.51.100.50"
+		// Через мёртвый туннель адрес выхода не узнать: живой демон отвечает
+		// 400 IP_CHECK_FAILED (сверка С1).
+		if ok, known := f.matrix[r.URL.Query().Get("id")]; known && !ok {
+			status, out = http.StatusBadRequest, map[string]any{"success": false, "code": "IP_CHECK_FAILED", "message": "ip check failed"}
+		} else {
+			out = envelope(map[string]any{"directIp": "203.0.113.10", "vpnIp": "198.51.100.50", "endpointIp": "198.51.100.60", "ipChanged": true})
 		}
-		out = envelope(map[string]any{"directIp": "203.0.113.10", "vpnIp": vpn, "endpointIp": "198.51.100.60", "ipChanged": true})
 	case "POST /api/access-policies/permit":
 		status, out = f.permitLocked(r)
 	case "POST /api/control/restart":
@@ -380,7 +386,7 @@ func (f *fakeAWGM) dnsRoutesLocked() []map[string]any {
 }
 
 func (f *fakeAWGM) matrixLocked() map[string]any {
-	ts := time.Now().UTC().Add(-f.matrixAge).Format(time.RFC3339)
+	ts := time.Now().UTC().Format(time.RFC3339)
 	targets := []string{"cc", "dns"}
 	cells := []map[string]any{}
 	tunnels := []map[string]any{}
