@@ -797,6 +797,27 @@ func TestFlapHitsAttemptsCeiling(t *testing.T) {
 	}
 }
 
+// S20б. Потолок общий с лесенкой: окно уже выбрано -- не уводим, и сказано почему.
+func TestMoveRefusedAtCeiling(t *testing.T) {
+	r := newRig(t, rigOpts{})
+	r.Tick()
+	for range 3 {
+		if err := r.core.LinkRepair.Attempts.Started(e2eRouter, "tunnel_"+carrierID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kill(r, carrierID)
+	r.Ticks(failThreshold)
+	r.DrainCommands()
+	wantCalls(t, r)
+	if got := r.MoveRecord(carrierID); got != "" {
+		t.Errorf("запись без увода: %q", got)
+	}
+	if !alertAbout(r.Alerts(), "не увёл") || !alertAbout(r.Alerts(), "Заблокированное сейчас не открывается") {
+		t.Errorf("человеку не сказано, почему трафик не уведён: %q", r.Alerts())
+	}
+}
+
 // S21. Увод не подтверждён: записи нет, и тревога говорит правду.
 func TestMissedPromote(t *testing.T) {
 	check := func(t *testing.T, r *rig, word string) {
