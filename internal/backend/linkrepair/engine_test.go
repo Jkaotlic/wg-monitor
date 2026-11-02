@@ -1706,6 +1706,43 @@ func TestReturnDue_NoBriefRespectsPause(t *testing.T) {
 	}
 }
 
+// Замок занят соседом: возврат его дожидается, а не откладывается на паузу.
+func TestReturnMoved_WaitsForLock(t *testing.T) {
+	e := newLadder(t, nil)
+	e.cmd.snapshot = `{"policy_model":true,"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[{"name":"Набор","interfaces":[{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","available":true},{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","available":true}]}]}`
+	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Набор", Backup: "awg10", BackupName: "Работа",
+		Origin: []string{"awg12", "awg10"}, Expect: []string{"awg10", "awg12"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.d.Store.TryLock("роутер") {
+		t.Fatal("замок занят")
+	}
+	e.d.ReturnMoved(ladderReq())
+	time.Sleep(10 * time.Millisecond)
+	e.d.Store.Unlock("роутер")
+	e.waitUnlocked(t)
+	if e.cmd.countOf("route_policy_promote") != 1 {
+		t.Fatalf("возврат не дождался замка: %+v", e.cmd.sent)
+	}
+}
+
+// S34: другой набор уже уведён, этот роутер отказал -- «не увёл, не открывается»
+// неправда.
+func TestMoveOnly_RefusalAfterPartialIsNotFailure(t *testing.T) {
+	e := newLadder(t, nil)
+	if err := e.d.saveMoved("роутер", "tunnel_awg12", movedRecord{Moves: []movedEntry{{Policy: "Другой", Backup: "awg10", BackupName: "Работа",
+		Origin: []string{"awg12", "awg10"}, Expect: []string{"awg10", "awg12"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	e.cmd.refuse = map[string]bool{"route_policy_promote": true}
+	_, _ = e.d.Start(ladderReq())
+	e.waitUnlocked(t)
+	_, calls := e.rep.snapshot()
+	if len(calls) != 1 || !strings.Contains(calls[0].Text, "Часть трафика") || strings.Contains(calls[0].Text, "не открывается") {
+		t.Fatalf("частичный отказ назван провалом: %+v", calls)
+	}
+}
+
 // WaitMoves отпускает, когда фоновых уводов нет.
 func TestWaitMovesReturnsWhenIdle(t *testing.T) {
 	e := newLadder(t, nil)

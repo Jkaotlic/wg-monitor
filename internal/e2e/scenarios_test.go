@@ -957,8 +957,12 @@ func TestWaitingCascadeSendsNoCommands(t *testing.T) {
 	r.Ticks(2)
 	r.DrainCommands()
 	before := r.exch.dispatched.Load()
-	r.Ticks(5)
-	r.DrainCommands()
+	// Пауза тут ни при чём: опрос отсекает сам отчёт, сколько бы времени ни прошло.
+	for range 5 {
+		r.AdvanceClock(retryPause)
+		r.Tick()
+		r.DrainCommands()
+	}
 	if got := r.exch.dispatched.Load(); got != before {
 		t.Errorf("ждущая запись опрашивает роутер: %d команд за 5 отчётов", got-before)
 	}
@@ -1048,10 +1052,14 @@ func TestPartialMoveIsNotCalledFailure(t *testing.T) {
 	if !alertAbout(r.Alerts(), "Увёл трафик на запасной VPN-туннель «vpn-backup-one»") || !alertAbout(r.Alerts(), "не дал увести") {
 		t.Errorf("частичный увод назван неверно: %q", r.Alerts())
 	}
+	said := len(r.tg.Log())
 	r.AdvanceClock(retryPause)
 	r.Tick()
 	r.DrainCommands()
 	check()
+	if got := len(r.tg.Log()); got != said {
+		t.Errorf("повтор отказа пишет снова: %q", r.tg.Log()[said:])
+	}
 	r.awgm.RefusePolicy("Work", false)
 	r.AdvanceClock(retryPause)
 	r.Tick()
@@ -1205,8 +1213,14 @@ func TestRefusedReturnDoesNotBurnCeiling(t *testing.T) {
 	deadCarrierMoved(t, r)
 	r.awgm.RefusePermit(true)
 	heal(r, carrierID)
-	r.Ticks(failThreshold + 3)
+	r.Ticks(failThreshold)
 	r.DrainCommands()
+	// Несколько пауз подряд отказов: окно попыток от них не сгорает.
+	for range 4 {
+		r.AdvanceClock(retryPause)
+		r.Tick()
+		r.DrainCommands()
+	}
 	wantChain(t, r, "OpkgTun10", "Wireguard2", "OpkgTun11")
 	r.awgm.RefusePermit(false)
 	r.AdvanceClock(retryPause)
@@ -1273,6 +1287,7 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 		r.Ticks(failThreshold)
 		r.DrainCommands()
 		before := r.exch.dispatched.Load()
+		r.AdvanceClock(retryPause) // отсекает сам отчёт, а не пауза
 		r.Ticks(3)
 		r.DrainCommands()
 		if got := r.exch.dispatched.Load(); got != before {
@@ -1291,6 +1306,7 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 		r.Ticks(failThreshold)
 		r.DrainCommands()
 		before := r.exch.dispatched.Load()
+		r.AdvanceClock(retryPause)
 		r.Ticks(3)
 		r.DrainCommands()
 		if got := r.exch.dispatched.Load(); got != before {
