@@ -1031,6 +1031,27 @@ func TestNoRetryCommandsWithoutNeed(t *testing.T) {
 			t.Errorf("повтор без резерва: %d команд", got-before)
 		}
 	})
+	t.Run("роутер отказывает: пробуем, но сказано один раз", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		r.Tick()
+		r.awgm.RefusePermit(true)
+		kill(r, carrierID)
+		r.Ticks(failThreshold)
+		r.DrainCommands()
+		log, tries := len(r.tg.Log()), r.awgm.Reads("POST /api/access-policies/permit")
+		r.Ticks(3)
+		r.DrainCommands()
+		if got := len(r.tg.Log()); got != log {
+			t.Errorf("отказ повторён человеку: %q", r.tg.Log())
+		}
+		if got := r.awgm.Reads("POST /api/access-policies/permit"); got <= tries {
+			t.Errorf("увод не пробуется снова: было %d, стало %d", tries, got)
+		}
+		r.awgm.RefusePermit(false)
+		r.Tick()
+		r.DrainCommands()
+		wantCalls(t, r, "promote:"+backup1ID)
+	})
 	t.Run("потолок и сказано один раз", func(t *testing.T) {
 		r := newRig(t, rigOpts{})
 		r.Tick()
