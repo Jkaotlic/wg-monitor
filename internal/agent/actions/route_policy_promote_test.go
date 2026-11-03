@@ -130,3 +130,50 @@ func TestRoutePolicyPromote_RefusesUnknownPolicy(t *testing.T) {
 		t.Fatalf("err = %v, ожидался отказ по неизвестной политике", err)
 	}
 }
+
+// Роутер выполнил перестановку, а ответ потерялся (контур S30): постусловие
+// решает, а не транспорт. Ответа «ошибка» здесь хватило бы, чтобы бэкенд забыл увод.
+func TestRoutePolicyPromote_LostAnswerVerifiedByPostcondition(t *testing.T) {
+	applied := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/access-policies/permit"):
+			applied = true
+			if hj, ok := w.(http.Hijacker); ok {
+				if c, _, err := hj.Hijack(); err == nil {
+					_ = c.Close()
+				}
+			}
+		case strings.HasPrefix(r.URL.Path, "/api/tunnels/all"):
+			_, _ = w.Write([]byte(promoteTunnelsJSON))
+		case strings.Contains(r.URL.RawQuery, "refresh=true") && applied:
+			_, _ = w.Write([]byte(policyChainJSON("OpkgTun10", "OpkgTun11")))
+		default:
+			_, _ = w.Write([]byte(policyChainJSON("OpkgTun11", "OpkgTun10")))
+		}
+	}))
+	defer srv.Close()
+	if _, err := RoutePolicyPromoteJSON(context.Background(), awgmgr.New(srv.URL),
+		wire.RoutePolicyPromoteRequest{PolicyName: "HydraRoute", TunnelID: "awg10"}); err != nil {
+		t.Fatalf("перестановка выполнена, а агент докладывает отказ: %v", err)
+	}
+}
+
+// Настоящий отказ постусловие не отменяет.
+func TestRoutePolicyPromote_RefusalStaysRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/access-policies/permit"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/api/tunnels/all"):
+			_, _ = w.Write([]byte(promoteTunnelsJSON))
+		default:
+			_, _ = w.Write([]byte(policyChainJSON("OpkgTun11", "OpkgTun10")))
+		}
+	}))
+	defer srv.Close()
+	if _, err := RoutePolicyPromoteJSON(context.Background(), awgmgr.New(srv.URL),
+		wire.RoutePolicyPromoteRequest{PolicyName: "HydraRoute", TunnelID: "awg10"}); err == nil {
+		t.Fatal("отказ роутера назван успехом")
+	}
+}

@@ -43,7 +43,7 @@ func TestTunnelsCheck_RestartedTunnelKeepsRulesForTwoRuns(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
-		case "/api/monitoring/matrix":
+		case "/api/monitoring/matrix", "/api/routing/policy-interfaces":
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)

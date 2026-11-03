@@ -1,0 +1,87 @@
+{
+  "incidents": [
+    {
+      "acked": false,
+      "check_name": "agent_heartbeat",
+      "fail_count": 1,
+      "hard_since": "2026-11-02T00:00:00Z"
+    }
+  ],
+  "reserve_only_alert": false,
+  "router": {
+    "agent_version": "v0.64.0",
+    "id": 1,
+    "kind": "static",
+    "last_seen_age_sec": 7200,
+    "last_seen_at": "2026-11-02T00:00:00Z",
+    "nickname": "router-e2e",
+    "reach": "offline",
+    "stale": true,
+    "status": "alert"
+  },
+  "traffic": {
+    "carrier_alive": true,
+    "carrier_basis": "policy",
+    "carrier_tunnel_id": "awg50",
+    "contested_default": true,
+    "egress_tunnel_id": "awg50",
+    "egress_tunnel_name": "vpn-main",
+    "mode": "split",
+    "reserve_tunnel_ids": [
+      "awg10",
+      "awg11"
+    ]
+  },
+  "tunnels": [
+    {
+      "active_default_known": true,
+      "default_route_intent": true,
+      "enabled": true,
+      "handshake_age_sec": 2400,
+      "is_active_default": false,
+      "matrix_latency_ms": 42,
+      "matrix_updated_at": "2026-11-02T00:00:00Z",
+      "name": "vpn-backup-one",
+      "note": "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу",
+      "ping_check_status": "disabled",
+      "ping_latency_ms": 0,
+      "run_state": "running",
+      "status": "ok",
+      "ts": "2026-11-02T00:00:00Z",
+      "tunnel_id": "awg10"
+    },
+    {
+      "active_default_known": true,
+      "default_route_intent": true,
+      "enabled": true,
+      "handshake_age_sec": 2400,
+      "is_active_default": false,
+      "matrix_latency_ms": 42,
+      "matrix_updated_at": "2026-11-02T00:00:00Z",
+      "name": "vpn-backup-two",
+      "note": "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу",
+      "ping_check_status": "disabled",
+      "ping_latency_ms": 0,
+      "run_state": "running",
+      "status": "ok",
+      "ts": "2026-11-02T00:00:00Z",
+      "tunnel_id": "awg11"
+    },
+    {
+      "active_default_known": true,
+      "default_route_intent": true,
+      "enabled": true,
+      "handshake_age_sec": 17,
+      "is_active_default": false,
+      "matrix_latency_ms": 42,
+      "matrix_updated_at": "2026-11-02T00:00:00Z",
+      "name": "vpn-main",
+      "ping_check_status": "disabled",
+      "ping_latency_ms": 0,
+      "run_state": "running",
+      "status": "ok",
+      "ts": "2026-11-02T00:00:00Z",
+      "tunnel_id": "awg50"
+    }
+  ]
+}

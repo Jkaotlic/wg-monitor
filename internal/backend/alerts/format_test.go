@@ -75,7 +75,7 @@ func TestFormatHardGenericFallback(t *testing.T) {
 		HardSince:   hardSince,
 		Check:       wire.Check{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "handshake age 312s > 180s"}},
 	})
-	for _, want := range []string{"🔴", "vasya", "Что не работает:", "handshake age 312s", "проверок подряд без ответа: 3"} {
+	for _, want := range []string{"🔴", "vasya", "Что не работает:", "Проверка сообщила о сбое", "проверок подряд без ответа: 3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
@@ -122,15 +122,15 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 		},
 	})
 	wants := []string{
-		"🟡",
+		"🔴",
 		"VPN-туннель «amnezia_for_awg2» не отвечает",
-		"На что обратить внимание:",
+		"Что не работает:",
 		"Сервер VPN-туннеля: 198.51.100.21:37634", "выход провайдера: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
 		"Проверка связи: падает", "неудачных попыток 3 из 3",
 		"автоперезапусков: 2",
 		"Параметры:", "nativewg", "AWG AWG2.0", "MTU 1280",
-		"Что может пострадать:",
+		"Что это ломает:",
 		"Что я думаю:",
 		"Что делать:",
 	}
@@ -447,8 +447,10 @@ func TestFormatHardWithNeighborsInfluencesDiagnosis(t *testing.T) {
 	if !strings.Contains(got, "Соседние VPN-туннели живы") {
 		t.Errorf("missing neighbors-alive hypothesis:\n%s", got)
 	}
-	if !strings.Contains(got, "🟡") {
-		t.Errorf("single-tunnel degradation with alive neighbors should be advisory:\n%s", got)
+	// Живой сосед -- не доказательство, что трафик на нём (v0.64, B7): красная,
+	// пока движок не увёл или цепочка не показала, что трафик идёт мимо.
+	if strings.Contains(got, "🟡") {
+		t.Errorf("живой сосед ещё не обход:\n%s", got)
 	}
 
 	// Мёртвые соседи → диагноз указывает на WAN/провайдера.
@@ -659,14 +661,72 @@ func TestFormatHardTunnelWithLiveSpareIsHonest(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(got, "запасн") {
-		t.Fatalf("при живом резерве тревога обязана сказать, что обход работает:\n%s", got)
+	// Живой сосед не значит, что трафик на нём: обещать обход нельзя, пока увод не
+	// подтверждён (v0.64, B7). Подтверждение дописывает в тревогу движок.
+	if strings.Contains(got, "обход идёт") || strings.Contains(got, "Пока ничего") {
+		t.Fatalf("обещан обход, увод которого не подтверждён:\n%s", got)
 	}
-	if !strings.Contains(got, "Амстердам") {
-		t.Fatalf("надо назвать линию, через которую сейчас идёт обход:\n%s", got)
+	if !strings.Contains(got, "🔴") {
+		t.Fatalf("трафик всё ещё ведётся в мёртвый VPN-туннель:\n%s", got)
 	}
-	if strings.Contains(got, "🔴") {
-		t.Fatalf("работающий обход -- не красная тревога:\n%s", got)
+}
+
+// Упал запасной (тот же признак, что reserve_only_alert у экрана), трафик идёт
+// через живого: не красная и не «сейчас туда не доходит» (B5).
+func TestFormatHardReserveIsNotCarrierAlarm(t *testing.T) {
+	args := HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg12", HardSince: time.Now(),
+		Check:   wire.Check{Name: "tunnel_awg12", Status: "fail", Details: map[string]any{"tunnel_name": "Амстердам", "handshake_age_sec": 900}},
+		Traffic: &TrafficFacts{Via: "Франкфурт"},
+	}
+	got := FormatHard(args)
+	for _, want := range []string{"🟡", "Запасной VPN-туннель «Амстердам» не работает", "трафик идёт через «Франкфурт»", "Спешки нет"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("нет %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"🔴", "не доходит", "Что это ломает"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("есть %q:\n%s", bad, got)
+		}
+	}
+	re := FormatRealert(RealertArgs{Nickname: "router-a", CheckName: "tunnel_awg12", HardSince: time.Now(), RealertCount: 1,
+		Check: args.Check, Traffic: args.Traffic})
+	if strings.Contains(re, "🔴") || !strings.Contains(re, "трафик идёт через «Франкфурт»") {
+		t.Errorf("напоминание говорит иначе, чем тревога:\n%s", re)
+	}
+}
+
+// Упало несущее звено: что с запасным -- факт из цепочки, а не из соседей.
+func TestFormatHardCarrierSpareFacts(t *testing.T) {
+	base := HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now(),
+		Check:     wire.Check{Name: "tunnel_awg11", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 2}},
+		Neighbors: []NeighborSummary{{CheckName: "tunnel_awg99", TunnelName: "Посторонний", Status: "ok"}},
+	}
+	none := base
+	none.Traffic = &TrafficFacts{NoSpare: true}
+	got := FormatHard(none)
+	if !strings.Contains(got, "Живого запасного VPN-туннеля нет") || strings.Contains(got, "пойдёт через запасной") {
+		t.Errorf("живой сосед вне цепочки не запасной:\n%s", got)
+	}
+	spare := base
+	spare.Traffic = &TrafficFacts{Spare: "Амстердам"}
+	got = FormatHard(spare)
+	if !strings.Contains(got, "Запасной VPN-туннель «Амстердам» на связи") || !strings.Contains(got, "🔴") {
+		t.Errorf("запасной на связи, а трафик ещё не на нём:\n%s", got)
+	}
+}
+
+// Сырая ошибка с адресом -- в журнал, не владельцу (B6).
+func TestFormatHardNoRawErrorForOwner(t *testing.T) {
+	raw := `awgmgr GET /api/system/info: Get "http://127.0.0.1:2222/api/system/info": EOF`
+	for _, check := range []string{"awg_manager", "tunnels", "hydraroute", "какая-то_новая_проверка"} {
+		got := FormatHard(HardArgs{Nickname: "router-a", CheckName: check, HardSince: time.Now(),
+			Check: wire.Check{Name: check, Status: "fail", Details: map[string]any{"error": raw}}})
+		if strings.Contains(got, "awgmgr") || strings.Contains(got, "http://") || strings.Contains(got, "EOF") {
+			t.Errorf("%s: сырая ошибка в тревоге:\n%s", check, got)
+		}
 	}
 }
 
@@ -1170,7 +1230,11 @@ func TestAlertSaysVPNTunnelNotLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			chk := wire.Check{Name: tc.check, Status: "fail", Details: tc.d}
-			hard := FormatHard(HardArgs{Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), Check: chk, Neighbors: tc.ns})
+			args := HardArgs{Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), Check: chk, Neighbors: tc.ns}
+			if strings.HasPrefix(tc.check, "tunnel_") && tc.ns != nil && neighborsAlive(tc.ns) {
+				args.Traffic = &TrafficFacts{Spare: "Амстердам"}
+			}
+			hard := FormatHard(args)
 			assertSaysVPNTunnel(t, "тревога", hard)
 			assertSaysVPNTunnel(t, "напоминание", FormatRealert(RealertArgs{
 				Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), RealertCount: 1, Check: chk, Neighbors: tc.ns,
@@ -1183,7 +1247,7 @@ func TestAlertSaysVPNTunnelNotLine(t *testing.T) {
 				t.Errorf("VPN-туннель называется по имени в ёлочках:\n%s", hard)
 			}
 			if strings.HasPrefix(tc.check, "tunnel_") && tc.ns != nil && neighborsAlive(tc.ns) &&
-				!strings.Contains(hard, "запасной VPN-туннель «Амстердам»") {
+				!strings.Contains(hard, "апасной VPN-туннель «Амстердам»") {
 				t.Errorf("резерв -- запасной VPN-туннель, мужской род:\n%s", hard)
 			}
 		})

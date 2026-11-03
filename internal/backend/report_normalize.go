@@ -49,6 +49,12 @@ func isLegacyPingCheckDisabledFalseFail(c wire.Check) bool {
 	if conflict, ok := boolDetail(d, "address_conflict"); ok && conflict {
 		return false
 	}
+	// Провал активной пробы через туннель -- не ложный fail: удалённая сторона
+	// отвечает на обмен ключами, а данные не идут, свежесть обмена тут ничего
+	// не доказывает.
+	if matrixOK, ok := boolDetail(d, "matrix_ok"); ok && !matrixOK {
+		return false
+	}
 	age, ok := intDetail(d, "handshake_age_sec")
 	return ok && age <= tunnelHandshakeHealthyMaxAgeSec
 }

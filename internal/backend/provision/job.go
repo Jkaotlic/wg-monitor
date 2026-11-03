@@ -229,6 +229,14 @@ func (s *Store) TryLock(nick string) bool {
 	return true
 }
 
+// Locked -- занят ли замок, без захвата: пробный захват мог бы ответить «занято»
+// чужому мастеру.
+func (s *Store) Locked(nick string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.locks[nick]
+}
+
 // Unlock releases the single-flight lock for nick. Unlocking a nick that
 // isn't locked is a no-op.
 func (s *Store) Unlock(nick string) {

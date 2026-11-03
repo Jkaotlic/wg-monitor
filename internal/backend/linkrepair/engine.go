@@ -86,6 +86,9 @@ type Thread interface {
 	NeedHuman(ctx context.Context, text, action string)
 	// NotStarted -- правка «Автопочинка не запускалась: …».
 	NotStarted(ctx context.Context, why string)
+	// Moved -- факт про трафик без починки (увод и возврат при выключенной
+	// автопочинке, v0.64): правка, ответ о восстановлении не гасится.
+	Moved(ctx context.Context, text string)
 }
 
 // nopThread -- нить без людей: Report не задан.
@@ -95,6 +98,7 @@ func (nopThread) Progress(context.Context, string)          {}
 func (nopThread) Done(context.Context, string)              {}
 func (nopThread) NeedHuman(context.Context, string, string) {}
 func (nopThread) NotStarted(context.Context, string)        {}
+func (nopThread) Moved(context.Context, string)             {}
 
 type Deps struct {
 	Store *provision.Store
@@ -123,6 +127,11 @@ type Deps struct {
 	SourceOff func(provider string) string
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
 	Attempts Attempts
+	// LineDead -- звено мертво по своей последней проверке tunnel_<id> (Д3):
+	// резервом оно не считается. nil -- мёртвых не знаем.
+	LineDead func(routerID int64, tunnelID string) bool
+	// Moves -- уводы и возвраты, идущие в фоне; nil -- не считать.
+	Moves    *MoveState
 	Commands replace.Commander
 	Report   Reporter
 	// BaseCtx принадлежит процессу, а не запросу: починка переживает
@@ -163,12 +172,18 @@ func (s Setting) renamed(current string) bool {
 // политики уже отсортирован по приоритету, поэтому первый подходящий -- это
 // ровно тот, на кого политика уйдёт сама. Интерфейсы без TunnelID (WAN,
 // мост, гостевая сеть) не годятся: увести туда значит снять защиту.
-func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, bool) {
+//
+// dead -- звено мертво по своей проверке (Д3): поднятый интерфейс ещё не значит,
+// что туннель везёт трафик. nil -- мёртвых не знаем.
+func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string, dead func(tunnelID string) bool) (string, bool) {
 	for _, iface := range pol.Interfaces {
 		if iface.TunnelID == "" || iface.TunnelID == brokenTunnelID {
 			continue
 		}
 		if !iface.Available {
+			continue
+		}
+		if dead != nil && dead(iface.TunnelID) {
 			continue
 		}
 		return iface.TunnelID, true
@@ -252,6 +267,12 @@ func agentCanLadder(version string) bool {
 	return upstream.SoftwareNewerThan(MinAgentLadder, v)
 }
 
+// agentTooOldForPromote -- агент старше route_policy_promote: увести и вернуть
+// трафик нечем.
+func agentTooOldForPromote(version string) bool {
+	return upstream.SoftwareNewerThan(version, replace.MinAgentVersion)
+}
+
 func (d Deps) baseCtx() context.Context {
 	if d.BaseCtx != nil {
 		return d.BaseCtx
@@ -309,9 +330,12 @@ func (d Deps) Start(req StartReq) (string, error) {
 		}()
 	}
 	if req.Auto {
-		// Выключено -- молчим: тревога уже ушла, а «не запускалась» про
-		// выключенное -- шум.
+		// Выключено -- лесенки нет, тревога уже ушла, а «не запускалась» про
+		// выключенное -- шум. Но трафик с мёртвого первого звена на живой резерв
+		// уводится и так (Д1): своё задание ему не нужно, экран починки молчит.
 		if !set.Enabled {
+			d.stampTry(req)
+			d.startMoveOnly(req, sc)
 			return "", ErrAutoDisabled
 		}
 		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
@@ -330,7 +354,7 @@ func (d Deps) Start(req StartReq) (string, error) {
 	}
 	// Порог агента тот же, что у мастера замены: без route_policy_promote
 	// увести и вернуть трафик нечем.
-	if upstream.SoftwareNewerThan(req.AgentVersion, replace.MinAgentVersion) {
+	if agentTooOldForPromote(req.AgentVersion) {
 		notStarted("агент роутера слишком старый — " + ActAgentOld)
 		return "", fmt.Errorf("%w: на роутере агент %s, нужен %s или новее",
 			replace.ErrAgentTooOld, req.AgentVersion, replace.MinAgentVersion)
@@ -873,17 +897,7 @@ func (d Deps) failover(ctx context.Context, jobID string, req StartReq, tunnelID
 		d.step(jobID, StepFailover, provision.StepDone, textCarrier(plan.carrier))
 		return nil
 	}
-	type cand struct {
-		policy   string
-		backup   string
-		backupNm string
-	}
-	var cands []cand
-	for _, p := range plan.active {
-		if b, ok := pickBackup(p, tunnelID); ok {
-			cands = append(cands, cand{p.Name, b, ifaceName(p, b)})
-		}
-	}
+	cands := d.backups(req.RouterID, plan, tunnelID)
 	if len(cands) == 0 {
 		d.step(jobID, StepFailover, provision.StepDone, "запасного VPN-туннеля нет — чиним как есть")
 		return nil
@@ -929,6 +943,25 @@ func (d Deps) failover(ctx context.Context, jobID string, req StartReq, tunnelID
 	d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через запасной VPN-туннель «"+names.backup+"»")
 	*log = append(*log, textMovedTo(names.backup))
 	return moved
+}
+
+// backupCand -- на кого уводить трафик в одном наборе правил.
+type backupCand struct {
+	policy   string
+	backup   string
+	backupNm string
+}
+
+// backups -- живой резерв в каждом наборе, где VPN-туннель первое звено.
+func (d Deps) backups(routerID int64, plan policyPlan, tunnelID string) []backupCand {
+	dead := func(id string) bool { return d.lineDead(routerID, id) }
+	var cands []backupCand
+	for _, p := range plan.active {
+		if b, ok := pickBackup(p, tunnelID, dead); ok {
+			cands = append(cands, backupCand{p.Name, b, ifaceName(p, b)})
+		}
+	}
+	return cands
 }
 
 // finishOK -- ступень доказана: вернуть трафик (если уводили), снять стоп,
@@ -1220,6 +1253,8 @@ func (d Deps) findPolicies(ctx context.Context, routerID int64, tunnelID string)
 		d.logCommandFailure("route_status", "unparsable", err.Error())
 		return plan, errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
+	plan.chains = snapshotChains(snap)
+	plan.incomplete = len(snap.Warnings) > 0
 	for _, t := range snap.Tunnels {
 		if t.ID == tunnelID && strings.TrimSpace(t.Name) != "" {
 			plan.name = strings.TrimSpace(t.Name)
@@ -1270,6 +1305,11 @@ type policyPlan struct {
 	reserve bool
 	carrier string
 	name    string
+	// chains -- цепочки всех наборов снимка (policyChainKey -> id звеньев по порядку,
+	// "" -- звено мимо VPN). incomplete -- агент сообщил о сбое чтения (Warnings):
+	// по такому снимку ничего не решаем.
+	chains     ReportChains
+	incomplete bool
 }
 
 // policyMove -- набор правил, где трафик уведён на запасной.

@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -154,6 +155,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	}
 
 	carrier := newTunnelCarrierLookup(ctx, t.Client, activeDefaultID)
+	probeBlind := matrixTargetDown(matrix, tunnels.Tunnels, maxAge, time.Now())
 
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
@@ -179,7 +181,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
 		// «не знаем», а не «правил нет».
 		rc.Unknown = routeCounts == nil
-		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier)
+		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier, probeBlind)
 		if graced[tu.ID] && chk.Details != nil {
 			// Остановлен недавно: правила за ним сохранены окном терпимости.
 			chk.Details["run_grace"] = true
@@ -271,6 +273,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		return nil
 	}
 	defaultIface := resolveDefaultIface(tunnels, activeDefaultID, graced)
+	policyCarrier := newPolicyCarrierLookup(ctx, c, tunnels)
 	out := map[string]routeCounts{}
 	bump := func(iface string, dns, hr, stat int) {
 		if iface == "" {
@@ -301,9 +304,16 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 			bump(firstNonEmptyTunnel(r.Routes[0].Interface, r.Routes[0].TunnelID), 1, hr, 0)
 			continue
 		}
-		// Fall-through HR-Neo rule → follows global policy → default tunnel.
-		if isHR && r.HRPolicyName != "" && defaultIface != "" {
-			bump(defaultIface, 1, 1, 0)
+		// Fall-through HR-Neo rule → follows its policy: credited to the chain's
+		// live link. Первый заявивший основной маршрут тут не ответ: после увода
+		// трафика правила оставались бы за мёртвым туннелем, и экран звал бы живой
+		// обход аварией (контур S13). Цепочку не узнать -- прежнее правило.
+		if isHR && r.HRPolicyName != "" {
+			if iface, ok := policyCarrier(r.HRPolicyName); ok {
+				bump(iface, 1, 1, 0)
+			} else if defaultIface != "" {
+				bump(defaultIface, 1, 1, 0)
+			}
 		}
 	}
 	for _, r := range statics {
@@ -313,6 +323,61 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		bump(r.TunnelID, 0, 0, 1)
 	}
 	return out
+}
+
+// newPolicyCarrierLookup -- интерфейс VPN-туннеля, на котором сейчас держится
+// политика: первое поднятое звено её цепочки. Политики читаются лениво -- только
+// когда встретилось правило на политике, и один раз на обход. ok=false -- не знаем:
+// политики не прочитались, такой нет, живого звена нет. Живое звено мимо VPN (WAN)
+// -- ok с пустым интерфейсом: правила ведут не в туннель, приписывать некому.
+func newPolicyCarrierLookup(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel) func(policy string) (string, bool) {
+	var (
+		loaded   bool
+		policies []awgmgr.AccessPolicy
+		up       map[string]bool
+	)
+	return func(policy string) (string, bool) {
+		if !loaded {
+			loaded = true
+			ps, err := c.AccessPolicies(ctx)
+			if err != nil {
+				return "", false
+			}
+			ifaces, err := c.PolicyInterfaces(ctx)
+			if err != nil {
+				return "", false
+			}
+			policies, up = ps, make(map[string]bool, len(ifaces))
+			for _, i := range ifaces {
+				up[strings.ToLower(strings.TrimSpace(i.Name))] = i.Up
+			}
+		}
+		for _, p := range policies {
+			if !strings.EqualFold(strings.TrimSpace(p.Name), strings.TrimSpace(policy)) {
+				continue
+			}
+			links := append([]awgmgr.AccessPolicyInterface(nil), p.Interfaces...)
+			sort.SliceStable(links, func(i, j int) bool { return links[i].Order < links[j].Order })
+			for _, l := range links {
+				if !up[strings.ToLower(strings.TrimSpace(l.Name))] {
+					continue
+				}
+				return policyLinkIface(l, tunnels), true
+			}
+		}
+		return "", false
+	}
+}
+
+// policyLinkIface -- интерфейс туннеля звена: у nativewg звено называется
+// NDMS-именем, у opkg-туннеля NDMS-имени нет, и связь идёт по интерфейсу или метке.
+func policyLinkIface(l awgmgr.AccessPolicyInterface, tunnels []awgmgr.Tunnel) string {
+	for _, tu := range tunnels {
+		if strings.EqualFold(l.Name, tu.NDMSName) || strings.EqualFold(l.Name, tu.InterfaceName) || (l.Label != "" && l.Label == tu.Name) {
+			return tu.InterfaceName
+		}
+	}
+	return ""
 }
 
 // resolveDefaultIface returns the interface of the tunnel awg-manager actually
@@ -359,7 +424,10 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string, graced
 // one is the live egress, so consumers get both `is_active_default` (the answer)
 // and `active_default_known` (whether there IS an answer) rather than being left
 // to guess from intent.
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix, carrier tunnelCarrierLookup) wire.Check {
+//
+// probeBlind -- цель пробы лежит (matrixTargetDown): матрица в этом обходе ни
+// подтвердить, ни опровергнуть ничего не может.
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix, carrier tunnelCarrierLookup, probeBlind bool) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -439,10 +507,13 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	// (статус не running, конфликт адресов, провал pingCheck) матрица не
 	// отменяет -- они про саму линию, а не про её простой.
 	if matrixSaysAlive(matrix, tu.ID, time.Now()) {
-		reasons = dropStaleHandshakeReason(reasons)
-		if len(reasons) == 0 {
+		kept := dropStaleHandshakeReason(reasons)
+		// Пометка -- только если простой и правда был: иначе она стояла и у
+		// несущего со свежим обменом ключами (контур S2).
+		if len(kept) == 0 && len(reasons) > 0 {
 			details["note"] = "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"
 		}
+		reasons = kept
 	}
 	// Обратное тоже верно: свежий обмен ключами ещё не значит, что трафик
 	// идёт. Удалённая сторона может отвечать на обмен, а данные при этом
@@ -455,6 +526,14 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	}
 	if len(reasons) == 0 {
 		return OK(name, start, details)
+	}
+	// Единственная претензия -- простой, а проба не отвечает ни у кого: старое
+	// рукопожатие не доказывает отказ, молчащая проба его не опровергает.
+	// Туннель не виноват, но и живым его назвать нечем -- контур S3: тревога
+	// «точно лежит» на резервах, пока лежит цель пробы.
+	if probeBlind && len(dropStaleHandshakeReason(reasons)) == 0 {
+		details["unverified_problems"] = strings.Join(reasons, "; ")
+		return Unverified(name, start, "проба не отвечает ни через один VPN-туннель: простой нечем отличить от отказа", details)
 	}
 	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) {
 		switch used, known := tunnelCarrierVerdict(tu, carrier); {
@@ -607,6 +686,38 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 		}
 	}
 	return own > 0 && othersAlive
+}
+
+// matrixTargetDown -- свежие пробы есть, ни одна не прошла, а хотя бы один
+// включённый туннель при этом обменивается ключами. Канал живой -- значит,
+// молчит цель пробы, а не туннели. Рукопожатий нет ни у кого -- это уже не цель,
+// а общая авария (пропал WAN), и тревоги остаются.
+func matrixTargetDown(matrix *awgmgr.MonitoringMatrix, tunnels []awgmgr.Tunnel, maxAge time.Duration, now time.Time) bool {
+	if matrix == nil {
+		return false
+	}
+	probed := false
+	for _, c := range matrix.Cells {
+		if !matrixCellFresh(matrix, c, now) {
+			continue
+		}
+		if c.OK {
+			return false
+		}
+		probed = true
+	}
+	if !probed {
+		return false
+	}
+	for _, tu := range tunnels {
+		if !tu.Enabled {
+			continue
+		}
+		if t := tu.LastHandshake.Time(); t != nil && now.Sub(*t) <= maxAge {
+			return true
+		}
+	}
+	return false
 }
 
 // matrixFreshWindow -- насколько свежей должна быть матрица, чтобы её ответу

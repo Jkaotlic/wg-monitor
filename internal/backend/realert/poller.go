@@ -72,6 +72,8 @@ func effectiveCadence(base, age time.Duration) time.Duration {
 }
 
 type Poller struct {
+	// trafficFacts -- где сейчас идёт трафик (alerts.TrafficFacts); nil -- не знаем.
+	trafficFacts   func(userID int64, checkName string) *alerts.TrafficFacts
 	d              *db.DB
 	tg             TGSender
 	cfg            Config
@@ -351,6 +353,18 @@ func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.Neig
 	return alerts.BuildNeighborSummaries(rows, checkName)
 }
 
+// SetTrafficFacts -- где сейчас идёт трафик: та же функция, что у первой тревоги.
+func (p *Poller) SetTrafficFacts(fn func(userID int64, checkName string) *alerts.TrafficFacts) {
+	p.trafficFacts = fn
+}
+
+func (p *Poller) trafficFor(userID int64, checkName string) *alerts.TrafficFacts {
+	if p.trafficFacts == nil || !strings.HasPrefix(checkName, "tunnel_") {
+		return nil
+	}
+	return p.trafficFacts(userID, checkName)
+}
+
 // neighborsFor -- соседи для напоминания: у bypass_leak это VPN-туннели
 // роутера, кроме несущего (как у первой тревоги), у прочих --
 // neighborSummaries.
@@ -481,6 +495,7 @@ func (p *Poller) tick(ctx context.Context) {
 			Check:        check,
 			Neighbors:    neighbors,
 			RealertEvery: cadence,
+			Traffic:      p.trafficFor(sh.UserID, sh.CheckName),
 		})
 		// Тот же двухкнопочный набор, что и под исходной HARD-тревогой:
 		// открыть роутер в приложении (если база настроена) и отложить

@@ -301,6 +301,15 @@ func (t *repairThread) Progress(ctx context.Context, text string) {
 	t.edit(ctx, phaseProgress, text, t.recipients())
 }
 
+// Moved -- факт про трафик без починки: правкой, а нет правки -- новым
+// сообщением. Закрытие снимается сразу: о том, что VPN-туннель ожил, человек
+// узнает обычным «восстановилось», чинил-то его не бот.
+func (t *repairThread) Moved(ctx context.Context, text string) {
+	t.refresh()
+	t.r.finish(t.key, t.gen, false)
+	t.say(ctx, phaseMoved, text)
+}
+
 func (t *repairThread) Done(ctx context.Context, text string) {
 	t.refresh()
 	t.r.finish(t.key, t.gen, true)
@@ -522,6 +531,9 @@ const AutoRepairLine = "Автопочинка включена — начина
 // идёт и после «Починил» совет «нажмите «Починить»» -- неправда.
 const AdviceTitle = "Что делать"
 
+// ImpactTitle -- заголовок раздела тревоги «что это ломает».
+const ImpactTitle = "Что это ломает"
+
 // repairPhase -- на чём стоит починка; от неё зависят значок итога и то,
 // что остаётся от тревоги под ним.
 type repairPhase int
@@ -531,6 +543,7 @@ const (
 	phaseDone                          // починил
 	phaseFailed                        // сам не смог
 	phaseNotStarted                    // не запускалась
+	phaseMoved                         // трафик уведён или возвращён, починки нет
 )
 
 func (p repairPhase) badge() string {
@@ -541,6 +554,8 @@ func (p repairPhase) badge() string {
 		return "❌"
 	case phaseNotStarted:
 		return "⚠️"
+	case phaseMoved:
+		return "↪️"
 	}
 	return "🛠"
 }
@@ -576,6 +591,11 @@ func alertUnder(base string, ph repairPhase) string {
 			continue
 		}
 		if ph == phaseProgress && strings.HasPrefix(body, AdviceTitle+":") {
+			continue
+		}
+		// Трафик уведён: «правила не работают» из тревоги уже неправда, рядом с
+		// фактом об уводе их оставлять нельзя.
+		if ph == phaseMoved && strings.HasPrefix(body, ImpactTitle+":") {
 			continue
 		}
 		kept = append(kept, b)

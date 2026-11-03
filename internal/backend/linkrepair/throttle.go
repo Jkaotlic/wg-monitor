@@ -95,6 +95,23 @@ func (a Attempts) verdict(nickname, checkName string) (bool, string, bool, error
 	return true, "", false, nil
 }
 
+// overLimit -- упёрся ли счётчик в потолок окна, без учёта стопа «нужен человек»:
+// стоп -- про лесенку, а увод и возврат её не касаются. n -- попыток в окне.
+func (a Attempts) overLimit(nickname, checkName string) (bool, int, error) {
+	log, err := a.load(nickname, checkName)
+	if err != nil {
+		return false, 0, err
+	}
+	cutoff := a.now().Add(-attemptWindow)
+	fresh := 0
+	for _, t := range log.At {
+		if t.After(cutoff) {
+			fresh++
+		}
+	}
+	return fresh >= attemptLimit, fresh, nil
+}
+
 // Record запоминает попытку. ok=false запрещает следующую автопочинку до
 // вмешательства человека: раз автоматика не справилась, повторять её на том
 // же месте бессмысленно.
