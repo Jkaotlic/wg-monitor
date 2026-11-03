@@ -271,3 +271,99 @@ func TestTunnelsCheck_AwgmConnLeavesMarginToParentDeadline(t *testing.T) {
 	}
 	t.Fatal("проверки tunnel_awg10 нет")
 }
+
+// slowPolicyStub -- туннель без правил с выключенным pingCheck: его вердикт
+// решает ленивое чтение политик доступа (newTunnelCarrierLookup), и политики
+// отвечают не сразу (1,5 с). policies -- ответ политик; connHang -- проверка
+// связи висит, пока агент не бросит ждать (мёртвый туннель), иначе 404.
+func slowPolicyRun(t *testing.T, tunnel, policies string, connHang bool) wire.Check {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[` + tunnel + `]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"tunnelId":"awg10","status":"disabled","method":"icmp","failCount":0,"failThreshold":3}
+			]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/routing/access-policies":
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":` + policies + `}`))
+		case "/api/monitoring/matrix", "/api/routing/policy-interfaces":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			if !connHang {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			<-r.Context().Done()
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	// Срок проверки сжат с perCheckTimeout (10 с) до 3 с: соотношение то же --
+	// политики успевают, только если их не держат за спиной проверки связи.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, c := range (TunnelsCheck{Client: awgmgr.New(srv.URL)}).Run(ctx, Deps{}) {
+		if c.Name == "tunnel_awg10" {
+			return c
+		}
+	}
+	t.Fatal("проверки tunnel_awg10 нет")
+	return wire.Check{}
+}
+
+// Ревью v0.65: Run ждал ответов о связи ДО обхода туннелей, и ленивое чтение
+// политик оставалось с секундой срока. Зависшая проверка связи (ровно случай
+// мёртвого туннеля) роняла чтение политик, и вердикт менялся: неиспользуемый
+// туннель становился unverified, а мёртвое звено политики -- unverified вместо
+// fail, то есть тревога глохла. Вердикт не зависит от проверки связи ни
+// данными, ни сроком.
+func TestTunnelsCheck_HangingAwgmConnDoesNotShiftVerdict(t *testing.T) {
+	cases := []struct {
+		name, tunnel, policies, want string
+	}{
+		{
+			name:     "туннель без правил и без звена",
+			tunnel:   `{"id":"awg10","name":"unused","type":"awg","status":"running","enabled":true,"interfaceName":"nwg1"}`,
+			policies: `[]`,
+			want:     "ok",
+		},
+		{
+			name:     "мёртвое звено политики",
+			tunnel:   `{"id":"awg10","name":"link","type":"awg","status":"running","enabled":true,"interfaceName":"nwg1","ndmsName":"Wireguard1"}`,
+			policies: `[{"name":"HydraRoute","interfaces":[{"name":"Wireguard1","order":0}]}]`,
+			want:     "fail",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := slowPolicyRun(t, tc.tunnel, tc.policies, false)
+			hang := slowPolicyRun(t, tc.tunnel, tc.policies, true)
+			if base.Status != tc.want || base.Details["unverified"] != nil {
+				t.Fatalf("без проверки связи вердикт %s (%v), хотим %s", base.Status, base.Details["unverified_reason"], tc.want)
+			}
+			if hang.Status != base.Status {
+				t.Fatalf("зависшая проверка связи сменила вердикт: %s -> %s (%v)", base.Status, hang.Status, hang.Details["unverified_reason"])
+			}
+			for _, k := range []string{"unverified", "unverified_reason", "note", "error"} {
+				if base.Details[k] != hang.Details[k] {
+					t.Fatalf("%s: %v -> %v", k, base.Details[k], hang.Details[k])
+				}
+			}
+			if hang.Details["awgm_conn"] != "error" {
+				t.Fatalf("зависшая проверка связи -- error: %v", hang.Details["awgm_conn"])
+			}
+		})
+	}
+}

@@ -204,14 +204,17 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 // fails to decode, so the ceiling must fit the largest honest answer of the
 // endpoint -- geo-expand of a big category list is larger than 1 MiB.
 func (c *Client) getLimited(ctx context.Context, path string, out any, limit int64) error {
-	return c.getVia(ctx, c.HTTP, path, out, limit)
+	return c.getVia(ctx, c.HTTP, path, out, limit, slog.LevelWarn)
 }
 
-func (c *Client) getVia(ctx context.Context, hc *http.Client, path string, out any, limit int64) error {
+// getVia -- get через заданный http.Client. failLevel -- уровень записи о
+// сорванном запросе: проверка связи у мёртвого туннеля срывается по сроку
+// каждый обход, и Warn на каждый превратил бы журнал в шум.
+func (c *Client) getVia(ctx context.Context, hc *http.Client, path string, out any, limit int64, failLevel slog.Level) error {
 	start := time.Now()
 	resp, err := c.doVia(ctx, hc, http.MethodGet, path, nil, "")
 	if err != nil {
-		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
+		slog.Log(ctx, failLevel, "awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
@@ -381,7 +384,7 @@ func (c *Client) MonitoringMatrix(ctx context.Context) (*MonitoringMatrix, error
 // связи». Поэтому запрос идёт без него: срок обязан задать ctx вызывающего.
 func (c *Client) TestConnectivity(ctx context.Context, tunnelID string) (*Connectivity, error) {
 	var env Envelope[Connectivity]
-	if err := c.getVia(ctx, c.streamHTTPClient(), "/api/test/connectivity?id="+url.QueryEscape(tunnelID), &env, 1<<20); err != nil {
+	if err := c.getVia(ctx, c.streamHTTPClient(), "/api/test/connectivity?id="+url.QueryEscape(tunnelID), &env, 1<<20, slog.LevelDebug); err != nil {
 		if IsEndpointMissing(err) {
 			return nil, fmt.Errorf("%w: проверка связи появилась в awg-manager позже", ErrUnsupportedByRouter)
 		}

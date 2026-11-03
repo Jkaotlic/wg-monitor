@@ -116,9 +116,12 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	if err != nil {
 		return []wire.Check{Fail("tunnels", start, err.Error(), nil)}
 	}
-	// Вопросы о связи (v0.65) идут параллельно с остальными запросами обхода:
-	// у мёртвого туннеля awg-manager отвечает долго, и последовательно они
-	// съели бы срок проверки, нужный спискам правил и матрице.
+	// Вопросы о связи (v0.65) идут параллельно со всем обходом, а их ответы
+	// дописываются в самом конце: у мёртвого туннеля awg-manager отвечает
+	// долго, и ждать его до вердиктов значило бы оставить ленивым запросам
+	// (политики доступа в evalTunnel) секунду срока. Ревью v0.65: так у
+	// мёртвого звена политики fail становился unverified и тревога глохла.
+	// Вердикт не зависит от проверки связи ни данными, ни сроком.
 	connCh := make(chan map[string]awgmConn, 1)
 	go func() { connCh <- collectAwgmConn(ctx, t.Client, tunnels.Tunnels) }()
 
@@ -178,7 +181,6 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		"tunnel_count":         len(tunnels.Tunnels),
 		"tunnel_count_enabled": enabledCount,
 	}))
-	conns := <-connCh
 	for _, tu := range tunnels.Tunnels {
 		if !tunnelTypeChecked(tu) {
 			continue
@@ -192,11 +194,10 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 			// Остановлен недавно: правила за ним сохранены окном терпимости.
 			chk.Details["run_grace"] = true
 		}
-		conn, asked := conns[tu.ID]
-		annotateAwgmConn(&chk, tu, conn, asked)
 		out = append(out, chk)
 	}
 	annotateAwgmDown(out, t.AwgmDownSince)
+	annotateAwgmConns(out, tunnels.Tunnels, <-connCh)
 	return out
 }
 

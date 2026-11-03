@@ -23,13 +23,14 @@ import (
 // awgmConnTimeout -- срок на все вопросы о связи за обход (и, значит, на
 // каждый). У мёртвого туннеля awg-manager ждёт ответа сам; срок на каждый
 // вопрос по отдельности при пяти мёртвых туннелях растянул бы обход вдвое.
+// 8 с, а не 10: срок всей проверки (perCheckTimeout) -- те же 10 с.
 // var, а не const: тест сжимает его до долей секунды.
-var awgmConnTimeout = 10 * time.Second
+var awgmConnTimeout = 8 * time.Second
 
 // awgmConnMargin -- запас до срока всей проверки (perCheckTimeout у
-// репортёра): после ответов о связи проверке ещё собирать выдачу, и вопросы,
-// съевшие весь её срок, уронили бы её целиком.
-const awgmConnMargin = time.Second
+// репортёра): после ответов о связи проверке ещё дописать поля и отдать
+// выдачу; вопросы, съевшие весь её срок, уронили бы её целиком.
+const awgmConnMargin = 2 * time.Second
 
 // awgmConnParallel -- сколько вопросов разом. Каждый у awg-manager -- живая
 // проба через туннель; десяток одновременно на слабом роутере -- нагрузка.
@@ -104,6 +105,27 @@ func collectAwgmConn(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tun
 	}
 	wg.Wait()
 	return out
+}
+
+// annotateAwgmConns -- отдельный проход по готовым проверкам туннелей после
+// вердиктов: сырьё awg-manager только дописывается к деталям.
+func annotateAwgmConns(out []wire.Check, tunnels []awgmgr.Tunnel, conns map[string]awgmConn) {
+	byID := make(map[string]awgmgr.Tunnel, len(tunnels))
+	for _, tu := range tunnels {
+		byID[tu.ID] = tu
+	}
+	for i := range out {
+		id, ok := strings.CutPrefix(out[i].Name, tunnelCheckPrefix)
+		if !ok || id == "" {
+			continue
+		}
+		tu, ok := byID[id]
+		if !ok {
+			continue
+		}
+		conn, asked := conns[id]
+		annotateAwgmConn(&out[i], tu, conn, asked)
+	}
 }
 
 // annotateAwgmConn кладёт сырьё в детали проверки туннеля. Пустое не пишется:
