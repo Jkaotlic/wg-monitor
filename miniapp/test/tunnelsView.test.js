@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { tunnelsView } from '../src/tunnelsView.js'
+import { withCheckVerdict } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot. Данные сняты с домашнего роутера:
 // политика HydraRoute ведёт в awg11, за ним два звена резерва, ещё
@@ -221,5 +222,36 @@ describe('tunnelsView -- машинное имя за тап', () => {
     expect(v.active.code).toBe('awg11')
     expect(v.chain[1].title).toBe('NetherlandsKerkradeS24')
     expect(v.chain[1].code).toBe('awg20')
+  })
+})
+
+// v0.65: слово awg-manager у каждого звена, неиспользуемого и несущего --
+// из проекции проверки (events.tunnels), а не из снимка: withCheckVerdict
+// пишет в копию снимка status 'dead', и слово подменилось бы мнением бота.
+describe('tunnelsView -- слово awg-manager', () => {
+  const events = [
+    { tunnel_id: 'awg11', status: 'fail', run_state: 'running', awgm_conn: 'disconnected' },
+    { tunnel_id: 'awg20', status: 'ok', run_state: 'running', awgm_conn: 'connected', awgm_conn_latency_ms: 64 },
+  ]
+  const dead = withCheckVerdict(SNAP, { tunnels: events })
+
+  it('снимок говорит dead, а awg-manager -- «Нет связи» из проекции', () => {
+    expect(dead.tunnels.find((x) => x.id === 'awg11').status).toBe('dead')
+    const v = tunnelsView(dead, undefined, events)
+    expect(v.chain.find((c) => c.tunnelID === 'awg11').awgm.label).toBe('Нет связи')
+    expect(v.chain.find((c) => c.tunnelID === 'awg20').awgm).toMatchObject({ label: 'Активен', note: '64 мс' })
+    expect(v.active.awgm.label).toBe('Нет связи')
+  })
+
+  it('неиспользуемый получает слово, у кого проверки нет -- null', () => {
+    const v = tunnelsView(SNAP, undefined, [...events, { tunnel_id: 'awg21', status: 'ok', run_state: 'disabled' }])
+    expect(v.unused.find((u) => u.id === 'awg21').awgm.label).toBe('Выключен')
+    expect(v.chain.find((c) => c.tunnelID === 'awg10').awgm).toBe(null)
+  })
+
+  it('без проверок -- слов нет, раскладка прежняя', () => {
+    const v = tunnelsView(SNAP)
+    expect(v.chain.every((c) => c.awgm === null)).toBe(true)
+    expect(v.active.awgm).toBe(null)
   })
 })

@@ -24,6 +24,7 @@ import { ReplaceScreen } from './ReplaceScreen.jsx'
 import { TunnelScreen } from './TunnelScreen.jsx'
 import { ConfImportScreen } from './ConfImportScreen.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
+import { AwgmLine } from '../ui/AwgmLine.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -228,7 +229,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const shown = withOpenAlarms(withCheckVerdict(snapshot, checks, { failed: checksFailed }), checks?.incidents)
   // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
   // traffic из того же ответа /events, что и проверки.
-  const view = tunnelsView(shown, checks?.traffic)
+  // Слово awg-manager (v0.65) -- из проекции проверки того же ответа, не из
+  // снимка с вердиктом: там у мёртвого VPN-туннеля уже «dead» бота.
+  const view = tunnelsView(shown, checks?.traffic, checks?.tunnels)
   // Тревоги -- в подпись строк: строка говорит то же, что считает счёт (Fix 2).
   const list = tunnelList(shown, checks?.incidents)
   // Счёт, заголовок и подпись -- одной функцией, с тревогами (I1, M2).
@@ -391,6 +394,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               {view.active.code}
               {view.active.iface ? ` · интерфейс ${view.active.iface}` : ''}
             </p>
+            <AwgmLine badge={view.active.awgm} />
             <div class="stat-grid" style="margin:14px 0 16px">
               <Stat
                 label="обмен ключами"
@@ -490,6 +494,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 name: c.title,
                 title: CHAIN_TITLE[c.role] ?? 'Состояние неизвестно',
                 value: c.role === 'active' && c.handshakeAgeSec != null ? humanAge(c.handshakeAgeSec) : c.note,
+                extra: <AwgmLine badge={c.awgm} />,
                 action: chainAction(c),
               }))}
             />
@@ -510,6 +515,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                 <DataRow
                   title={t.title}
                   code={t.code}
+                  titleExtra={<AwgmLine badge={t.awgm} />}
                   value={t.live === 'up' ? 'поднят' : t.live === 'down' ? 'выключен' : 'неизвестно'}
                   valueTone="muted"
                 />
@@ -553,6 +559,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           asleep={asleep}
           snapshot={snapshot}
           verdictSnapshot={shown}
+          eventTunnels={checks?.tunnels}
           tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}

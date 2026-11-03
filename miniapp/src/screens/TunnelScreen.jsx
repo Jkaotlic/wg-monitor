@@ -23,6 +23,7 @@ import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
 import { ExitRow } from './SignalSections.jsx'
+import { awgmBadge, awgmToneClass } from '../awgmBadge.js'
 
 // Экран одного VPN-туннеля: что это, сколько через него идёт и можно ли его
 // удалить. Локальный слой вкладки (как мастер замены): в адрес не пишется.
@@ -30,7 +31,7 @@ import { ExitRow } from './SignalSections.jsx'
 // Удаление необратимо, поэтому подтверждается набором имени, а сервер сам
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
-export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
+export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, eventTunnels, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
   // Слова о состоянии -- по снимку с вердиктом проверок, как в списке (A1.1):
   // иначе роутерное «running» спорит с проверкой «не отвечает».
   const fresh = tunnelCard(verdictSnapshot ?? snapshot, tunnelID)
@@ -251,6 +252,11 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
       </button>
     ) : null
 
+  // Слово awg-manager (v0.65) -- из проекции проверки (events.tunnels), не из
+  // снимка с вердиктом: здесь же «Состояние» говорит слово бота, и обе строки
+  // рядом показывают расхождение. Пояснение -- задержка или причина.
+  const awgm = awgmBadge((eventTunnels ?? []).find((x) => x?.tunnel_id === card?.id))
+
   const meta = (snapshot?.tunnels ?? []).find((x) => x.id === card?.id)
   const tunnelRunning = meta ? Boolean(meta.enabled) && (!meta.status || meta.status === 'running') : true
 
@@ -262,6 +268,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, tunn
         </h1>
         <div class="card card-rows">
           <DataRow title="Состояние" code={card.id} value={fresh ? card.stateLabel : outcome?.done ? 'удалён с роутера' : 'нет в снимке роутера'} />
+          {fresh && awgm && <DataRow title="awg-manager" value={awgm.label} valueSub={awgm.note || undefined} valueTone={awgmToneClass(awgm.tone)} />}
           {/* Пропавший из снимка VPN-туннель: прежние интерфейс и правила
               были бы вчерашней картиной. */}
           {fresh && <DataRow title="Интерфейс" value={card.iface || 'роутер не сообщил'} />}
