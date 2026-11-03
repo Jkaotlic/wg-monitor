@@ -34,6 +34,8 @@
   "tunnels": [
     {
       "active_default_known": true,
+      "awgm_conn": "disconnected",
+      "awgm_conn_reason": "timeout",
       "default_route_intent": true,
       "enabled": true,
       "handshake_age_sec": 2400,
@@ -48,6 +50,8 @@
     },
     {
       "active_default_known": true,
+      "awgm_conn": "connected",
+      "awgm_conn_latency_ms": 42,
       "default_route_intent": true,
       "enabled": true,
       "handshake_age_sec": 2400,
@@ -65,6 +69,8 @@
     },
     {
       "active_default_known": true,
+      "awgm_conn": "connected",
+      "awgm_conn_latency_ms": 42,
       "default_route_intent": true,
       "enabled": true,
       "handshake_age_sec": 17,

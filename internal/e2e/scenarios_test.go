@@ -87,6 +87,14 @@ func TestDeadCarrierFreshHandshake(t *testing.T) {
 	if len(s.Incidents) != 1 || s.Incidents[0].CheckName != "tunnel_"+carrierID {
 		t.Errorf("инциденты на экране: %+v", s.Incidents)
 	}
+	// v0.65: рядом с вердиктом бота -- слово самого awg-manager. Сырьё доезжает
+	// до экрана, у живого резерва -- «связь есть».
+	if got := s.Tunnel(t, carrierID).AwgmConn; got != "disconnected" {
+		t.Errorf("awgm_conn мёртвого несущего на экране %q, хотим disconnected", got)
+	}
+	if got := s.Tunnel(t, backup1ID).AwgmConn; got != "connected" {
+		t.Errorf("awgm_conn живого резерва на экране %q, хотим connected", got)
+	}
 }
 
 var standardChain = []string{"Wireguard2", "OpkgTun10", "OpkgTun11"}

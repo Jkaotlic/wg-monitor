@@ -64,6 +64,16 @@ type miniappTunnel struct {
 	ActiveDefaultKnown bool   `json:"active_default_known"`
 	Note               string `json:"note,omitempty"`
 	TS                 string `json:"ts,omitempty"`
+	// v0.65: сырьё для слова awg-manager на экране -- тем же правилом, что
+	// значок карточки в его UI («Конфликт IP», «Нет связи», «Сломан»). Слово
+	// считает мини-апп (awgmBadge.js), бэкенд пропускает как есть. Нет ключа
+	// AwgmConn -- агент связь не спрашивал (старый агент, старый awg-manager,
+	// туннель не running/broken); экран обязан сказать «не проверялась».
+	AddressConflict   bool   `json:"address_conflict,omitempty"`
+	AwgmConn          string `json:"awgm_conn,omitempty"`
+	AwgmConnLatencyMs *int   `json:"awgm_conn_latency_ms,omitempty"`
+	AwgmConnReason    string `json:"awgm_conn_reason,omitempty"`
+	AwgmStatusDetails string `json:"awgm_status_details,omitempty"`
 	// RoutesDNS / RoutesStatic -- сколько правил ведут в этот VPN-туннель.
 	// Нужны только для вывода «обход идёт правилами» и в мини-апп не уходят.
 	RoutesDNS    int `json:"-"`
@@ -93,6 +103,11 @@ type miniappTunnelDetails struct {
 	RoutesDNS          int    `json:"routes_dns"`
 	RoutesStatic       int    `json:"routes_static"`
 	RunGrace           bool   `json:"run_grace"`
+	AddressConflict    bool   `json:"address_conflict"`
+	AwgmConn           string `json:"awgm_conn"`
+	AwgmConnLatencyMs  *int   `json:"awgm_conn_latency_ms"`
+	AwgmConnReason     string `json:"awgm_conn_reason"`
+	AwgmStatusDetails  string `json:"awgm_status_details"`
 }
 
 // miniappTunnelFromEvent projects one latest-event row into the mini app's
@@ -138,6 +153,11 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	out.RoutesDNS = d.RoutesDNS
 	out.RoutesStatic = d.RoutesStatic
 	out.RunGrace = d.RunGrace
+	out.AddressConflict = d.AddressConflict
+	out.AwgmConn = d.AwgmConn
+	out.AwgmConnLatencyMs = d.AwgmConnLatencyMs
+	out.AwgmConnReason = d.AwgmConnReason
+	out.AwgmStatusDetails = d.AwgmStatusDetails
 	return out, true
 }
 
