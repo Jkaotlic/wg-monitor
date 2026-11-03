@@ -9,6 +9,7 @@ import S13 from './fixtures/e2e/s13_moved.json'
 import { pathState, reserveLine, deadReserveLine, carrierAlive } from '../src/trafficPath.js'
 import { routerHeadline } from '../src/routerHeadline.js'
 import { fleetRow } from '../src/fleet.js'
+import { awgmBadge } from '../src/awgmBadge.js'
 
 // Экран глазами человека: снимки -- настоящие ответы мини-аппа из контура
 // internal/e2e (screen_fixture_test.go сверяет их с контуром), функции --
@@ -112,5 +113,19 @@ describe('S13: трафик уведён на живой резерв', () => {
   })
   it('в списке роутеров -- не красная тревога', () => {
     expect(S13.reserve_only_alert).toBe(true)
+  })
+})
+
+// v0.65: настоящий ответ мини-аппа из контура -- слово awg-manager у мёртвого
+// несущего «Нет связи» рядом с вердиктом бота, у живого резерва -- «Активен».
+describe('S1: слово awg-manager рядом с вердиктом бота', () => {
+  const carrier = S1.tunnels.find((t) => t.name === 'vpn-main')
+  it('мёртвый несущий -- «Нет связи», бот -- провал', () => {
+    expect(carrier.status).toBe('fail')
+    expect(awgmBadge(carrier)).toMatchObject({ label: 'Нет связи', tone: 'bad' })
+  })
+  it('живой резерв -- «Активен» с задержкой', () => {
+    const backup = S1.tunnels.find((t) => t.name !== 'vpn-main' && t.status === 'ok')
+    expect(awgmBadge(backup)).toMatchObject({ label: 'Активен', tone: 'ok', note: '42 мс' })
   })
 })

@@ -42,6 +42,9 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -130,6 +133,9 @@ func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testi
 		case "/api/monitoring/matrix":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -179,6 +185,9 @@ func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(
 		case "/api/monitoring/matrix":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -223,6 +232,9 @@ func TestTunnelsCheck_DoesNotSuppressFailureWhenRouteListsUnreadable(t *testing.
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		case "/api/monitoring/matrix":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -273,6 +285,9 @@ func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -387,6 +402,9 @@ func TestTunnelsCheck_PingCheckDisabledDoesNotFailLiveTunnel(t *testing.T) {
 		case "/api/monitoring/matrix":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -423,6 +441,9 @@ func TestTunnelsCheck_FutureHandshakeDoesNotReportOK(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		case "/api/monitoring/matrix":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -468,6 +489,9 @@ func TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag(t *testing.T) 
 		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -509,6 +533,9 @@ func TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
 		case "/api/monitoring/matrix", "/api/routing/access-policies", "/api/routing/policy-interfaces":
 			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -637,6 +664,9 @@ func matrixStub(t *testing.T, withMatrix bool) *httptest.Server {
 				"tunnels":[{"id":"awg10","name":"line-a","ifaceName":"opkgtun10"}],
 				"cells":[{"targetId":"cc","tunnelId":"awg10","latencyMs":84,"ok":true,"isSelf":true}],
 				"updatedAt":"2026-09-09T09:32:23Z"}}`))
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -724,6 +754,9 @@ func TestTunnelsCheck_IdleTunnelAnsweringMatrixIsNotDown(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[
 				{"targetId":"t1","tunnelId":"awg10","latencyMs":84,"ok":true,"ts":"` + now + `"}
 			],"updatedAt":"` + now + `"}}`))
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -779,6 +812,9 @@ func probeStub(t *testing.T, cells string, updatedAt time.Time) *httptest.Server
 		case "/api/monitoring/matrix":
 			ts := updatedAt.UTC().Format(time.RFC3339)
 			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[` + strings.ReplaceAll(cells, "TS", ts) + `],"updatedAt":"` + ts + `"}}`))
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -876,6 +912,9 @@ func TestTunnelsCheck_DoesNotSuppressDeadTunnelThatCarriesPolicyOrDefault(t *tes
 					_, _ = w.Write([]byte(`{"success":true,"data":` + tc.policies + `}`))
 				case "/api/monitoring/matrix":
 					w.WriteHeader(http.StatusNotFound)
+				case "/api/test/connectivity":
+					// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+					w.WriteHeader(http.StatusNotFound)
 				default:
 					t.Errorf("unexpected path: %s", r.URL.Path)
 				}
@@ -972,6 +1011,9 @@ func probeStubIdleReserve(t *testing.T, cells string) *httptest.Server {
 		case "/api/monitoring/matrix":
 			ts := now.Format(time.RFC3339)
 			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[` + strings.ReplaceAll(cells, "TS", ts) + `],"updatedAt":"` + ts + `"}}`))
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -1030,6 +1072,9 @@ func TestTunnelsCheck_AllStaleAndProbeSilentStaysFail(t *testing.T) {
 		case "/api/monitoring/matrix":
 			ts := now.Format(time.RFC3339)
 			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[{"targetId":"t1","tunnelId":"awg10","ok":false,"ts":"` + ts + `"},{"targetId":"t1","tunnelId":"awg11","ok":false,"ts":"` + ts + `"}],"updatedAt":"` + ts + `"}}`))
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -1083,6 +1128,9 @@ func TestTunnelsCheck_PolicyRulesCreditedToLiveLink(t *testing.T) {
 		case "/api/routing/policy-interfaces":
 			_, _ = w.Write([]byte(`{"success":true,"data":[{"name":"OpkgTun10","label":"reserve","up":true},{"name":"Wireguard2","label":"main","up":true}]}`))
 		case "/api/monitoring/matrix":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)

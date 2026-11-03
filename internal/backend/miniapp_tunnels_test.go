@@ -294,3 +294,45 @@ func TestMiniappTunnelFromEventMatrixLatencyAbsentStaysNil(t *testing.T) {
 		t.Fatalf("без данных поле обязано быть nil, получили %v", *got.MatrixLatencyMs)
 	}
 }
+
+// v0.65: сырьё для слова awg-manager на экране («Нет связи», «Сломан»). Белый
+// список пропускает его как есть -- слово считает мини-апп.
+func TestMiniappTunnelFromEventProjectsAwgmConn(t *testing.T) {
+	row := db.EventRow{
+		CheckName: "tunnel_awg10",
+		Status:    "ok",
+		DetailsJSON: `{"tunnel_id":"awg10","status":"broken","address_conflict":true,"awgm_conn":"disconnected",` +
+			`"awgm_conn_latency_ms":64,"awgm_conn_reason":"timeout","awgm_status_details":"Не запустился — перезапустите туннель"}`,
+	}
+	got, ok := miniappTunnelFromEvent(row)
+	if !ok {
+		t.Fatal("must project")
+	}
+	blob := mustJSON(t, got)
+	for _, want := range []string{`"address_conflict":true`, `"awgm_conn":"disconnected"`, `"awgm_conn_latency_ms":64`,
+		`"awgm_conn_reason":"timeout"`, `"awgm_status_details":"Не запустился — перезапустите туннель"`} {
+		if !contains(blob, want) {
+			t.Fatalf("%s не доехал: %s", want, blob)
+		}
+	}
+}
+
+// Старый агент сырья не шлёт: ключей нет вовсе -- «не спрашивали» не должно
+// превратиться ни в «конфликта нет», ни в «связь есть».
+func TestMiniappTunnelFromEventAwgmConnAbsentOmitted(t *testing.T) {
+	row := db.EventRow{
+		CheckName:   "tunnel_awg10",
+		Status:      "ok",
+		DetailsJSON: `{"tunnel_id":"awg10","status":"running","address_conflict":false}`,
+	}
+	got, ok := miniappTunnelFromEvent(row)
+	if !ok {
+		t.Fatal("must project")
+	}
+	blob := mustJSON(t, got)
+	for _, key := range []string{"address_conflict", "awgm_conn", "awgm_conn_latency_ms", "awgm_conn_reason", "awgm_status_details"} {
+		if contains(blob, `"`+key+`"`) {
+			t.Fatalf("ключ %s без данных: %s", key, blob)
+		}
+	}
+}

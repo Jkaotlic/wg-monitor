@@ -178,8 +178,11 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 	// Выдумывать свои бессмысленно: проекция их отбросит, и экран честно
 	// скажет «0 линий поднято» о поднятых туннелях -- то есть песочница
 	// станет учить неправде.
-	tunnelOK := `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":true,"is_active_default":true,"active_default_known":true}`
-	tunnelBad := `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"down","enabled":true,"handshake_age_sec":5400,"ping_check_status":"fail","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"рукопожатия нет 90 минут"}`
+	tunnelOK := `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":true,"is_active_default":true,"active_default_known":true,"awgm_conn":"connected","awgm_conn_latency_ms":64}`
+	// Сломанный VPN-туннель -- так, как его зовёт awg-manager (v0.65): broken с
+	// пояснением на карточке; экран пишет «awg-manager: Сломан» и пояснение.
+	tunnelBad := `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"broken","enabled":true,"handshake_age_sec":5400,"ping_check_status":"fail","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"рукопожатия нет 90 минут",` +
+		`"awgm_conn":"disconnected","awgm_conn_reason":"timeout","awgm_status_details":"Не запустился — перезапустите туннель"}`
 	rows := []struct {
 		name    string
 		status  string
@@ -194,7 +197,7 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		// Сторож своего DNS-сервера: проверка вне основного порядка экрана,
 		// и только на ней видно, что её имя переведено («Свой DNS-сервер»).
 		{"resolver_guard", "ok", `{}`},
-		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"vpn-de","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true}`},
+		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"vpn-de","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true,"awgm_conn":"connected","awgm_conn_latency_ms":212}`},
 	}
 	if broken {
 		// VPN-туннель со своего сервера -- под именем, каким его заводит
@@ -208,6 +211,10 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 			`","status":"running","enabled":true,"handshake_age_sec":30,"ping_check_status":"ok","active_default_known":true}`})
 		rows[5].status = "fail"
 		rows[5].details = tunnelBad
+		// Расхождение router4car4 02.11: бот считает VPN-туннель рабочим, а
+		// карточка awg-manager пишет «Нет связи». Экран обязан показать обе.
+		rows[7].details = `{"tunnel_id":"awg10","tunnel_name":"vpn-de","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true,` +
+			`"awgm_conn":"disconnected","awgm_conn_reason":"timeout"}`
 		rows[1].status = "fail"
 		rows[1].details = `{"endpoints":4,"failed_count":2,"rkn_probed":true,"rkn_suspect":true}`
 		// Сервер имён для русских сайтов молчит, заграничные отвечают
@@ -256,12 +263,12 @@ func seedWorkChecks(d *db.DB, uid int64, ts time.Time) error {
 			`"policies":[{"name":"HydraRoute","active_tunnel_id":"awg14","via_vpn":true,"dns":32,"hr_neo":32,` +
 			`"links":[{"tunnel_id":"awg14","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`},
 		{"awg_manager", "ok", `{"version":"2.19.1","firmware":"5.02.A.8.0-3"}`},
-		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":1447,"ping_check_status":"disabled","default_route_intent":true,"is_active_default":false,"active_default_known":true}`},
+		{"tunnel_awg10", "fail", `{"tunnel_id":"awg10","tunnel_name":"vpn-nl","status":"running","enabled":true,"handshake_age_sec":1447,"ping_check_status":"disabled","default_route_intent":true,"is_active_default":false,"active_default_known":true,"awgm_conn":"disconnected","awgm_conn_reason":"timeout"}`},
 		// awg12 -- VPN-туннель вне набора (vpn-fi в снимке маршрутов
 		// workRouteSnapshot): без строки в базе бэкенд ответил бы
 		// unknown_tunnel на запрос его трафика.
-		{"tunnel_awg12", "ok", `{"tunnel_id":"awg12","tunnel_name":"vpn-fi","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":false,"is_active_default":false,"active_default_known":true}`},
-		{"tunnel_awg14", "ok", `{"tunnel_id":"awg14","tunnel_name":"vpn-hip","status":"running","enabled":true,"handshake_age_sec":88,"ping_check_status":"disabled","matrix_latency_ms":117,"matrix_updated_at":"2026-09-18T07:58:02Z","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"}`},
+		{"tunnel_awg12", "ok", `{"tunnel_id":"awg12","tunnel_name":"vpn-fi","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":false,"is_active_default":false,"active_default_known":true,"awgm_conn":"connected","awgm_conn_latency_ms":71}`},
+		{"tunnel_awg14", "ok", `{"tunnel_id":"awg14","tunnel_name":"vpn-hip","status":"running","enabled":true,"handshake_age_sec":88,"ping_check_status":"disabled","matrix_latency_ms":117,"matrix_updated_at":"2026-09-18T07:58:02Z","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу","awgm_conn":"connected","awgm_conn_latency_ms":109}`},
 	}
 	for shift := 0; shift < 3; shift++ {
 		at := ts.Add(-time.Duration(shift) * time.Minute)

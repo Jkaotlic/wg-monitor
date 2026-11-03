@@ -569,6 +569,9 @@ type ScreenTunnel struct {
 	Status   string `json:"status"`
 	RunState string `json:"run_state"`
 	Note     string `json:"note"`
+	// AwgmConn -- ответ проверки связи awg-manager (v0.65): из него экран пишет
+	// «awg-manager: Нет связи».
+	AwgmConn string `json:"awgm_conn"`
 }
 
 // ScreenTraffic -- главный ответ экрана: куда идёт обход и жив ли он.

@@ -8,6 +8,7 @@
 import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 import { withSnapshotCarrier } from './trafficPath.js'
 import { ALARM_OPEN_LABEL } from './tunnelDelete.js'
+import { awgmBadge } from './awgmBadge.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активного VPN-туннеля, второе --
@@ -73,7 +74,7 @@ function rulesNote(row, policy) {
 
 // Цепочка политики звеньями. activeTunnelID -- кого отметить несущим; пусто --
 // никого (несущий неизвестен: звенья показываем, роль «работает сейчас» -- нет).
-function chainOf(policy, byID, activeTunnelID, opts) {
+function chainOf(policy, byID, activeTunnelID, opts, awgm) {
   return (policy?.interfaces ?? []).map((link) => {
     const tunnel = link.tunnel_id ? byID.get(link.tunnel_id) : undefined
     const role = chainRole(link, tunnel, activeTunnelID, opts)
@@ -92,13 +93,19 @@ function chainOf(policy, byID, activeTunnelID, opts) {
       // нет, и кнопки под ними быть не должно.
       ndmsName: tunnel?.ndms_name ?? '',
       live: tunnel ? tunnelLive(tunnel) : 'unknown',
+      awgm: awgmOf(awgm, link.tunnel_id),
     }
   })
 }
 
+// Слово awg-manager по id туннеля (awgmBadge); нет проверки -- null.
+function awgmOf(awgm, id) {
+  return (id && awgm.get(id)) || null
+}
+
 // Только свои туннели: WAN и системные записи каталога NDMS сюда не
 // попадают -- предложить поднять провайдера было бы бессмысленно.
-function unusedOf(tunnels, chain) {
+function unusedOf(tunnels, chain, awgm) {
   const inChain = new Set(chain.map((c) => c.tunnelID).filter(Boolean))
   return tunnels
     .filter((t) => t.type === 'managed' && !inChain.has(t.id))
@@ -109,6 +116,7 @@ function unusedOf(tunnels, chain) {
       code: t.id,
       live: tunnelLive(t),
       ndmsName: t.ndms_name ?? '',
+      awgm: awgmOf(awgm, t.id),
     }))
 }
 
@@ -132,13 +140,17 @@ function firstVPNPolicy(policies, byID) {
 //   none    -- ни одна политика не ведёт в VPN-туннель.
 // Без traffic.carrier_basis (бэкенд старше v0.56, тесты раскладки) несущим
 // остаётся активное звено первой VPN-политики снимка -- слово роутера.
-export function tunnelsView(snapshot, serverTraffic) {
+//
+// eventTunnels -- events.tunnels того же ответа, что и проверки: из них, а не
+// из снимка, считается слово awg-manager у каждого VPN-туннеля (awgm, v0.65).
+export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
   const empty = { state: 'none', active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
   if (tunnels.length === 0) return empty
 
   const byID = new Map(tunnels.map((t) => [t.id, t]))
+  const awgm = new Map((Array.isArray(eventTunnels) ? eventTunnels : []).map((t) => [t?.tunnel_id, awgmBadge(t)]))
   // Сервер несущего не знает -- активное звено из снимка роутера, тем же
   // правилом, что у экрана «Роутер» (withSnapshotCarrier).
   const traffic = withSnapshotCarrier(serverTraffic, snapshot)
@@ -149,8 +161,8 @@ export function tunnelsView(snapshot, serverTraffic) {
     // называются по своему состоянию. Подпись режима -- у вкладки, а не у
     // строки VPN-туннеля (песочница v0.56: строка vpn-nl была озаглавлена
     // «Настроено, маршрут выбирается по адресу»).
-    const chain = chainOf(p, byID, '')
-    return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
+    const chain = chainOf(p, byID, '', undefined, awgm)
+    return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
   }
 
   let carrierID
@@ -162,9 +174,9 @@ export function tunnelsView(snapshot, serverTraffic) {
       // агент без active_tunnel_id в политиках снимка -- тоже «не знаем»,
       // ревью B1: шапка «Роутера» на тех же данных говорит «всё работает»).
       const p = firstVPNPolicy(policies, byID) ?? policies.find((x) => x.via_vpn && (x.interfaces ?? []).some((l) => l.tunnel_id && byID.has(l.tunnel_id)))
-      const chain = chainOf(p, byID, '')
+      const chain = chainOf(p, byID, '', undefined, awgm)
       const state = traffic.mode === 'direct' ? 'none' : 'unknown'
-      return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
+      return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
     }
   } else {
     carrierID = firstVPNPolicy(policies, byID)?.active_tunnel_id ?? ''
@@ -206,8 +218,9 @@ export function tunnelsView(snapshot, serverTraffic) {
     // Подпись описывает то же число (review v0.46, п. 6): «общий набор» --
     // только когда своих правил у туннеля нет.
     rulesNote: rulesNote(activeRow, policy),
+    awgm: awgmOf(awgm, activeTunnel.id),
   }
 
-  const chain = chainOf(policy, byID, carrierID, { carrierDead })
-  return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain) }
+  const chain = chainOf(policy, byID, carrierID, { carrierDead }, awgm)
+  return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
 }

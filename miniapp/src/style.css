@@ -5824,3 +5824,18 @@ body {
 .v057-subtitle {
   margin-top: var(--sp-3);
 }
+
+/* v0.65: строка «awg-manager: <слово>» под именем VPN-туннеля -- слово роутера
+   рядом с вердиктом бота. Своих цветов нет: точка и слово берут классы тона
+   строки данных (data-row-dot-*, data-row-value-*). Своя строка, а не хвост
+   подписи: под длинным пояснением «Сломан» иначе тонет имя. */
+.awgm-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}

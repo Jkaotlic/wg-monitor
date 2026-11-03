@@ -12,6 +12,8 @@ export function Chain({ links }) {
           <span class="chain-main">
             {l.title ?? l.note}
             {l.name ? <u class="data-row-code">{l.name}</u> : null}
+            {/* Слово awg-manager о звене (v0.65) -- под именем, необязательно. */}
+            {l.extra ?? null}
           </span>
           <span class="chain-note">{l.value ?? ''}</span>
           {/* Действие звена -- необязательный слот: у цепочки, которую

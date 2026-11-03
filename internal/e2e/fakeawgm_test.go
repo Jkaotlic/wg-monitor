@@ -58,6 +58,7 @@ type fakeAWGM struct {
 	policies      []*fakePolicy
 	matrix        map[string]bool // id туннеля -> проба прошла; нет ключа -- ячеек нет
 	matrixMissing bool            // старая сборка: 404 на /api/monitoring/matrix
+	disconnected  map[string]bool // id туннеля -> проверка связи говорит «Нет связи»
 	down          bool            // демон молчит: соединение рвётся без ответа
 	promotions    []Promotion
 	calls         []string // журнал мутаций по порядку
@@ -75,7 +76,7 @@ type fakeAWGM struct {
 
 func newFakeAWGM(t *testing.T) *fakeAWGM {
 	t.Helper()
-	f := &fakeAWGM{matrix: map[string]bool{}, failing: map[string]bool{}, reads: map[string]int{}, refusedPolicy: map[string]bool{}, missing: map[string]bool{}}
+	f := &fakeAWGM{matrix: map[string]bool{}, disconnected: map[string]bool{}, failing: map[string]bool{}, reads: map[string]int{}, refusedPolicy: map[string]bool{}, missing: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -126,6 +127,18 @@ func (f *fakeAWGM) SetMatrixMissing(missing bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.matrixMissing = missing
+}
+
+// SetConnectivity -- ответ проверки связи (/api/test/connectivity), по которой
+// UI awg-manager пишет на карточке «Нет связи». По умолчанию связь есть.
+func (f *fakeAWGM) SetConnectivity(id string, connected bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if connected {
+		delete(f.disconnected, id)
+	} else {
+		f.disconnected[id] = true
+	}
 }
 
 // SetPolicy заводит политику с цепочкой звеньев (имена NDMS) по приоритету.
@@ -349,6 +362,13 @@ func (f *fakeAWGM) serve(w http.ResponseWriter, r *http.Request) {
 			status, out = http.StatusBadRequest, map[string]any{"success": false, "code": "IP_CHECK_FAILED", "message": "ip check failed"}
 		} else {
 			out = envelope(map[string]any{"directIp": "203.0.113.10", "vpnIp": "198.51.100.50", "endpointIp": "198.51.100.60", "ipChanged": true})
+		}
+	case "GET /api/test/connectivity":
+		// Живая форма 2.19.x: без связи задержка null, причина -- словами демона.
+		if f.disconnected[r.URL.Query().Get("id")] {
+			out = envelope(map[string]any{"connected": false, "latency": nil, "reason": "timeout"})
+		} else {
+			out = envelope(map[string]any{"connected": true, "latency": 42, "reason": ""})
 		}
 	case "POST /api/access-policies/permit":
 		if ch := f.permitHang; ch != nil {
