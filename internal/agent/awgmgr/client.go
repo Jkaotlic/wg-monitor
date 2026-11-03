@@ -49,6 +49,12 @@ func (c *Client) SetCredentials(login, password string) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	return c.doVia(ctx, c.HTTP, method, path, body, contentType)
+}
+
+// doVia -- do через заданный http.Client: долгим запросам (проверка связи)
+// нужен клиент без общего короткого таймаута, срок им ставит ctx.
+func (c *Client) doVia(ctx context.Context, hc *http.Client, method, path string, body io.Reader, contentType string) (*http.Response, error) {
 	var bodyBytes []byte
 	if body != nil {
 		var err error
@@ -74,7 +80,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 		if ck := c.cookie(); ck != nil {
 			req.AddCookie(ck)
 		}
-		return c.HTTP.Do(req)
+		return hc.Do(req)
 	})
 }
 
@@ -198,8 +204,12 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 // fails to decode, so the ceiling must fit the largest honest answer of the
 // endpoint -- geo-expand of a big category list is larger than 1 MiB.
 func (c *Client) getLimited(ctx context.Context, path string, out any, limit int64) error {
+	return c.getVia(ctx, c.HTTP, path, out, limit)
+}
+
+func (c *Client) getVia(ctx context.Context, hc *http.Client, path string, out any, limit int64) error {
 	start := time.Now()
-	resp, err := c.do(ctx, http.MethodGet, path, nil, "")
+	resp, err := c.doVia(ctx, hc, http.MethodGet, path, nil, "")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr GET %s: %w", path, err)
@@ -357,6 +367,28 @@ func (c *Client) MonitoringMatrix(ctx context.Context) (*MonitoringMatrix, error
 	}
 	if !env.Success {
 		return nil, fmt.Errorf("awgmgr monitoring/matrix: success=false")
+	}
+	return &env.Data, nil
+}
+
+// TestConnectivity -- GET /api/test/connectivity?id=: та же проверка связи,
+// по которой UI awg-manager пишет на карточке туннеля «Нет связи». Сборка без
+// эндпоинта отвечает 404 -- это ErrUnsupportedByRouter: «не умеет» и «связи
+// нет» человеку говорятся разными словами.
+//
+// У мёртвого туннеля awg-manager ждёт ответа дольше общего таймаута клиента
+// (5 с), и обрезанная проверка выглядела бы как «не ответил» вместо «Нет
+// связи». Поэтому запрос идёт без него: срок обязан задать ctx вызывающего.
+func (c *Client) TestConnectivity(ctx context.Context, tunnelID string) (*Connectivity, error) {
+	var env Envelope[Connectivity]
+	if err := c.getVia(ctx, c.streamHTTPClient(), "/api/test/connectivity?id="+url.QueryEscape(tunnelID), &env, 1<<20); err != nil {
+		if IsEndpointMissing(err) {
+			return nil, fmt.Errorf("%w: проверка связи появилась в awg-manager позже", ErrUnsupportedByRouter)
+		}
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr test/connectivity: success=false")
 	}
 	return &env.Data, nil
 }

@@ -54,7 +54,7 @@ func TestDeadCarrierFreshHandshake(t *testing.T) {
 		t.Fatalf("живой роутер: несущий должен быть %s и жив, экран %+v", carrierID, s.Traffic)
 	}
 
-	r.awgm.SetMatrix(carrierID, false)
+	kill(r, carrierID)
 	r.Ticks(failThreshold - 1)
 	wantNoAlerts(t, r) // порог ещё не пройден
 	if got := r.Screen().Tunnel(t, carrierID).Status; got != "fail" {
@@ -98,12 +98,17 @@ func wantChain(t *testing.T, r *rig, want ...string) {
 	}
 }
 
-// kill -- проба через туннель падает, и туннель не поднимется сам.
-func kill(r *rig, id string) { r.awgm.SetMatrix(id, false) }
+// kill -- проба через туннель падает, и туннель не поднимется сам; карточка
+// awg-manager при этом пишет «Нет связи».
+func kill(r *rig, id string) {
+	r.awgm.SetMatrix(id, false)
+	r.awgm.SetConnectivity(id, false)
+}
 
 // heal -- туннель снова живой: проба проходит, ключами обменялся только что.
 func heal(r *rig, id string) {
 	r.awgm.SetMatrix(id, true)
+	r.awgm.SetConnectivity(id, true)
 	r.awgm.UpdateTunnel(id, func(tu *fakeTunnel) {
 		tu.Status, tu.StatusDetails, tu.HandshakeAge = "running", "", freshAge
 	})

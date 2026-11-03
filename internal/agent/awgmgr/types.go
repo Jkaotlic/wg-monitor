@@ -44,6 +44,15 @@ type Tunnel struct {
 	PingCheck            PingCheckBrief `json:"pingCheck"`
 }
 
+// Connectivity mirrors /api/test/connectivity .data. Latency -- указатель:
+// без связи awg-manager шлёт null, и ноль на его месте читался бы как
+// «мгновенно».
+type Connectivity struct {
+	Connected bool   `json:"connected"`
+	Latency   *int   `json:"latency"`
+	Reason    string `json:"reason"`
+}
+
 type PingCheckBrief struct {
 	Status        string `json:"status"`
 	RestartCount  int    `json:"restartCount"`

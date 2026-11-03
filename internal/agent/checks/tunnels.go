@@ -116,6 +116,11 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	if err != nil {
 		return []wire.Check{Fail("tunnels", start, err.Error(), nil)}
 	}
+	// Вопросы о связи (v0.65) идут параллельно с остальными запросами обхода:
+	// у мёртвого туннеля awg-manager отвечает долго, и последовательно они
+	// съели бы срок проверки, нужный спискам правил и матрице.
+	connCh := make(chan map[string]awgmConn, 1)
+	go func() { connCh <- collectAwgmConn(ctx, t.Client, tunnels.Tunnels) }()
 
 	// Index ping-status per tunnelId. If pingcheck/status fails, we still
 	// emit checks based on tunnels/all — pingCheck data degrades, not blocks.
@@ -173,8 +178,9 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		"tunnel_count":         len(tunnels.Tunnels),
 		"tunnel_count_enabled": enabledCount,
 	}))
+	conns := <-connCh
 	for _, tu := range tunnels.Tunnels {
-		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
+		if !tunnelTypeChecked(tu) {
 			continue
 		}
 		rc := routeCounts[tu.InterfaceName]
@@ -186,6 +192,8 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 			// Остановлен недавно: правила за ним сохранены окном терпимости.
 			chk.Details["run_grace"] = true
 		}
+		conn, asked := conns[tu.ID]
+		annotateAwgmConn(&chk, tu, conn, asked)
 		out = append(out, chk)
 	}
 	annotateAwgmDown(out, t.AwgmDownSince)

@@ -45,6 +45,9 @@ func TestTunnelsCheck_RestartedTunnelKeepsRulesForTwoRuns(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		case "/api/monitoring/matrix", "/api/routing/policy-interfaces":
 			w.WriteHeader(http.StatusNotFound)
+		case "/api/test/connectivity":
+			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
