@@ -99,7 +99,7 @@ const flushMany = async (n = 6) => {
   for (let i = 0; i < n; i++) await flush()
 }
 const byText = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
-const routeStatusCalls = () => mocks.calls.filter((c) => c.action === 'route_status').length
+const tunnelStatusCalls = () => mocks.calls.filter((c) => c.action === 'tunnels_status').length
 
 async function mount(extra = {}) {
   const root = document.createElement('div')
@@ -138,7 +138,7 @@ async function click(root, text) {
 beforeEach(() => {
   mocks.calls = []
   mocks.api = []
-  mocks.answers = { route_status: { status: 'ok', output: JSON.stringify(SNAP) } }
+  mocks.answers = { tunnels_status: { status: 'ok', output: JSON.stringify(SNAP) } }
   mocks.role = 'owner'
   mocks.previewReply = structuredClone(PREVIEW)
   mocks.pollReplies = []
@@ -182,14 +182,14 @@ describe('загрузка .conf', () => {
     expect(root.innerHTML).not.toContain('PrivateKey')
     expect(root.innerHTML).not.toContain(btoa(CONF))
 
-    const before = routeStatusCalls()
+    const before = tunnelStatusCalls()
     await click(root, 'Добавить как новый')
     expect(mocks.api.slice(1)).toEqual([
       ['confirm', 7, 'tok1'],
       ['result', 7, 'c5'],
     ])
     expect(root.querySelector('.tunnel-outcome').textContent).toBe('VPN-туннель «amsterdam-nl» добавлен. Перенести на него правила можно в «Маршрутах».')
-    expect(routeStatusCalls()).toBe(before + 1)
+    expect(tunnelStatusCalls()).toBe(before + 1)
     expect(mocks.api.filter((c) => c[0] === 'preview')).toHaveLength(1)
 
     await click(root, 'К списку VPN-туннелей')
@@ -308,12 +308,12 @@ describe('загрузка .conf: ревью', () => {
     const root = await mount()
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
-    const before = routeStatusCalls()
+    const before = tunnelStatusCalls()
     await click(root, 'Добавить как новый')
     expect(root.querySelector('.tunnel-outcome').textContent).toBe('Команда ушла на роутер, но он пока не ответил. Загляните в список VPN-туннелей через минуту.')
     expect(byText(root, 'К списку VPN-туннелей')).toBeTruthy()
     expect(byText(root, 'Добавить как новый')).toBeFalsy()
-    expect(routeStatusCalls()).toBe(before + 1)
+    expect(tunnelStatusCalls()).toBe(before + 1)
     render(null, root)
   })
 

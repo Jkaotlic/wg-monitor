@@ -50,6 +50,15 @@ const CHAIN_TITLE = {
 }
 
 const SOURCES_WAIT_MS = 8000
+const TUNNEL_STATUS_ACTION = 'tunnels_status'
+
+export async function requestTunnelStatus(run, deadline) {
+  const result = await run(TUNNEL_STATUS_ACTION, {}, deadline)
+  if (result?.status !== 'ok' && /^unknown action:\s*tunnels_status\b/i.test(String(result?.output ?? '').trim())) {
+    return run('route_status', {}, deadline)
+  }
+  return result
+}
 
 // Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
 // его адрес переживает обновление страницы, и «назад» Telegram закрывает его.
@@ -193,15 +202,15 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   useOnClose(layer === 'tunnel', loadAutorepair)
 
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
-  useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
-  useOnClose(routesOpen, () => run('route_status', {}, deadline))
+  useOnClose(cabinetOpen, () => requestTunnelStatus(run, deadline))
+  useOnClose(routesOpen, () => requestTunnelStatus(run, deadline))
 
   useEffect(() => {
     setSnapshot(null)
     setSnapshotAt(null)
     setRole('')
     setRoleStatus('loading')
-    run('route_status', {}, deadline)
+    requestTunnelStatus(run, deadline)
     loadRole()
   }, [routerID])
 
@@ -312,7 +321,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               buttonLabel: up ? 'Выключить' : 'Включить',
               danger: up,
               asleep,
-              onDone: () => run('route_status', {}, deadline),
+              onDone: () => requestTunnelStatus(run, deadline),
             }),
           )
         }
@@ -341,7 +350,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               args: { tunnel_id: t.tunnelID ?? t.id },
               buttonLabel: 'Перезапустить',
               asleep,
-              onDone: () => run('route_status', {}, deadline),
+              onDone: () => requestTunnelStatus(run, deadline),
             }),
           )
         }
@@ -372,7 +381,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     <div class="screen">
       <div class="router-header">
         <h1 class="screen-title">VPN-туннели</h1>
-        <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => run('route_status', {}, deadline)}>
+        <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => requestTunnelStatus(run, deadline)}>
           {busy ? 'Читаю…' : 'Обновить'}
         </button>
       </div>
@@ -390,12 +399,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {phase === 'refreshing' && (
         <p class="snapshot-banner snapshot-banner-progress">Обновляем состояние. Пока показан предыдущий снимок.</p>
       )}
-      {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}
+      {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => requestTunnelStatus(run, deadline)} />}
       {phase === 'stale-error' && (
         <div class="snapshot-banner snapshot-banner-error">
           <strong>Состояние не обновилось.</strong>
           <span>{error || 'Роутер не ответил.'} Ниже показан предыдущий снимок{snapshotAt ? `, полученный ${humanAge(Math.max(0, Math.floor((Date.now() - snapshotAt) / 1000)))} назад` : ''}.</span>
-          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => run('route_status', {}, deadline)}>Повторить</button>
+          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => requestTunnelStatus(run, deadline)}>Повторить</button>
         </div>
       )}
       {phase === 'refused' && (
@@ -405,7 +414,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         <div class="snapshot-banner snapshot-banner-error">
           <strong>Роутер не отдал новое состояние.</strong>
           <span>{agentReplyText(result, 'Ниже показан предыдущий снимок.')}</span>
-          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => run('route_status', {}, deadline)}>Повторить</button>
+          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => requestTunnelStatus(run, deadline)}>Повторить</button>
         </div>
       )}
       {/* Ответ пришёл, а снимка в нём нет. Молчать здесь нельзя: пустой экран
@@ -602,9 +611,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           role={role}
           openSheet={openSheet}
           onClose={closeLayer}
-          onChanged={() => run('route_status', {}, deadline)}
+          onChanged={() => requestTunnelStatus(run, deadline)}
           onOpenRebind={onOpenRebind}
-          onRestart={() => run('route_status', {}, deadline)}
+          onRestart={() => requestTunnelStatus(run, deadline)}
           canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
           onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName, returnTo: 'tunnel', returnParams: { tunnelID: layerParams.tunnelID } })}
         />
@@ -616,7 +625,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           tunnel={layerParams.tunnel}
           policyName={layerParams.policyName}
           onClose={closeLayer}
-          onDone={() => run('route_status', {}, deadline)}
+          onDone={() => requestTunnelStatus(run, deadline)}
           onOpenCabinet={() => openLayer('cabinet', {})}
           onOpenTunnel={(tunnelID) => (tunnelID ? openLayer('tunnel', { tunnelID }) : closeLayer())}
         />
@@ -628,7 +637,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           asleep={asleep}
           snapshot={snapshot}
           onClose={closeLayer}
-          onImported={() => run('route_status', {}, deadline)}
+          onImported={() => requestTunnelStatus(run, deadline)}
         />
       )}
     </div>

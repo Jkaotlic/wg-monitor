@@ -97,7 +97,7 @@ const snapResult = (snap) => ({ status: 'ok', output: JSON.stringify(snap) })
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 const byText = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
-const routeStatusCalls = () => mocks.calls.filter((c) => c.action === 'route_status').length
+const tunnelStatusCalls = () => mocks.calls.filter((c) => c.action === 'tunnels_status').length
 
 // v0.52: экран VPN-туннеля -- слой навигации. Хозяин слоя -- настоящий
 // редьюсер nav.js, поэтому открытие строкой и «назад» проходят весь путь.
@@ -167,7 +167,7 @@ async function confirmDelete(sheet, typed) {
 beforeEach(() => {
   mocks.calls = []
   mocks.api = []
-  mocks.answers = { route_status: snapResult(SNAP) }
+  mocks.answers = { tunnels_status: snapResult(SNAP) }
   mocks.role = 'owner'
   mocks.deleteReply = null
   mocks.deleteReplies = []
@@ -230,7 +230,7 @@ describe('экран VPN-туннеля', () => {
   })
 
   it('главный выход роутера -- удалить нельзя, переноса не предлагает', async () => {
-    mocks.answers.route_status = snapResult({ ...SNAP, default_egress: 'nwg3' })
+    mocks.answers.tunnels_status = snapResult({ ...SNAP, default_egress: 'nwg3' })
     const { root } = await mount()
     await openTunnel(root, 'old-home')
     expect(root.querySelector('.tunnel-block').textContent).toContain('«old-home» — главный выход роутера')
@@ -258,8 +258,8 @@ describe('экран VPN-туннеля', () => {
 
     mocks.deleteReplies = [{ state: 'checking' }, { state: 'checking' }]
 
-    const before = routeStatusCalls()
-    mocks.answers.route_status = snapResult({ ...SNAP, tunnels: SNAP.tunnels.filter((t) => t.id !== 'nwg2') })
+    const before = tunnelStatusCalls()
+    mocks.answers.tunnels_status = snapResult({ ...SNAP, tunnels: SNAP.tunnels.filter((t) => t.id !== 'nwg2') })
     await confirmDelete(sheet, 'spare')
     await flush()
     expect(mocks.api).toEqual([
@@ -269,7 +269,7 @@ describe('экран VPN-туннеля', () => {
       ['result', 7, 'c9'],
     ])
     expect(root.querySelector('.tunnel-outcome').textContent).toBe('VPN-туннель «spare» удалён.')
-    expect(routeStatusCalls()).toBe(before + 1)
+    expect(tunnelStatusCalls()).toBe(before + 1)
     // Удалённый VPN-туннель: прежние интерфейс и правила не показываются.
     expect(root.querySelector('.tunnel-screen').textContent).toContain('удалён с роутера')
     expect(root.querySelector('.tunnel-screen').textContent).not.toContain('Интерфейс')
@@ -332,12 +332,12 @@ describe('экран VPN-туннеля: ревью', () => {
   it('команда ушла, а ожидание сорвалось -- не «ничего не удалено», а «ушла на роутер»', async () => {
     mocks.result = new Error('502')
     const { root, seen } = await mount()
-    const before = routeStatusCalls()
+    const before = tunnelStatusCalls()
     const host = await askAndConfirm(root, seen)
     await flush()
     expect(host.textContent).not.toContain('ничего не удалено')
     expect(root.querySelector('.tunnel-outcome').textContent).toBe('Команда ушла на роутер, но он пока не ответил. Обновите список VPN-туннелей через минуту.')
-    expect(routeStatusCalls()).toBe(before + 1)
+    expect(tunnelStatusCalls()).toBe(before + 1)
     // Команда в очереди -- второй раз удалять нечего.
     expect(byText(root, 'Удалить VPN-туннель')).toBeFalsy()
     render(null, host)
@@ -360,7 +360,7 @@ describe('экран VPN-туннеля: ревью', () => {
     const { root, seen } = await mount()
     await askAndConfirm(root, seen)
     expect(root.querySelector('.tunnel-outcome')).toBeTruthy()
-    mocks.answers.route_status = snapResult({ ...SNAP, counts: { ...SNAP.counts, nwg2: { dns: 1, static: 0 } } })
+    mocks.answers.tunnels_status = snapResult({ ...SNAP, counts: { ...SNAP.counts, nwg2: { dns: 1, static: 0 } } })
     await act(async () => byText(root, 'Обновить').click())
     await flush()
     expect(root.querySelector('.tunnel-outcome')).toBe(null)
@@ -369,7 +369,7 @@ describe('экран VPN-туннеля: ревью', () => {
   })
 
   it('пустой главный выход -- кнопка есть, сервер решит сам', async () => {
-    mocks.answers.route_status = snapResult({ ...SNAP, default_egress: '' })
+    mocks.answers.tunnels_status = snapResult({ ...SNAP, default_egress: '' })
     const { root } = await mount()
     await openTunnel(root, 'spare')
     expect(byText(root, 'Удалить VPN-туннель')).toBeTruthy()

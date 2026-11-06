@@ -970,7 +970,13 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
 		}
-		out, err := RouteStatus(ctx, r.AwgClient)
+		var out string
+		var err error
+		if cmd.Action == "tunnels_status" {
+			out, err = TunnelsStatus(ctx, r.AwgClient)
+		} else {
+			out, err = RouteStatus(ctx, r.AwgClient)
+		}
 		if err != nil {
 			return "err", err.Error(), payload
 		}

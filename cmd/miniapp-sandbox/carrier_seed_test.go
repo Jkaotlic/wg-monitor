@@ -80,3 +80,13 @@ func TestSandboxSnapshotAgreesWithChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxTunnelsStatusIsCompact(t *testing.T) {
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(sandboxOutput(1, "tunnels_status", nil)), &snap); err != nil {
+		t.Fatalf("decode tunnels_status: %v", err)
+	}
+	if len(snap.Rules) != 0 || len(snap.Tunnels) == 0 {
+		t.Fatalf("compact snapshot must omit rules and keep tunnels: %+v", snap)
+	}
+}

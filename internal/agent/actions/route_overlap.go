@@ -75,12 +75,18 @@ func classifyRouteOverlaps(candidate wire.RouteRuleSummary, existing []wire.Rout
 func normalizeRouteRuleSummary(rule wire.RouteRuleSummary) wire.RouteRuleSummary {
 	out := rule
 	out.Targets = make([]wire.RouteTarget, 0, len(rule.Targets))
+	seen := make(map[wire.RouteTarget]bool, len(rule.Targets))
 	for _, target := range rule.Targets {
 		raw := target.Value
 		if raw == "" {
 			raw = target.Type
 		}
-		out.Targets = append(out.Targets, normalizeRouteTarget(raw))
+		normalized := normalizeRouteTarget(raw)
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		out.Targets = append(out.Targets, normalized)
 	}
 	return out
 }

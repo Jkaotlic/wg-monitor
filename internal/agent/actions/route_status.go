@@ -102,9 +102,30 @@ func fetchRouteInputs(ctx context.Context, c *awgmgr.Client) (routeInputs, error
 // RouteStatus fetches the routing snapshot and returns it as a JSON-encoded
 // string suitable for wire.CommandResult.Output.
 func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
-	in, err := fetchRouteInputs(ctx, c)
+	snap, err := buildRouteStatusSnapshot(ctx, c)
 	if err != nil {
 		return "", err
+	}
+	return marshalRouteSnapshot(snap)
+}
+
+// TunnelsStatus returns the same authoritative tunnel, policy and counter
+// facts as RouteStatus without the full route target catalogue. The tunnels
+// tab never renders rule targets; omitting them keeps large HydraRoute lists
+// from crossing the command relay on every refresh.
+func TunnelsStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
+	snap, err := buildRouteStatusSnapshot(ctx, c)
+	if err != nil {
+		return "", err
+	}
+	snap.Rules = nil
+	return marshalRouteSnapshot(snap)
+}
+
+func buildRouteStatusSnapshot(ctx context.Context, c *awgmgr.Client) (wire.RouteSnapshot, error) {
+	in, err := fetchRouteInputs(ctx, c)
+	if err != nil {
+		return wire.RouteSnapshot{}, err
 	}
 	settings, policies := in.settings, in.policies
 	routingErr, policiesErr, polIfacesErr := in.routingErr, in.policiesErr, in.polIfacesErr
@@ -139,6 +160,10 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	if polIfacesErr != nil && !(legacyModel && awgmgr.IsEndpointMissing(polIfacesErr)) {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/policy-interfaces failed: %v", polIfacesErr))
 	}
+	return snap, nil
+}
+
+func marshalRouteSnapshot(snap wire.RouteSnapshot) (string, error) {
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return "", err

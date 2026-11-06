@@ -635,8 +635,9 @@ function commandResult(id) {
   if (lastAction === 'route_delete') {
     return { id, status: 'ok', duration_ms: 260, output: 'правило удалено' }
   }
-  if (lastAction === 'route_status') {
-    return { id, status: 'ok', duration_ms: 120, output: JSON.stringify(ROUTE_SNAPSHOT) }
+  if (lastAction === 'route_status' || lastAction === 'tunnels_status') {
+    const snapshot = lastAction === 'tunnels_status' ? { ...ROUTE_SNAPSHOT, rules: undefined } : ROUTE_SNAPSHOT
+    return { id, status: 'ok', duration_ms: 120, output: JSON.stringify(snapshot) }
   }
   if (lastAction === 'diag_now') {
     return { id, status: 'ok', duration_ms: 2559, output: JSON.stringify(DIAG_REPORT) }

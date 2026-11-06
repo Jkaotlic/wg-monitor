@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,6 +43,24 @@ func TestRouteOverlapNormalizeCIDRAndIP(t *testing.T) {
 				t.Fatalf("normalizeRouteTarget(%q) = %+v, want %+v", tt.raw, got, want)
 			}
 		})
+	}
+}
+
+func TestNormalizeRouteRuleSummaryDeduplicatesCanonicalTargets(t *testing.T) {
+	rule := wire.RouteRuleSummary{Targets: []wire.RouteTarget{
+		{Value: "Example.COM."},
+		{Value: "example.com"},
+		{Value: "192.0.2.7"},
+		{Value: "192.0.2.7/32"},
+	}}
+
+	got := normalizeRouteRuleSummary(rule)
+	want := []wire.RouteTarget{
+		{Type: "domain", Value: "example.com"},
+		{Type: "cidr", Value: "192.0.2.7/32"},
+	}
+	if !reflect.DeepEqual(got.Targets, want) {
+		t.Fatalf("targets = %+v, want %+v", got.Targets, want)
 	}
 }
 

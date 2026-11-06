@@ -9,7 +9,7 @@ const SNAP = {
   tunnels: [{ id: 'awg10', name: 'vymysel-nl', type: 'managed', status: 'running', enabled: true, has_handshake: true, handshake_age_sec: 30 }],
   policies: [],
 }
-const mocks = vi.hoisted(() => ({ checks: null }))
+const mocks = vi.hoisted(() => ({ checks: null, runs: [] }))
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterChecks: () => mocks.checks(),
@@ -26,10 +26,13 @@ CMD.value = {
   result: { status: 'ok', output: JSON.stringify(SNAP) },
   error: null,
   errorCode: null,
-  run: () => Promise.resolve(null),
+  run: (action) => {
+    mocks.runs.push(action)
+    return Promise.resolve(null)
+  },
 }
 
-const { TunnelsTab } = await import('../src/screens/TunnelsTab.jsx')
+const { TunnelsTab, requestTunnelStatus } = await import('../src/screens/TunnelsTab.jsx')
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
 async function mount() {
@@ -41,6 +44,28 @@ async function mount() {
 }
 
 describe('MINI-06: вкладка туннелей', () => {
+  it('на старом агенте один раз откатывается к полному route_status', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce({ status: 'err', output: 'unknown action: tunnels_status' })
+      .mockResolvedValueOnce({ status: 'ok', output: JSON.stringify(SNAP) })
+    const deadline = { deadlineMs: 90_000 }
+    await requestTunnelStatus(run, deadline)
+    expect(run.mock.calls).toEqual([
+      ['tunnels_status', {}, deadline],
+      ['route_status', {}, deadline],
+    ])
+  })
+
+  it('запрашивает компактный tunnels_status, а не полный список правил', async () => {
+    mocks.runs.length = 0
+    mocks.checks = () => Promise.resolve({ checks: [], tunnels: [] })
+    const root = await mount()
+    expect(mocks.runs).toContain('tunnels_status')
+    expect(mocks.runs).not.toContain('route_status')
+    render(null, root)
+    root.remove()
+  })
+
   it('проверки не загрузились -- не «работает»', async () => {
     mocks.checks = () => Promise.reject(new Error('сервер не ответил'))
     const root = await mount()

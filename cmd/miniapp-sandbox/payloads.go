@@ -25,8 +25,12 @@ func sandboxOutput(routerID int64, action string, args map[string]any) string {
 		return mustJSON(sandboxOpkgCron(action, args))
 	case "entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove":
 		return mustJSON(sandboxEntwareClean(action, args))
-	case "route_status":
-		return mustJSON(routeSnapshot(routerState(routerID)))
+	case "route_status", "tunnels_status":
+		snap := routeSnapshot(routerState(routerID))
+		if action == "tunnels_status" {
+			snap.Rules = nil
+		}
+		return mustJSON(snap)
 	case "tunnel_import":
 		// Лесенка автопочинки (v0.54) кладёт конфиг в ТОТ ЖЕ VPN-туннель
 		// (target_id): агент отвечает «заменён», и нового туннеля нет.

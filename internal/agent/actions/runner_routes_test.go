@@ -27,6 +27,29 @@ func TestRunner_RouteStatus_Dispatch(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
 		t.Errorf("output not decodable: %v", err)
 	}
+	if len(snap.Rules) == 0 {
+		t.Fatal("route_status must keep full rules for the Routes tab")
+	}
+}
+
+func TestRunner_TunnelsStatus_OmitsRulesButKeepsTunnelFacts(t *testing.T) {
+	srv := fakeAwgmgrStatus(t, false)
+	defer srv.Close()
+	r := &Runner{AwgClient: awgmgr.New(srv.URL)}
+	res := r.Execute(context.Background(), wire.Command{ID: "x", Action: "tunnels_status"})
+	if res.Status != "ok" {
+		t.Fatalf("status: %s, output: %s", res.Status, res.Output)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
+		t.Fatalf("output not decodable: %v", err)
+	}
+	if len(snap.Rules) != 0 {
+		t.Fatalf("tunnels_status leaked %d full rules", len(snap.Rules))
+	}
+	if len(snap.Tunnels) == 0 || len(snap.Counts) == 0 {
+		t.Fatalf("compact status lost tunnel facts: %+v", snap)
+	}
 }
 
 func TestRunner_RouteRebind_Dispatch(t *testing.T) {
