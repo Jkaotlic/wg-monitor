@@ -41,6 +41,16 @@ describe('pathState', () => {
     expect(s.latencyMs).toBeNull()
   })
 
+  it('backend-конфликт запрещает локальной схеме быть зелёной', () => {
+    const s = pathState({
+      traffic: { mode: 'vpn', egress_tunnel_id: 'awg12' },
+      incidents: [],
+      tunnels: [{ tunnel_id: 'awg12', run_state: 'running' }],
+      evidence: { state: 'degraded', reason_code: 'source_conflict' },
+    })
+    expect(s.tunnel).toBe('unknown')
+  })
+
   // Молчащий роутер: показания -- на момент последнего отчёта, и рисовать по
   // ним живую схему значит выдавать прошлое за настоящее.
   it('на молчащем роутере обе ветки неизвестны', () => {

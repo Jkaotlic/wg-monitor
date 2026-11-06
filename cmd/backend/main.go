@@ -172,6 +172,7 @@ func main() {
 	muxDeps := core.Mux
 	muxDeps.Revive = reviveSvc
 	mux := backend.NewMux(muxDeps)
+	go backend.RunRolloutWorker(ctx, muxDeps, 15*time.Second)
 	srv := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: mux,

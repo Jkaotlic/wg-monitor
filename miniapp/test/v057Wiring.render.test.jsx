@@ -53,6 +53,7 @@ describe('v0.57: «Обслуживание»', () => {
     const dispatch = vi.fn()
     const nav = { routerID: 2, tab: 'manage', overlay, sheet: null }
     let root = await mount(<OverlayHost nav={nav} dispatch={dispatch} routers={ROUTERS} isAdmin />)
+		await vi.waitFor(() => expect(root.querySelector('.overlay-title')).toBeTruthy())
     expect(root.querySelector('.overlay-title').textContent).toBe(title)
     await act(async () => root.querySelector('.overlay-back').click())
     expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'manage' })

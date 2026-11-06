@@ -176,6 +176,9 @@ func TestMiniappHistoryReturnsTransitions(t *testing.T) {
 	if resp.Transitions[0].Status != "ok" || resp.Transitions[1].Status != "fail" {
 		t.Errorf("transition order = %+v", resp.Transitions)
 	}
+	if len(resp.Story) != 2 || resp.Story[0].Kind != "failure_detected" || resp.Story[1].Kind != "recovered" {
+		t.Fatalf("story = %+v", resp.Story)
+	}
 }
 
 func TestMiniappHistoryDeniedForStranger(t *testing.T) {

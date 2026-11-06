@@ -1,9 +1,12 @@
 import { useContext, useEffect, useRef, useState } from 'preact/hooks'
-import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, silenceIncident, ackIncident, muteIncident, fetchRouterVersions } from '../api.js'
+import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, fetchRouterOperations, silenceIncident, ackIncident, muteIncident, fetchRouterVersions } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve, withSnapshotCarrier } from '../trafficPath.js'
+import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
+import { incidentStoryView } from '../incidentStory.js'
+import { operationView } from '../operations.js'
 import { recentRouteSnapshot } from '../routes.js'
 import { whenText, sinceText, untilText } from '../when.js'
 import { errorText } from '../errorText.js'
@@ -145,7 +148,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
     setHistoryError(null)
     fetchIncidentHistory(routerID, incident.check_name)
       .then((data) => {
-        setHistory(data.transitions ?? [])
+        setHistory(incidentStoryView(data))
         setHistoryTruncated(!!data.truncated)
       })
       .catch((err) => setHistoryError(errorText(err)))
@@ -265,8 +268,9 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
               {historyTruncated && <p class="state">показаны только последние события</p>}
               <ul class="list-reset history-list">
                 {history.map((t, i) => (
-                  <li key={`${t.ts}-${i}`} class={`history-entry history-entry-${t.status}`}>
-                    {whenText(t.ts)} · {t.label}
+                  <li key={`${t.at}-${t.kind}-${i}`} class={`history-entry history-entry-${t.tone}`}>
+                    <span>{whenText(t.at)} · {t.title}</span>
+                    {t.detail && <small>{t.detail}</small>}
                   </li>
                 ))}
               </ul>
@@ -285,6 +289,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   const [checks, setChecks] = useState(null)
   const [tunnels, setTunnels] = useState([])
   const [serverTraffic, setTraffic] = useState(null)
+  const [evidence, setEvidence] = useState(null)
+  const [operations, setOperations] = useState([])
   // Сервер несущего не знает -- активное звено из недавнего снимка маршрутов
   // роутера (его снимали вкладки «VPN-туннели» и «Маршруты»): шапка и схема
   // называют того же, что вкладка (B1). Команду роутеру отсюда не шлём.
@@ -322,8 +328,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // навсегда подменяла экран своим текстом.
   function loadData() {
     const my = ++loadSeq.current
-    return Promise.all([fetchRouter(id), fetchRouterChecks(id)])
-      .then(([r, c]) => {
+    return Promise.all([fetchRouter(id), fetchRouterChecks(id), fetchRouterOperations(id).catch(() => null)])
+      .then(([r, c, ops]) => {
         if (my !== loadSeq.current) return
         setError(null)
         setRouter(r.router)
@@ -334,6 +340,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
         // headline and the traffic path both read a missing one as "unknown",
         // which is the honest answer rather than a defaulted-away one.
         setTraffic(c.traffic ?? null)
+        setEvidence(c.evidence ?? null)
+        if (ops) setOperations(ops.operations ?? [])
       })
       .catch((err) => {
         if (my !== loadSeq.current) return
@@ -356,6 +364,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
     setChecks(null)
     setTunnels([])
     setTraffic(null)
+    setEvidence(null)
+    setOperations([])
     setError(null)
     loadData()
     if (!shouldPulse({ visible: true, routerID: id })) return undefined
@@ -422,7 +432,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
   // нет» говорим только по слову сервера (он видит политики целиком).
   const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
-  const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
+  const path = pathState({ traffic, incidents, tunnels, stale: headline.stale, evidence })
   // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
   // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
   // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
@@ -456,7 +466,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
       <p class="traffic-detail" style="margin-top:6px">
         <Quoted text={headline.verdict} />
       </p>
-      <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
+      <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} evidence={evidence} />
+      <EvidenceSummary evidence={evidence} />
       {/* Число туннелей -- только в плитке «VPN-туннели» ниже (спека C1):
           здесь оно повторяло плитку. Остаётся лишь оговорка про устаревшие
           показания молчащего роутера. */}
@@ -606,6 +617,23 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
       </section>
     ) : null
 
+  const operationsBlock = operations.length > 0 ? (
+    <section class="section">
+      <h2 class="section-title">Последние действия</h2>
+      <ul class="card list-reset">
+        {operations.map((operation) => {
+          const view = operationView(operation)
+          return (
+            <li key={operation.operation_id} class="row checks-row">
+              <span class="row-title">{view.title}</span>
+              <span class={`checks-status checks-status-${view.tone}`}>{view.status}{view.at ? ` · ${whenText(view.at)}` : ''}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  ) : null
+
   if (!wide) {
     // Порядок -- по срочности (v0.50, спека п. 1.1): при тревоге сразу под
     // шапкой -- тревоги с «Починить», чтобы кнопка была в первом экране на
@@ -624,6 +652,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
         {backupBlock}
         {tunnelsNavBlock}
         {checksBlock}
+        {operationsBlock}
       </div>
     )
   }
@@ -643,6 +672,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
         {backupBlock}
         {tunnelsNavBlock}
         {checksBlock}
+        {operationsBlock}
       </div>
       <div class="now-side">
         {incidentsBlock}

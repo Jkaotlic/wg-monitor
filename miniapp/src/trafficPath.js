@@ -208,9 +208,9 @@ export function lineVia(t, traffic) {
   return t.name || egressName || t.tunnel_id
 }
 
-export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {
+export function pathState({ traffic, incidents = [], tunnels = [], stale = false, evidence = null } = {}) {
   const t = carrierLine({ traffic, tunnels })
-  const tunnel = tunnelBranch({ line: t, traffic, tunnels, incidents, stale })
+  const tunnel = capTunnelState(tunnelBranch({ line: t, traffic, tunnels, incidents, stale }), evidence)
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
@@ -223,3 +223,4 @@ export function pathState({ traffic, incidents = [], tunnels = [], stale = false
     latencyMs: t && typeof t.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
   }
 }
+import { capTunnelState } from './statusEvidence.js'

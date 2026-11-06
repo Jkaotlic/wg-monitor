@@ -1,18 +1,21 @@
 import { RouterDetail } from './RouterDetail.jsx'
 import { TunnelsTab } from './TunnelsTab.jsx'
 import { ChecksTab } from './ChecksTab.jsx'
-import { ManageTab } from './ManageTab.jsx'
-import { ParkTab } from './ParkTab.jsx'
+import { lazy } from 'preact/compat'
+import { LazyScreen } from '../ui/LazyScreen.jsx'
 import { PARK_TAB, tabOwnsLayer, layerFamily } from '../nav.js'
 import { routerContext } from './OverlayHost.jsx'
 import { routerPickMode, otherAlertRouter } from '../routerPick.js'
+
+const ManageTab = lazy(() => import('./ManageTab.jsx').then((m) => ({ default: m.ManageTab })))
+const ParkTab = lazy(() => import('./ParkTab.jsx').then((m) => ({ default: m.ParkTab })))
 
 export function TabBody({ nav, dispatch, routers, isAdmin }) {
   // «Парк» (v0.48) от роутера не зависит: открывается и без него. Слои парка
   // возвращаются сюда же (returnTo 'park'). Вкладка -- только админу; сервер
   // остальным всё равно ответит 404.
   if (nav.tab === PARK_TAB && isAdmin) {
-    return (
+    return <LazyScreen>
       <ParkTab
         routers={routers}
         onPick={(id) => dispatch({ type: 'router', id })}
@@ -23,7 +26,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           dispatch({ type: 'overlay', overlay: 'agentconn' })
         }}
       />
-    )
+    </LazyScreen>
   }
   if (nav.routerID == null) return <p class="state">Выберите роутер в списке.</p>
   const { current, asleep } = routerContext(routers, nav.routerID)
@@ -93,7 +96,7 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
     // пакеты) -- слои с адресом; закрываются обратно во вкладку. «Ход
     // работы» перенаправления возвращает сюда же (returnTo 'manage').
     case 'manage':
-      return (
+      return <LazyScreen>
         <ManageTab
           key={key}
           routerID={nav.routerID}
@@ -111,6 +114,6 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           onOpenPorthop={() => dispatch({ type: 'overlay', overlay: 'porthop' })}
           onOpenSpace={() => dispatch({ type: 'overlay', overlay: 'space' })}
         />
-      )
+      </LazyScreen>
   }
 }

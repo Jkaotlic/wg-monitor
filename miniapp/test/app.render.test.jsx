@@ -286,6 +286,7 @@ describe('оболочка: Telegram', () => {
   // вкладка «Управление» внизу, шестерёнки в шапке нет.
   it('старая ссылка open=settings открывает вкладку «Настройки»', async () => {
     const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
+		await vi.waitFor(() => expect(root.querySelector('.app-body .stub-settings')).toBeTruthy())
     expect(root.querySelector('.app-body .stub-settings')).toBeTruthy()
     // В Telegram сессия не админская (tgSession.is_admin=false): с v0.47
     // вкладка не передаёт админские слоты вовсе. Прежняя заглушка

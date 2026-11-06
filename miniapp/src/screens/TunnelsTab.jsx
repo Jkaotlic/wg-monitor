@@ -6,7 +6,7 @@ import { autorepairBadge } from '../autorepair.js'
 import { Pill } from '../ui/Pill.jsx'
 import { parseRouteSnapshot, rememberCommandSnapshot, snapshotState, tunnelRuleSummary, withCheckVerdict, withOpenAlarms } from '../routes.js'
 import { confirmSheet, localSheet } from '../sheet.js'
-import { tunnelsView } from '../tunnelsView.js'
+import { tunnelOverviewRows, tunnelsView } from '../tunnelsView.js'
 import { tunnelList, tunnelsTabSummary, ALARM_OPEN_LABEL } from '../tunnelDelete.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '../configSources.js'
@@ -16,8 +16,6 @@ import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
-import { Chain } from '../ui/Chain.jsx'
-import { DataRow } from '../ui/DataRow.jsx'
 import { useOnClose } from '../useOnClose.js'
 import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
@@ -25,6 +23,8 @@ import { TunnelScreen } from './TunnelScreen.jsx'
 import { ConfImportScreen } from './ConfImportScreen.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { AwgmLine } from '../ui/AwgmLine.jsx'
+import { statusEvidenceCopy } from '../statusEvidence.js'
+import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -44,6 +44,9 @@ const CHAIN_TITLE = {
   unknown: 'Состояние неизвестно',
   activeUnknown: 'Назначен несущим, проверка неизвестна',
   checkUnknown: 'Проверка неизвестна',
+  activeStale: 'Назначен несущим, проверка устарела',
+  checkStale: 'Проверка устарела',
+  unusedUp: 'Не используется',
 }
 
 const SOURCES_WAIT_MS = 8000
@@ -62,6 +65,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const [roleStatus, setRoleStatus] = useState('loading')
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
+  const [snapshotAt, setSnapshotAt] = useState(null)
   // Вердикт проверок tunnel_* -- чтобы туннель с поднятым интерфейсом и мёртвой
   // удалённой стороной не звался «работает» (см. withCheckVerdict).
   const [checks, setChecks] = useState(null)
@@ -194,6 +198,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
 
   useEffect(() => {
     setSnapshot(null)
+    setSnapshotAt(null)
     setRole('')
     setRoleStatus('loading')
     run('route_status', {}, deadline)
@@ -203,7 +208,10 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   useEffect(() => {
     if (result?.status !== 'ok') return
     const snap = parseRouteSnapshot(result.output)
-    if (rememberCommandSnapshot(routerID, result, snap)) setSnapshot(snap)
+    if (rememberCommandSnapshot(routerID, result, snap)) {
+      setSnapshot(snap)
+      setSnapshotAt(snap ? Date.now() : null)
+    }
   }, [result])
 
   // Проверки перечитываются вместе со снимком: оба -- про одно и то же «сейчас».
@@ -226,14 +234,33 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
     }
   }, [routerID, result])
 
-  const shown = withOpenAlarms(withCheckVerdict(snapshot, checks, { failed: checksFailed }), checks?.incidents)
+  const shown = withOpenAlarms(
+    withCheckVerdict(snapshot, checks, { failed: checksFailed, enforceFreshness: true, requireTimestamp: true }),
+    checks?.incidents,
+  )
   // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
   // traffic из того же ответа /events, что и проверки.
   // Слово awg-manager (v0.65) -- из проекции проверки того же ответа, не из
   // снимка с вердиктом: там у мёртвого VPN-туннеля уже «dead» бота.
-  const view = tunnelsView(shown, checks?.traffic, checks?.tunnels)
+  const view = tunnelsView(shown, checks?.traffic, checks?.tunnels, { enforceFreshness: true, requireTimestamp: true })
+  const freshnessText = checksFailed
+    ? 'Проверки не загрузились — состояние удалённой стороны неизвестно.'
+    : view.freshness?.stale
+      ? view.freshness.ageSec != null
+        ? `Проверки устарели · последний ответ ${humanAge(view.freshness.ageSec)} назад`
+        : 'Проверки устарели · время последнего ответа неизвестно'
+      : view.freshness?.known
+        ? `Проверено ${humanAge(view.freshness.ageSec)} назад`
+        : checks
+          ? 'Время последней проверки неизвестно'
+          : ''
+  const evidence = checks?.evidence ?? null
+  const evidenceCopy = statusEvidenceCopy(evidence)
+  const evidenceUncertain = ['degraded', 'stale', 'unknown'].includes(evidence?.state)
   // Тревоги -- в подпись строк: строка говорит то же, что считает счёт (Fix 2).
   const list = tunnelList(shown, checks?.incidents)
+  const listByID = new Map(list.map((t) => [t.id, t]))
+  const overviewRows = tunnelOverviewRows(view).filter((t) => listByID.has(t.id))
   // Счёт, заголовок и подпись -- одной функцией, с тревогами (I1, M2).
   const summary = tunnelsTabSummary(list, checks)
   const phase = snapshotState({ busy, error, result, snapshot })
@@ -327,7 +354,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Что предложить звену цепочки. Активное трогать нечем -- оно несёт трафик
   // прямо сейчас, и «выключить» на нём не переключатель, а обрыв.
   const chainAction = (c) => {
-    if (['active', 'unknown', 'activeUnknown', 'checkUnknown'].includes(c.role)) return null
+    if (['active', 'unknown', 'activeUnknown', 'checkUnknown', 'activeStale', 'checkStale'].includes(c.role)) return null
     if (c.role === 'down' || c.role === 'activeDown') return restartButton(c)
     return toggleButton(c)
   }
@@ -360,9 +387,26 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       )}
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
+      {phase === 'refreshing' && (
+        <p class="snapshot-banner snapshot-banner-progress">Обновляем состояние. Пока показан предыдущий снимок.</p>
+      )}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={() => run('route_status', {}, deadline)} />}
+      {phase === 'stale-error' && (
+        <div class="snapshot-banner snapshot-banner-error">
+          <strong>Состояние не обновилось.</strong>
+          <span>{error || 'Роутер не ответил.'} Ниже показан предыдущий снимок{snapshotAt ? `, полученный ${humanAge(Math.max(0, Math.floor((Date.now() - snapshotAt) / 1000)))} назад` : ''}.</span>
+          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => run('route_status', {}, deadline)}>Повторить</button>
+        </div>
+      )}
       {phase === 'refused' && (
         <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок — попробуйте ещё раз через минуту.')}</p>
+      )}
+      {phase === 'stale-refused' && (
+        <div class="snapshot-banner snapshot-banner-error">
+          <strong>Роутер не отдал новое состояние.</strong>
+          <span>{agentReplyText(result, 'Ниже показан предыдущий снимок.')}</span>
+          <button type="button" class="btn btn-ghost btn-row" disabled={busy} onClick={() => run('route_status', {}, deadline)}>Повторить</button>
+        </div>
       )}
       {/* Ответ пришёл, а снимка в нём нет. Молчать здесь нельзя: пустой экран
           неотличим от «туннелей нет», и человек будет искать поломку в
@@ -373,15 +417,29 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </p>
       )}
 
+      {snapshot && freshnessText && (
+        <p class={`tunnel-freshness${checksFailed || view.freshness?.stale || !view.freshness?.known ? ' tunnel-freshness-warn' : ''}`}>
+          {freshnessText}
+        </p>
+      )}
+
+      {snapshot && <EvidenceSummary evidence={evidence} />}
+
       {view.active && (
-        <Section title={view.active.live === 'down' || view.active.checkUnknown ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
+        <Section title={view.active.live === 'down' || view.active.checkUnknown || view.active.checkStale || evidence?.state === 'failed' || evidenceUncertain ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
           <Hero>
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
-            {view.active.live === 'down' ? (
+            {evidence?.state === 'failed' ? (
+              <StateTag tone="danger">VPN-туннель не отвечает</StateTag>
+            ) : evidenceUncertain ? (
+              <StateTag tone="warn">{evidenceCopy?.title ?? 'состояние требует проверки'}</StateTag>
+            ) : view.active.live === 'down' ? (
               <StateTag tone="danger">{view.active.alarmOpen ? ALARM_OPEN_LABEL : 'VPN-туннель не отвечает'}</StateTag>
             ) : view.active.checkUnknown ? (
               <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
+            ) : view.active.checkStale ? (
+              <StateTag tone="warn">поднят, проверка устарела</StateTag>
             ) : view.active.unverified ? (
               <StateTag tone="warn">поднят, не проверено</StateTag>
             ) : (
@@ -395,6 +453,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               {view.active.iface ? ` · интерфейс ${view.active.iface}` : ''}
             </p>
             <AwgmLine badge={view.active.awgm} />
+            {view.active.sourceConflict && <p class={`source-conflict source-conflict-${view.active.sourceConflict.tone}`}>{view.active.sourceConflict.text}</p>}
             <div class="stat-grid" style="margin:14px 0 16px">
               <Stat
                 label="обмен ключами"
@@ -459,6 +518,17 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
+      {snapshot && view.state === 'direct' && (
+        <Section title="Как сейчас идёт трафик">
+          <Hero>
+            <StateTag>напрямую через провайдера</StateTag>
+            <p class="traffic-detail" style="padding-bottom:16px">
+              VPN-туннель сейчас не назначен несущим. Это совпадает с режимом прямого доступа, который сообщил роутер.
+            </p>
+          </Hero>
+        </Section>
+      )}
+
       {view.active && (() => {
         const failText = traffic.error || (traffic.result && traffic.result.status !== 'ok' ? 'Роутер не отдал обмен за сутки — попробуйте ещё раз.' : '')
         const tv = trafficView(trafficOut, { busy: traffic.busy, error: failText })
@@ -482,68 +552,36 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         )
       })()}
 
-      {view.chain.length > 0 && (
-        <Section title="Порядок подхвата">
-          <div class="card card-rows">
-            <Chain
-              links={view.chain.map((c) => ({
-                ...c,
-                // Заголовок звена -- его роль; имя VPN-туннеля идёт подписью, и
-                // подписью человеческой: раньше у безымянного VPN-туннеля здесь
-                // стояло имя интерфейса вида OpkgTun11.
-                name: c.title,
-                title: CHAIN_TITLE[c.role] ?? 'Состояние неизвестно',
-                value: c.role === 'active' && c.handshakeAgeSec != null ? humanAge(c.handshakeAgeSec) : c.note,
-                extra: <AwgmLine badge={c.awgm} />,
-                action: chainAction(c),
-              }))}
-            />
-            <p class="card-foot">
-              {view.state === 'singbox'
-                ? 'Маршрут для каждого адреса выбирает роутер среди настроенных VPN-туннелей.'
-                : 'Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.'}
-            </p>
-          </div>
-        </Section>
-      )}
-
-      {view.unused.length > 0 && (
-        <Section title={`Не используются · ${view.unused.length}`}>
-          <div class="card card-rows">
-            {view.unused.map((t) => (
-              <div key={t.id} class="settings-row">
-                <DataRow
-                  title={t.title}
-                  code={t.code}
-                  titleExtra={<AwgmLine badge={t.awgm} />}
-                  value={t.live === 'up' ? 'поднят' : t.live === 'down' ? 'выключен' : 'неизвестно'}
-                  valueTone="muted"
-                />
-                {toggleButton(t)}
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* Все свои VPN-туннели -- вход на экран каждого: там удаление. Цепочка
-          и «не используются» выше отвечают на другие вопросы и не содержат
-          всех VPN-туннелей сразу. */}
-      {list.length > 0 && (
+      {overviewRows.length > 0 && (
         <Section title={summary.title}>
-          {/* Тот же счёт и те же слова, что на «Роутере» и «Проверках» (B3). */}
-          <p class="state">{summary.note}</p>
-          <ul class="card list-reset">
-            {list.map((t) => (
-              <ListRow
-                key={t.id}
-                title={t.name}
-                sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
-                right={autoBadge(t.id)}
-                onClick={() => openLayer?.('tunnel', { tunnelID: t.id })}
-              />
-            ))}
-          </ul>
+          <div class="tunnel-overview-head">
+            <p class="state">{summary.note}</p>
+            <span>{view.state === 'singbox' ? 'Роутер выбирает маршрут для каждого адреса.' : 'Порядок сверху вниз — порядок подхвата.'}</span>
+          </div>
+          <div class="card tunnel-overview">
+            {overviewRows.map((t) => {
+              const meta = listByID.get(t.id)
+              return (
+                <div key={t.id} class={`tunnel-overview-row chain-link settings-row tunnel-overview-${t.role}`}>
+                  <button type="button" class="tunnel-overview-main list-row list-row-btn" onClick={() => openLayer?.('tunnel', { tunnelID: t.id })}>
+                    <span class="tunnel-overview-rail" aria-hidden="true" />
+                    <span class="tunnel-overview-copy">
+                      <span class="tunnel-overview-role">{CHAIN_TITLE[t.role] ?? 'Состояние неизвестно'}</span>
+                      <span class="row-title tunnel-overview-name">{t.title ?? meta?.name}</span>
+                      <span class="tunnel-overview-meta">{meta?.stateLabel} · {tunnelRuleSummary(meta)}</span>
+                      <AwgmLine badge={t.awgm} />
+                      {t.sourceConflict && <span class={`source-conflict source-conflict-${t.sourceConflict.tone}`}>{t.sourceConflict.text}</span>}
+                    </span>
+                    <span class="tunnel-overview-chevron" aria-hidden="true">›</span>
+                  </button>
+                  <div class="tunnel-overview-actions">
+                    {autoBadge(t.id)}
+                    {chainAction(t)}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </Section>
       )}
 

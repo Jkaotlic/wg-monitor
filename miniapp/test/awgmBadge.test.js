@@ -48,15 +48,15 @@ describe('awgmBadge -- правило карточки awg-manager', () => {
 
   // Старый агент или сборка awg-manager без проверки связи: молча «Активен»
   // было бы обещанием, которого никто не проверял.
-  it('running без ответа о связи -- «Активен», связь не проверялась', () => {
-    expect(awgmBadge(t({ run_state: 'running' }))).toEqual({ label: 'Активен', tone: 'ok', note: 'связь не проверялась' })
+  it('running без ответа о связи -- не зелёный', () => {
+    expect(awgmBadge(t({ run_state: 'running' }))).toEqual({ label: 'Активен', tone: 'warn', note: 'связь не проверялась' })
   })
 
   // Запрос упал -- это не «Нет связи»: awg-manager ничего не сказал.
-  it('running и вопрос о связи сорвался -- «Активен», awg-manager не ответил', () => {
+  it('running и вопрос о связи сорвался -- проверка связи не подтверждена', () => {
     expect(awgmBadge(t({ run_state: 'running', awgm_conn: 'error' }))).toEqual({
-      label: 'Активен',
-      tone: 'ok',
+      label: 'Связь не проверена',
+      tone: 'warn',
       note: 'awg-manager не ответил на проверку связи',
     })
   })
@@ -97,5 +97,29 @@ describe('awgmBadge -- правило карточки awg-manager', () => {
   // не превращает «Остановлен» в ошибку.
   it('связь не перекрывает слово не-running', () => {
     expect(awgmBadge(t({ run_state: 'stopped', awgm_conn: 'disconnected' }))).toMatchObject({ label: 'Остановлен' })
+  })
+
+  it('старое слово awg-manager показывается как историческое, а не текущее', () => {
+    expect(
+      awgmBadge(
+        t({ run_state: 'running', awgm_conn: 'connected', awgm_conn_latency_ms: 64, ts: '2026-11-06T09:40:00Z' }),
+        { nowMs: Date.parse('2026-11-06T10:00:00Z'), enforceFreshness: true, requireTimestamp: true },
+      ),
+    ).toEqual({
+      label: 'Данные устарели',
+      tone: 'muted',
+      note: 'последний статус: активен · 20 мин назад',
+      stale: true,
+      ageSec: 1200,
+    })
+  })
+
+  it('без времени в строгом режиме не выдаёт статус за текущий', () => {
+    expect(awgmBadge(t({ run_state: 'running', awgm_conn: 'connected' }), { enforceFreshness: true, requireTimestamp: true })).toMatchObject({
+      label: 'Данные устарели',
+      tone: 'muted',
+      note: 'время проверки неизвестно',
+      stale: true,
+    })
   })
 })

@@ -316,6 +316,11 @@ func serviceMenuItems(legacy bool) []menuItem {
 		Title: "Мигрировать backend URL",
 		Help:  "когда нажимать: сменился домен backend; отправляет update_backend_url всем агентам флота",
 	})
+	items = append(items, menuItem{
+		Key:   fmt.Sprintf("%d", len(items)+1),
+		Title: "External readiness probe",
+		Help:  "когда нажимать: проверить или поставить независимый /readyz-контроль на третьем хосте",
+	})
 	return items
 }
 
@@ -451,23 +456,67 @@ func runServiceMenu(state *State, statePath string, secrets *SecretStore) {
 			}
 		case "5":
 			if !legacy {
-				PrintFail("Не понял. Введи 1-4 или B.")
-				break
+				runExternalProbeMenu(state, statePath, secrets)
+				continue
 			}
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionMigrateBackendURL(state, secrets, "")
 			})
+		case "6":
+			if legacy {
+				runExternalProbeMenu(state, statePath, secrets)
+				continue
+			}
+			PrintFail("Не понял. Введи 1-5 или B.")
 		case "B", "Q", "":
 			return
 		default:
-			limit := "4"
+			limit := "5"
 			if legacy {
-				limit = "5"
+				limit = "6"
 			}
 			PrintFail("Не понял. Введи 1-" + limit + " или B.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в раздел Сервис", "")
+	}
+}
+
+func externalProbeMenuItems() []menuItem {
+	return []menuItem{
+		{Key: "1", Title: "Configure / preview", Help: "сохранить третий SSH-хост и показать безопасный план без установки"},
+		{Key: "2", Title: "Status", Help: "проверить timer и последнее persisted-состояние"},
+		{Key: "3", Title: "Install / repair", Help: "явно установить probe и проверить postconditions"},
+		{Key: "4", Title: "Remove", Help: "остановить timer и удалить probe, credentials и state с третьего хоста"},
+	}
+}
+
+func runExternalProbeMenu(state *State, statePath string, secrets *SecretStore) {
+	for {
+		fmt.Println()
+		fmt.Println(Colorize("External readiness probe", ColorBold))
+		fmt.Print(renderMenuItems(externalProbeMenuItems(), "B", "Назад"))
+		switch readMenuChoice() {
+		case "1":
+			configureExternalProbeInteractive(state)
+			runActionAndSave(state, statePath, secrets, func() error { return actionExternalProbe(state, secrets, "preview") })
+		case "2":
+			runActionAndSave(state, statePath, secrets, func() error { return actionExternalProbe(state, secrets, "status") })
+		case "3":
+			runActionAndSave(state, statePath, secrets, func() error { return actionExternalProbe(state, secrets, "install") })
+		case "4":
+			if strings.EqualFold(strings.TrimSpace(Ask("Напиши REMOVE для удаления внешнего probe", "")), "REMOVE") {
+				runActionAndSave(state, statePath, secrets, func() error { return actionExternalProbe(state, secrets, "remove") })
+			} else {
+				PrintWarn("Удаление отменено")
+			}
+		case "B", "Q", "":
+			return
+		default:
+			PrintFail("Не понял. Введи 1-4 или B.")
+		}
+		fmt.Println()
+		Ask("[Enter] чтобы вернуться в External readiness probe", "")
 	}
 }
 

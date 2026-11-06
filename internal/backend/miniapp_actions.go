@@ -210,6 +210,7 @@ type miniappTransition struct {
 
 type miniappHistoryResp struct {
 	Transitions []miniappTransition `json:"transitions"`
+	Story       []incidentStoryStep `json:"story"`
 	Truncated   bool                `json:"truncated"`
 }
 
@@ -253,6 +254,7 @@ func miniappHistoryHandler(d Deps) http.HandlerFunc {
 				Label:     miniappHistoryLabel(tr.Status),
 			})
 		}
+		resp.Story = incidentStoryFromCheckRows(events)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

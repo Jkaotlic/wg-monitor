@@ -52,7 +52,7 @@ describe('MINI-06: вкладка туннелей', () => {
     root.remove()
   })
   it('проверки ок -- «работает»', async () => {
-    mocks.checks = () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running' }] })
+    mocks.checks = () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running', ts: new Date().toISOString() }] })
     const root = await mount()
     expect(root.textContent).toMatch(/vymysel-nlработает/)
     render(null, root)

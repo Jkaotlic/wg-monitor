@@ -5839,3 +5839,214 @@ body {
   color: var(--dim);
   overflow-wrap: anywhere;
 }
+
+/* VPN-туннели: единая операторская лента вместо трёх списков с одними и
+   теми же именами. Узкая рейка слева кодирует роль/состояние, а не украшает. */
+.tunnel-overview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0 0 var(--sp-3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.tunnel-overview-head > :last-child {
+  text-align: right;
+  color: var(--dim);
+}
+
+.tunnel-overview-head > .state {
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.tunnel-overview {
+  padding: 0;
+  overflow: hidden;
+}
+
+.tunnel-overview-row,
+.tunnel-overview-row.settings-row,
+.tunnel-overview-row.chain-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) 0 0;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.tunnel-overview-row:last-child { border-bottom: 0; }
+.tunnel-overview-row.chain-link::before { display: none; }
+
+.tunnel-overview-main {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: stretch;
+  min-width: 0;
+  min-height: 88px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tunnel-overview-main:hover .tunnel-overview-name { color: var(--sig); }
+
+.tunnel-overview-rail {
+  width: 4px;
+  height: 100%;
+  background: var(--dim);
+}
+
+.tunnel-overview-active .tunnel-overview-rail { background: var(--sig); box-shadow: 0 0 14px color-mix(in srgb, var(--sig) 55%, transparent); }
+.tunnel-overview-ready .tunnel-overview-rail,
+.tunnel-overview-unusedUp .tunnel-overview-rail { background: var(--ok); }
+.tunnel-overview-activeDown .tunnel-overview-rail,
+.tunnel-overview-down .tunnel-overview-rail { background: var(--bad); }
+.tunnel-overview-activeUnknown .tunnel-overview-rail,
+.tunnel-overview-checkUnknown .tunnel-overview-rail,
+.tunnel-overview-activeStale .tunnel-overview-rail,
+.tunnel-overview-checkStale .tunnel-overview-rail { background: var(--warn); }
+
+.tunnel-overview-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: var(--sp-3) 0;
+}
+
+.tunnel-overview-role {
+  color: var(--dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.tunnel-overview-name {
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  transition: color var(--transition-fast);
+}
+
+.tunnel-overview-meta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+}
+
+.tunnel-overview-chevron {
+  align-self: center;
+  color: var(--dim);
+  font-size: var(--fs-xl);
+}
+
+.tunnel-overview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.source-conflict {
+  display: block;
+  margin-top: var(--sp-2);
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.source-conflict-danger {
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad);
+}
+
+.snapshot-banner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--sp-3);
+  align-items: center;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+
+.snapshot-banner > span { color: var(--muted); }
+.snapshot-banner > .btn { grid-column: 2; grid-row: 1 / span 2; }
+.snapshot-banner-error { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--surface)); color: var(--bad); }
+
+.tunnel-freshness {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: var(--sp-3) 0 0;
+  color: var(--ok);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.tunnel-freshness::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tunnel-freshness-warn { color: var(--warn); }
+
+@media (max-width: 560px) {
+  .tunnel-overview-head { flex-direction: column; }
+  .tunnel-overview-head > :last-child { text-align: left; }
+  .tunnel-overview-row,
+  .tunnel-overview-row.settings-row,
+  .tunnel-overview-row.chain-link { grid-template-columns: minmax(0, 1fr); padding-right: 0; }
+  .tunnel-overview-actions { padding: 0 var(--sp-3) var(--sp-3) var(--sp-4); }
+  .tunnel-overview-actions:empty { display: none; }
+  .snapshot-banner { grid-template-columns: minmax(0, 1fr); }
+  .snapshot-banner > .btn { grid-column: 1; grid-row: auto; justify-self: start; }
+}
+.evidence-summary {
+  margin: 10px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.evidence-summary > summary {
+  cursor: pointer;
+  color: inherit;
+	min-height: 40px;
+	padding: 10px 0;
+	box-sizing: border-box;
+}
+
+.evidence-summary ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.evidence-summary-warn { color: var(--warn); }
+.evidence-summary-danger { color: var(--danger); }

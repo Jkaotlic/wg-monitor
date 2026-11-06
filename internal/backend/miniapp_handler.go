@@ -50,6 +50,8 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/update", reqID(auth(miniappAgentUpdateHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/update/cancel", reqID(auth(miniappAgentUpdateCancelHandler(d))))
 	mux.Handle("POST /v1/miniapp/fleet/agent/update", reqID(auth(miniappFleetAgentUpdateHandler(d))))
+	mux.Handle("GET /v1/miniapp/fleet/agent/rollout", reqID(auth(miniappFleetRolloutStatusHandler(d))))
+	mux.Handle("POST /v1/miniapp/fleet/agent/rollout/cancel", reqID(auth(miniappFleetRolloutCancelHandler(d))))
 	// Оживление агента -- только админу, гейт внутри (404 не-админу).
 	// Тело POST несёт пароль: middleware тела не читают, хендлер его не логирует.
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/revive", reqID(auth(miniappAgentReviveHandler(d))))
@@ -135,6 +137,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/ack", reqID(auth(miniappAckHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/mute", reqID(auth(miniappMuteHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/incidents/{check}/history", reqID(auth(miniappHistoryHandler(d))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/operations", reqID(auth(miniappOperationsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/access", reqID(auth(miniappAccessHandler(d))))
 	// Справочник людей (v0.58) -- выбор человека при выдаче доступа. Только
 	// админ, отказ как у соседних маршрутов доступа.
@@ -563,6 +566,10 @@ type miniappRouterEventsResp struct {
 	// sources of truth.
 	Tunnels []miniappTunnel `json:"tunnels"`
 	Traffic miniappTraffic  `json:"traffic"`
+	// Evidence is the backend-owned explanation of the traffic verdict. New
+	// clients use it instead of independently upgrading a stale or conflicting
+	// source to green; old clients ignore the additive field.
+	Evidence statusEvidence `json:"evidence"`
 }
 
 // miniappEventsWindow bounds how far back "the latest status of every
@@ -582,7 +589,8 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		// per check: its latest known status — the same query shape the
 		// bot's tunnels panel/alert formatter already use, not a full
 		// chronological history.
-		rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, "", time.Now().UTC().Add(-miniappEventsWindow))
+		now := time.Now().UTC()
+		rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, "", now.Add(-miniappEventsWindow))
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
 			return
@@ -604,6 +612,7 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		}
 		sort.Slice(resp.Tunnels, func(i, j int) bool { return resp.Tunnels[i].TunnelID < resp.Tunnels[j].TunnelID })
 		resp.Traffic = miniappDeriveTraffic(resp.Tunnels, byCheck)
+		resp.Evidence = deriveStatusEvidenceFromChecks(resp.Tunnels, resp.Traffic, byCheck, now)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

@@ -16,6 +16,8 @@ import {
   forgetRouterCredentials,
   reinstallRouterAgent,
   updateFleetAgents,
+  fetchFleetAgentRollout,
+  cancelFleetAgentRollout,
   sendCommand,
   fetchCommandResult,
   setRouterNotify,
@@ -48,7 +50,7 @@ import {
   agentCancelDoneText,
   fleetUpdateTargets,
   fleetUpdateSheetText,
-  fleetUpdateSummary,
+  rolloutSummary,
   fleetUpdateErrorText,
 } from '../agentUpdate.js'
 import {
@@ -132,6 +134,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   // лист к этому моменту уже закрыт, а человек должен увидеть, чем кончилось.
   const [notice, setNotice] = useState('')
   const [fleetResult, setFleetResult] = useState(null)
+  const [rolloutResp, setRolloutResp] = useState(null)
   // «Ещё ▸» на карточке -- по роутеру: раскрытие одной не трогает другие.
   const [moreOpen, setMoreOpen] = useState(() => new Set())
   const toggleMore = (id) =>
@@ -190,6 +193,21 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
 
   useEffect(() => {
     load()
+    const refreshRollout = () => fetchFleetAgentRollout()
+      .then((resp) => {
+        if (!aliveRef.current) return
+				if (!resp?.job) {
+					setRolloutResp(null)
+					return
+				}
+        setRolloutResp(resp)
+        setFleetResult(rolloutSummary(resp))
+        if (['complete', 'failed', 'cancelled'].includes(resp?.job?.state)) load()
+      })
+      .catch(() => {})
+    refreshRollout()
+    const timer = setInterval(refreshRollout, 10_000)
+    return () => clearInterval(timer)
   }, [])
 
   // Ссылку выдаёт сервер, он же говорит словами про срок и лимит: своих
@@ -384,14 +402,15 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
       localSheet({
         title: text.title,
         body: text.body,
-        buttonLabel: 'Обновить всех',
-        busyLabel: 'Ставим…',
+        buttonLabel: 'Начать с canary',
+        busyLabel: 'Запускаем…',
         confirmPhrase: FLEET_UPDATE_PHRASE,
         errorText: fleetUpdateErrorText,
         perform: (typed) => updateFleetAgents(typed),
         onDone: (resp) => {
           setNotice('')
-          setFleetResult(fleetUpdateSummary(resp?.results))
+          setRolloutResp(resp)
+          setFleetResult(rolloutSummary(resp))
           load()
         },
       }),
@@ -604,6 +623,11 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                     <Quoted text={line.text} />
                   </p>
                 ))}
+                {fleetResult.active && rolloutResp?.job && (
+                  <button type="button" class="btn btn-ghost btn-row" onClick={() => cancelFleetAgentRollout().then((resp) => { setRolloutResp(resp); setFleetResult(rolloutSummary(resp)) }).catch(() => {})}>
+                    Остановить раскатку
+                  </button>
+                )}
               </div>
             )}
             {notice && (

@@ -158,6 +158,14 @@ export function updateFleetAgents(confirm) {
   return request('/fleet/agent/update', { method: 'POST', body: JSON.stringify({ confirm }) })
 }
 
+export function fetchFleetAgentRollout() {
+  return request('/fleet/agent/rollout')
+}
+
+export function cancelFleetAgentRollout() {
+  return request('/fleet/agent/rollout/cancel', { method: 'POST' })
+}
+
 // Оживление агента: пароль уходит один раз, в теле этого POST, и больше
 // клиентом не читается -- сервер его не возвращает никаким маршрутом. Тело
 // собирает revive.js (пустых полей в нём нет).
@@ -236,6 +244,11 @@ export function muteIncident(routerID, check) {
 
 export function fetchIncidentHistory(routerID, check) {
   return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/history`)
+}
+
+export function fetchRouterOperations(routerID, before = 0) {
+  const cursor = before > 0 ? `&before=${before}` : ''
+  return request(`/routers/${routerID}/operations?limit=10${cursor}`)
 }
 
 // Лента событий роутера (/timeline), а не история одной проверки

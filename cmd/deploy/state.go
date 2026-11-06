@@ -13,10 +13,24 @@ import (
 const CurrentSchemaVersion = 1
 
 type State struct {
-	SchemaVersion int           `toml:"schema_version"`
-	Backend       BackendState  `toml:"backend"`
-	Telegram      TelegramState `toml:"telegram"`
-	Agents        []AgentState  `toml:"agents"`
+	SchemaVersion int                `toml:"schema_version"`
+	Backend       BackendState       `toml:"backend"`
+	Telegram      TelegramState      `toml:"telegram"`
+	ExternalProbe ExternalProbeState `toml:"external_probe"`
+	Agents        []AgentState       `toml:"agents"`
+}
+
+// ExternalProbeState contains only non-secret provisioning metadata.  The
+// probe's SSH password and its independent Telegram credentials live in the
+// SecretStore, never in wizard.toml or the remote state file.
+type ExternalProbeState struct {
+	Host        string `toml:"host,omitempty"`
+	Port        int    `toml:"port,omitempty"`
+	User        string `toml:"user,omitempty"`
+	SSHAuth     string `toml:"ssh_auth,omitempty"`
+	KeyPath     string `toml:"key_path,omitempty"`
+	ReadyURL    string `toml:"ready_url,omitempty"`
+	LastInstall string `toml:"last_install,omitempty"`
 }
 
 type BackendState struct {

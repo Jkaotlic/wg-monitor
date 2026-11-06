@@ -19,7 +19,7 @@ import (
 // строки -- нет. После восстановления экран пуст до первого отчёта агентов.
 // owed_replies -- недоставленные «восстановилось»: после восстановления из
 // архива они устарели бы, повторять их нельзя.
-var SkipTables = []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies"}
+var SkipTables = []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies", "operation_journal"}
 
 // CopyTables -- таблицы, чьи строки переносятся целиком. Сборка переносит
 // любую таблицу не из SkipTables; этот список нужен сторожу
@@ -51,6 +51,10 @@ var CopyTables = []string{
 	// восстановления агенты прислали бы журнал заново и владельцы получили бы
 	// повторные «починил».
 	"awgm_unstick_events",
+	// Незавершённая canary-раскатка -- persisted operational intent: после
+	// восстановления backend обязан продолжить или показать её оператору.
+	"rollout_jobs",
+	"rollout_targets",
 }
 
 type schemaObject struct{ kind, name, sql string }
@@ -153,6 +157,19 @@ func BuildCounted(ctx context.Context, src, dst string) (counts Counts, err erro
 		q := quoteIdent(o.name)
 		if _, err := conn.ExecContext(ctx, `INSERT INTO main.`+q+` SELECT * FROM src.`+q); err != nil { // #nosec G202 -- имя таблицы из sqlite_master, экранировано quoteIdent
 			return counts, fmt.Errorf("copy table %s: %w", o.name, err)
+		}
+	}
+	// A restored archive must never resume old operational intent by itself.
+	// Keep the rollout visible, but require an explicit operator review before
+	// any worker can advance it; old observation timestamps are discarded.
+	for _, o := range objects {
+		if o.kind == "table" && o.name == "rollout_jobs" {
+			if _, err := conn.ExecContext(ctx, `UPDATE main.rollout_jobs
+				SET state='paused', pause_reason='restore_review_required', observation_started_at=NULL
+				WHERE state NOT IN ('complete','failed','cancelled')`); err != nil {
+				return counts, fmt.Errorf("pause restored rollout jobs: %w", err)
+			}
+			break
 		}
 	}
 	counts = countSource(ctx, conn)

@@ -46,6 +46,7 @@ describe('открытие «Хода работы»', () => {
     const dispatch = vi.fn()
     const nav = { routerID: 22, tab: 'manage', overlay: null, sheet: null }
     const root = await mount(<TabBody nav={nav} dispatch={dispatch} routers={ROUTERS} isAdmin />)
+		await vi.waitFor(() => expect(root.querySelector('.stub-admin')).toBeTruthy())
     expect(root.querySelector('.stub-admin').dataset.name).toBe('home')
     await act(async () => root.querySelector('.stub-admin').click())
     expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'job', params: { ...JOB, returnTo: 'manage' } })
@@ -60,6 +61,7 @@ describe('открытие «Хода работы»', () => {
       const dispatch = vi.fn()
       const nav = { routerID, tab: 'park', overlay: null, sheet: null }
       const root = await mount(<TabBody nav={nav} dispatch={dispatch} routers={ROUTERS} isAdmin />)
+			await vi.waitFor(() => expect(root.querySelector('.stub-park')).toBeTruthy())
       await act(async () => root.querySelector('.stub-park').click())
       expect(dispatch).toHaveBeenCalledWith({ type: 'overlay', overlay: 'job', params: { ...JOB, returnTo: 'park' } })
       render(null, root)

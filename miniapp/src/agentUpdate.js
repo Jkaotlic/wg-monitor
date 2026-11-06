@@ -163,7 +163,7 @@ export function fleetUpdateSheetText(fleet) {
   const word = pluralRu(n, 'роутер', 'роутера', 'роутеров')
   return {
     title: 'Обновить агент на всех отставших?',
-    body: `${verb} ${n} ${word}: ${names}. Выключенные и спящие получат обновление, когда выйдут на связь.`,
+    body: `${verb} ${n} ${word}: ${names}. Выключенные и спящие получат обновление, когда выйдут на связь. Сначала обновится один свежий canary-роутер; после 10 минут без новых тревог и пропусков отчётов сервер продолжит с остальными.`,
   }
 }
 
@@ -193,4 +193,33 @@ export function fleetUpdateSummary(results) {
   if (count.skipped) parts.push(`${pluralRu(count.skipped, 'пропущен', 'пропущено', 'пропущено')} ${count.skipped}`)
   if (count.error) parts.push(`не получилось ${count.error}`)
   return { headline: `Обновление: ${parts.join(', ')}.`, lines }
+}
+
+const ROLLOUT_PAUSE = {
+  new_hard_incident: 'после обновления появилась новая тревога',
+  report_gap: 'canary перестал присылать свежие отчёты',
+  deploy_failed: 'не удалось поставить обновление на следующий роутер',
+}
+
+export function rolloutSummary(resp) {
+  // Compatibility with an older backend during a rolling backend/frontend
+  // deploy: it returned the all-at-once result array.
+  if (!resp?.job) return fleetUpdateSummary(resp?.results)
+  const state = resp.job.state
+  const targets = resp.targets ?? []
+  const observed = targets.filter((t) => t.status === 'observed').length
+  const total = targets.length
+  const byState = {
+    planned: 'Готовим безопасную раскатку.',
+    canary_pending: 'Canary обновляется · остальные роутеры пока не затронуты.',
+    observing: 'Canary обновился · наблюдаем 10 минут перед остальными.',
+    rolling: `Canary прошёл проверку · обновляем остальные (${observed} из ${total} подтверждено).`,
+    complete: `Раскатка завершена · новую версию подтвердили ${observed} из ${total}.`,
+    failed: 'Раскатка остановилась с ошибкой.',
+    cancelled: 'Раскатка отменена.',
+  }
+  const headline = state === 'paused'
+    ? `Раскатка на паузе: ${ROLLOUT_PAUSE[resp.job.pause_reason] ?? 'защитная проверка не пройдена'}.`
+    : (byState[state] ?? 'Состояние раскатки уточняется.')
+  return { headline, lines: [], active: !['complete', 'failed', 'cancelled'].includes(state) }
 }

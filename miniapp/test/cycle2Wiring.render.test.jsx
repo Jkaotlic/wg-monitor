@@ -201,6 +201,7 @@ describe('OverlayHost: слои парка', () => {
   it('вкладка «Парк»: openLayer с возвратом в Парк', async () => {
     const actions = []
     const root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'park' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
+		await vi.waitFor(() => expect(root.querySelector('.park-tab .stub-park')).toBeTruthy())
     expect(root.querySelector('.park-tab .stub-park')).toBeTruthy()
     mocks.props.park.openLayer('provision')
     expect(actions.pop()).toEqual({ type: 'overlay', overlay: 'provision', params: { returnTo: 'park' } })
@@ -212,6 +213,7 @@ describe('OverlayHost: слои парка', () => {
   it('вкладка «Парк»: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
     const actions = []
     const root = await mount(<TabBody nav={nav({ routerID: 1, tab: 'park' })} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)
+		await vi.waitFor(() => expect(mocks.props.park).toBeTruthy())
     mocks.props.park.onOpenConnection(2)
     expect(actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
     cleanup(root)
@@ -241,6 +243,7 @@ describe('вкладка «Управление»', () => {
   it('админу: настройки, вход в подключение агента, доступ; Парка нет', async () => {
     const t = tab(true)
     const root = await mount(t.node)
+		await vi.waitFor(() => expect(root.querySelector('.stub-settings')).toBeTruthy())
     expect(root.querySelector('.stub-settings')).toBeTruthy()
     expect(root.querySelector('.stub-park')).toBe(null)
     expect(root.querySelector('.stub-access')).toBeTruthy()
@@ -252,6 +255,7 @@ describe('вкладка «Управление»', () => {
   it('не-админу: настройки есть, входа в подключение и доступа нет', async () => {
     const t = tab(false)
     const root = await mount(t.node)
+		await vi.waitFor(() => expect(root.querySelector('.stub-settings')).toBeTruthy())
     expect(root.querySelector('.stub-settings')).toBeTruthy()
     expect(button(root, 'Открыть подключение агента')).toBeFalsy()
     expect(root.querySelector('.stub-access')).toBe(null)

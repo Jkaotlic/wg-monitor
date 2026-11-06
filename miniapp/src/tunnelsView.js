@@ -5,7 +5,7 @@
 // сначала "работает ли сейчас", потом "что будет, если ляжет", и только
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
-import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
+import { tunnelEventAgeSec, tunnelEventFresh, tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 import { withSnapshotCarrier } from './trafficPath.js'
 import { ALARM_OPEN_LABEL } from './tunnelDelete.js'
 import { awgmBadge } from './awgmBadge.js'
@@ -27,12 +27,14 @@ function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
   // «Работает сейчас» было бы неправдой.
   if (link.tunnel_id && link.tunnel_id === activeTunnelID) {
     if (live === 'down' || carrierDead || tunnel?.alarm_open) return 'activeDown'
+    if (tunnel?.verdict_stale) return 'activeStale'
     // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
     // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
     return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
   }
   // Тревога открыта, проверка уже ok: «отвечает» сказать нельзя.
   if (tunnel?.alarm_open) return 'down'
+  if (tunnel?.verdict_stale) return 'checkStale'
   if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
   if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
@@ -54,6 +56,8 @@ const ROLE_NOTE = {
   // п. 5): неизвестна проверка, а не слово роутера.
   activeUnknown: 'проверка не пришла: сервер не ответил',
   checkUnknown: 'поднят, проверка не пришла: сервер не ответил',
+  activeStale: 'проверка устарела',
+  checkStale: 'поднят, проверка устарела',
 }
 
 // Имя VPN-туннеля глазами человека. Пустое имя -- это отсутствие имени, а не повод
@@ -79,6 +83,8 @@ function chainOf(policy, byID, activeTunnelID, opts, awgm) {
     const tunnel = link.tunnel_id ? byID.get(link.tunnel_id) : undefined
     const role = chainRole(link, tunnel, activeTunnelID, opts)
     const age = tunnel?.has_handshake ? (tunnel.handshake_age_sec ?? null) : null
+    const live = tunnel ? tunnelLive(tunnel) : 'unknown'
+    const badge = awgmOf(awgm, link.tunnel_id)
     return {
       tunnelID: link.tunnel_id ?? '',
       name: link.name || link.bind,
@@ -92,8 +98,9 @@ function chainOf(policy, byID, activeTunnelID, opts, awgm) {
       // туннель (агент делает это ndmc'ом). Пусто у opkg-туннелей: их в NDMS
       // нет, и кнопки под ними быть не должно.
       ndmsName: tunnel?.ndms_name ?? '',
-      live: tunnel ? tunnelLive(tunnel) : 'unknown',
-      awgm: awgmOf(awgm, link.tunnel_id),
+      live,
+      awgm: badge,
+      sourceConflict: sourceConflict(live, badge),
     }
   })
 }
@@ -103,21 +110,42 @@ function awgmOf(awgm, id) {
   return (id && awgm.get(id)) || null
 }
 
+function sourceConflict(live, badge) {
+  if (live === 'up' && badge?.tone === 'bad') {
+    return { tone: 'danger', text: `Источники расходятся: проверка бота успешна, awg-manager сообщает «${badge.label}».` }
+  }
+  if (live === 'down' && badge?.tone === 'ok') {
+    return { tone: 'warn', text: `Источники расходятся: проверка бота неуспешна, awg-manager сообщает «${badge.label}».` }
+  }
+  return null
+}
+
 // Только свои туннели: WAN и системные записи каталога NDMS сюда не
 // попадают -- предложить поднять провайдера было бы бессмысленно.
 function unusedOf(tunnels, chain, awgm) {
   const inChain = new Set(chain.map((c) => c.tunnelID).filter(Boolean))
   return tunnels
     .filter((t) => t.type === 'managed' && !inChain.has(t.id))
-    .map((t) => ({
-      id: t.id,
-      name: t.name || t.id,
-      title: lineTitle(t.name),
-      code: t.id,
-      live: tunnelLive(t),
-      ndmsName: t.ndms_name ?? '',
-      awgm: awgmOf(awgm, t.id),
-    }))
+    .map((t) => {
+      const live = tunnelLive(t)
+      const switchedOff = tunnelSwitchedOff(t)
+      const badge = awgmOf(awgm, t.id)
+      return {
+        id: t.id,
+        name: t.name || t.id,
+        title: lineTitle(t.name),
+        code: t.id,
+        live,
+        role: live === 'up' ? 'unusedUp' : switchedOff ? 'off' : live === 'down' ? 'down' : t.verdict_stale ? 'checkStale' : 'unknown',
+        switchedOff,
+        verdictStale: Boolean(t.verdict_stale),
+        checkUnknown: Boolean(t.verdict_unknown),
+        unverified: Boolean(t.check_unverified),
+        ndmsName: t.ndms_name ?? '',
+        awgm: badge,
+        sourceConflict: sourceConflict(live, badge),
+      }
+    })
 }
 
 // Ведущей считается политика, чьё активное звено -- наш туннель. Политика,
@@ -137,20 +165,23 @@ function firstVPNPolicy(policies, byID) {
 //   singbox -- маршрут выбирается для каждого адреса: политика «настроена»,
 //              несущего нет;
 //   unknown -- сервер несущего не назвал или проверки не загрузились;
-//   none    -- ни одна политика не ведёт в VPN-туннель.
+//   direct  -- сервер подтвердил штатный прямой путь через провайдера;
+//   none    -- снимок не содержит работающей VPN-политики, но прямой путь не подтверждён.
 // Без traffic.carrier_basis (бэкенд старше v0.56, тесты раскладки) несущим
 // остаётся активное звено первой VPN-политики снимка -- слово роутера.
 //
 // eventTunnels -- events.tunnels того же ответа, что и проверки: из них, а не
 // из снимка, считается слово awg-manager у каждого VPN-туннеля (awgm, v0.65).
-export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
+export function tunnelsView(snapshot, serverTraffic, eventTunnels = [], freshnessOptions = {}) {
   const empty = { state: 'none', active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
   if (tunnels.length === 0) return empty
 
   const byID = new Map(tunnels.map((t) => [t.id, t]))
-  const awgm = new Map((Array.isArray(eventTunnels) ? eventTunnels : []).map((t) => [t?.tunnel_id, awgmBadge(t)]))
+  const eventRows = Array.isArray(eventTunnels) ? eventTunnels : []
+  const awgm = new Map(eventRows.map((t) => [t?.tunnel_id, awgmBadge(t, freshnessOptions)]))
+  const freshness = tunnelViewFreshness(eventRows, freshnessOptions)
   // Сервер несущего не знает -- активное звено из снимка роутера, тем же
   // правилом, что у экрана «Роутер» (withSnapshotCarrier).
   const traffic = withSnapshotCarrier(serverTraffic, snapshot)
@@ -162,7 +193,7 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
     // строки VPN-туннеля (песочница v0.56: строка vpn-nl была озаглавлена
     // «Настроено, маршрут выбирается по адресу»).
     const chain = chainOf(p, byID, '', undefined, awgm)
-    return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
+    return { state: 'singbox', active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm), freshness }
   }
 
   let carrierID
@@ -175,12 +206,12 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
       // ревью B1: шапка «Роутера» на тех же данных говорит «всё работает»).
       const p = firstVPNPolicy(policies, byID) ?? policies.find((x) => x.via_vpn && (x.interfaces ?? []).some((l) => l.tunnel_id && byID.has(l.tunnel_id)))
       const chain = chainOf(p, byID, '', undefined, awgm)
-      const state = traffic.mode === 'direct' ? 'none' : 'unknown'
-      return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
+      const state = traffic.mode === 'direct' ? 'direct' : 'unknown'
+      return { state, active: null, policyName: p?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm), freshness }
     }
   } else {
     carrierID = firstVPNPolicy(policies, byID)?.active_tunnel_id ?? ''
-    if (!carrierID) return { ...empty, unused: [] }
+    if (!carrierID) return { ...empty, unused: unusedOf(tunnels, [], awgm), freshness }
   }
 
   // Политика несущего: та, чьё активное звено -- он; снимок мог разойтись с
@@ -207,6 +238,7 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
     // Тревога открыта, а последняя проверка ok: слова героя -- те же, что в списке.
     alarmOpen: Boolean(activeTunnel.alarm_open),
     checkUnknown: Boolean(activeTunnel.verdict_unknown),
+    checkStale: Boolean(activeTunnel.verdict_stale),
     // Проверка пришла, но ничего не проверила (unknown, v0.46).
     unverified: Boolean(activeTunnel.check_unverified),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
@@ -220,7 +252,37 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = []) {
     rulesNote: rulesNote(activeRow, policy),
     awgm: awgmOf(awgm, activeTunnel.id),
   }
+  active.sourceConflict = sourceConflict(active.live, active.awgm)
 
   const chain = chainOf(policy, byID, carrierID, { carrierDead }, awgm)
-  return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm) }
+  return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm), freshness }
+}
+
+function tunnelViewFreshness(rows, { nowMs = Date.now(), maxAgeMs, enforceFreshness = false, requireTimestamp = false } = {}) {
+  if (rows.length === 0) return { known: false, stale: false, ageSec: null }
+  const ages = rows.map((row) => tunnelEventAgeSec(row, nowMs))
+  const missing = ages.some((age) => age == null)
+  const knownAges = ages.filter((age) => age != null)
+  const stale = enforceFreshness && rows.some((row) => !tunnelEventFresh(row, nowMs, maxAgeMs) || (requireTimestamp && !row?.ts))
+  return { known: !missing && knownAges.length > 0, stale, ageSec: knownAges.length ? Math.max(...knownAges) : null }
+}
+
+// Одна рабочая лента экрана: сначала реальный порядок подхвата, затем
+// VPN-туннели вне политики. Один id встречается один раз — подробности и
+// действие больше не приходится искать в трёх повторяющихся разделах.
+export function tunnelOverviewRows(view) {
+  const seen = new Set()
+  const out = []
+  for (const link of view?.chain ?? []) {
+    const id = link.tunnelID
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ ...link, id, kind: 'chain' })
+  }
+  for (const tunnel of view?.unused ?? []) {
+    if (!tunnel.id || seen.has(tunnel.id)) continue
+    seen.add(tunnel.id)
+    out.push({ ...tunnel, kind: 'unused' })
+  }
+  return out
 }

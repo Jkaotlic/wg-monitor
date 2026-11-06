@@ -14,6 +14,8 @@
 //
 // tone -- смысл цвета, не класс: ok | warn | bad | muted.
 
+import { TUNNEL_EVENT_FRESH_MS, tunnelEventAgeSec } from './routes.js'
+
 const BY_STATUS = {
   broken: { label: 'Сломан', tone: 'bad' },
   starting: { label: 'Запускается', tone: 'warn' },
@@ -25,7 +27,24 @@ const BY_STATUS = {
   disabled: { label: 'Выключен', tone: 'muted' },
 }
 
-export function awgmBadge(t) {
+export function awgmBadge(t, { nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH_MS, enforceFreshness = false, requireTimestamp = false } = {}) {
+  const badge = currentBadge(t)
+  if (!badge || !enforceFreshness) return badge
+  const ageSec = tunnelEventAgeSec(t, nowMs)
+  if (ageSec == null) {
+    return requireTimestamp ? { label: 'Данные устарели', tone: 'muted', note: 'время проверки неизвестно', stale: true, ageSec: null } : badge
+  }
+  if (ageSec * 1000 <= maxAgeMs) return badge
+  return {
+    label: 'Данные устарели',
+    tone: 'muted',
+    note: `последний статус: ${badge.label.toLowerCase()} · ${ageLabel(ageSec)} назад`,
+    stale: true,
+    ageSec,
+  }
+}
+
+function currentBadge(t) {
   const status = typeof t?.run_state === 'string' ? t.run_state.trim() : ''
   if (!status) return null
   const reason = (t.awgm_conn_reason ?? '').trim()
@@ -35,6 +54,8 @@ export function awgmBadge(t) {
     // связи слова не меняет.
     if (t.awgm_conn === 'disconnected') return { label: 'Нет связи', tone: 'bad', note: reason }
     if (t.ping_check_status === 'recovering') return { label: 'Восстанавливается', tone: 'warn', note: '' }
+    if (t.awgm_conn === 'error') return { label: 'Связь не проверена', tone: 'warn', note: 'awg-manager не ответил на проверку связи' }
+    if (t.awgm_conn !== 'connected') return { label: 'Активен', tone: 'warn', note: 'связь не проверялась' }
     return { label: 'Активен', tone: 'ok', note: activeNote(t) }
   }
   const known = BY_STATUS[status]
@@ -45,6 +66,13 @@ export function awgmBadge(t) {
   return { ...known, note }
 }
 
+function ageLabel(sec) {
+  if (sec < 60) return `${sec} сек`
+  if (sec < 3600) return `${Math.floor(sec / 60)} мин`
+  if (sec < 86400) return `${Math.floor(sec / 3600)} ч`
+  return `${Math.floor(sec / 86400)} дн`
+}
+
 // Пояснение к «Активен»: молча «Активен» без ответа о связи было бы
 // обещанием, которого никто не проверял. Сбой вопроса -- не «Нет связи»:
 // awg-manager просто ничего не сказал.
@@ -52,8 +80,6 @@ function activeNote(t) {
   switch (t.awgm_conn) {
     case 'connected':
       return Number.isFinite(t.awgm_conn_latency_ms) ? `${t.awgm_conn_latency_ms} мс` : ''
-    case 'error':
-      return 'awg-manager не ответил на проверку связи'
     default:
       return 'связь не проверялась'
   }

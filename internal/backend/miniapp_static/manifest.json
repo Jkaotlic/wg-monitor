@@ -1,0 +1,366 @@
+{
+  "_Fold-DeorXDhI.js": {
+    "file": "assets/Fold-DeorXDhI.js",
+    "name": "Fold",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js"
+    ]
+  },
+  "_PackagesCard-B5O-wAEq.js": {
+    "file": "assets/PackagesCard-B5O-wAEq.js",
+    "name": "PackagesCard",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_maintenance-DRR7x7wy.js",
+      "index.html",
+      "_stamp-DtEwUNhB.js"
+    ]
+  },
+  "_PeoplePicker-BVgXstnD.js": {
+    "file": "assets/PeoplePicker-BVgXstnD.js",
+    "name": "PeoplePicker",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_when-CS8aOh9X.js"
+    ]
+  },
+  "_Q-BpPacQiF.js": {
+    "file": "assets/Q-BpPacQiF.js",
+    "name": "Q",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js"
+    ]
+  },
+  "_agentJobs-B3kBbjPH.js": {
+    "file": "assets/agentJobs-B3kBbjPH.js",
+    "name": "agentJobs",
+    "imports": [
+      "_labels-BAAudAf7.js",
+      "_staleness-BJgim8nB.js",
+      "index.html",
+      "_formRules-D_-y6LiM.js"
+    ]
+  },
+  "_backendDeploy-Boui912f.js": {
+    "file": "assets/backendDeploy-Boui912f.js",
+    "name": "backendDeploy"
+  },
+  "_commandWait-D7KsAX7Q.js": {
+    "file": "assets/commandWait-D7KsAX7Q.js",
+    "name": "commandWait",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_jobPoll-pVwVvXGt.js"
+    ]
+  },
+  "_formRules-D_-y6LiM.js": {
+    "file": "assets/formRules-D_-y6LiM.js",
+    "name": "formRules"
+  },
+  "_jobPoll-pVwVvXGt.js": {
+    "file": "assets/jobPoll-pVwVvXGt.js",
+    "name": "jobPoll",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js"
+    ]
+  },
+  "_jsxRuntime.module-GyPmACt8.js": {
+    "file": "assets/jsxRuntime.module-GyPmACt8.js",
+    "name": "jsxRuntime.module"
+  },
+  "_labels-BAAudAf7.js": {
+    "file": "assets/labels-BAAudAf7.js",
+    "name": "labels"
+  },
+  "_maintenance-DRR7x7wy.js": {
+    "file": "assets/maintenance-DRR7x7wy.js",
+    "name": "maintenance",
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_sheet-DpHVhjdk.js"
+    ]
+  },
+  "_provisionWizard-3508R4cy.js": {
+    "file": "assets/provisionWizard-3508R4cy.js",
+    "name": "provisionWizard",
+    "imports": [
+      "index.html",
+      "_formRules-D_-y6LiM.js"
+    ]
+  },
+  "_sheet-DpHVhjdk.js": {
+    "file": "assets/sheet-DpHVhjdk.js",
+    "name": "sheet",
+    "imports": [
+      "_Q-BpPacQiF.js"
+    ]
+  },
+  "_staleness-BJgim8nB.js": {
+    "file": "assets/staleness-BJgim8nB.js",
+    "name": "staleness"
+  },
+  "_stamp-DtEwUNhB.js": {
+    "file": "assets/stamp-DtEwUNhB.js",
+    "name": "stamp",
+    "imports": [
+      "_when-CS8aOh9X.js"
+    ]
+  },
+  "_when-CS8aOh9X.js": {
+    "file": "assets/when-CS8aOh9X.js",
+    "name": "when",
+    "imports": [
+      "_labels-BAAudAf7.js"
+    ]
+  },
+  "index.html": {
+    "file": "assets/index-CbjrferH.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_when-CS8aOh9X.js",
+      "_staleness-BJgim8nB.js",
+      "_commandWait-D7KsAX7Q.js",
+      "_maintenance-DRR7x7wy.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js"
+    ],
+    "dynamicImports": [
+      "src/screens/AgentConfigScreen.jsx",
+      "src/screens/DNSResetScreen.jsx",
+      "src/screens/ProvisionWizard.jsx",
+      "src/screens/JobProgress.jsx",
+      "src/screens/BackendDeployWait.jsx",
+      "src/screens/AgentConnectionScreen.jsx",
+      "src/screens/PackagesScreen.jsx",
+      "src/screens/PorthopScreen.jsx",
+      "src/screens/SpaceScreen.jsx",
+      "src/screens/CabinetScreen.jsx",
+      "src/screens/SelfhostedScreen.jsx",
+      "src/screens/SelfhostedInstanceScreen.jsx",
+      "src/screens/Awg3PanelFormScreen.jsx",
+      "src/screens/Awg3PanelScreen.jsx",
+      "src/screens/ManageTab.jsx",
+      "src/screens/ParkTab.jsx"
+    ],
+    "css": [
+      "assets/index-CsWHaKUo.css"
+    ]
+  },
+  "src/screens/AgentConfigScreen.jsx": {
+    "file": "assets/AgentConfigScreen-33RKMpje.js",
+    "name": "AgentConfigScreen",
+    "src": "src/screens/AgentConfigScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_maintenance-DRR7x7wy.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html"
+    ]
+  },
+  "src/screens/AgentConnectionScreen.jsx": {
+    "file": "assets/AgentConnectionScreen-CcOfZ1ns.js",
+    "name": "AgentConnectionScreen",
+    "src": "src/screens/AgentConnectionScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_Q-BpPacQiF.js",
+      "index.html",
+      "_formRules-D_-y6LiM.js",
+      "_provisionWizard-3508R4cy.js"
+    ]
+  },
+  "src/screens/Awg3PanelFormScreen.jsx": {
+    "file": "assets/Awg3PanelFormScreen-Dk4b8a0f.js",
+    "name": "Awg3PanelFormScreen",
+    "src": "src/screens/Awg3PanelFormScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html"
+    ]
+  },
+  "src/screens/Awg3PanelScreen.jsx": {
+    "file": "assets/Awg3PanelScreen-CYIPUaez.js",
+    "name": "Awg3PanelScreen",
+    "src": "src/screens/Awg3PanelScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_staleness-BJgim8nB.js",
+      "_commandWait-D7KsAX7Q.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html",
+      "_PeoplePicker-BVgXstnD.js"
+    ]
+  },
+  "src/screens/BackendDeployWait.jsx": {
+    "file": "assets/BackendDeployWait-PHEZJUj-.js",
+    "name": "BackendDeployWait",
+    "src": "src/screens/BackendDeployWait.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_backendDeploy-Boui912f.js"
+    ]
+  },
+  "src/screens/CabinetScreen.jsx": {
+    "file": "assets/CabinetScreen-BUY5cBGs.js",
+    "name": "CabinetScreen",
+    "src": "src/screens/CabinetScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_commandWait-D7KsAX7Q.js",
+      "_maintenance-DRR7x7wy.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html"
+    ]
+  },
+  "src/screens/DNSResetScreen.jsx": {
+    "file": "assets/DNSResetScreen-q1MAUwhY.js",
+    "name": "DNSResetScreen",
+    "src": "src/screens/DNSResetScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_maintenance-DRR7x7wy.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html"
+    ]
+  },
+  "src/screens/JobProgress.jsx": {
+    "file": "assets/JobProgress-ED21q5uR.js",
+    "name": "JobProgress",
+    "src": "src/screens/JobProgress.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_jobPoll-pVwVvXGt.js",
+      "_Q-BpPacQiF.js",
+      "index.html"
+    ]
+  },
+  "src/screens/ManageTab.jsx": {
+    "file": "assets/ManageTab-CV0fsfbE.js",
+    "name": "ManageTab",
+    "src": "src/screens/ManageTab.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_maintenance-DRR7x7wy.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html",
+      "_PeoplePicker-BVgXstnD.js",
+      "_Fold-DeorXDhI.js",
+      "_agentJobs-B3kBbjPH.js"
+    ]
+  },
+  "src/screens/PackagesScreen.jsx": {
+    "file": "assets/PackagesScreen-BQlR0iAc.js",
+    "name": "PackagesScreen",
+    "src": "src/screens/PackagesScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "index.html",
+      "_PackagesCard-B5O-wAEq.js"
+    ]
+  },
+  "src/screens/ParkTab.jsx": {
+    "file": "assets/ParkTab-BvuCpfhe.js",
+    "name": "ParkTab",
+    "src": "src/screens/ParkTab.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_when-CS8aOh9X.js",
+      "_staleness-BJgim8nB.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html",
+      "_formRules-D_-y6LiM.js",
+      "_backendDeploy-Boui912f.js",
+      "_Fold-DeorXDhI.js",
+      "_agentJobs-B3kBbjPH.js",
+      "_stamp-DtEwUNhB.js"
+    ]
+  },
+  "src/screens/PorthopScreen.jsx": {
+    "file": "assets/PorthopScreen-BOmBCGyT.js",
+    "name": "PorthopScreen",
+    "src": "src/screens/PorthopScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_maintenance-DRR7x7wy.js",
+      "index.html"
+    ]
+  },
+  "src/screens/ProvisionWizard.jsx": {
+    "file": "assets/ProvisionWizard-MKfkM64k.js",
+    "name": "ProvisionWizard",
+    "src": "src/screens/ProvisionWizard.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html",
+      "_formRules-D_-y6LiM.js",
+      "_provisionWizard-3508R4cy.js"
+    ]
+  },
+  "src/screens/SelfhostedInstanceScreen.jsx": {
+    "file": "assets/SelfhostedInstanceScreen-C1VM3XwO.js",
+    "name": "SelfhostedInstanceScreen",
+    "src": "src/screens/SelfhostedInstanceScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_Q-BpPacQiF.js",
+      "_sheet-DpHVhjdk.js",
+      "index.html",
+      "_Fold-DeorXDhI.js"
+    ]
+  },
+  "src/screens/SelfhostedScreen.jsx": {
+    "file": "assets/SelfhostedScreen-BHltOgBf.js",
+    "name": "SelfhostedScreen",
+    "src": "src/screens/SelfhostedScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "index.html"
+    ]
+  },
+  "src/screens/SpaceScreen.jsx": {
+    "file": "assets/SpaceScreen-DPScjZCv.js",
+    "name": "SpaceScreen",
+    "src": "src/screens/SpaceScreen.jsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_jsxRuntime.module-GyPmACt8.js",
+      "_labels-BAAudAf7.js",
+      "_maintenance-DRR7x7wy.js",
+      "index.html",
+      "_PackagesCard-B5O-wAEq.js"
+    ]
+  }
+}

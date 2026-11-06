@@ -403,3 +403,51 @@ CREATE TABLE IF NOT EXISTS awgm_unstick_events (
     PRIMARY KEY (user_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_awgm_unstick_events_at ON awgm_unstick_events(at);
+
+-- Append-only operator activity. A row is inserted before a mutation and may
+-- receive its terminal fields exactly once; it is never rewritten into a new
+-- meaning. Summaries are redacted by the service before insertion.
+CREATE TABLE IF NOT EXISTS operation_journal (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT    NOT NULL UNIQUE,
+    request_id   TEXT    NOT NULL DEFAULT '',
+    router_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    actor_id     INTEGER NOT NULL DEFAULT 0,
+    action       TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    started_at   TIMESTAMP NOT NULL,
+    finished_at  TIMESTAMP,
+    outcome      TEXT    NOT NULL DEFAULT '',
+    reason_code  TEXT    NOT NULL DEFAULT '',
+    summary      TEXT    NOT NULL DEFAULT '',
+    command_id   TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_operation_journal_router_seq ON operation_journal(router_id, seq DESC);
+CREATE INDEX IF NOT EXISTS idx_operation_journal_command ON operation_journal(command_id) WHERE command_id <> '';
+
+CREATE TABLE IF NOT EXISTS rollout_jobs (
+    id                  TEXT PRIMARY KEY,
+    target_version      TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('planned','canary_pending','observing','paused','rolling','complete','failed','cancelled')),
+    created_by          INTEGER NOT NULL DEFAULT 0,
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    observation_started_at TIMESTAMP,
+    pause_reason        TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rollout_one_active ON rollout_jobs((1))
+    WHERE state NOT IN ('complete','failed','cancelled');
+
+CREATE TABLE IF NOT EXISTS rollout_targets (
+    job_id       TEXT NOT NULL REFERENCES rollout_jobs(id) ON DELETE CASCADE,
+    router_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ordinal      INTEGER NOT NULL,
+    role         TEXT NOT NULL CHECK (role IN ('canary','fleet')),
+    status       TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','queued','observed','failed','skipped')),
+    command_id   TEXT NOT NULL DEFAULT '',
+    queued_at    TIMESTAMP,
+    observed_at  TIMESTAMP,
+    PRIMARY KEY (job_id, router_id),
+    UNIQUE (job_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_rollout_targets_job_ordinal ON rollout_targets(job_id, ordinal);

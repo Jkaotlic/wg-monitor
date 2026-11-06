@@ -369,6 +369,22 @@ func TestMiniappCommandEnqueuesAllowedAction(t *testing.T) {
 	if sink.enqueued[0].Action != "tunnel_restart" || sink.enqueued[0].Args["ndms_name"] != "Wireguard0" {
 		t.Fatalf("bad command: the agent must receive the resolved ndms_name, got %+v", sink.enqueued[0])
 	}
+	ops, err := d.Operations().List(ownedID, 10, 0)
+	if err != nil || len(ops) != 1 || ops[0].Action != "tunnel_restart" || ops[0].CommandID != sink.enqueued[0].ID || ops[0].FinishedAt != nil {
+		t.Fatalf("pending operation = %+v err=%v", ops, err)
+	}
+	sink.results = map[string]wire.CommandResult{sink.enqueued[0].ID: {ID: sink.enqueued[0].ID, Status: "ok"}}
+	pollReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", ownedID, sink.enqueued[0].ID), nil)
+	pollReq.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	pollRec := httptest.NewRecorder()
+	h.ServeHTTP(pollRec, pollReq)
+	if pollRec.Code != http.StatusOK {
+		t.Fatalf("poll = %d %s", pollRec.Code, pollRec.Body.String())
+	}
+	ops, err = d.Operations().List(ownedID, 10, 0)
+	if err != nil || ops[0].Outcome != "ok" || ops[0].ReasonCode != "command_completed" || ops[0].FinishedAt == nil {
+		t.Fatalf("finished operation = %+v err=%v", ops, err)
+	}
 }
 
 // The attack this whole fix exists to close: a caller sending the router's

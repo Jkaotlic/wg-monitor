@@ -90,6 +90,12 @@ func (s *StateRepo) Save(userID int64, checkName string, st IncidentState) error
 	return err
 }
 
+func (s *StateRepo) HardCount(userID int64) (int, error) {
+	var n int
+	err := s.d.db.QueryRow(`SELECT count(*) FROM incident_state WHERE user_id=? AND current_status='hard'`, userID).Scan(&n)
+	return n, err
+}
+
 func (s *StateRepo) IncSoftFlap(userID int64, checkName, date string) error {
 	_, err := s.d.db.Exec(
 		`INSERT INTO daily_soft_flaps(user_id, check_name, date, flap_count) VALUES (?,?,?,1)

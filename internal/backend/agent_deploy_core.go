@@ -2,6 +2,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -33,6 +34,8 @@ type agentDeployOpts struct {
 	AllowDowngrade bool
 	Now            time.Time
 	Source         string
+	Context        context.Context
+	ActorID        int64
 }
 
 type agentDeployResult struct {
@@ -48,10 +51,27 @@ type agentDeployError struct {
 
 func (e *agentDeployError) Error() string { return e.Code + ": " + e.Message }
 
-func agentDeployCore(d Deps, u *db.User, target string, opts agentDeployOpts) (agentDeployResult, *agentDeployError) {
+func agentDeployCore(d Deps, u *db.User, target string, opts agentDeployOpts) (result agentDeployResult, derr *agentDeployError) {
 	if d.DB == nil || d.CommandSink == nil {
 		return agentDeployResult{}, &agentDeployError{http.StatusServiceUnavailable, errCodeInternal, "command sink not configured"}
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	source := opts.Source
+	if source == "" {
+		source = "deploy"
+	}
+	opID, journalErr := BeginOperation(ctx, d.DB, u.ID, opts.ActorID, "agent_update", source, nil)
+	if journalErr != nil {
+		return agentDeployResult{}, &agentDeployError{http.StatusInternalServerError, errCodeInternal, "operation journal unavailable"}
+	}
+	defer func() {
+		if derr != nil {
+			_ = FinishOperation(d.DB, opID, "failed", derr.Code, time.Now())
+		}
+	}()
 	targetVersion, err := releaseorigin.ValidateReleaseTag(target)
 	if err != nil {
 		return agentDeployResult{}, &agentDeployError{http.StatusConflict, deployErrNoRelease, err.Error()}
@@ -105,6 +125,12 @@ func agentDeployCore(d Deps, u *db.User, target string, opts agentDeployOpts) (a
 			return agentDeployResult{}, &agentDeployError{http.StatusConflict, deployErrPending, "agent already has pending deploy"}
 		}
 		return agentDeployResult{}, &agentDeployError{http.StatusInternalServerError, errCodeInternal, err.Error()}
+	}
+	if err := AttachOperationCommand(d.DB, opID, id); err != nil {
+		if _, clearErr := d.DB.Users().ClearPendingDeployIfMatches(u.ID, targetVersion); clearErr != nil && d.Logger != nil {
+			d.Logger.Warn("rollback pending deploy after journal failure", "user_id", u.ID, "target_version", targetVersion, "err", clearErr)
+		}
+		return agentDeployResult{}, &agentDeployError{http.StatusInternalServerError, errCodeInternal, "operation journal command attach failed"}
 	}
 	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 		if _, clearErr := d.DB.Users().ClearPendingDeployIfMatches(u.ID, targetVersion); clearErr != nil && d.Logger != nil {

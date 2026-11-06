@@ -1,0 +1,1 @@
+import{i as e,n as t}from"./when-CS8aOh9X.js";function n(t,{timeZone:n,now:r}={}){return e(t,{timeZone:n,now:r})}function r(e,{timeZone:n,now:r}={}){return t(e,{timeZone:n,now:r})}function i(e,t){let n=Date.parse(e??``),r=Date.parse(t??``);return Number.isNaN(n)||Number.isNaN(r)?null:Math.max(0,Math.round((r-n)/1e3))}export{r as n,n as r,i as t};

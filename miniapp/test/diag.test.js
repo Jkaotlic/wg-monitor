@@ -138,6 +138,18 @@ describe('checkRows', () => {
     expect(byKey.tunnels.answer).toBe('нет')
   })
 
+  it('конфликт backend-источников запрещает строке туннелей отвечать «да»', () => {
+    const rows = checkRows({
+      checks: CHECKS,
+      tunnels: [{ tunnel_id: 'awg12', status: 'ok', run_state: 'running', enabled: true }],
+      router: ROUTER,
+      evidence: { state: 'degraded', reason_code: 'source_conflict' },
+    })
+    const tunnel = rowsByKey(rows).tunnels
+    expect(tunnel.answer).toBe('не знаем')
+    expect(tunnel.tone).toBe('muted')
+  })
+
   // Молчащий роутер -- это не «нет», а «мы не знаем»: последний отчёт был
   // час назад, и всё остальное на экране — данные на тот момент.
   it('молчащий роутер отвечает «не знаем», а не «нет»', () => {

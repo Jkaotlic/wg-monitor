@@ -21,7 +21,12 @@ const { ManageGroup } = await import('../src/ui/ManageGroup.jsx')
 
 async function mount(node) {
   const root = document.createElement('div')
-  await act(async () => render(node, root))
+  await act(async () => {
+    render(node, root)
+    await Promise.resolve()
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
   return root
 }
 

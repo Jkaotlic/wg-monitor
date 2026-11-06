@@ -107,6 +107,7 @@ function stateLabel(live, t, alarmed = false) {
   // Проверка главнее (A1.1): роутер поднял VPN-туннель, а проверка провалена --
   // «работает» сказать нельзя, и «выключен» тоже: он поднят, но не отвечает.
   if (t?.check_failed && !tunnelSwitchedOff(t)) return 'поднят, но не отвечает'
+  if (t?.verdict_stale && !tunnelSwitchedOff(t)) return live === 'down' ? 'не отвечает, проверка устарела' : 'поднят, проверка устарела'
   if (live === 'down' && !tunnelSwitchedOff(t)) return 'не отвечает'
   // Проверки не загрузились (withCheckVerdict): роутер сказал «поднят»,
   // неизвестна проверка (review v0.46, п. 5).

@@ -724,6 +724,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			ResolveIP:      func() string { return wizardRepoResolveIPForBackendURL(r, repoBaseURL) },
 			AllowDowngrade: req.AllowDowngrade,
 			Source:         "wizard",
+			Context:        r.Context(),
 		})
 		if derr != nil {
 			writeJSONError(w, derr.Status, derr.Code, derr.Message)
@@ -1584,17 +1585,17 @@ func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action s
 // silly. Callers do their own authorization before calling this: it enforces
 // none.
 func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any) {
-	enqueueAgentCommandForUserResp(w, d, u, action, args, wizardDeployResp{})
+	_, _ = enqueueAgentCommandForUserResp(w, d, u, action, args, wizardDeployResp{})
 }
 
 // enqueueAgentCommandForUserResp ставит команду и отвечает 202 телом resp с
 // выданным cmd_id. Возвращает, встала ли команда в очередь: мини-апп снимает
 // кулдаун перезагрузки, если нет.
-func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) bool {
+func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) (bool, string) {
 	id, err := newCmdID()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
-		return false
+		return false, ""
 	}
 	if args == nil {
 		args = map[string]any{}
@@ -1607,7 +1608,7 @@ func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, a
 	}
 	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
-		return false
+		return false, ""
 	}
 	if d.Logger != nil {
 		d.Logger.Info("agent command enqueued",
@@ -1617,7 +1618,7 @@ func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, a
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(resp)
-	return true
+	return true, id
 }
 
 // wizardCmdResultHandler returns the agent's CommandResult for a previously
@@ -1674,6 +1675,9 @@ func wizardCmdResultHandler(d Deps) http.HandlerFunc {
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "result_not_ready", "no result yet — poll again")
 			return
+		}
+		if err := finishCommandOperation(d.DB, cmdID, res.Status, time.Now()); err != nil && !errors.Is(err, db.ErrOperationNotFound) && !errors.Is(err, db.ErrOperationAlreadyFinished) && d.Logger != nil {
+			d.Logger.Error("operation journal finish failed", "cmd_id", cmdID, "err", err)
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(res)

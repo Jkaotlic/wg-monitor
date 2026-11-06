@@ -380,6 +380,15 @@ func secretStatusRows(state *State) []secretStatusRow {
 	if state.Backend.Domain != "" || len(state.Agents) > 0 {
 		add("WIZARD_TOKEN", "wizard API token", true)
 	}
+	if state.ExternalProbe.Host != "" {
+		if normalizeBackendSSHAuth(state.ExternalProbe.SSHAuth) == backendSSHAuthKey {
+			add("EXTERNAL_PROBE_SSH_KEY_PASSPHRASE", "external probe SSH key passphrase", false)
+		} else {
+			add("EXTERNAL_PROBE_SSH_PASSWORD", "external probe SSH password", true)
+		}
+		add("EXTERNAL_PROBE_TG_TOKEN", "independent external probe Telegram token", true)
+		add("EXTERNAL_PROBE_TG_CHAT", "independent external probe Telegram chat", true)
+	}
 	if len(state.Agents) > 0 {
 		add("WG_KEENETIC_PASS", "fallback router SSH password", false)
 	}

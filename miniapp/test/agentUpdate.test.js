@@ -9,9 +9,17 @@ import {
   fleetUpdateTargets,
   fleetUpdateSheetText,
   fleetUpdateSummary,
+  rolloutSummary,
   fleetUpdateErrorText,
   isAway,
 } from '../src/agentUpdate.js'
+
+describe('canary rollout summary', () => {
+  it('объясняет observation gate и причину паузы', () => {
+    expect(rolloutSummary({ job: { state: 'observing' }, targets: [{ role: 'canary', status: 'observed' }, { role: 'fleet', status: 'planned' }] }).headline).toBe('Canary обновился · наблюдаем 10 минут перед остальными.')
+    expect(rolloutSummary({ job: { state: 'paused', pause_reason: 'new_hard_incident' }, targets: [] }).headline).toBe('Раскатка на паузе: после обновления появилась новая тревога.')
+  })
+})
 import { ApiError } from '../src/api.js'
 
 // Роутеры -- в форме miniappFleetRouter (miniapp_fleet.go) с полями частей 1-2.

@@ -84,6 +84,7 @@ describe('широкая раскладка в браузере', () => {
     // Порядок -- сломанное сверху, как в FleetOverlay.
     expect([...side.querySelectorAll('.side-row-name')].map((n) => n.textContent)).toEqual(['Дом', 'Офис', 'Дача'])
     // Роутер не выбран, админ -- Парк, а не сводка.
+		await vi.waitFor(() => expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy())
     expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
     expect(root.querySelector('.fleet-home')).toBe(null)
     cleanup(root)
@@ -138,6 +139,7 @@ describe('широкая раскладка в браузере', () => {
     expect(root.querySelector('.main-gear')).toBe(null)
     await act(async () => button(root.querySelector('.side-tabs'), 'Настройки').click())
     await flush()
+		await vi.waitFor(() => expect(root.querySelector('.stub-settings')).toBeTruthy())
     expect(root.querySelector('.stub-settings')).toBeTruthy()
     expect(root.querySelector('.stub-admin')).toBeTruthy()
     expect(window.location.search).toBe('?router=2&tab=manage')

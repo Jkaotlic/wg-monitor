@@ -177,7 +177,7 @@ beforeEach(() => {
 
 describe('A1.1: проверка главнее на экране VPN-туннеля', () => {
   it('роутер «running», проверка провалена -- экран и список говорят «поднят, но не отвечает»', async () => {
-    mocks.checks = { tunnels: [{ tunnel_id: 'nwg1', status: 'fail' }] }
+    mocks.checks = { tunnels: [{ tunnel_id: 'nwg1', status: 'fail', ts: new Date().toISOString() }] }
     const { root } = await mount()
     const row = [...root.querySelectorAll('.list-row-btn')].find((b) => b.querySelector('.row-title')?.textContent === 'amsterdam')
     expect(row.textContent).toContain('поднят, но не отвечает')

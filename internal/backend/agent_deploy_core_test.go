@@ -63,6 +63,10 @@ func TestAgentDeployCoreQueuesAndMarks(t *testing.T) {
 	if st.Version != "v0.32.0" || st.Since != now.Format(time.RFC3339) || st.Attempts != 0 {
 		t.Fatalf("отметка: %+v", st)
 	}
+	ops, err := d.Operations().List(u.ID, 10, 0)
+	if err != nil || len(ops) != 1 || ops[0].Action != "agent_update" || ops[0].CommandID != res.CmdID || ops[0].FinishedAt != nil {
+		t.Fatalf("журнал: %+v err=%v", ops, err)
+	}
 }
 
 func TestAgentDeployCoreRefusals(t *testing.T) {
@@ -117,6 +121,10 @@ func TestAgentDeployCoreRollsBackMarkWhenEnqueueFails(t *testing.T) {
 	}
 	if st, _ := d.Users().PendingDeploy(u.ID); st.Version != "" {
 		t.Fatalf("отметка осталась после сорванной постановки: %+v", st)
+	}
+	ops, err := d.Operations().List(u.ID, 10, 0)
+	if err != nil || len(ops) != 1 || ops[0].Outcome != "failed" || ops[0].ReasonCode != errCodeInternal {
+		t.Fatalf("сорванная постановка в журнале: %+v err=%v", ops, err)
 	}
 }
 

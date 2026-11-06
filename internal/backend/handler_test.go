@@ -973,7 +973,13 @@ func TestCmdResult_PostRecords(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	if err := d.Operations().Begin(db.Operation{ID: "op-result", RouterID: uid, Action: "agent_update", Source: "rollout", StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Operations().AttachCommand("op-result", "abc"); err != nil {
+		t.Fatal(err)
+	}
 
 	sink := &fakeCmdSink{}
 	mux := NewMux(Deps{
@@ -1001,6 +1007,43 @@ func TestCmdResult_PostRecords(t *testing.T) {
 	}
 	if sink.results[0].ID != "abc" || sink.results[0].Status != "ok" || sink.results[0].DurationMs != 42 {
 		t.Errorf("got %+v", sink.results[0])
+	}
+	ops, err := d.Operations().List(uid, 10, 0)
+	if err != nil || len(ops) != 1 || ops[0].Outcome != "ok" || ops[0].FinishedAt == nil {
+		t.Fatalf("result POST did not finish journal: ops=%+v err=%v", ops, err)
+	}
+}
+
+func TestCmdResult_DuplicateRetriesOperationJournalFinish(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	if err := d.Operations().Begin(db.Operation{ID: "op-duplicate", RouterID: uid, Action: "agent_update", Source: "rollout", StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Operations().AttachCommand("op-duplicate", "dup-cmd"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{resultErr: cmdpkg.ErrDuplicateResult}
+	mux := NewMux(Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), DB: d, Dispatcher: &fakeDisp{}, CommandSink: sink, Thresholds: state.Thresholds{Fail: 3, Recovery: 2}})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "dup-cmd", Status: "ok"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	ops, err := d.Operations().List(uid, 10, 0)
+	if err != nil || len(ops) != 1 || ops[0].Outcome != "ok" || ops[0].FinishedAt == nil {
+		t.Fatalf("duplicate did not finish journal: ops=%+v err=%v", ops, err)
 	}
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tunnelsView } from '../src/tunnelsView.js'
+import { tunnelOverviewRows, tunnelsView } from '../src/tunnelsView.js'
 import { withCheckVerdict } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot. Данные сняты с домашнего роутера:
@@ -51,6 +51,12 @@ describe('tunnelsView -- активная линия', () => {
   it('пустой снимок не падает', () => {
     expect(tunnelsView(null)).toEqual({ state: 'none', active: null, policyName: '', chain: [], unused: [] })
   })
+
+  it('подтверждённый прямой режим не называется аварией VPN', () => {
+    const v = tunnelsView(SNAP, { mode: 'direct', carrier_basis: 'none' })
+    expect(v.state).toBe('direct')
+    expect(v.active).toBe(null)
+  })
 })
 
 describe('tunnelsView -- порядок подхвата', () => {
@@ -92,6 +98,45 @@ describe('tunnelsView -- не используются', () => {
   it('WAN-записи в список не попадают', () => {
     const v = tunnelsView(SNAP)
     expect(v.unused.some((t) => t.id === 'eth3')).toBe(false)
+  })
+
+  it('включённый, но упавший туннель не называется выключенным', () => {
+    const broken = {
+      ...SNAP,
+      tunnels: [...SNAP.tunnels.filter((t) => t.id !== 'awg21'), { id: 'awg21', name: 'Запасной', type: 'managed', enabled: true, status: 'broken' }],
+    }
+    expect(tunnelsView(broken).unused[0]).toMatchObject({ id: 'awg21', role: 'down', switchedOff: false })
+  })
+
+  it('выключенный настройкой туннель остаётся выключенным', () => {
+    expect(tunnelsView(SNAP).unused[0]).toMatchObject({ id: 'awg21', role: 'off', switchedOff: true })
+  })
+})
+
+describe('расхождение источников', () => {
+  it('поднятый по проверке, но без связи по awg-manager помечается конфликтом', () => {
+    const v = tunnelsView(SNAP, null, [{ tunnel_id: 'awg11', status: 'ok', run_state: 'running', awgm_conn: 'disconnected' }])
+    expect(v.active.sourceConflict).toEqual({ tone: 'danger', text: 'Источники расходятся: проверка бота успешна, awg-manager сообщает «Нет связи».' })
+  })
+
+  it('показывает расхождение и на резервном звене цепочки', () => {
+    const v = tunnelsView(SNAP, null, [{ tunnel_id: 'awg20', status: 'ok', run_state: 'running', awgm_conn: 'disconnected' }])
+    expect(v.chain.find((row) => row.tunnelID === 'awg20').sourceConflict).toMatchObject({ tone: 'danger' })
+  })
+})
+
+describe('единая лента VPN-туннелей', () => {
+  it('сохраняет порядок подхвата, затем добавляет неиспользуемые без дублей', () => {
+    const view = tunnelsView(SNAP)
+    const rows = tunnelOverviewRows(view)
+
+    expect(rows.map((r) => [r.id, r.role])).toEqual([
+      ['awg11', 'active'],
+      ['awg20', 'ready'],
+      ['awg10', 'off'],
+      ['awg21', 'off'],
+    ])
+    expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length)
   })
 })
 

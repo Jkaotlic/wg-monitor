@@ -214,6 +214,12 @@ func main() {
 			os.Exit(2)
 		}
 		runCLIAction("deferred status", func() error { return actionDeferredAWGMStatus(state, secrets) })
+	case "external-probe":
+		if len(args) != 2 || (args[1] != "preview" && args[1] != "status" && args[1] != "install" && args[1] != "remove") {
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy external-probe preview|status|install|remove")
+			os.Exit(2)
+		}
+		runCLIAction("external-probe "+args[1], func() error { return actionExternalProbe(state, secrets, args[1]) })
 	case "backup":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy backup status|install|run|push-secrets|password|restore <archive>")
@@ -462,6 +468,8 @@ Commands:
   backup status|install|run|push-secrets|password|restore <archive>
                                manage encrypted nightly full backups
   deferred status              summarize deferred AWG Manager jobs on backend
+  external-probe preview|status|install|remove
+                               manage independent HTTPS /readyz monitoring on a third host
   awgm-url-patch               emergency AWG Manager backend URL retarget helper
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available

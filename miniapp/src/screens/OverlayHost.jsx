@@ -1,25 +1,28 @@
 import { FleetOverlay } from './FleetOverlay.jsx'
 import { RoutesTab } from './RoutesTab.jsx'
-import { AgentConfigScreen } from './AgentConfigScreen.jsx'
-import { DNSResetScreen } from './DNSResetScreen.jsx'
-import { ProvisionWizard } from './ProvisionWizard.jsx'
-import { JobProgress } from './JobProgress.jsx'
-import { BackendDeployWait } from './BackendDeployWait.jsx'
-import { AgentConnectionScreen } from './AgentConnectionScreen.jsx'
-import { PackagesScreen } from './PackagesScreen.jsx'
-import { PorthopScreen } from './PorthopScreen.jsx'
-import { SpaceScreen } from './SpaceScreen.jsx'
-import { CabinetScreen } from './CabinetScreen.jsx'
 import { RepairScreen } from './RepairScreen.jsx'
-import { SelfhostedScreen } from './SelfhostedScreen.jsx'
-import { SelfhostedInstanceScreen } from './SelfhostedInstanceScreen.jsx'
-import { Awg3PanelFormScreen } from './Awg3PanelFormScreen.jsx'
-import { Awg3PanelScreen } from './Awg3PanelScreen.jsx'
+import { lazy } from 'preact/compat'
+import { LazyScreen } from '../ui/LazyScreen.jsx'
 import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { FLEET_OVERLAYS, normalizeReturn, awg3ListParams, navPinned, fleetIsHome } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
 import { isStale } from '../staleness.js'
+
+const AgentConfigScreen = lazy(() => import('./AgentConfigScreen.jsx').then((m) => ({ default: m.AgentConfigScreen })))
+const DNSResetScreen = lazy(() => import('./DNSResetScreen.jsx').then((m) => ({ default: m.DNSResetScreen })))
+const ProvisionWizard = lazy(() => import('./ProvisionWizard.jsx').then((m) => ({ default: m.ProvisionWizard })))
+const JobProgress = lazy(() => import('./JobProgress.jsx').then((m) => ({ default: m.JobProgress })))
+const BackendDeployWait = lazy(() => import('./BackendDeployWait.jsx').then((m) => ({ default: m.BackendDeployWait })))
+const AgentConnectionScreen = lazy(() => import('./AgentConnectionScreen.jsx').then((m) => ({ default: m.AgentConnectionScreen })))
+const PackagesScreen = lazy(() => import('./PackagesScreen.jsx').then((m) => ({ default: m.PackagesScreen })))
+const PorthopScreen = lazy(() => import('./PorthopScreen.jsx').then((m) => ({ default: m.PorthopScreen })))
+const SpaceScreen = lazy(() => import('./SpaceScreen.jsx').then((m) => ({ default: m.SpaceScreen })))
+const CabinetScreen = lazy(() => import('./CabinetScreen.jsx').then((m) => ({ default: m.CabinetScreen })))
+const SelfhostedScreen = lazy(() => import('./SelfhostedScreen.jsx').then((m) => ({ default: m.SelfhostedScreen })))
+const SelfhostedInstanceScreen = lazy(() => import('./SelfhostedInstanceScreen.jsx').then((m) => ({ default: m.SelfhostedInstanceScreen })))
+const Awg3PanelFormScreen = lazy(() => import('./Awg3PanelFormScreen.jsx').then((m) => ({ default: m.Awg3PanelFormScreen })))
+const Awg3PanelScreen = lazy(() => import('./Awg3PanelScreen.jsx').then((m) => ({ default: m.Awg3PanelScreen })))
 
 export function routerContext(routers, routerID) {
   const current = routers.find((r) => r.id === routerID)
@@ -46,7 +49,7 @@ export function returnLabel(returnTo, isAdmin = false, part = 'all') {
 
 // Слой поверх вкладок. Один выбор для обеих раскладок: телефонная кладёт его
 // крышкой поверх экрана, широкая -- в основную область рядом со списком.
-export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters }) {
+function OverlayHostContent({ nav, dispatch, routers, isAdmin, refreshRouters }) {
   const { current, asleep } = routerContext(routers, nav.routerID)
   const openSheet = (sheet) => dispatch({ type: 'sheet', sheet })
   const close = () => dispatch({ type: 'overlay', overlay: null })
@@ -278,4 +281,8 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
     default:
       return null
   }
+}
+
+export function OverlayHost(props) {
+  return <LazyScreen><OverlayHostContent {...props} /></LazyScreen>
 }

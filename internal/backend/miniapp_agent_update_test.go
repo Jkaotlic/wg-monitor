@@ -43,6 +43,15 @@ func postMiniappJSON(t *testing.T, h http.Handler, path, body string, telegramUs
 	return rec
 }
 
+func getMiniapp(t *testing.T, h http.Handler, path string, telegramUserID int64) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 func decodeDeployError(t *testing.T, rec *httptest.ResponseRecorder) (code, errField, message string) {
 	t.Helper()
 	var body struct {
@@ -366,17 +375,17 @@ func TestMiniappFleetAgentUpdateBadRequestOnBrokenBody(t *testing.T) {
 	}
 }
 
-func TestMiniappFleetAgentUpdateEmptyIsArray(t *testing.T) {
+func TestMiniappFleetAgentUpdateWithoutTargetsIsConflict(t *testing.T) {
 	d, ownedID, h, _ := agentUpdateTestMux(t)
 	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.33.0"); err != nil {
 		t.Fatal(err)
 	}
 	rec := fleetUpdate(t, h, `{"confirm":" Обновить "}`, 999)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"results":[]`) {
-		t.Fatalf("пустой итог обязан быть [], тело %s", rec.Body.String())
+	if code, _, _ := decodeDeployError(t, rec); code != "no_targets" {
+		t.Fatalf("ждали no_targets, тело %s", rec.Body.String())
 	}
 }
 
@@ -425,43 +434,34 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]miniappFleetAgentUpdateResult{}
-	for _, r := range resp.Results {
-		got[r.Nickname] = r
-		for _, banned := range []string{"pending", "self_update"} {
-			if strings.Contains(r.ReasonText, banned) {
-				t.Errorf("%s: внутреннее имя в тексте %q", r.Nickname, r.ReasonText)
-			}
-		}
+	if resp.Job.State != "canary_pending" || len(resp.Targets) != 4 {
+		t.Fatalf("canary rollout: job=%+v targets=%+v", resp.Job, resp.Targets)
 	}
-	want := map[string][2]string{
-		"router-owned":  {"deferred", "router_asleep"},
-		"router-online": {"queued", ""},
-		// Назначенная v0.32.0 старше раскатываемой v0.33.0 -- вытесняется
-		// (18.09: выключенные роутеры ждали v0.37 при бэкенде v0.42).
-		"router-pending":      {"deferred", "router_asleep"},
-		"router-pending-same": {"skipped", "deploy_pending"},
+	if resp.Targets[0].RouterID != onlineID || resp.Targets[0].Role != "canary" || resp.Targets[0].Status != "queued" {
+		t.Fatalf("canary selected incorrectly: %+v", resp.Targets[0])
 	}
-	if len(got) != len(want) {
-		t.Fatalf("в итоге %d роутеров, ждали %d: %+v", len(got), len(want), resp.Results)
+	if n := len(sink.snapshotEnqueued()); n != 1 {
+		t.Fatalf("поставлено %d команд, ждали только canary", n)
 	}
-	for nick, w := range want {
-		r, ok := got[nick]
-		if !ok || r.Outcome != w[0] || r.ReasonCode != w[1] || r.ReasonText == "" {
-			t.Errorf("%s: %+v, ждали outcome=%s reason_code=%q", nick, r, w[0], w[1])
-		}
+	if st, _ := d.Users().PendingDeploy(pendingID); st.Version != "v0.32.0" {
+		t.Fatalf("fleet phase touched before observation gate: %+v", st)
 	}
-	if _, ok := got["router-ancient"]; ok {
-		t.Errorf("router-ancient (ниже agentSelfUpdateFloor) не должен попадать в массовое обновление: %+v", got["router-ancient"])
+	_ = ownedID
+	_ = sameID
+}
+
+func TestMiniappFleetRolloutIdleIsNormalEmptyResponse(t *testing.T) {
+	_, _, h, _ := agentUpdateTestMux(t)
+	rec := getMiniapp(t, h, "/v1/miniapp/fleet/agent/rollout", 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if got["router-owned"].RouterID != ownedID {
-		t.Errorf("router_id: %+v", got["router-owned"])
+	var resp miniappFleetAgentUpdateResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
 	}
-	if n := len(sink.snapshotEnqueued()); n != 3 {
-		t.Fatalf("поставлено %d команд, ждали 3", n)
-	}
-	if st, _ := d.Users().PendingDeploy(pendingID); st.Version != "v0.33.0" {
-		t.Fatalf("назначенная версия не переписана на свежую: %+v", st)
+	if resp.Job.ID != "" || resp.Targets == nil || len(resp.Targets) != 0 {
+		t.Fatalf("idle rollout response=%+v", resp)
 	}
 }
 
@@ -486,8 +486,8 @@ func TestMiniappFleetAgentUpdateReportsEnqueueError(t *testing.T) {
 	}
 	var resp miniappFleetAgentUpdateResp
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if len(resp.Results) != 1 || resp.Results[0].Outcome != "error" || resp.Results[0].ReasonText == "" {
-		t.Fatalf("итог: %+v", resp.Results)
+	if resp.Job.State != "paused" || resp.Job.PauseReason != "deploy_failed" {
+		t.Fatalf("итог: %+v", resp.Job)
 	}
 }
 

@@ -32,6 +32,7 @@ describe('MINI-04: вкладка пересоздаётся при смене �
       const root = document.createElement('div')
       await act(async () => render(<TabBody nav={{ routerID: 1, tab }} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />, root))
       await act(async () => render(<TabBody nav={{ routerID: 2, tab }} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />, root))
+			await vi.waitFor(() => expect(root.querySelector('.probe')).toBeTruthy())
       expect(root.querySelector('.probe').textContent).toBe('2')
       render(null, root)
     })

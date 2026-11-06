@@ -87,6 +87,9 @@ func TestServiceMenuOffersCurrentVPSAdoption(t *testing.T) {
 	if !strings.Contains(text, "current VPS") && !strings.Contains(text, "текущий VPS") {
 		t.Fatalf("service menu should offer current VPS adoption:\n%s", text)
 	}
+	if !strings.Contains(text, "External readiness probe") {
+		t.Fatalf("service menu should offer external readiness probe:\n%s", text)
+	}
 }
 
 func TestMenuHeaderBoxKeepsVersionInsideBorder(t *testing.T) {

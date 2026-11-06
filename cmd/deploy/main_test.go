@@ -20,6 +20,7 @@ func TestUsageTextMentionsMenuAndCLIParity(t *testing.T) {
 		"doctor [--deep]",
 		"backup status",
 		"secrets status",
+		"external-probe preview|status|install|remove",
 		"Without a command",
 	} {
 		if !strings.Contains(got, want) {

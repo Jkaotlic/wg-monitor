@@ -1065,13 +1065,19 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// Транзакция гарантирует "всё или ничего" по части ingest-а; FSM-
 		// dispatch делается ОТДЕЛЬНО после commit'а — он имеет TG side
 		// effects, обернуть в DB-tx нельзя.
-		tx, err := d.DB.SQL().BeginTx(r.Context(), nil)
+		// Authentication and decoding are complete. Detach this bounded atomic
+		// DB section from a client disconnect so a lost response produces an
+		// idempotent retry, not `report tx begin: context canceled` and a lost
+		// report. The deadline still prevents a stuck writer from living on.
+		ingestCtx, cancelIngest := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Second)
+		defer cancelIngest()
+		tx, err := d.DB.SQL().BeginTx(ingestCtx, nil)
 		if err != nil {
 			d.Logger.Warn("report tx begin", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "tx begin")
 			return
 		}
-		if _, err := tx.ExecContext(r.Context(),
+		if _, err := tx.ExecContext(ingestCtx,
 			`UPDATE users SET last_seen_at = ?
 			   WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`, ts, uid, ts); err != nil {
 			tx.Rollback()
@@ -1084,7 +1090,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// проходя events назад по строкам tunnels=fail.
 		for _, c := range rep.Checks {
 			if c.Name == miniappTunnelsInventoryCheck && c.Status == "ok" && !checkUnverified(c) {
-				if _, err := tx.ExecContext(r.Context(), db.TunnelsInventoryOKAtSQL, ts, uid, ts); err != nil {
+				if _, err := tx.ExecContext(ingestCtx, db.TunnelsInventoryOKAtSQL, ts, uid, ts); err != nil {
 					tx.Rollback()
 					d.Logger.Warn("update tunnels inventory time", "nickname", nick, "err", err)
 					writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update tunnels inventory time")
@@ -1096,7 +1102,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// INSERT OR IGNORE — idempotent on (user_id, check_name, ts) per
 		// uq_events_user_check_ts (API-01). Agent retry on transient TCP error
 		// no longer duplicates the report's events.
-		insertStmt, err := tx.PrepareContext(r.Context(),
+		insertStmt, err := tx.PrepareContext(ingestCtx,
 			`INSERT OR IGNORE INTO events(user_id, check_name, status, details_json, ts) VALUES(?,?,?,?,?)`)
 		if err != nil {
 			tx.Rollback()
@@ -1108,7 +1114,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		dispatchChecks := make([]wire.Check, 0, len(rep.Checks))
 		for _, c := range rep.Checks {
 			detailsJSON := normaliseDetailsJSON(c.Details)
-			res, err := insertStmt.ExecContext(r.Context(), uid, c.Name, c.Status, detailsJSON, ts)
+			res, err := insertStmt.ExecContext(ingestCtx, uid, c.Name, c.Status, detailsJSON, ts)
 			if err != nil {
 				insertStmt.Close()
 				tx.Rollback()
@@ -1124,7 +1130,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		insertStmt.Close()
 		// v0.47: серии пингчека awg-manager -- в той же транзакции, что события.
-		if _, err := upsertReportPingRuns(r.Context(), tx, uid, rep.Facts); err != nil {
+		if _, err := upsertReportPingRuns(ingestCtx, tx, uid, rep.Facts); err != nil {
 			tx.Rollback()
 			d.Logger.Warn("ping runs upsert (tx rollback)", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "ping runs")
@@ -1132,7 +1138,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		// v0.59: журнал сторожа зависаний -- в той же транзакции; вставка,
 		// которая легла, -- новое событие.
-		unstickFresh, uerr := insertReportUnstickEvents(r.Context(), tx, uid, rep.Facts, time.Now().UTC())
+		unstickFresh, uerr := insertReportUnstickEvents(ingestCtx, tx, uid, rep.Facts, time.Now().UTC())
 		if uerr != nil {
 			tx.Rollback()
 			d.Logger.Warn("unstick events insert (tx rollback)", "nickname", nick, "err", uerr)
@@ -1665,19 +1671,37 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
+		finishJournal := func() bool {
+			if d.DB == nil {
+				return true
+			}
+			err := finishCommandOperation(d.DB, res.ID, res.Status, time.Now())
+			if err == nil || errors.Is(err, db.ErrOperationNotFound) || errors.Is(err, db.ErrOperationAlreadyFinished) {
+				return true
+			}
+			d.Logger.Error("operation journal finish failed", "cmd_id", res.ID, "err", err)
+			// RecordResult may already have succeeded. A 500 makes the agent retry;
+			// the duplicate path below then retries this idempotent DB transition.
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "operation journal failed")
+			return false
+		}
 		if err := d.CommandSink.RecordResult(uid, res); err != nil {
 			if errors.Is(err, cmdpkg.ErrDuplicateResult) {
 				d.Logger.Info("duplicate cmd result ignored",
 					"nickname", nick, "cmd_id", res.ID, "status", res.Status,
 					"req_id", RequestIDFromContext(r.Context()))
-				w.WriteHeader(http.StatusOK)
+				if finishJournal() {
+					w.WriteHeader(http.StatusOK)
+				}
 				return
 			}
 			if errors.Is(err, cmdpkg.ErrUnissuedResult) {
 				d.Logger.Info("stale cmd result ignored",
 					"nickname", nick, "cmd_id", res.ID, "status", res.Status,
 					"req_id", RequestIDFromContext(r.Context()))
-				w.WriteHeader(http.StatusOK)
+				if finishJournal() {
+					w.WriteHeader(http.StatusOK)
+				}
 				return
 			}
 			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
@@ -1685,6 +1709,11 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		incCmdResult()
+		// The result POST is the authoritative terminal event. Polling is only a
+		// view concern and may never happen for background/canary commands.
+		if !finishJournal() {
+			return
+		}
 		// Снимок версий из ответа version_audit. Пишется ДО relay и НЕ ЗАВИСИТ
 		// от него: relay случается только при наличии origin-ref, то есть когда
 		// человек нажал кнопку в Telegram. Суточный опрос (updatespoll) ставит

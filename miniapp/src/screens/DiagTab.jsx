@@ -16,6 +16,7 @@ import { ExitIPSection, WANSection } from './SignalSections.jsx'
 import { PingCheckSection, InspectSection } from './CheckToolsSections.jsx'
 import { ExitCompareSection } from './ExitCompare.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
+import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
 // моргнула»: пять строк данных, у каждой -- ответ и измерение. Числа берутся
@@ -61,6 +62,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
           // Сдвиг часов телефона снимается в момент ответа (MINI-10).
           clockOffsetMs: serverClockOffset(r.router),
           traffic: c.traffic ?? null,
+          evidence: c.evidence ?? null,
         })
         setError(null)
       })
@@ -104,6 +106,7 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
         {rows.length} {rows.length === 1 ? 'вопрос' : 'вопросов'} роутеру
         {age != null ? ` · последний отчёт ${agoText(age)}` : ''}
       </p>
+      <EvidenceSummary evidence={data.evidence} />
 
       <div class="stat-grid">
         <Stat

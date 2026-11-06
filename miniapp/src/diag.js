@@ -185,6 +185,7 @@ import { pluralRu, incidentCopy, checkLabel, guardVerdict, tunnelCountSummary } 
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 import { agoText, whenText } from './when.js'
+import { statusEvidenceCopy } from './statusEvidence.js'
 
 // Разделы вкладки «Проверки» → «Сейчас» (v0.52, спека §2): заголовки -- одни и
 // те же для экрана и для указателей places.js.
@@ -278,7 +279,13 @@ function awgmRow(check, clock) {
 //
 // Работающий -- по тому же правилу, что плитка «VPN-туннели» (MINI-07,
 // labels.workingTunnelCount): поднят, проверка не провалена, тревоги нет.
-function tunnelsRow(check, tunnels, clock, incidents) {
+function tunnelsRow(check, tunnels, clock, incidents, evidence) {
+  if (evidence?.state === 'failed') {
+    return { answer: 'нет', tone: 'danger', value: 'отказ подтверждён сервером' }
+  }
+  if (['degraded', 'stale', 'unknown'].includes(evidence?.state)) {
+    return { answer: 'не знаем', tone: 'muted', value: statusEvidenceCopy(evidence)?.title ?? 'источники не дали единого ответа' }
+  }
   const list = Array.isArray(tunnels) ? tunnels : []
   if (list.length === 0) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
@@ -294,7 +301,7 @@ function tunnelsRow(check, tunnels, clock, incidents) {
 }
 
 
-export function checkRows({ checks = [], tunnels = [], incidents = [], router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
+export function checkRows({ checks = [], tunnels = [], incidents = [], evidence = null, router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
   const clock = { clockOffsetMs, nowMs }
   const byName = new Map((checks ?? []).map((c) => [c.check_name, c]))
   // Молчащий роутер делает устаревшими ВСЕ показания: то, что показано ниже,
@@ -327,7 +334,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], router = 
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
     else if (key === 'dns_ru') body = { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
-    else body = tunnelsRow(check ?? null, tunnels, clock, incidents)
+    else body = tunnelsRow(check ?? null, tunnels, clock, incidents, evidence)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({

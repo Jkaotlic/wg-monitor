@@ -28,6 +28,7 @@ func TestStateRoundTrip(t *testing.T) {
 			ChatID:      -1001234567890,
 			AdminUserID: 123456789,
 		},
+		ExternalProbe: ExternalProbeState{Host: "probe.example.com", Port: 22, User: "ops", SSHAuth: "key", KeyPath: filepath.Join(dir, "probe_key"), ReadyURL: "https://monitor.example.com/readyz"},
 		Agents: []AgentState{
 			{Nickname: "test", Host: "192.168.1.1", Port: 222, User: "root", Arch: "arm64", ThreadID: 42, Kind: "static"},
 		},

@@ -257,6 +257,15 @@ var miniappNDMSRequiredActions = map[string]bool{
 	"pingcheck_toggle": true,
 }
 
+var miniappJournalActions = map[string]bool{
+	"tunnel_restart": true, "tunnel_enable": true, "tunnel_disable": true,
+	"tunnel_power": true, "tunnel_delete": true, "tunnel_import": true,
+	"route_policy_promote": true, "route_rebind": true, "route_migrate": true,
+	"route_add": true, "route_delete": true, "service_restart": true,
+	"firmware_install": true, "awgm_update": true, "hrneo_update": true,
+	"self_update": true, "agent_config_set": true, "agent_config_restore": true,
+}
+
 type miniappCommandReq struct {
 	Action string         `json:"action"`
 	Args   map[string]any `json:"args"`
@@ -412,8 +421,27 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 		}
 		resp := wizardDeployResp{}
 		resp.RouterAsleep, resp.RouterStatus, resp.WakeWindowMin = miniappWakeWindow(d, u, req.Action, time.Now().UTC())
-		if !enqueueAgentCommandForUserResp(w, d, u, req.Action, args, resp) && reboot {
+		opID := ""
+		if miniappJournalActions[req.Action] {
+			opID, err = BeginOperation(r.Context(), d.DB, routerID, telegramUserID, req.Action, "miniapp", args)
+			if err != nil {
+				if reboot {
+					rebootCooldown.release(u.ID)
+				}
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "operation journal unavailable")
+				return
+			}
+		}
+		queued, cmdID := enqueueAgentCommandForUserResp(w, d, u, req.Action, args, resp)
+		if !queued && reboot {
 			rebootCooldown.release(u.ID)
+		}
+		if opID != "" {
+			if !queued {
+				_ = FinishOperation(d.DB, opID, "failed", "enqueue_failed", time.Now())
+			} else if err := AttachOperationCommand(d.DB, opID, cmdID); err != nil && d.Logger != nil {
+				d.Logger.Error("operation journal command attach failed", "operation_id", opID, "cmd_id", cmdID, "err", err)
+			}
 		}
 	}
 }
@@ -522,6 +550,9 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 		if !ok {
 			writeJSONError(w, http.StatusNotFound, "result_not_ready", "no result yet — poll again")
 			return
+		}
+		if err := finishCommandOperation(d.DB, cmdID, res.Status, time.Now()); err != nil && !errors.Is(err, db.ErrOperationNotFound) && !errors.Is(err, db.ErrOperationAlreadyFinished) && d.Logger != nil {
+			d.Logger.Error("operation journal finish failed", "cmd_id", cmdID, "err", err)
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(res)

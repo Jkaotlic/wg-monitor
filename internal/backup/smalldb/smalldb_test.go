@@ -50,6 +50,9 @@ func liveDB(t *testing.T) (*db.DB, string) {
 	exec(`INSERT INTO awgm_ping_runs (user_id, tunnel_id, from_ts, to_ts, fails) VALUES (1, 't1', 'a', 'b', 4)`)
 	exec(`INSERT INTO alert_messages (user_id, check_name, telegram_user_id, message_id) VALUES (1, 'ping', 1000, 77)`)
 	exec(`INSERT INTO owed_replies (user_id, check_name, text, created_at) VALUES (1, 'ping', '🟢 восстановилось', '2026-10-15T08:00:00Z')`)
+	exec(`INSERT INTO operation_journal (operation_id, router_id, actor_id, action, source, started_at, outcome, summary) VALUES ('op-1', 1, 1000, 'restart', 'miniapp', '2026-10-15T08:00:00Z', 'success', 'service restarted')`)
+	exec(`INSERT INTO rollout_jobs (id, target_version, state, created_by, created_at, updated_at) VALUES ('rollout-1', 'v1.2.3', 'observing', 1000, '2026-10-15T08:00:00Z', '2026-10-15T08:01:00Z')`)
+	exec(`INSERT INTO rollout_targets (job_id, router_id, ordinal, role, status) VALUES ('rollout-1', 1, 0, 'canary', 'observed')`)
 	return d, path
 }
 
@@ -140,7 +143,7 @@ func TestEveryTableIsClassified(t *testing.T) {
 			t.Errorf("в списках малого архива таблица %q, которой нет в схеме", name)
 		}
 	}
-	if want := []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies"}; !slices.Equal(SkipTables, want) {
+	if want := []string{"events", "daily_soft_flaps", "awgm_ping_runs", "alert_messages", "owed_replies", "operation_journal"}; !slices.Equal(SkipTables, want) {
 		t.Errorf("SkipTables = %v, по спеке %v", SkipTables, want)
 	}
 }
@@ -161,10 +164,21 @@ func TestBuildCopiesEverythingButHistory(t *testing.T) {
 		t.Fatalf("таблицы: %v, ждали %v", got, want)
 	}
 	for _, table := range CopyTables {
+		if table == "rollout_jobs" {
+			continue // restored active jobs are intentionally paused below
+		}
 		got, want := dump(t, small, table), dump(t, d.SQL(), table)
 		if !slices.Equal(got, want) {
 			t.Errorf("таблица %s разошлась:\n got %v\nwant %v", table, got, want)
 		}
+	}
+	var rolloutState, pauseReason string
+	var observed any
+	if err := small.QueryRow(`SELECT state, pause_reason, observation_started_at FROM rollout_jobs WHERE id='rollout-1'`).Scan(&rolloutState, &pauseReason, &observed); err != nil {
+		t.Fatal(err)
+	}
+	if rolloutState != "paused" || pauseReason != "restore_review_required" || observed != nil {
+		t.Fatalf("restored rollout resumed unsafely: state=%q reason=%q observed=%v", rolloutState, pauseReason, observed)
 	}
 	for _, table := range []string{"users", "router_operators", "router_credentials", "incident_state", "router_versions"} {
 		if n := len(dump(t, small, table)); n == 0 {

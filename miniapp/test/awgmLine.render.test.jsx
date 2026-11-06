@@ -29,9 +29,9 @@ const SNAP = {
 // Бот считает все три рабочими; awg-manager у резерва и неиспользуемого
 // пишет «Нет связи», у несущего -- «Активен».
 const EVENT_TUNNELS = [
-  { tunnel_id: 'awg11', status: 'ok', run_state: 'running', awgm_conn: 'connected', awgm_conn_latency_ms: 64 },
-  { tunnel_id: 'awg20', status: 'ok', run_state: 'running', awgm_conn: 'disconnected', awgm_conn_reason: 'timeout' },
-  { tunnel_id: 'awg21', status: 'ok', run_state: 'running', awgm_conn: 'disconnected' },
+  { tunnel_id: 'awg11', status: 'ok', run_state: 'running', awgm_conn: 'connected', awgm_conn_latency_ms: 64, ts: new Date().toISOString() },
+  { tunnel_id: 'awg20', status: 'ok', run_state: 'running', awgm_conn: 'disconnected', awgm_conn_reason: 'timeout', ts: new Date().toISOString() },
+  { tunnel_id: 'awg21', status: 'ok', run_state: 'running', awgm_conn: 'disconnected', ts: new Date().toISOString() },
 ]
 
 vi.mock('../src/api.js', async (importOriginal) => ({
@@ -86,8 +86,45 @@ describe('строка «awg-manager» на вкладке «VPN-туннели�
     const root = await mount(<TunnelsTab routerID={7} asleep={false} openSheet={() => {}} />)
     expect(lines(root, '.hero .awgm-line, .awgm-line-hero')).toContain('awg-manager: Активен · 64 мс')
     expect(root.querySelector('.awgm-line .data-row-dot-ok')).toBeTruthy()
+    expect(root.querySelector('.tunnel-freshness').textContent).toMatch(/^Проверено /)
     render(null, root)
     root.remove()
+  })
+
+  it('показывает одну упорядоченную ленту вместо трёх повторяющихся списков', async () => {
+    const root = await mount(<TunnelsTab routerID={7} asleep={false} openSheet={() => {}} openLayer={() => {}} />)
+    const rows = [...root.querySelectorAll('.tunnel-overview-row')]
+    expect(rows.map((row) => row.querySelector('.tunnel-overview-name')?.textContent)).toEqual(['vpn-nl', 'vpn-de', 'vpn-fi'])
+    expect(root.textContent).not.toContain('Порядок подхвата')
+    expect(root.textContent).not.toContain('Не используются ·')
+    render(null, root)
+    root.remove()
+  })
+
+  it('включённому, но упавшему туннелю предлагает перезапуск, а не включение', async () => {
+    const previous = CMD.value
+    const event = EVENT_TUNNELS.find((t) => t.tunnel_id === 'awg21')
+    const previousEvent = { ...event }
+    Object.assign(event, { status: 'fail', run_state: 'broken', awgm_conn: 'disconnected' })
+    CMD.value = {
+      ...previous,
+      result: {
+        status: 'ok',
+        output: JSON.stringify({
+          ...SNAP,
+          tunnels: SNAP.tunnels.map((t) => (t.id === 'awg21' ? { ...t, status: 'broken', enabled: true } : t)),
+        }),
+      },
+    }
+    const root = await mount(<TunnelsTab routerID={7} asleep={false} openSheet={() => {}} openLayer={() => {}} />)
+    const row = [...root.querySelectorAll('.tunnel-overview-row')].find((el) => el.textContent.includes('vpn-fi'))
+    expect(row.textContent).toContain('Не отвечает')
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toContain('Перезапустить')
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('Включить')
+    render(null, root)
+    root.remove()
+    CMD.value = previous
+    Object.assign(event, previousEvent)
   })
 })
 

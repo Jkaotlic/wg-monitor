@@ -33,8 +33,8 @@ export function pathLabel(s, stale) {
   return `Путь трафика: ${tunnel}; ${direct}`
 }
 
-export function TrafficPath({ traffic, incidents, tunnels, stale }) {
-  const s = pathState({ traffic, incidents, tunnels, stale })
+export function TrafficPath({ traffic, incidents, tunnels, stale, evidence = null }) {
+  const s = pathState({ traffic, incidents, tunnels, stale, evidence })
   const viaLabel = s.via || 'VPN-туннель'
 
   return (

@@ -98,8 +98,9 @@ curl -sS -m 5 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
 ```
 
 **Critical:** the bot token / chat used by the probe **must be different**
-from the monitor's primary bot. Otherwise you've reintroduced the same
-shared-failure-domain problem (token revocation, Telegram outage).
+from the monitor's primary bot. This separates token revocation and bot/chat
+configuration failures. It does **not** separate a Telegram-wide outage: for
+provider-level independence use Option A with email or push outside Telegram.
 
 ## What NOT to do
 
@@ -133,14 +134,41 @@ the backend is down. This is a soft, zero-extra-infra complement — it shares t
 backend's failure domain, so it does **not** replace an external probe; it just
 makes silence noticeable for operators who haven't set one up yet.
 
-## Future work (not yet implemented)
+## Wizard provisioning
 
-- **Wizard auto-provisioning of the external probe** (deferred): a "register
-  external uptime probe" step that SSHes to a second host, uploads
-  `wg-monitor-probe`, and writes the cron. Deferred because the wizard currently
-  models only agent (router) and backend (VPS) SSH targets — the probe host is a
-  third target type with its own credentials/known-hosts, which is a meaningful
-  addition. Until then, use the copy-paste above.
+The deploy wizard now models the probe as a separate third host. Open
+`Service -> External readiness probe`, configure and preview the target, then
+choose `Install / repair`. The same flows are available non-interactively:
+
+```sh
+wg-monitor-deploy external-probe preview
+wg-monitor-deploy external-probe status
+wg-monitor-deploy external-probe install
+wg-monitor-deploy external-probe remove
+```
+
+Non-secret host metadata and the HTTPS `/readyz` URL are stored under
+`[external_probe]` in `wizard.toml`. SSH and notification credentials remain in
+the wizard secret store (`EXTERNAL_PROBE_*`). The remote notification env file
+is mode `0600`; uploads first land in a private `mktemp` directory; and the
+systemd service uses `DynamicUser`, a private temp directory, read-only system
+paths, and `NoNewPrivileges`. The persisted health state contains only
+`ok|down` and the failure count. SSH uses the dedicated `external-probe`
+known-hosts alias, so a changed host key fails closed.
+
+The installed systemd timer runs every minute. Each probe has a five-second
+timeout, requires the exact body `ready`, pages after two consecutive failures,
+deduplicates an ongoing outage, and sends a single recovery message. Use a bot
+and chat independent from wg-monitor's primary alert path. If Telegram itself
+is part of the outage you will not receive either Telegram notification, so a
+hosted monitor with an email/push route remains the stronger design.
+
+The wizard never chooses a host or installs this implicitly. Provisioning is an
+explicit operator action because the host and notification channel must be
+outside the backend failure domain.
+
+## Future work
+
 - Have agents observe a "backend silent for >N minutes" condition and send
   an out-of-band alert via their own direct TG client (currently every
   agent only reports through the backend).

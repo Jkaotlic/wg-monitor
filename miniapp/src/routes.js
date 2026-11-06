@@ -49,7 +49,20 @@ export function tunnelSwitchedOff(t) {
 // интерфейса ничего не доказывает: раньше сбой загрузки возвращал мёртвому
 // туннелю «работает». Поднятые туннели получают пустой статус -- «состояние
 // неизвестно»; выключенные настройкой остаются выключенными.
-export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
+export const TUNNEL_EVENT_FRESH_MS = 5 * 60_000
+
+export function tunnelEventAgeSec(event, nowMs = Date.now()) {
+  const at = Date.parse(event?.ts ?? '')
+  if (!Number.isFinite(at)) return null
+  return Math.max(0, Math.floor((nowMs - at) / 1000))
+}
+
+export function tunnelEventFresh(event, nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH_MS) {
+  const age = tunnelEventAgeSec(event, nowMs)
+  return age != null && age * 1000 <= maxAgeMs
+}
+
+export function withCheckVerdict(snapshot, events, { failed = false, nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH_MS, enforceFreshness = false, requireTimestamp = false } = {}) {
   if (failed && snapshot && Array.isArray(snapshot.tunnels)) {
     return {
       ...snapshot,
@@ -58,21 +71,29 @@ export function withCheckVerdict(snapshot, events, { failed = false } = {}) {
       ),
     }
   }
-  const failing = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
+  const eventRows = events?.tunnels ?? []
+  const rowFresh = (t) => {
+    if (!t?.ts) return !requireTimestamp
+    return !enforceFreshness || tunnelEventFresh(t, nowMs, maxAgeMs)
+  }
+  const freshRows = eventRows.filter(rowFresh)
+  const stale = new Set(eventRows.filter((t) => !rowFresh(t)).map((t) => t.tunnel_id))
+  const failing = new Set(freshRows.filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
   // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
   // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
-  const unchecked = new Set((events?.tunnels ?? []).filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
+  const unchecked = new Set(freshRows.filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
   // И в обратную сторону (Fix 3 v0.56): последняя проверка -- ok и роутер в
   // ней сказал running, а снимок маршрутов -- «down». Проверки и счёт зовут
   // его работающим; строка, «Порядок подхвата» и «Маршруты» -- тоже.
   // Выключенный настройкой не трогаем.
   const passing = new Set(
-    (events?.tunnels ?? []).filter((t) => t?.status === 'ok' && t?.run_state === 'running').map((t) => t.tunnel_id),
+    freshRows.filter((t) => t?.status === 'ok' && t?.run_state === 'running').map((t) => t.tunnel_id),
   )
-  if (!snapshot || (failing.size === 0 && unchecked.size === 0 && passing.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
+  if (!snapshot || (failing.size === 0 && unchecked.size === 0 && passing.size === 0 && stale.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
+      if (stale.has(t.id)) return { ...t, verdict_stale: true }
       if (passing.has(t.id) && tunnelLive(t) === 'down' && !tunnelSwitchedOff(t)) return { ...t, status: 'running', check_ok: true }
       if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
       // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
@@ -144,6 +165,9 @@ export function parseRouteSnapshot(output) {
 // отвечает агент, который команду знает, но описывает мир в формате, которого
 // приложение не понимает (обычно -- старый агент на роутере).
 export function snapshotState({ busy, error, result, snapshot } = {}) {
+  if (snapshot && busy) return 'refreshing'
+  if (snapshot && error) return 'stale-error'
+  if (snapshot && result && result.status !== 'ok') return 'stale-refused'
   if (snapshot) return 'ready'
   if (busy) return 'loading'
   if (error) return 'error'

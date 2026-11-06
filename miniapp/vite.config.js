@@ -85,5 +85,6 @@ export default defineConfig({
   build: {
     outDir: '../internal/backend/miniapp_static',
     emptyOutDir: true,
+    manifest: 'manifest.json',
   },
 })

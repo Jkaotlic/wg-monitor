@@ -2,6 +2,8 @@
 package backend
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/rollout"
 )
 
 // Обновление агента из мини-аппа. Только админ: радиус -- агент на чужом
@@ -168,6 +171,8 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		opts.AllowDowngrade = req.AllowDowngrade
+		opts.Context = r.Context()
+		opts.ActorID = adminID
 		target := strings.TrimSpace(req.TargetVersion)
 		if target == "" {
 			target = serverVersion
@@ -210,7 +215,94 @@ type miniappFleetAgentUpdateResult struct {
 }
 
 type miniappFleetAgentUpdateResp struct {
-	Results []miniappFleetAgentUpdateResult `json:"results"`
+	Job     db.RolloutJob                   `json:"job"`
+	Targets []db.RolloutTarget              `json:"targets"`
+	Results []miniappFleetAgentUpdateResult `json:"results,omitempty"` // old clients ignore the new job fields safely
+}
+
+func miniappRolloutEngine(d Deps, ctx context.Context, actorID int64) (rollout.Engine, bool) {
+	opts, ok := miniappAgentDeployOpts(d, "miniapp-fleet-canary")
+	if !ok {
+		return rollout.Engine{}, false
+	}
+	return rollout.Engine{
+		DB: d.DB,
+		Deploy: func(routerID int64, target string) (string, error) {
+			u, err := d.DB.Users().GetByID(routerID)
+			if err != nil {
+				return "", err
+			}
+			local := opts
+			local.Context, local.ActorID = ctx, actorID
+			res, derr := agentDeployCore(d, u, target, local)
+			if derr != nil {
+				return "", derr
+			}
+			return res.CmdID, nil
+		},
+		Probe: func(routerID int64) rollout.Probe {
+			u, err := d.DB.Users().GetByID(routerID)
+			if err != nil {
+				return rollout.Probe{ReportGap: true}
+			}
+			now := time.Now().UTC()
+			fresh := u.LastSeenAt != nil && now.Sub(u.LastSeenAt.UTC()) <= 5*time.Minute
+			hard, _ := d.DB.State().HardCount(routerID)
+			return rollout.Probe{Fresh: fresh, Version: stringValue(u.LastDeployedVersion), NewHardIncidents: hard, ReportGap: !fresh}
+		},
+	}, true
+}
+
+// RunRolloutWorker advances the persisted canary state machine independently
+// from the mini-app.  Therefore an observation window and the remaining fleet
+// continue after a backend restart even when no operator keeps Park open.
+func RunRolloutWorker(ctx context.Context, d Deps, interval time.Duration) {
+	if d.DB == nil || d.CommandSink == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	tick := func() {
+		job, _, err := d.DB.Rollouts().Active()
+		if errors.Is(err, sql.ErrNoRows) {
+			return
+		}
+		if err != nil {
+			if d.Logger != nil {
+				d.Logger.Error("rollout worker read failed", "err", err)
+			}
+			return
+		}
+		engine, ok := miniappRolloutEngine(d, ctx, job.CreatedBy)
+		if !ok {
+			return
+		}
+		if _, err := engine.Tick(job.ID); err != nil && d.Logger != nil {
+			d.Logger.Error("rollout worker tick failed", "job_id", job.ID, "err", err)
+		}
+	}
+	tick()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tick()
+		}
+	}
+}
+
+func writeMiniappRollout(w http.ResponseWriter, d *db.DB, job db.RolloutJob) {
+	current, targets, err := d.Rollouts().Get(job.ID)
+	if err != nil {
+		writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать раскатку.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(miniappFleetAgentUpdateResp{Job: current, Targets: targets})
 }
 
 // miniappFleetAgentUpdateHandler -- POST /v1/miniapp/fleet/agent/update.
@@ -246,7 +338,7 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 				"Сервер собран без номера выпуска: обновлять агентов не до чего.")
 			return
 		}
-		opts, ok := miniappAgentDeployOpts(d, "miniapp-fleet")
+		engine, ok := miniappRolloutEngine(d, context.WithoutCancel(r.Context()), adminID)
 		if !ok {
 			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
 			return
@@ -256,9 +348,15 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, miniappDeployErrorText(errCodeInternal))
 			return
 		}
-		now := time.Now().UTC()
-		resp := miniappFleetAgentUpdateResp{Results: []miniappFleetAgentUpdateResult{}}
-		counts := map[string]int{}
+		if active, _, err := d.DB.Rollouts().Active(); err == nil {
+			writeMiniappRollout(w, d.DB, active)
+			return
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать текущую раскатку.")
+			return
+		}
+		candidates := []rollout.Candidate{}
+		candidateUsers := map[int64]db.User{}
 		for i := range users {
 			u := &users[i]
 			// agentUpdateVerdictFor держит Behind=false для агентов ниже
@@ -270,38 +368,87 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 			if !verdict.Behind {
 				continue
 			}
-			row := miniappFleetAgentUpdateResult{RouterID: u.ID, Nickname: u.Nickname}
-			// Назначенное обновление решает ядро: более старое оно вытесняет,
-			// то же -- отказывает deploy_pending (ниже это «пропущено»).
-			// Ранний пропуск здесь держал бы выключенные роутеры на старой
-			// версии вечно.
-			if _, derr := agentDeployCore(d, u, serverVersion, opts); derr != nil {
-				if derr.Code == deployErrPending {
-					row.Outcome, row.ReasonCode = "skipped", deployErrPending
-				} else {
-					row.Outcome, row.ReasonCode = "error", derr.Code
-				}
-			} else if asleep, _, _ := miniappWakeWindow(d, u, "self_update", now); asleep {
-				row.Outcome, row.ReasonCode = "deferred", "router_asleep"
-				row.ReasonText = "Роутер не на связи: обновится, когда выйдет на связь."
-			} else {
-				row.Outcome = "queued"
-				row.ReasonText = "Обновление отправлено."
+			hard, _ := d.DB.State().HardCount(u.ID)
+			fresh := u.LastSeenAt != nil && time.Since(u.LastSeenAt.UTC()) <= 5*time.Minute
+			candidates = append(candidates, rollout.Candidate{RouterID: u.ID, Fresh: fresh, HardIncidents: hard})
+			candidateUsers[u.ID] = *u
+		}
+		canary := rollout.SelectCanary(candidates)
+		if canary == 0 {
+			writeMiniappDeployError(w, http.StatusConflict, "no_targets", "Нет отставших агентов для обновления.")
+			return
+		}
+		ids := []int64{canary}
+		for _, candidate := range candidates {
+			if candidate.RouterID != canary {
+				ids = append(ids, candidate.RouterID)
 			}
-			if row.ReasonText == "" {
-				row.ReasonText = miniappDeployErrorText(row.ReasonCode)
-			}
-			counts[row.Outcome]++
-			resp.Results = append(resp.Results, row)
+		}
+		job, err := engine.Create(serverVersion, adminID, ids)
+		if err != nil {
+			writeMiniappDeployError(w, http.StatusConflict, "rollout_exists", "Раскатка уже идёт.")
+			return
+		}
+		job, err = engine.Tick(job.ID)
+		if err != nil {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось запустить canary.")
+			return
 		}
 		if d.Logger != nil {
-			d.Logger.Info("miniapp fleet agent update",
-				"target_version", serverVersion, "by", adminID,
-				"queued", counts["queued"], "deferred", counts["deferred"],
-				"skipped", counts["skipped"], "error", counts["error"])
+			d.Logger.Info("miniapp fleet canary rollout started", "job_id", job.ID, "target_version", serverVersion, "canary_router_id", canary, "targets", len(candidateUsers), "by", adminID)
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(resp)
+		writeMiniappRollout(w, d.DB, job)
+	}
+}
+
+func miniappFleetRolloutStatusHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, ok := miniappAdminOrNotFound(d, w, r)
+		if !ok {
+			return
+		}
+		job, _, err := d.DB.Rollouts().Active()
+		if errors.Is(err, sql.ErrNoRows) {
+			// Normal idle state, not a failed network request.  Returning 200 keeps
+			// the Park poll quiet in browser telemetry and layout diagnostics.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(w).Encode(miniappFleetAgentUpdateResp{Targets: []db.RolloutTarget{}})
+			return
+		}
+		if err != nil {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать раскатку.")
+			return
+		}
+		writeMiniappRollout(w, d.DB, job)
+	}
+}
+
+func miniappFleetRolloutCancelHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := miniappAdminOrNotFound(d, w, r)
+		_ = actor
+		if !ok {
+			return
+		}
+		job, _, err := d.DB.Rollouts().Active()
+		if errors.Is(err, sql.ErrNoRows) {
+			writeMiniappDeployError(w, http.StatusNotFound, "no_rollout", "Активной раскатки нет.")
+			return
+		}
+		if err != nil {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать раскатку.")
+			return
+		}
+		engine, ok := miniappRolloutEngine(d, context.WithoutCancel(r.Context()), actor)
+		if !ok {
+			return
+		}
+		if err := engine.Cancel(job.ID); err != nil {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось отменить раскатку.")
+			return
+		}
+		job, _, _ = d.DB.Rollouts().Get(job.ID)
+		writeMiniappRollout(w, d.DB, job)
 	}
 }
 
