@@ -109,6 +109,8 @@ func main() {
 	multiChecks := []checks.MultiCheck{
 		checks.TunnelsCheck{
 			Client:          awgClient,
+			Confirm:         checks.ConfirmTunnel,
+			Traffic:         &checks.TunnelTrafficHistory{},
 			HandshakeMaxAge: cfg.Checks.AWG.HandshakeMaxAge(),
 			AwgmDownSince:   signals.tracker.DownSince,
 			// Окно терпимости -- два плановых отчёта (A2.10).

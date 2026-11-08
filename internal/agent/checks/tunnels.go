@@ -33,6 +33,10 @@ type TunnelsCheck struct {
 	// Grace -- память обходов для окна терпимости (RunGrace). nil -- без
 	// окна: остановленному туннелю правила не засчитываются.
 	Grace *RunGrace
+	// Confirm independently verifies suspect probes. nil keeps legacy behavior
+	// for older integrations; production wires ConfirmTunnel explicitly.
+	Confirm func(context.Context, awgmgr.Tunnel) []TunnelProbeResult
+	Traffic *TunnelTrafficHistory
 }
 
 // defaultRunGraceWindow -- окно терпимости, когда интервал отчётов не задан.
@@ -197,6 +201,8 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		out = append(out, chk)
 	}
 	annotateAwgmDown(out, t.AwgmDownSince)
+	t.Traffic.Annotate(out, tunnels.Tunnels, time.Now())
+	confirmSuspectTunnels(ctx, out, tunnels.Tunnels, t.Confirm)
 	annotateAwgmConns(out, tunnels.Tunnels, <-connCh)
 	return out
 }
@@ -529,6 +535,13 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	// теряются (workrouter 18.09: nl21 «ок» каждые три минуты, пока
 	// awg-manager писал «нет связи»). Матрица -- активная проба через туннель,
 	// и её провал при живом соседе перевешивает свежесть обмена.
+	// A failed own target is evidence worth independently checking even when
+	// every neighbor fails (including a router with only one tunnel). The
+	// legacy verdict below still requires a healthy neighbor; confirmation
+	// resolves that ambiguity without depending on that same target again.
+	if matrixHasFailedOwnTargets(matrix, tu.ID, time.Now()) {
+		details["matrix_ok"] = false
+	}
 	if matrixSaysDead(matrix, tu.ID, time.Now()) {
 		details["matrix_ok"] = false
 		reasons = append(reasons, probeFailedReason)
@@ -695,6 +708,23 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 		}
 	}
 	return own > 0 && othersAlive
+}
+
+func matrixHasFailedOwnTargets(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.Time) bool {
+	if matrix == nil {
+		return false
+	}
+	found := false
+	for _, c := range matrix.Cells {
+		if c.TunnelID != tunnelID || !matrixCellFresh(matrix, c, now) {
+			continue
+		}
+		if c.OK {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // matrixTargetDown -- свежие пробы есть, ни одна не прошла, а хотя бы один

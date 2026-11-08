@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,25 +67,55 @@ func writeDNSSnapshot(dir, content string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	name := filepath.Join(dir, fmt.Sprintf("dns-before-%d.txt", time.Now().Unix()))
-	if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
+	now := time.Now()
+	f, err := os.CreateTemp(dir, fmt.Sprintf("dns-before-%d.%09d-*.txt", now.Unix(), now.Nanosecond()))
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	cleanup := func() { _ = f.Close(); _ = os.Remove(name) }
+	if err := f.Chmod(0o600); err != nil {
+		cleanup()
+		return "", err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
 		return "", err
 	}
 	pruneDNSSnapshots(dir, 5)
 	return name, nil
 }
 
-// pruneDNSSnapshots оставляет последние keep снимков: место на роутере
-// ограничено, а бесконечная история снимков не нужна никому.
+// pruneDNSSnapshots uses age, so legacy second-only names and unique retry
+// snapshots share the same retention policy.
 func pruneDNSSnapshots(dir string, keep int) {
 	files, err := filepath.Glob(filepath.Join(dir, "dns-before-*.txt"))
-	if err != nil || len(files) <= keep {
+	if err != nil {
 		return
 	}
-	// Имена содержат метку времени, поэтому лексикографический порядок совпадает
-	// с хронологическим до 2286 года.
-	for i := 0; i < len(files)-keep; i++ {
-		_ = os.Remove(files[i])
+	type snapshot struct {
+		path     string
+		modified time.Time
+	}
+	var snapshots []snapshot
+	for _, name := range files {
+		info, err := os.Stat(name)
+		if err == nil && info.Mode().IsRegular() {
+			snapshots = append(snapshots, snapshot{name, info.ModTime()})
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].modified.Equal(snapshots[j].modified) {
+			return snapshots[i].path < snapshots[j].path
+		}
+		return snapshots[i].modified.Before(snapshots[j].modified)
+	})
+	for i := 0; i < len(snapshots)-keep; i++ {
+		_ = os.Remove(snapshots[i].path)
 	}
 }
 

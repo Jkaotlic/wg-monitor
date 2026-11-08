@@ -1154,7 +1154,8 @@ func TestLadder_AttemptsFollowOutcome(t *testing.T) {
 	req := ladderReq()
 	req.Auto = false
 	e2.run(t, req)
-	if blocked, why := e.d.Attempts.Blocked("роутер", "tunnel_awg12"); blocked {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("удачная ручная починка обязана снять стоп: %s", why)
 	}
 }
@@ -1309,7 +1310,8 @@ func TestLadder_PromoteRefusedStillRepairs(t *testing.T) {
 	if strings.Contains(final.Text, "вернул") || strings.Contains(final.Text, "увёл") {
 		t.Fatalf("итог врёт про трафик: %q", final.Text)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("удача поставила стоп: %s", why)
 	}
 }
@@ -1327,7 +1329,8 @@ func TestLadder_NoSnapshotNotSticky(t *testing.T) {
 	if final.Kind != "need" || final.Action != "роутер не ответил — проверьте, на связи ли он" {
 		t.Fatalf("итог %+v", final)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 }
@@ -1426,9 +1429,9 @@ func TestLadder_ProofTargetsBrokenTunnel(t *testing.T) {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
 	probes := e.cmd.actions("exit_ip_probe")
-	// Перезапуск отсеян ещё на обмене ключами; замер -- у ступени «тот же конфиг».
-	if len(probes) != 1 {
-		t.Fatalf("замеров %d, ждали 1", len(probes))
+	// Read-only preflight plus the successful reissue proof, both pinned to the broken tunnel.
+	if len(probes) != 2 {
+		t.Fatalf("замеров %d, ждали 2", len(probes))
 	}
 	for _, p := range probes {
 		if p.Args["tunnel_id"] != "awg12" {
@@ -1438,16 +1441,21 @@ func TestLadder_ProofTargetsBrokenTunnel(t *testing.T) {
 	if n := len(e.cmd.actions("check_via_tunnel")); n != 0 {
 		t.Fatalf("проверка через активное звено (то есть резерв) ушла %d раз", n)
 	}
-	// Первый замер -- уже после увода на резерв.
+	// Preflight precedes promotion; the second proof follows it.
+	probeCount := 0
 	promoted := false
-	for _, s := range e.cmd.all() {
-		if s.Action == "route_policy_promote" && s.Args["tunnel_id"] == "awg10" {
+	for _, cmd := range e.cmd.all() {
+		if cmd.Action == "route_policy_promote" && cmd.Args["tunnel_id"] == "awg10" {
 			promoted = true
 		}
-		if s.Action == "exit_ip_probe" && !promoted {
-			t.Fatal("замер до увода")
+		if cmd.Action == "exit_ip_probe" {
+			probeCount++
+			if (probeCount == 1 && promoted) || (probeCount == 2 && !promoted) {
+				t.Fatal("wrong probe order")
+			}
 		}
 	}
+
 }
 
 // Агент старше v0.47 не умеет мерить выход по туннелю: доказательство --
@@ -2283,6 +2291,8 @@ func TestLadder_FailbackPartialFailure(t *testing.T) {
 // чиним». Стоп при этом не ставится -- вердикта нет.
 func TestLadder_InterruptedAutoRunCounts(t *testing.T) {
 	e := newLadder(t, &Setting{Enabled: true, Provider: "amnezia", Option: "nl"})
+	now := time.Now()
+	e.d.Attempts.Now = func() time.Time { return now }
 	for i := 0; i < attemptLimit; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		e.d.BaseCtx = ctx
@@ -2293,6 +2303,7 @@ func TestLadder_InterruptedAutoRunCounts(t *testing.T) {
 		e.d.Report = e.rep
 		job, _ := e.run(t, ladderReq())
 		cancel()
+		now = now.Add(10 * time.Minute)
 		if job.Hint != ActAborted {
 			t.Fatalf("запуск %d: подсказка %q", i, job.Hint)
 		}
@@ -2469,7 +2480,8 @@ func TestLadder_ImportSilentNoNewCountry(t *testing.T) {
 	if job.State != provision.StateFailed || final.Kind != "need" || final.Action != ActRouterLate {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 	wantSteps(t, job, map[string]provision.StepStatus{StepRecreate: provision.StepSkipped})
@@ -2489,7 +2501,8 @@ func TestLadder_RestartSilentStops(t *testing.T) {
 	if final.Kind != "need" || final.Action != ActRouterLate {
 		t.Fatalf("state=%s final=%+v", job.State, final)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 }
@@ -2530,7 +2543,8 @@ func TestLadder_NotInSetNotSticky(t *testing.T) {
 	if final.Kind != "need" || !strings.Contains(final.Text, "чинить нечего") {
 		t.Fatalf("итог %+v", final)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("VPN-туннель вне наборов получил стоп: %s", why)
 	}
 }
@@ -2566,7 +2580,8 @@ func TestLadder_NewCountryImportSilentNoSave(t *testing.T) {
 	if !strings.Contains(final.Text, "не ответил вовремя") || strings.Contains(final.Text, "сам не смог") {
 		t.Fatalf("итог говорит о провале починки, а не о молчании роутера: %q", final.Text)
 	}
-	if allow, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !allow {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("молчание роутера поставило стоп: %s", why)
 	}
 }
@@ -2637,7 +2652,8 @@ func TestLadder_SourceOffRestartsThenStopsBeforeIssue(t *testing.T) {
 		t.Fatalf("state=%s hint=%q final=%+v", job.State, job.Hint, final)
 	}
 	// Стопа нет: следующее падение снова запустит автопочинку (перезапуск).
-	if ok, why := e.d.Attempts.Allow("роутер", "tunnel_awg12"); !ok {
+	if log, err := e.d.Attempts.load("роутер", "tunnel_awg12"); err != nil || log.Failed {
+		why := fmt.Sprint(log, err)
 		t.Fatalf("автопочинка встала: %s", why)
 	}
 }

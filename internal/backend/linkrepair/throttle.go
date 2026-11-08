@@ -28,8 +28,12 @@ type Attempts struct {
 }
 
 type attemptLog struct {
-	At     []time.Time `json:"at"`
-	Failed bool        `json:"failed"`
+	At        []time.Time `json:"at"`
+	Failed    bool        `json:"failed"`
+	LastStart time.Time   `json:"last_start,omitempty"`
+	// BackupHold records a repeat incident before a move is possible. It survives
+	// failed snapshots, unavailable backups, busy locks and backend restarts.
+	BackupHold bool `json:"backup_hold,omitempty"`
 }
 
 func (a Attempts) now() time.Time {
@@ -45,6 +49,8 @@ func attemptKey(nickname, checkName string) string {
 
 // WhyAttemptsUnread -- причина отказа, когда история попыток не прочиталась:
 // стоит ли стоп «нужен человек» и не исчерпан ли потолок, неизвестно.
+const WhyRepairCooldown = "после автопочинки ещё не прошло десять минут"
+
 const WhyAttemptsUnread = "не смог прочитать историю попыток"
 
 // load -- история попыток. Записи нет -- пустая история; ошибка чтения --
@@ -91,6 +97,9 @@ func (a Attempts) verdict(nickname, checkName string) (bool, string, bool, error
 	}
 	if fresh >= attemptLimit {
 		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh), true, nil
+	}
+	if !log.LastStart.IsZero() && a.now().Before(log.LastStart.Add(10*time.Minute)) {
+		return false, WhyRepairCooldown, false, nil
 	}
 	return true, "", false, nil
 }
@@ -153,6 +162,7 @@ func (a Attempts) Started(nickname, checkName string) error {
 		}
 	}
 	log.At = append(kept, a.now())
+	log.LastStart = a.now()
 	return a.save(nickname, checkName, log)
 }
 
@@ -199,4 +209,38 @@ func (a Attempts) Clear(nickname, checkName string) error {
 		return err
 	}
 	return a.KV.Set(attemptKey(nickname, checkName), string(raw))
+}
+
+func (a Attempts) cancelUnmutated(nickname, check string) error {
+	log, err := a.load(nickname, check)
+	if err != nil {
+		return err
+	}
+	if len(log.At) > 0 {
+		log.At = log.At[:len(log.At)-1]
+	}
+	log.LastStart = time.Time{}
+	return a.save(nickname, check, log)
+}
+func (a Attempts) recurrent(nickname, check string) bool {
+	log, err := a.load(nickname, check)
+	if err != nil {
+		return true
+	}
+	count := 0
+	for _, at := range log.At {
+		if at.After(a.now().Add(-attemptWindow)) {
+			count++
+		}
+	}
+	return count > 1
+}
+
+func (a Attempts) retainBackup(nickname, check string) error {
+	log, err := a.load(nickname, check)
+	if err != nil {
+		return err
+	}
+	log.BackupHold = true
+	return a.save(nickname, check, log)
 }

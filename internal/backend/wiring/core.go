@@ -11,6 +11,8 @@ package wiring
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 	"github.com/Jkaotlic/wg-monitor/internal/backup"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // Inputs -- то, что процесс создаёт сам: сюда входят только ресурсы с местом
@@ -177,13 +180,29 @@ func NewCore(in Inputs) *Core {
 		SpendRelocation: backend.LinkRepairSpendRelocation(d),
 		SourceOff:       backend.RepairSourceOff,
 		Attempts:        linkrepair.Attempts{KV: d.KV()},
-		LineDead:        backend.LinkRepairLineDead(d, logger.With("component", "linkrepair")),
-		Moves:           linkrepair.NewMoveState(),
-		Commands:        cmdQueue,
-		Report:          repairs,
-		BaseCtx:         ctx,
-		Now:             time.Now,
-		Logger:          logger.With("component", "linkrepair"),
+		LatestCheck: func(routerID int64, check string) (wire.Check, error) {
+			row, ok, err := d.Events().LatestEvent(routerID, check)
+			if err != nil {
+				return wire.Check{}, err
+			}
+			if !ok {
+				return wire.Check{}, fmt.Errorf("triggering check missing")
+			}
+			c := wire.Check{Name: check, Status: row.Status}
+			if row.DetailsJSON != "" {
+				if err := json.Unmarshal([]byte(row.DetailsJSON), &c.Details); err != nil {
+					return wire.Check{}, err
+				}
+			}
+			return c, nil
+		},
+		LineDead: backend.LinkRepairLineDead(d, logger.With("component", "linkrepair")),
+		Moves:    linkrepair.NewMoveState(),
+		Commands: cmdQueue,
+		Report:   repairs,
+		BaseCtx:  ctx,
+		Now:      time.Now,
+		Logger:   logger.With("component", "linkrepair"),
 	}
 
 	mux := backend.Deps{

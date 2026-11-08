@@ -126,7 +126,8 @@ type Deps struct {
 	// человек». nil -- выключенных нет.
 	SourceOff func(provider string) string
 	// Attempts гасит цикл «падает -- чиним»; действует только на автозапуск.
-	Attempts Attempts
+	Attempts    Attempts
+	LatestCheck func(routerID int64, check string) (wire.Check, error)
 	// LineDead -- звено мертво по своей последней проверке tunnel_<id> (Д3):
 	// резервом оно не считается. nil -- мёртвых не знаем.
 	LineDead func(routerID int64, tunnelID string) bool
@@ -151,6 +152,8 @@ type StartReq struct {
 	// выключатель автопочинки и счётчик попыток: человек, нажавший
 	// «Починить», просил явно, и отказывать ему из-за счётчика неверно.
 	Auto bool
+	// holdBackup requests route-only safety during a repeated repair cooldown.
+	holdBackup bool
 	// TunnelName -- имя VPN-туннеля, каким его знает запускающий: автозапуск
 	// берёт его из самой проверки, приложение -- из последних событий
 	// роутера. Нужно, когда снимок не пришёл и имени взять больше неоткуда.
@@ -236,6 +239,7 @@ type lineNames struct {
 	// failbackFailed -- VPN-туннель починен, но вернуть на него трафик не
 	// вышло: трафик остался на запасном.
 	failbackFailed bool
+	backupHeld     bool
 	// reserve -- упал не первый VPN-туннель цепочки, а резерв: уводить и
 	// возвращать нечего. carrier -- звено, через которое трафик идёт сейчас;
 	// пусто при reserve -- живого звена у трафика нет.
@@ -348,6 +352,17 @@ func (d Deps) Start(req StartReq) (string, error) {
 			if tooOften {
 				why += ". Что делать: " + ActTooOften
 			}
+			if why == WhyRepairCooldown {
+				// Save the safety requirement before asking for a snapshot or router lock:
+				// retries can arrive through AfterFailedReport with a fresh StartReq.
+				if err := d.Attempts.retainBackup(req.Nickname, req.CheckName); err != nil {
+					d.logWarn("linkrepair: backup hold intention not saved", "err", err)
+				} else {
+					req.holdBackup = true
+					d.stampTry(req)
+					d.startMoveOnly(req, sc)
+				}
+			}
 			notStarted(why)
 			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
 		}
@@ -364,6 +379,15 @@ func (d Deps) Start(req StartReq) (string, error) {
 		return "", ErrAlreadyRunning
 	}
 	if req.Auto {
+		if allow, why, _, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+			d.Store.Unlock(req.Nickname)
+			notStarted(why)
+			if err != nil {
+				d.logWarn("linkrepair: attempts under lock", "err", err)
+			}
+			return "", fmt.Errorf("%w: %s", ErrAutoDisabled, why)
+		}
+
 		// Попытка считается с запуска: прерванная итога не напишет. Не
 		// записалась -- не стартуем: потолок попыток без записи не работает.
 		if err := d.Attempts.Started(req.Nickname, req.CheckName); err != nil {
@@ -417,6 +441,36 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario, set Setting, renamedT
 	names := lineNames{broken: orID(brokenName, req.TunnelName, sc.TunnelID)}
 	names.carrier, names.reserve = plan.carrier, plan.reserve
 	var log []string // что сделано -- для правок и итоговой фразы
+
+	var trigger wire.Check
+	if d.LatestCheck != nil {
+		var triggerErr error
+		trigger, triggerErr = d.LatestCheck(req.RouterID, req.CheckName)
+		if triggerErr != nil {
+			d.finishFail(ctx, jobID, req, th, StepFailover, names, errors.New("не удалось прочитать данные сбоя до починки"), ActRouterSilent)
+			return
+		}
+	}
+
+	// Prove the tunnel before the first mutation. Unknown results never clear failure.
+	if agentCanExitProbe(req.AgentVersion) && !structuralTrigger(trigger) {
+		if _, probeErr := d.Probe.VerifyTunnelExit(ctx, req.RouterID, sc.TunnelID); probeErr == nil {
+			if req.Auto {
+				if err := d.Attempts.cancelUnmutated(req.Nickname, req.CheckName); err != nil {
+					d.logWarn("linkrepair: release read-only attempt", "err", err)
+				}
+			}
+			d.skip(jobID, "VPN-туннель работает: независимая проверка выхода успешна", StepFailover, StepRestart, StepReissue, StepRecreate, StepFailback)
+			d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
+			th.Done(context.WithoutCancel(ctx), "VPN-туннель «"+names.broken+"» работает: проверка выхода успешна. Перезапуск не понадобился; прежняя проверка могла не получить ответ контрольного адреса.")
+			return
+		}
+	}
+	if evidenceErr := d.recordEvidence(req, trigger, plan.snapshot); evidenceErr != nil {
+		d.logWarn("linkrepair: incident evidence not saved", "err", evidenceErr)
+		d.finishFail(ctx, jobID, req, th, StepFailover, names, errors.New("не удалось сохранить данные сбоя до починки"), ActRouterSilent)
+		return
+	}
 
 	// Ступень 0. Увести трафик, пока чиним. Резерва может не быть -- это не
 	// провал: чинить всё равно надо, человек просто побудет без обхода.
@@ -967,7 +1021,10 @@ func (d Deps) backups(routerID int64, plan policyPlan, tunnelID string) []backup
 // finishOK -- ступень доказана: вернуть трафик (если уводили), снять стоп,
 // сказать людям.
 func (d Deps) finishOK(ctx context.Context, jobID string, req StartReq, th Thread, moved []policyMove, sc Scenario, names lineNames, log []string) {
-	if len(moved) > 0 {
+	if len(moved) > 0 && req.Auto && d.Attempts.recurrent(req.Nickname, req.CheckName) && d.backupsProven(ctx, req, moved) {
+		names.backupHeld = true
+		d.skip(jobID, "повторный сбой: трафик остаётся на проверенном запасном VPN-туннеле", StepFailback)
+	} else if len(moved) > 0 {
 		d.step(jobID, StepFailback, provision.StepActive, "возвращаю трафик на VPN-туннель «"+names.broken+"»")
 		var stuck []string
 		var lastErr error
@@ -1253,6 +1310,7 @@ func (d Deps) findPolicies(ctx context.Context, routerID int64, tunnelID string)
 		d.logCommandFailure("route_status", "unparsable", err.Error())
 		return plan, errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
+	plan.snapshot = snap
 	plan.chains = snapshotChains(snap)
 	plan.incomplete = len(snap.Warnings) > 0
 	for _, t := range snap.Tunnels {
@@ -1301,10 +1359,11 @@ func (d Deps) findPolicies(ctx context.Context, routerID int64, tunnelID string)
 // reserve -- он резерв во всех своих наборах; carrier -- через что тогда
 // идёт трафик (первый такой набор).
 type policyPlan struct {
-	active  []wire.RoutePolicySummary
-	reserve bool
-	carrier string
-	name    string
+	snapshot wire.RouteSnapshot
+	active   []wire.RoutePolicySummary
+	reserve  bool
+	carrier  string
+	name     string
 	// chains -- цепочки всех наборов снимка (policyChainKey -> id звеньев по порядку,
 	// "" -- звено мимо VPN). incomplete -- агент сообщил о сбое чтения (Warnings):
 	// по такому снимку ничего не решаем.
@@ -1342,4 +1401,41 @@ func joinBackupNames(names []string) string {
 		out = append(out, n)
 	}
 	return strings.Join(out, "» и «")
+}
+
+// Retain a backup only after an actual tunnel-specific exit check. Availability
+// in the route snapshot alone does not prove the backup carries traffic.
+func (d Deps) backupsProven(ctx context.Context, req StartReq, moved []policyMove) bool {
+	if !agentCanExitProbe(req.AgentVersion) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, m := range moved {
+		if seen[m.backup] {
+			continue
+		}
+		seen[m.backup] = true
+		if _, err := d.Probe.VerifyTunnelExit(ctx, req.RouterID, m.backup); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func agentCanExitProbe(version string) bool {
+	return version == "v0.47.0" || version == "0.47.0" || upstream.SoftwareNewerThan("v0.47.0", version)
+}
+func structuralTrigger(c wire.Check) bool {
+	kind, _ := c.Details["failure_kind"].(string)
+	if kind == "interface" || kind == "address_conflict" || kind == "ping_check" {
+		return true
+	}
+	raw, _ := c.Details["error"].(string)
+	return strings.Contains(raw, "status=") || strings.Contains(raw, "address conflict") || strings.Contains(raw, "ping-check") || strings.Contains(raw, "pingCheck=")
+}
+func (d Deps) recordEvidence(req StartReq, trigger wire.Check, snap wire.RouteSnapshot) error {
+	if d.LatestCheck == nil {
+		return nil
+	}
+	return (Evidence{KV: d.Attempts.KV, Now: d.Now}).Record(req.Nickname, req.CheckName, trigger, snap)
 }
