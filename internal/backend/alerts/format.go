@@ -375,6 +375,9 @@ func linesFromWriter(write func(*strings.Builder)) []string {
 func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
+		if tunnelProbeOnly(d) {
+			return "🟡"
+		}
 		// Жёлтая -- только когда трафик и правда идёт мимо упавшего. Живой сосед
 		// сам по себе ничего не доказывает: пока движок не увёл, трафик ведётся в
 		// мёртвое первое звено.
@@ -438,12 +441,18 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 	switch checkCategory(checkName) {
 	case "tunnel":
 		name := quotedTunnelName(d)
+		if tunnelProbeOnly(d) {
+			return fmt.Sprintf("Не прошла контрольная проверка VPN-туннеля %s", name)
+		}
 		// Упал запасной: обход работает, и тревожный тон гнал бы человека чинить
 		// то, что у него работает. Приложение в этот момент говорит то же самое
 		// (reserve_only_alert). Про упавшее несущее звено «обход идёт» не
 		// говорим: живой сосед ещё не значит, что трафик на нём.
 		if via := strOrEmpty(d, trafficViaKey); via != "" {
 			return fmt.Sprintf("Запасной VPN-туннель %s не работает, трафик идёт через «%s»", name, via)
+		}
+		if tunnelFailureUnconfirmed(d) {
+			return fmt.Sprintf("VPN-туннель %s: проверка не прошла", name)
 		}
 		return fmt.Sprintf("VPN-туннель %s не отвечает", name)
 	case "dns":
@@ -592,7 +601,7 @@ func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 	if age, ok := intOrZero(d, "handshake_age_sec"); ok {
 		fmt.Fprintf(b, "  Последний обмен ключами: %s назад\n", humanAgeSec(age))
 	} else {
-		b.WriteString("  VPN-туннель ни разу не установил связь\n")
+		b.WriteString("  Данные о последнем обмене ключами отсутствуют\n")
 	}
 	if pc := strOrEmpty(d, "ping_check_status"); pc != "" {
 		fc, _ := intOrZero(d, "ping_check_fail_count")
@@ -989,6 +998,9 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 	case "dns":
 		return "Домены могут не открываться или уходить не туда: сайты, приложения и правила HR-Neo зависят от DNS."
 	case "tunnel":
+		if tunnelProbeOnly(d) {
+			return "Независимая проверка через VPN-туннель отвечает. Сбой контрольной цели сам по себе не означает, что сайты через VPN недоступны."
+		}
 		// Упал запасной -- ничего не сломано, но подхватить трафик стало некому:
 		// и пугать незачем, и молчать нельзя.
 		if via := strOrEmpty(d, trafficViaKey); via != "" {
@@ -1000,6 +1012,9 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 			spareNote = " Живого запасного VPN-туннеля нет — увести трафик некуда."
 		} else if sp := strOrEmpty(d, trafficSpareKey); sp != "" {
 			spareNote = fmt.Sprintf(" Запасной VPN-туннель «%s» на связи.", sp)
+		}
+		if tunnelFailureUnconfirmed(d) {
+			return "Сайты, направленные через этот VPN-туннель, могут быть недоступны. По имеющимся проверкам общий отказ передачи данных не установлен." + spareNote
 		}
 		var parts []string
 		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
@@ -1157,33 +1172,61 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	return ""
 }
 
+// A successful independent probe only disproves a probe-target outage. It
+// cannot clear a stopped interface, address conflict or configured watchdog.
+func tunnelProbeOnly(d map[string]any) bool {
+	conflict, _ := boolOrFalse(d, "address_conflict")
+	return strOrEmpty(d, "failure_kind") == "probe_target" &&
+		strOrEmpty(d, "tunnel_confirmation") == "reachable" &&
+		!conflict && strOrEmpty(d, "ping_check_status") != "dead"
+}
+
+func tunnelFailureUnconfirmed(d map[string]any) bool {
+	conflict, _ := boolOrFalse(d, "address_conflict")
+	kind := strOrEmpty(d, "failure_kind")
+	return !conflict && kind != "address_conflict" && kind != "interface" &&
+		strOrEmpty(d, "ping_check_status") != "dead" &&
+		strOrEmpty(d, "tunnel_confirmation") != "unreachable"
+}
+
 func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 	age, hasAge := intOrZero(d, "handshake_age_sec")
 	pc := strOrEmpty(d, "ping_check_status")
 	conflict, hasConflict := boolOrFalse(d, "address_conflict")
 
 	var parts []string
-	if hasConflict && conflict {
+	if (hasConflict && conflict) || strOrEmpty(d, "failure_kind") == "address_conflict" {
 		parts = append(parts, "У VPN-туннеля конфликт адресов: он пытается подняться с тем же адресом, что и другой VPN-туннель. Сам по себе такой VPN-туннель не поднимется.")
+	}
+	if strOrEmpty(d, "failure_kind") == "interface" {
+		parts = append(parts, "Интерфейс VPN-туннеля остановлен: проверьте его состояние в приложении.")
 	}
 	switch {
 	case !hasAge:
-		parts = append(parts, "Обмена ключами не было ни разу с момента запуска — VPN-туннель так и не поднялся. Чаще всего дело в неверных настройках сервера или в том, что провайдер закрыл нужный порт.")
-	case age > 600:
-		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — VPN-туннель точно лежит, а не моргнул.", humanAgeSec(age)))
+		parts = append(parts, "Данные о последнем обмене ключами отсутствуют: неизвестно, когда VPN-туннель устанавливал связь.")
 	case age > 180:
-		parts = append(parts, "Обмен ключами устарел, но не катастрофически. Возможно, провайдер режет такой трафик, либо сервер VPN-туннеля временно недоступен.")
+		parts = append(parts, fmt.Sprintf("Обмен ключами устарел (%s назад). Возможны простой VPN-туннеля или потеря связи; один возраст обмена ключами не доказывает отказ передачи данных.", humanAgeSec(age)))
 	}
 	if pc == "dead" {
-		parts = append(parts, "Проверка связи показывает сбой — пакеты не доходят даже после авто-рестартов.")
+		parts = append(parts, "Настроенная проверка связи сообщает о сбое: её цель не отвечает. Это отдельный сигнал от обмена ключами.")
 	}
-	// Обмен ключами свежий, а проба awg-manager через туннель не проходит:
-	// сервер отвечает на обмен, но трафик теряется (workrouter 18.09).
-	if probeOK, has := boolOrFalse(d, "matrix_ok"); has && !probeOK && hasAge && age <= 180 {
-		parts = append(parts, "Обмен ключами идёт, но проверка awg-manager через этот VPN-туннель не проходит: сервер отвечает на обмен, а трафик теряется. Похоже на блокировку у провайдера или сломанную маршрутизацию на сервере.")
+	if probeOK, has := boolOrFalse(d, "matrix_ok"); has && !probeOK {
+		parts = append(parts, "Контрольная проверка awg-manager через VPN-туннель не прошла; это результат проверки одной цели.")
+	}
+	switch strOrEmpty(d, "tunnel_confirmation") {
+	case "reachable":
+		parts = append(parts, "Независимая HTTPS-проверка через VPN-туннель отвечает. Сбой контрольной цели не подтверждает общий отказ VPN-туннеля.")
+	case "unreachable":
+		parts = append(parts, "Независимые HTTPS-проверки не получили ответа через VPN-туннель: сбой передачи данных подтверждён для проверенных целей, но его причину эти пробы не определяют.")
+	case "unknown":
+		parts = append(parts, "Независимая проверка недоступна или не завершена: отказ передачи данных не подтверждён, восстановление тоже не установлено.")
+	default:
+		if probeOK, has := boolOrFalse(d, "matrix_ok"); has && !probeOK {
+			parts = append(parts, "Независимого подтверждения нет: общий отказ передачи данных не подтверждён.")
+		}
 	}
 	if len(parts) == 0 && len(ns) > 0 && neighborsAlive(ns) {
-		parts = append(parts, "Соседние VPN-туннели живы, так что интернет и роутер в порядке. Проблема локальная — сервер этого VPN-туннеля или его настройки.")
+		parts = append(parts, "Соседние VPN-туннели живы: полный обрыв интернета менее вероятен. Причину сбоя этого VPN-туннеля ещё нужно проверить.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && !neighborsAlive(ns) {
 		parts = append(parts, "Соседние VPN-туннели тоже не на связи. Похоже на проблему уровнем выше — у провайдера или в самом роутере.")
@@ -1300,8 +1343,11 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	age, hasAge := intOrZero(d, "handshake_age_sec")
 	conflict, hasConflict := boolOrFalse(d, "address_conflict")
-	if hasConflict && conflict {
+	if (hasConflict && conflict) || strOrEmpty(d, "failure_kind") == "address_conflict" {
 		return "У этого VPN-туннеля адрес совпал с адресом другого VPN-туннеля — сам он не поднимется. Нажмите «Починить» в приложении: оно перевыпустит настройки VPN-туннеля заново."
+	}
+	if tunnelProbeOnly(d) {
+		return "Проверьте доступность контрольной цели awg-manager и повторите проверку. По этому результату перезапуск VPN-туннеля не требуется."
 	}
 	if via := strOrEmpty(d, trafficViaKey); via != "" {
 		return "Спешки нет: трафик идёт через «" + via + "». Нажмите «Починить» в приложении, чтобы запасной VPN-туннель снова был готов подхватить трафик."
@@ -1310,9 +1356,9 @@ func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 		// Про увод трафика говорим только когда уводить есть куда: обещать
 		// обход, которого нет, -- то же враньё, что и молчать о нём.
 		if !noLiveSpare(d, ns) {
-			return "Нажмите «Починить» в приложении — оно уведёт трафик на запасной VPN-туннель и перевыпустит настройки упавшего VPN-туннеля. Если и после этого связи нет, провайдер может резать такой трафик."
+			return "Проверьте, открываются ли сайты через этот VPN-туннель. Если связи нет, нажмите «Починить» в приложении; доступен запасной VPN-туннель."
 		}
-		return "Нажмите «Починить» в приложении — оно перевыпустит настройки VPN-туннеля заново. Если и после этого связи нет, провайдер может резать такой трафик."
+		return "Проверьте, открываются ли сайты через этот VPN-туннель. Если связи нет, нажмите «Починить» в приложении."
 	}
 	var base string
 	if age > 600 {
