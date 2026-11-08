@@ -46,6 +46,8 @@ var dnsReferenceUpstreams = dnsref.ReferenceDoTLines()
 //
 // DNSResetOpts -- как выполнять сброс.
 type DNSResetOpts struct {
+	// Mode is empty for reference replacement, or add_secondary for an additive repair.
+	Mode string
 	// DryRun -- предпросмотр: читает конфиг, показывает, что изменилось бы, и
 	// НЕ делает ничего: ни команды, ни файла. Человек нажал «посмотреть».
 	DryRun bool
@@ -109,6 +111,13 @@ func maskDoHSecretPaths(s string) string {
 }
 
 func dnsReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string, res wire.DNSResetResult) {
+	switch opts.Mode {
+	case "add_secondary":
+		return dnsAddSecondary(ctx, exec, opts)
+	case "":
+	default:
+		return "err", "unknown DNS reset mode; nothing changed", res
+	}
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
 		msg := fmt.Sprintf("read running-config failed: %v", err)

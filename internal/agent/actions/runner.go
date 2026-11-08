@@ -924,6 +924,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
+		mode, _ := cmd.Args["mode"].(string)
+		if raw, exists := cmd.Args["mode"]; exists && raw != mode {
+			return "err", "dns_reset: mode must be a string", payload
+		}
 		dryRun, _ := cmd.Args["dry_run"].(bool)
 		if !dryRun {
 			// AGENT-04: сторож DNS держит роутер (запасные серверы, переход
@@ -937,6 +941,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			}
 		}
 		s, o, probed := DNSResetProbed(ctx, r.Exec, DNSResetOpts{
+			Mode:   mode,
 			DryRun: dryRun,
 			// v0.57: каждый сервер эталона пробуется перед применением;
 			// мёртвые не пишутся, ни одного живого заграничного -- отказ.

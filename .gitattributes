@@ -7,6 +7,7 @@
 # Shell scripts: always LF (must work on Linux)
 *.sh text eol=lf
 internal/installtmpl/S99wg-monitor text eol=lf
+internal/agent/actions/testdata/entware-cleanup.v056.golden text eol=lf
 
 # Python relay: always LF (embedded into the backend + run on the Linux VPS)
 *.py text eol=lf
