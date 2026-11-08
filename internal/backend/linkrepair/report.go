@@ -71,6 +71,8 @@ func progressText(_ lineNames, log []string, now string) string {
 func doneText(n lineNames, log []string) string {
 	text := "Починил сам — VPN-туннель «" + n.broken + "» снова работает"
 	switch {
+	case n.backup != "" && n.backupHeld:
+		text += ", после повторного сбоя трафик остаётся на проверенном запасном VPN-туннеле «" + n.backup + "»."
 	case n.backup != "" && n.failbackFailed:
 		text += ", но вернуть на него трафик не вышло — он идёт через запасной VPN-туннель «" + n.backup + "»."
 	case n.backup != "":

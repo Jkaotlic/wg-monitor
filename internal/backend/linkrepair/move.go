@@ -35,6 +35,8 @@ type movedRecord struct {
 	Moves []movedEntry `json:"moves"`
 	// HeldSaid -- человеку уже сказано, что возврат упёрся в потолок попыток.
 	HeldSaid bool `json:"held_said,omitempty"`
+	// HoldBackup survives restart and requires a deliberate operator route choice.
+	HoldBackup bool `json:"hold_backup,omitempty"`
 }
 
 type movedEntry struct {
@@ -538,7 +540,34 @@ func (d Deps) moveOnly(req StartReq, sc Scenario) {
 		refuse(sayStore, "не смог прочитать, куда уводил", err)
 		return
 	}
+	// The hold belongs to the incident, not to one goroutine's request. Both a
+	// pending incident and an existing held move require proof for every new backup.
+	history, err := d.Attempts.load(req.Nickname, req.CheckName)
+	if err != nil {
+		refuse(sayStore, WhyAttemptsUnread, err)
+		return
+	}
+	req.holdBackup = req.holdBackup || history.BackupHold || rec.HoldBackup
+
+	if req.holdBackup {
+		// A repeat during repair cooldown may move traffic, but only to a backup
+		// whose exit is independently proven. It does not restart/reissue the line.
+		verified := cands[:0]
+		for _, c := range cands {
+			if agentCanExitProbe(req.AgentVersion) {
+				if _, err := d.Probe.VerifyTunnelExit(ctx, req.RouterID, c.backup); err == nil {
+					verified = append(verified, c)
+				}
+			}
+		}
+		cands = verified
+		if len(cands) == 0 {
+			return
+		}
+	}
+
 	rec.At, rec.HeldSaid = d.now().UTC(), false
+	rec.HoldBackup = rec.HoldBackup || req.holdBackup
 	for _, c := range cands {
 		chain := plan.chains[policyChainKey(c.policy)]
 		rec.Moves = slices.DeleteFunc(rec.Moves, func(m movedEntry) bool { return m.Policy == c.policy })
@@ -549,6 +578,17 @@ func (d Deps) moveOnly(req StartReq, sc Scenario) {
 		// Без записи увод стал бы безвозвратным: не уводим.
 		refuse(sayStore, "не смог записать, куда увожу", err)
 		return
+	}
+
+	if d.LatestCheck != nil {
+		trigger, err := d.LatestCheck(req.RouterID, req.CheckName)
+		if err == nil {
+			err = d.recordEvidence(req, trigger, plan.snapshot)
+		}
+		if err != nil {
+			refuse(sayStore, "не смог сохранить данные сбоя до увода", err)
+			return
+		}
 	}
 
 	var moved, refused, silent []string
@@ -599,7 +639,11 @@ func (d Deps) moveOnly(req StartReq, sc Scenario) {
 		} else {
 			d.clearTry(req)
 		}
-		d.begin(ctx, req).Moved(context.WithoutCancel(ctx), movedText(moved, broken, what))
+		if rec.HoldBackup {
+			d.begin(ctx, req).Moved(context.WithoutCancel(ctx), "Повторный сбой VPN-туннеля «"+broken+"»: трафик оставил на проверенном запасном VPN-туннеле «"+joinBackupNames(moved)+"». Автовозврат отключён; выберите основной VPN-туннель вручную.")
+		} else {
+			d.begin(ctx, req).Moved(context.WithoutCancel(ctx), movedText(moved, broken, what))
+		}
 		return
 	}
 	// Часть трафика уже ушла раньше, или выполнена ли команда -- неизвестно: «не увёл,
@@ -656,7 +700,7 @@ func (d Deps) ReturnDue(req StartReq, chains ReportChains) bool {
 		d.logWarn("linkrepair: запись об уводе не прочиталась", "nickname", req.Nickname, "check", req.CheckName, "err", err)
 		return false
 	}
-	if !found {
+	if !found || rec.HoldBackup {
 		return false
 	}
 	if chains != nil && !slices.ContainsFunc(rec.Moves, func(m movedEntry) bool {
@@ -713,7 +757,7 @@ func (d Deps) returnMoved(req StartReq, sc Scenario) {
 		warn("запись об уводе", err)
 		return
 	}
-	if !found {
+	if !found || rec.HoldBackup {
 		return
 	}
 	over, _, err := d.Attempts.overLimit(req.Nickname, req.CheckName)
