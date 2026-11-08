@@ -27,7 +27,10 @@ it excludes credentials, full configurations and free-form command output.
 
 ## Add a secondary DNS resolver without resetting policy
 
-On agents supporting this mode, the existing `dns_reset` command accepts:
+Requires backend `v0.66.3-rc2` or newer and agent `v0.66.3-rc1` or newer.
+The backend rejects the additive mode for older or unknown agent versions;
+unknown modes are rejected instead of becoming a full DNS reset.
+The existing `dns_reset` command accepts:
 
 ```json
 {"mode":"add_secondary","dry_run":true}
