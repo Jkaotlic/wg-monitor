@@ -945,26 +945,28 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "hrneo_inventory":
 		return map[string]any{}, true
 	case "dns_reset":
-		// Сброс DNS принимает ровно один аргумент -- предпросмотр. Раньше он
-		// стоял среди «команд без аргументов», и dry_run не доезжал до агента
-		// вовсе: кнопка предпросмотра была бы невозможна. Наружу уходит ровно
-		// одно поле, всё остальное клиентское не доезжает.
-		raw, present := args["dry_run"]
-		if !present {
-			// Отсутствие ключа -- настоящий сброс: так работает кнопка
-			// дашборда сегодня, и менять её поведение молча нельзя.
-			return map[string]any{"dry_run": false}, true
+		// Never discard a supplied mode: old agents interpret that as a full
+		// reset. Only the fixed additive mode is accepted; no mode retains the
+		// legacy reference-reset behavior.
+		out := map[string]any{"dry_run": false}
+		if raw, present := args["mode"]; present {
+			mode, ok := raw.(string)
+			if !ok || mode != "add_secondary" {
+				writeJSONError(w, http.StatusBadRequest, "invalid_mode", "mode must be add_secondary when supplied")
+				return nil, false
+			}
+			out["mode"] = mode
 		}
-		dryRun, ok := raw.(bool)
-		if !ok {
-			// Значение неверного типа не приводим ни к чему. `false` означало
-			// бы разрушительный сброс там, где клиент просил предпросмотр, а
-			// `true` -- молчаливый отказ выполнить то, что человек нажал.
-			// Угадывать намерение сломанного клиента опаснее, чем отказать.
-			writeJSONError(w, http.StatusBadRequest, "invalid_dry_run", "dry_run must be a boolean")
-			return nil, false
+		if raw, present := args["dry_run"]; present {
+			dryRun, ok := raw.(bool)
+			if !ok {
+				writeJSONError(w, http.StatusBadRequest, "invalid_dry_run", "dry_run must be a boolean")
+				return nil, false
+			}
+			out["dry_run"] = dryRun
 		}
-		return map[string]any{"dry_run": dryRun}, true
+		return out, true
+
 	case "route_lookup", "dns_open":
 		// «Куда пойдёт сайт» и «открывается ли сайт»: агенту уходит ровно имя
 		// сайта, в одном виде. Адрес с путём или портом и одиночное имя без
@@ -1592,6 +1594,26 @@ func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, actio
 // выданным cmd_id. Возвращает, встала ли команда в очередь: мини-апп снимает
 // кулдаун перезагрузки, если нет.
 func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) (bool, string) {
+	// Shared by dashboard, wizard and miniapp dispatch. An older or unknown
+	// agent silently ignores mode and would perform a destructive full reset.
+	if action == "dns_reset" {
+		if raw, present := args["mode"]; present {
+			mode, ok := raw.(string)
+			if !ok || mode != "add_secondary" {
+				writeJSONError(w, http.StatusBadRequest, "invalid_mode", "mode must be add_secondary when supplied")
+				return false, ""
+			}
+			version := ""
+			if u.LastDeployedVersion != nil {
+				version = *u.LastDeployedVersion
+			}
+			if !agentAtLeast(version, "v0.66.3-rc1") {
+				writeJSONError(w, http.StatusConflict, "agent_too_old", "add_secondary requires agent v0.66.3-rc1 or newer")
+				return false, ""
+			}
+		}
+	}
+
 	id, err := newCmdID()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
