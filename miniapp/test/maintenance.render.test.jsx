@@ -164,3 +164,19 @@ describe('обслуживание на экране настроек', () => {
     unmount()
   })
 })
+
+it('BusyBox: admin only, agent floor, confirmation and verified outcome', async () => {
+  for (const settings of [{ role: 'owner', agent_version: 'v0.66.3' }, { role: 'operator', agent_version: 'v0.66.3' }, { role: 'admin', agent_version: 'v0.66.2' }]) {
+    const { root, unmount } = await mount({ settings })
+    expect(button(root, 'Защитить BusyBox')).toBeUndefined()
+    unmount()
+  }
+  const { root, sheets, unmount } = await mount({ settings: { role: 'admin', agent_version: 'v0.66.3' } })
+  expect(button(root, 'Защитить BusyBox')).toBeDefined()
+  await click(button(root, 'Защитить BusyBox'))
+  expect(sheets[0].action).toBe('opkg_busybox_hold')
+  expect(sheets[0].body).toContain('Остальные пакеты')
+  await deliver(sheets[0], { status: 'ok', output: 'verified' })
+  expect(root.textContent).toContain('BusyBox защищён от обновления')
+  unmount()
+})

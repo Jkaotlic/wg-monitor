@@ -34,7 +34,7 @@ type Config struct {
 }
 
 // Router -- бот и кабинеты провайдеров. Бот (цикл 5) принимает только:
-// /start в личке, кнопку «Тише на час» (silence), кнопку админа nmute,
+// /start и аварийную /busybox_hold (админу) в личке, кнопку «Тише на час» (silence), кнопку админа nmute,
 // старые кнопки из уже отправленных сообщений (тост «Это теперь в
 // приложении») и сторожей секретов и .conf в личке. Всё остальное -- молча.
 type Router struct {
@@ -45,7 +45,8 @@ type Router struct {
 	// memory -- память тревог диспетчера (notify.AlertMemory); nil -- не
 	// сообщать. После «Тише на час» нить починки правит тревогу уже со
 	// строкой тишины и без кнопок (BOT-06).
-	memory notify.AlertMemory
+	memory       notify.AlertMemory
+	busyboxQueue BusyboxHoldQueue
 }
 
 // SetAlertMemory -- кому сообщать о «Тише на час» (alerts.Dispatcher).
@@ -212,7 +213,7 @@ func (r *Router) silenceAllowed(ctx context.Context, q *tg.CallbackQuery, args A
 }
 
 // HandleMessage -- сообщение боту. Отвечает бот только в личке: сторожа
-// секретов и .conf, затем /start. В группах и на любой другой текст -- молча.
+// секретов и .conf, затем /start и аварийный hold админа. В группах — молча.
 func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if m == nil || !isPrivateMessage(m) {
 		return
@@ -226,6 +227,10 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	if r.handleConfDocument(ctx, m) {
+		return
+	}
+	if cmd, arg, ok := parseSlashCommand(m.Text); ok && cmd == "/busybox_hold" {
+		r.handleBusyboxHold(ctx, m, arg)
 		return
 	}
 	if cmd, _, ok := parseSlashCommand(m.Text); ok && cmd == "/start" {

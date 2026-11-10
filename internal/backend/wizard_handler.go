@@ -621,6 +621,7 @@ var wizardCommandAllowlist = map[string]bool{
 }
 
 var dashboardCommandAllowlist = map[string]bool{
+	"opkg_busybox_hold":     true,
 	"diag_now":              true,
 	"force_recheck":         true,
 	"route_status":          true,
@@ -942,7 +943,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "hrneo_inventory":
+	case "opkg_busybox_hold", "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "hrneo_inventory":
 		return map[string]any{}, true
 	case "dns_reset":
 		// Never discard a supplied mode: old agents interpret that as a full

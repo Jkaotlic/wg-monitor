@@ -493,6 +493,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "opkg_busybox_hold":
+		holder, ok := r.Opkg.(interface {
+			HoldBusybox(context.Context) (string, string)
+		})
+		if !ok {
+			return "err", "busybox hold not configured", payload
+		}
+		s, o := holder.HoldBusybox(ctx)
+		return s, o, payload
 	case "opkg_upgrade":
 		if r.Opkg == nil {
 			return "err", "opkg runner not configured", payload

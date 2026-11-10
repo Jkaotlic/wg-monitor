@@ -18,6 +18,9 @@ import {
   rebootSheet,
   restartSheet,
   opkgUpgradeSheet,
+  busyboxHoldAvailable,
+  busyboxHoldSheet,
+  maintenanceOutcomeLabel,
   feedDisableSheet,
   opkgUpgradeOutcome,
   refusalFromResult,
@@ -64,6 +67,7 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
   // меняет кнопку на объяснение.
   const [awgmResult, setAwgmResult] = useState(null)
   const [opkgResult, setOpkgResult] = useState(null)
+  const [busyboxResult, setBusyboxResult] = useState(null)
   const [refusals, setRefusals] = useState({})
 
   const audit = useCommand(routerID)
@@ -407,6 +411,17 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
             <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
               Перезапустить awg-manager
             </button>
+            {settings?.role === 'admin' && (
+              <div class="card settings-card">
+                <p class="hint">Защитите BusyBox перед обновлением Entware.</p>
+                {busyboxHoldAvailable(settings) ? (
+                  <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(busyboxHoldSheet({ routerID, asleep, onResult: setBusyboxResult }))}>
+                    Защитить BusyBox
+                  </button>
+                ) : <p class="hint">Защита появится после обновления агента до v0.66.3.</p>}
+                {busyboxResult && <p class={busyboxResult.status === 'ok' ? 'state' : 'state state-warn'}>{maintenanceOutcomeLabel('opkg_busybox_hold', busyboxResult)}</p>}
+              </div>
+            )}
             <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>
               Обновить пакеты Entware
             </button>

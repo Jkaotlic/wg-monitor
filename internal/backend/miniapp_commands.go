@@ -148,6 +148,7 @@ var miniappCommandAllowlist = map[string]bool{
 	"awgm_update":       true,
 	"hrneo_update":      true,
 	"opkg_upgrade":      true,
+	"opkg_busybox_hold": true,
 	"opkg_feed_disable": true,
 	"service_restart":   true,
 

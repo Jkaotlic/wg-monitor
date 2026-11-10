@@ -6,11 +6,11 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
-// Слеш-команд у бота больше нет (цикл 5): управление -- в приложении.
+// Управление — в приложении; аварийный busybox_hold доступен только админу в личке.
 // Telegram помнит список команд на своей стороне, пока его не перезапишут, и
-// после обновления люди видели бы меню из команд, которых нет. Пустой список
-// ставится на каждом старте: это дёшево, идемпотентно и чинит бота, которому
-// меню выставили руками через BotFather.
+// после обновления люди видели бы меню из команд, которых нет. На каждом
+// старте старые списки заменяются; аварийная команда остаётся только в личке
+// администратора. Это также исправляет меню, заданное через BotFather.
 //
 // Области -- те же три, в которые бот его когда-либо ставил: по умолчанию,
 // личка админа и (если группа ещё задана в конфиге) её участник-админ.
@@ -22,7 +22,7 @@ type botCommandSetter interface {
 	SetMyCommandsWithScope(ctx context.Context, cmds []tg.BotCommand, scope tg.BotCommandScope) error
 }
 
-// clearBotCommandMenus стирает меню команд во всех трёх областях. Ошибки не
+// clearBotCommandMenus убирает старые меню; в личке админа оставляет busybox_hold. Ошибки не
 // фатальны -- бот работает и без меню; вызывающий их логирует.
 func clearBotCommandMenus(ctx context.Context, c botCommandSetter, adminUserID, groupChatID int64) []error {
 	var errs []error
@@ -30,7 +30,7 @@ func clearBotCommandMenus(ctx context.Context, c botCommandSetter, adminUserID, 
 		errs = append(errs, err)
 	}
 	if adminUserID != 0 {
-		if err := c.SetMyCommandsWithScope(ctx, []tg.BotCommand{}, tg.BotCommandScope{
+		if err := c.SetMyCommandsWithScope(ctx, []tg.BotCommand{{Command: "busybox_hold", Description: "Защитить BusyBox от обновления"}}, tg.BotCommandScope{
 			Type: "chat", ChatID: adminUserID,
 		}); err != nil {
 			errs = append(errs, err)

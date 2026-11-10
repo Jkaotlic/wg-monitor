@@ -67,6 +67,7 @@ func agentSemver(s string) (string, bool) {
 // router-global, а старый агент не знает про dry_run и на «посмотреть, что
 // изменится» сделал бы настоящий сброс.
 var miniappActionMinAgentVersion = map[string]string{
+	"opkg_busybox_hold":   "v0.66.3",
 	"update_agent_config": "v0.31.0",
 	"dns_reset":           "v0.31.0",
 	// Действия цикла 1: старый агент ответил бы «unknown action», а экран
@@ -94,6 +95,7 @@ var miniappActionMinAgentVersion = map[string]string{
 // Рядом с miniappOwnerOnlyActions намеренно: «кто нажимает» и «что это
 // выполнит на роутере» -- два разных вопроса, и списки у них разные.
 var miniappAdminOnlyActions = map[string]bool{
+	"opkg_busybox_hold":   true,
 	"agent_config_get":    true,
 	"update_agent_config": true,
 	"dns_reset":           true,

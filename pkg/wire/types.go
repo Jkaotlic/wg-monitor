@@ -65,6 +65,7 @@ var validCommandActions = map[string]bool{
 	"pingcheck_status":      true,
 	"pingcheck_toggle":      true,
 	"opkg_upgrade":          true,
+	"opkg_busybox_hold":     true,
 	"opkg_feed_disable":     true,
 	"opkg_cron_status":      true,
 	"opkg_cron_install":     true,

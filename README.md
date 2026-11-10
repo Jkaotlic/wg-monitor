@@ -20,7 +20,7 @@ The current deploy path does **not** require the operator to join every router n
 
 - Per-minute agent reports from every router to the VPS backend.
 - Telegram alerts in private chats of the router's owner, operators and the admin.
-- Diagnostics, PingCheck, VPN tunnels and routes are managed in the mini app; the bot only notifies.
+- Diagnostics, PingCheck, VPN tunnels and routes are managed in the mini app; the bot sends notifications and provides an admin emergency BusyBox hold command.
 - VPN cabinets in the mini app: Amnezia Premium keys and HideMy.name codes per router (add, pick active, delete, revoke a country slot, issue and import, send the .conf to your Telegram DM) and self-hosted VPN servers (admin only: add, edit, enable, delete, check SSH, issue). Secrets are entered only in the app; the bot deletes a `vpn://` key or SSH password pasted into chat (a numeric code only in a private chat with the bot).
 - Web control at `/dashboard/` — the same mini app in a regular browser (token or personal link sign-in); if the app itself fails to load, `/dashboard/rescue/` is a self-contained emergency page (sign-in, fleet summary, backend rollout).
 - AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
@@ -33,6 +33,7 @@ The current deploy path does **not** require the operator to join every router n
 English:
 
 - The bot is a notification channel, not a control surface. It sends alerts to the private chats of a router's owner, its operators and the admin; each alert carries "📱 Открыть в приложении" and "⏸ Тише на час".
+- Emergency Entware protection (agent v0.66.3+): in the bot admin's private chat, `/busybox_hold all` holds BusyBox on supported routers, or `/busybox_hold <nickname>` targets one router. `/busybox_hold status` shows the last command results. Queued/offline routers are **not confirmed protected** until the agent returns a verified hold. Other packages keep updating. This does not repair an already broken Entware installation.
 - `/start` in a private chat answers with a card and the mini-app button. Someone with no access to any router also gets their own Telegram ID to pass to the admin.
 - There are no slash commands and no keyboards: the command menu is cleared in all three scopes at startup and the chat menu button opens the mini app.
 - Everything else — status, checks, diagnostics, PingCheck, VPN tunnels, routes, cabinets, fleet, access — lives in the mini app and at `/dashboard/`. Buttons of old messages answer "Это теперь в приложении".

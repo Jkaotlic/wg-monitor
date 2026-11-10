@@ -127,6 +127,8 @@ func NewCore(in Inputs) *Core {
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
 
+	cb.SetBusyboxHoldQueue(cmdQueue)
+
 	dashboardMobileStaleAfter := cfg.Heartbeat.StaleAfterMobileSec
 	if mobileLifecycle {
 		dashboardMobileStaleAfter = cfg.Heartbeat.MobileSleepAfterSec

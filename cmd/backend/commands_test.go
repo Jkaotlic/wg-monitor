@@ -28,7 +28,7 @@ func (f *fakeCommandSetter) SetMyCommandsWithScope(_ context.Context, cmds []tg.
 	return f.err
 }
 
-// Слеш-команд у бота больше нет: меню стирается во всех трёх областях, в
+// Старые меню стираются; в личке админа остаётся аварийный hold. Области — те, в
 // которые бот его когда-либо ставил. Пропустить область -- значит оставить в
 // ней навсегда меню из команд, которых нет.
 func TestClearBotCommandMenus_AllThreeScopes(t *testing.T) {
@@ -48,8 +48,12 @@ func TestClearBotCommandMenus_AllThreeScopes(t *testing.T) {
 		if f.calls[i].scope != w {
 			t.Errorf("область %d = %+v, ждали %+v", i, f.calls[i].scope, w)
 		}
-		if len(f.calls[i].cmds) != 0 {
-			t.Errorf("область %d: список команд не пуст: %+v", i, f.calls[i].cmds)
+		if i == 1 {
+			if len(f.calls[i].cmds) != 1 || f.calls[i].cmds[0].Command != "busybox_hold" {
+				t.Errorf("admin emergency menu: %+v", f.calls[i].cmds)
+			}
+		} else if len(f.calls[i].cmds) != 0 {
+			t.Errorf("non-private-admin scope has commands: %+v", f.calls[i].cmds)
 		}
 	}
 }

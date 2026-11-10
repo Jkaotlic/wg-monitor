@@ -147,6 +147,23 @@ export function restartSheet({ routerID, name, asleep = false, onResult }) {
   })
 }
 
+export function busyboxHoldAvailable(settings) {
+  return settings?.role === 'admin' && agentAtLeast(settings.agent_version, 'v0.66.3')
+}
+
+export function busyboxHoldSheet({ routerID, asleep = false, onResult }) {
+  return confirmSheet({
+    routerID,
+    title: 'Защитить BusyBox от обновления?',
+    body: 'Роутер запретит обновление BusyBox и проверит, что запрет сохранился. Остальные пакеты продолжат обновляться. VPN и службы не перезапускаются. Уже сломанный Entware эта команда не восстанавливает.',
+    action: 'opkg_busybox_hold',
+    buttonLabel: 'Защитить BusyBox',
+    commandLabel: 'защита BusyBox от обновления',
+    asleep,
+    onResult,
+  })
+}
+
 export function opkgUpgradeSheet({ routerID, asleep = false, onResult }) {
   return confirmSheet({
     routerID,
@@ -315,7 +332,7 @@ export function firmwareStatusErrorText(result) {
   return MAINT_TEXTS.firmwareStatusFailed
 }
 
-const MAINT_ACTIONS = new Set(['awgm_update', 'hrneo_update', 'opkg_upgrade', 'opkg_feed_disable', 'service_restart', 'firmware_install'])
+const MAINT_ACTIONS = new Set(['opkg_busybox_hold', 'awgm_update', 'hrneo_update', 'opkg_upgrade', 'opkg_feed_disable', 'service_restart', 'firmware_install'])
 
 // maintenanceOutcomeLabel -- итог на листе для действий обслуживания; для
 // остальных пусто, и лист берёт commandOutcomeLabel.
@@ -329,6 +346,8 @@ export function maintenanceOutcomeLabel(action, result, args = {}) {
   if (result.status === 'locked') return MAINT_TEXTS.busy
   if (/^unknown action:/i.test(String(result.output ?? '').trim())) return AGENT_OLDER_THAN_APP
   switch (action) {
+    case 'opkg_busybox_hold':
+      return result.status === 'ok' ? 'BusyBox защищён от обновления — запрет проверен на роутере. Остальные пакеты продолжат обновляться.' : 'Защита BusyBox не подтверждена. Проверьте связь с роутером и повторите.'
     case 'awgm_update':
       return awgmUpdateText(result)
     case 'hrneo_update':
@@ -375,6 +394,7 @@ const ERROR_CODES = {
 // Имена команд для строки «команда» на листе, когда экран не дал своё
 // (commandLabel): имя действия вроде tunnel_restart человеку не показываем.
 const COMMAND_NAMES = {
+  opkg_busybox_hold: 'защита BusyBox от обновления',
   tunnel_restart: 'перезапуск VPN-туннеля',
   tunnel_power: 'включение или выключение VPN-туннеля',
   pingcheck_toggle: 'слежение роутера за VPN-туннелем',

@@ -85,7 +85,7 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// hrneo_update за полом версии v0.32.0; service_restart -- только
 		// hrneo/awgmgr/router; перезагрузка и прошивка -- с набором имени,
 		// который сверяет бэкенд; opkg_feed_disable -- один http(s)-адрес.
-		"awgm_update", "hrneo_update", "opkg_upgrade", "opkg_feed_disable", "service_restart",
+		"awgm_update", "hrneo_update", "opkg_busybox_hold", "opkg_upgrade", "opkg_feed_disable", "service_restart",
 		// Пакеты по расписанию (спека цикла 2, п. 9): переехали из старого
 		// дашборда. Радиус router-global -- только админ (miniappAdminOnlyActions),
 		// аргументы -- явные ветки sanitizeWizardCommandArgs (расписание HH:MM,
