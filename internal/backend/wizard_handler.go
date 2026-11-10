@@ -1595,6 +1595,17 @@ func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, actio
 // выданным cmd_id. Возвращает, встала ли команда в очередь: мини-апп снимает
 // кулдаун перезагрузки, если нет.
 func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) (bool, string) {
+	if action == "opkg_busybox_hold" {
+		version := ""
+		if u.LastDeployedVersion != nil {
+			version = *u.LastDeployedVersion
+		}
+		if !agentAtLeast(version, "v0.66.3") {
+			writeJSONError(w, http.StatusConflict, "agent_too_old", "BusyBox protection requires agent v0.66.3 or newer")
+			return false, ""
+		}
+	}
+
 	// Shared by dashboard, wizard and miniapp dispatch. An older or unknown
 	// agent silently ignores mode and would perform a destructive full reset.
 	if action == "dns_reset" {
