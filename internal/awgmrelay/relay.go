@@ -14,3 +14,8 @@ var Script []byte
 
 // ScriptString is Script as a string, for callers that upload or write it as text.
 var ScriptString = string(Script)
+
+// EntwareRecoveryScript uses the retained native BusyBox without a working PATH.
+//
+//go:embed entware-recover.run
+var EntwareRecoveryScript []byte

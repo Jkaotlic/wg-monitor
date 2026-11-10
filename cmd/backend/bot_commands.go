@@ -30,7 +30,7 @@ func clearBotCommandMenus(ctx context.Context, c botCommandSetter, adminUserID, 
 		errs = append(errs, err)
 	}
 	if adminUserID != 0 {
-		if err := c.SetMyCommandsWithScope(ctx, []tg.BotCommand{{Command: "busybox_hold", Description: "Защитить BusyBox от обновления"}}, tg.BotCommandScope{
+		if err := c.SetMyCommandsWithScope(ctx, []tg.BotCommand{{Command: "busybox_hold", Description: "Защитить BusyBox от обновления"}, {Command: "entware_recover", Description: "Восстановить команды Entware"}}, tg.BotCommandScope{
 			Type: "chat", ChatID: adminUserID,
 		}); err != nil {
 			errs = append(errs, err)

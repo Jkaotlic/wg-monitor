@@ -858,11 +858,120 @@ def run_bootstrap(sock, cfg):
                 raise RelayError("bootstrap script failed: %d" % rc)
     raise RelayError("bootstrap script timeout waiting for marker")
 
+def run_entware_recovery(cfg):
+    # This mode deliberately does not start/stop a terminal or require root login.
+    # The server supplies its embedded, fixed script; never expose script input in APIs.
+    import contextlib
+    import io
+    op = None
+    path = ""
+    uploaded = False
+    requested = False
+    finished = False
+    successful = False
+    cleanup_ok = False
+    nonce = cfg.get("recovery_nonce", "")
+    if not re.fullmatch(r"[A-Za-z0-9]{8,64}", nonce):
+        raise RelayError("Entware recovery not confirmed: invalid job")
+    def emit(step):
+        print("__WG_RECOVERY__ " + nonce + " " + step, flush=True)
+    def api(method, route, body=None):
+        env = request(op, cfg, method, route, body)
+        if not isinstance(env, dict) or env.get("success") is False:
+            raise RelayError("operation refused")
+        data = env.get("data")
+        if not isinstance(data, dict):
+            raise RelayError("unexpected API response")
+        return data
+    def read(p):
+        return api("GET", "/api/system/files/read?" + urllib.parse.urlencode({"path": p})).get("content", "")
+    def entries(p):
+        rows = api("GET", "/api/system/files/list?" + urllib.parse.urlencode({"path": p})).get("entries")
+        if not isinstance(rows, list):
+            raise RelayError("directory listing unavailable")
+        return {e.get("name"): e for e in rows if isinstance(e, dict)}
+    def package_status(raw):
+        for paragraph in raw.replace("\r", "").split("\n\n"):
+            fields = dict(l.split(":", 1) for l in paragraph.splitlines() if ":" in l)
+            if fields.get("Package", "").strip() == "busybox":
+                state = fields.get("Status", "").split()
+                installed = len(state) == 3 and state[0] == "install" and state[2] == "installed"
+                return fields.get("Version", "").strip(), installed, installed and "hold" in state[1].split(",")
+        return "", False, False
+    count = 0
+    warnings = []
+    try:
+        op, _ = opener()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            login_if_needed(op, cfg)
+        before = package_status(read("/opt/lib/opkg/status"))
+        names = entries("/opt/bin")
+        if not before[1] or "x" not in str(names.get("busybox", {}).get("mode", "")):
+            raise RelayError("native BusyBox unavailable")
+        script = cfg.get("recovery_script", "")
+        if not isinstance(script, str) or not script.startswith("#!/opt/bin/busybox sh\n"):
+            raise RelayError("fixed recovery script unavailable")
+        path = "/tmp/wgm-entware-recover-" + secrets.token_hex(16) + ".run"
+        if path.rsplit("/", 1)[1] in entries("/tmp"):
+            raise RelayError("temporary path exists")
+        emit("recovery_check")
+        # Treat a lost write response as possibly uploaded; cleanup still verifies ownership.
+        uploaded = True
+        api("POST", "/api/system/files/write", {"path": path, "content": script})
+        if read(path) != script:
+            raise RelayError("uploaded script mismatch")
+        api("POST", "/api/system/files/chmod", {"path": path, "mode": "0700"})
+        requested = True
+        result = api("POST", "/api/system/files/script-action", {"path": path, "action": "run"})
+        finished = result.get("running") is False
+        lines = str(result.get("output", "")).splitlines()
+        if "BUSYBOX_HOLD_CONFIRMED" in lines:
+            emit("recovery_hold")
+        if result.get("ok") is not True or not finished or "RECOVERY_CONFIRMED" not in lines or "RESTORED_SHELL_OK" not in lines:
+            raise RelayError("script outcome unconfirmed")
+        after = package_status(read("/opt/lib/opkg/status"))
+        fresh_entries = entries("/opt/bin")
+        if after[0] != before[0] or not after[2] or not all(n in fresh_entries for n in ["df", "sh", "ash", "rm", "sleep"]):
+            raise RelayError("fresh postconditions not met")
+        emit("recovery_links")
+        counts = [int(l.split("=", 1)[1]) for l in lines if re.fullmatch(r"LINKS_CREATED=[0-9]{1,4}", l)]
+        if len(counts) != 1:
+            raise RelayError("link count unconfirmed")
+        count = counts[0]
+        warnings = ["existing_broken_applet"] if any(l.startswith("PRESERVED_BROKEN_APPLET=") for l in lines) else []
+        successful = True
+    except Exception:
+        # Never relay exception text: panel bodies and auth errors may contain secrets.
+        successful = False
+    finally:
+        if uploaded and op is not None:
+            if requested and not finished:
+                try:
+                    finished = api("GET", "/api/system/files/script-status?" + urllib.parse.urlencode({"path": path})).get("running") is False
+                except Exception:
+                    pass
+            if not requested or finished:
+                try:
+                    if read(path) != script:
+                        raise RelayError("cleanup ownership mismatch")
+                    api("POST", "/api/system/files/remove", {"path": path})
+                    cleanup_ok = path.rsplit("/", 1)[1] not in entries("/tmp")
+                except Exception:
+                    cleanup_ok = False
+    if not successful or not cleanup_ok:
+        raise RelayError("Entware recovery not confirmed; protection or links may be partially restored")
+    emit("recovery_verify")
+    print("__WG_RECOVERY_RESULT__ " + nonce + " " + json.dumps({"held": True, "shell_ok": True, "cleanup_ok": True, "links_created": count, "warnings": warnings}, separators=(",", ":")), flush=True)
+
+
 def main():
     global TLS_CONFIG, ERR_NONCE
     cfg = load_config(sys.argv[1])
     TLS_CONFIG = cfg
     ERR_NONCE = job_err_nonce(cfg)
+    if cfg.get("mode") == "entware_recover":
+        run_entware_recovery(cfg)
+        return
     if cfg.get("mode") == "deferred_bootstrap":
         run_deferred_bootstrap(cfg, sys.argv[1])
         return

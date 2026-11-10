@@ -8,6 +8,10 @@ export const STEP_STATUSES = ['pending', 'active', 'done', 'failed', 'skipped']
 // Все 10 имён provision/steps.go. Порядок шагов задаёт сервер (массив steps),
 // здесь только слова. Сверка с Go -- test/jobSteps.test.js.
 const STEP_LABELS = {
+  recovery_check: 'Проверка Entware и доступа к панели',
+  recovery_hold: 'Защита BusyBox от обновления',
+  recovery_links: 'Восстановление отсутствующих команд',
+  recovery_verify: 'Проверка команд, hold и очистки',
   terminal_connected: 'Вход в терминал роутера',
   arch_detected: 'Определение архитектуры роутера',
   downloading: 'Скачивание агента',
@@ -30,6 +34,7 @@ export function stepLabel(name) {
 }
 
 const KIND_WORDS = {
+ entware_recovery: { running: 'Восстановление Entware идёт', done: 'Команды Entware проверены, BusyBox защищён' },
   provision: { running: 'Установка агента идёт', done: 'Агент установлен и на связи' },
   repair_reinstall: { running: 'Переустановка агента идёт', done: 'Агент переустановлен и на связи' },
   repair_repoint: { running: 'Перенаправление агента идёт', done: 'Агент перенаправлен и на связи' },
@@ -38,6 +43,8 @@ const KIND_WORDS = {
 export function jobTitle(kind, nickname) {
   const nick = typeof nickname === 'string' ? nickname : ''
   switch (kind) {
+    case 'entware_recovery':
+      return `Восстановление Entware на «${nick}»`
     case 'repair_reinstall':
       return `Переустановка агента на «${nick}»`
     case 'repair_repoint':
@@ -90,7 +97,7 @@ export function jobView(job) {
     success,
     // hint и tail -- только про провал: у идущего задания они пусты или
     // устарели, а успеху подробности не нужны.
-    hint: failed && typeof job?.hint === 'string' ? job.hint : '',
+    hint: (failed || job?.kind === 'entware_recovery') && typeof job?.hint === 'string' ? job.hint : '',
     tail: failed && typeof job?.tail === 'string' ? job.tail : '',
     nickname: typeof job?.nickname === 'string' ? job.nickname : '',
     routerID: Number.isInteger(job?.router_id) ? job.router_id : null,

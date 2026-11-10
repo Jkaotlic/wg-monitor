@@ -231,3 +231,23 @@ func (s *Service) forgetRejectedCredentials(routerID int64) {
 		s.logger.Info("сохранённый пароль root не подошёл и стёрт", "router_id", routerID)
 	}
 }
+
+// PanelCredentials decrypts only the saved panel login. Root never leaves this
+// package through this method; recovery does not change auto-reinstall secrets.
+func (s *Service) PanelCredentials(routerID int64) (Secrets, bool, error) {
+	if !s.Enabled() {
+		return Secrets{}, false, ErrDisabled
+	}
+	nonce, ct, _, ok, err := s.cfg.DB.RouterCredentials().Get(routerID)
+	if err != nil || !ok {
+		return Secrets{}, false, err
+	}
+	c, err := s.box.Open(routerID, nonce, ct)
+	if err != nil {
+		return Secrets{}, false, errors.New("saved panel credentials unavailable")
+	}
+	if c.AWGMAPIKey() == "" && (c.AWGMLogin() == "" || c.AWGMPassword() == "") {
+		return Secrets{}, false, nil
+	}
+	return NewSecrets("", c.AWGMLogin(), c.AWGMPassword(), c.AWGMAPIKey()), true, nil
+}

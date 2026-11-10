@@ -11,7 +11,10 @@ describe('сверка с сервером', () => {
   it('у каждого шага provision.Template есть подпись', () => {
     const names = [...stepsGo.matchAll(/^\s*Step\w+\s*=\s*"([a-z_]+)"/gm)].map((m) => m[1])
     expect(names).toHaveLength(10)
-    expect([...STEP_NAMES].sort()).toEqual([...names].sort())
+    const recoveryGo = readFileSync(new URL('../../internal/backend/entware_recovery.go', import.meta.url), 'utf8')
+    const recovery = [...new Set([...recoveryGo.match(/var recoverySteps\s*=\s*\[\]string\{([^}]+)\}/)[1].matchAll(/"(recovery_[a-z]+)"/g)].map((m) => m[1]))]
+    expect(recovery).toHaveLength(4)
+    expect([...STEP_NAMES].sort()).toEqual([...names, ...recovery].sort())
   })
 
   it('состояния задания и шагов -- как в job.go', () => {

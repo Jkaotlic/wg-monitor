@@ -62,6 +62,8 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// внутри, отказ 404. Тела с паролями middleware не читают, обработчики не
 	// логируют.
 	mux.Handle("POST /v1/miniapp/backend/deploy", reqID(auth(miniappBackendDeployHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/entware/recover", reqID(auth(miniappEntwareRecoverHandler(d))))
+	mux.Handle("GET /v1/miniapp/entware/recovery-script", reqID(auth(miniappEntwareScriptHandler(d))))
 	mux.Handle("GET /v1/miniapp/jobs/{job_id}", reqID(auth(miniappJobHandler(d))))
 	mux.Handle("POST /v1/miniapp/provision", reqID(auth(miniappProvisionHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/reinstall", reqID(auth(miniappAgentReinstallHandler(d))))

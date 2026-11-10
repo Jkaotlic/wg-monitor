@@ -620,7 +620,8 @@ type Deps struct {
 	// Revive -- оживление агента на выключенном роутере (cycle 2б). nil --
 	// функция выключена: нет revive.key_file или ключ не той длины; маршруты
 	// мини-аппа отвечают revive_disabled. Методы безопасны на nil.
-	Revive *revive.Service
+	Revive          *revive.Service
+	EntwareRecovery *EntwareRecoveryService
 	// ReviveOverride подменяет Revive для маршрутов мини-аппа: тесты и
 	// песочница подставляют фейк без ключа шифрования и без воркера. В
 	// проде пусто -- маршруты берут Revive.

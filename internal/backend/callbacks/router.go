@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alertaction"
@@ -45,8 +47,10 @@ type Router struct {
 	// memory -- память тревог диспетчера (notify.AlertMemory); nil -- не
 	// сообщать. После «Тише на час» нить починки правит тревогу уже со
 	// строкой тишины и без кнопок (BOT-06).
-	memory       notify.AlertMemory
-	busyboxQueue BusyboxHoldQueue
+	memory           notify.AlertMemory
+	busyboxQueue     BusyboxHoldQueue
+	entwareRecovery  EntwareRecoveryOps
+	entwareConfirmMu sync.Mutex
 }
 
 // SetAlertMemory -- кому сообщать о «Тише на час» (alerts.Dispatcher).
@@ -120,6 +124,10 @@ func (r *Router) saveOffset(offset int64) error {
 // HandleCallback -- нажатие кнопки. Чат не проверяется: право решает человек
 // (админ или роль на роутере), а не место, где висит сообщение.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
+	if q != nil && strings.HasPrefix(q.Data, "ewrec:") {
+		r.handleEntwareRecoverCallback(ctx, q)
+		return
+	}
 	if q.Message.Chat.ID == q.From.ID {
 		r.recordPerson(q.From)
 	}
@@ -227,6 +235,10 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	if r.handleConfDocument(ctx, m) {
+		return
+	}
+	if cmd, arg, ok := parseSlashCommand(m.Text); ok && cmd == "/entware_recover" {
+		r.handleEntwareRecover(ctx, m, arg)
 		return
 	}
 	if cmd, arg, ok := parseSlashCommand(m.Text); ok && cmd == "/busybox_hold" {

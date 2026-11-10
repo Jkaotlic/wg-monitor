@@ -29,6 +29,7 @@ export function ManageTab({ routerID, routerName = '', isAdmin = false, focusGro
         routerName={routerName}
         asleep={asleep}
         openSheet={openSheet}
+        openLayer={openLayer}
         isAdmin={isAdmin}
         focusGroup={focusGroup}
         focusNonce={focusNonce}

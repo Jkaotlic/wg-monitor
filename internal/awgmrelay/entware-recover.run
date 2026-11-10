@@ -1,0 +1,116 @@
+#!/opt/bin/busybox sh
+# One-time recovery: hold changes package selection; missing applet links are restored.
+# No downloads, package upgrades, network changes or service restarts.
+set -eu
+set -f
+BB=/opt/bin/busybox
+OPKG=/opt/bin/opkg
+LOCK=/tmp/wg-monitor-opkg-auto-upgrade.lock
+CREATED_PATH="/tmp/wgm-busybox-recover-$$.links"
+[ -x "$BB" ] || { printf 'ERROR busybox is not executable\n'; exit 1; }
+[ -x "$OPKG" ] || { printf 'ERROR opkg is not executable\n'; exit 1; }
+initial_status=$("$OPKG" status busybox)
+case "$initial_status" in *"Package: busybox"*) ;; *) printf 'ERROR BusyBox package missing\n'; exit 1;; esac
+printf '%s\n' "$initial_status" | "$BB" grep -Eq '^Status: install [^ ]+ installed$' || { printf 'ERROR BusyBox package is not installed\n'; exit 1; }
+# Clear only diagnosed abandoned locks after exact PID and live-process checks.
+EXPECTED_SHARED=''
+if [ ! -L "$LOCK" ] && [ -f "$LOCK/pid" ] && [ ! -L "$LOCK/pid" ]; then EXPECTED_SHARED=$("$BB" cat "$LOCK/pid"); fi
+case "$EXPECTED_SHARED" in *[!0-9]*) printf 'ERROR unknown shared lock owner\n'; exit 1;; esac
+EXPECTED_AGENT=''
+if [ -f /opt/var/wg-monitor/opkg.lock ] && [ ! -L /opt/var/wg-monitor/opkg.lock ]; then
+  agent_owner=$("$BB" cat /opt/var/wg-monitor/opkg.lock)
+  case "$agent_owner" in pid=*) EXPECTED_AGENT=${agent_owner#pid=};; *) printf 'ERROR unknown agent lock owner\n'; exit 1;; esac
+  case "$EXPECTED_AGENT" in ''|*[!0-9]*) printf 'ERROR unknown agent lock owner\n'; exit 1;; esac
+fi
+"$BB" --list | "$BB" grep -qx pidof || { printf 'ERROR BusyBox pidof unavailable\n'; exit 1; }
+if "$BB" pidof opkg >/dev/null 2>&1; then
+  printf 'ERROR another opkg process is running\n'; exit 1
+fi
+if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
+  [ -n "$EXPECTED_SHARED" ] && [ -d "$LOCK" ] && [ ! -L "$LOCK" ] && [ -f "$LOCK/pid" ] && [ ! -L "$LOCK/pid" ] || { printf 'ERROR unexpected shared lock\n'; exit 1; }
+  owner=$("$BB" cat "$LOCK/pid")
+  [ "$owner" = "$EXPECTED_SHARED" ] && [ ! -d "/proc/$owner" ] || { printf 'ERROR shared lock owner changed or alive\n'; exit 1; }
+  [ "$("$BB" ls -A "$LOCK")" = pid ] || { printf 'ERROR unexpected shared lock contents\n'; exit 1; }
+  "$BB" rm "$LOCK/pid"
+  "$BB" rmdir "$LOCK"
+  printf 'ABANDONED_SHARED_LOCK_REMOVED\n'
+fi
+"$BB" mkdir "$LOCK" || { printf 'ERROR package operation lock is held\n'; exit 1; }
+cleanup() {
+  if [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ]; then return 0; fi
+  [ -d "$LOCK" ] && [ ! -L "$LOCK" ] && [ -f "$LOCK/pid" ] && [ ! -L "$LOCK/pid" ] || return 1
+  [ "$("$BB" cat "$LOCK/pid")" = "$$" ] || return 1
+  [ "$("$BB" ls -A "$LOCK")" = pid ] || return 1
+  "$BB" rm "$LOCK/pid"
+  "$BB" rmdir "$LOCK"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+printf '%s\n' "$$" > "$LOCK/pid"
+AGENT_LOCK=/opt/var/wg-monitor/opkg.lock
+if [ -e "$AGENT_LOCK" ] || [ -L "$AGENT_LOCK" ]; then
+  [ -n "$EXPECTED_AGENT" ] && [ -f "$AGENT_LOCK" ] && [ ! -L "$AGENT_LOCK" ] || { printf 'ERROR unexpected agent lock\n'; exit 1; }
+  owner=$("$BB" cat "$AGENT_LOCK")
+  [ "$owner" = "pid=$EXPECTED_AGENT" ] && [ ! -d "/proc/$EXPECTED_AGENT" ] || { printf 'ERROR agent lock owner changed or alive\n'; exit 1; }
+  "$BB" rm "$AGENT_LOCK"
+  printf 'ABANDONED_AGENT_LOCK_REMOVED\n'
+fi
+[ ! -e /opt/var/wg-monitor/opkg.lock ] || { printf 'ERROR agent package lock exists\n'; exit 1; }
+if "$BB" pidof opkg >/dev/null 2>&1; then
+  printf 'ERROR another opkg process is running\n'
+  exit 1
+fi
+"$OPKG" flag hold busybox
+status=$("$OPKG" status busybox)
+held=no
+package=no
+while IFS= read -r line; do
+  case "$line" in
+    "Package: busybox") package=yes;;
+    Status:*)
+      set -- $line
+      if [ "$#" -eq 4 ] && [ "$2" = install ] && [ "$4" = installed ]; then
+        case ",$3," in *,hold,*) held=yes;; esac
+      fi
+      ;;
+  esac
+done <<STATUS
+$status
+STATUS
+[ "$package" = yes ] && [ "$held" = yes ] || { printf 'ERROR BusyBox hold not confirmed\n'; exit 1; }
+printf 'BUSYBOX_HOLD_CONFIRMED\n'
+apps=$("$BB" --list)
+for required in df sh ash rm sleep cp mv chmod grep ps kill ln mkdir rmdir; do
+  printf '%s\n' "$apps" | "$BB" grep -qx "$required" || {
+    printf 'ERROR BusyBox applet unavailable: %s\n' "$required"
+    exit 1
+  }
+done
+case "$CREATED_PATH" in /tmp/wgm-busybox-recover-*.links) ;; *) printf 'ERROR invalid recovery journal path\n'; exit 1;; esac
+[ ! -e "$CREATED_PATH" ] && [ ! -L "$CREATED_PATH" ] || { printf 'ERROR recovery journal exists\n'; exit 1; }
+umask 077
+(set -C; : > "$CREATED_PATH") || { printf 'ERROR cannot create exclusive journal\n'; exit 1; }
+count=0
+for app in $apps; do
+  case "$app" in ""|.|..|*/*) printf 'ERROR invalid applet name\n'; exit 1;; esac
+  destination="/opt/bin/$app"
+  if [ -e "$destination" ] || [ -L "$destination" ]; then
+    [ -x "$destination" ] || printf 'PRESERVED_BROKEN_APPLET=%s\n' "$app"
+    continue
+  fi
+  "$BB" ln -s "$BB" "$destination"
+  printf '%s\n' "$destination" >> "$CREATED_PATH"
+  count=$((count + 1))
+done
+for required in df sh ash rm sleep cp mv chmod ps kill ln mkdir rmdir; do
+  [ -x "/opt/bin/$required" ] || { printf 'ERROR restored applet not executable: %s\n' "$required"; exit 1; }
+done
+/opt/bin/df -k /opt
+/opt/bin/sh -c 'printf "RESTORED_SHELL_OK\n"'
+printf 'LINKS_CREATED=%s\n' "$count"
+cleanup || { printf 'ERROR package lock cleanup not confirmed\n'; exit 1; }
+trap - EXIT
+[ ! -e "$LOCK" ] && [ ! -L "$LOCK" ] || { printf 'ERROR package lock remains\n'; exit 1; }
+"$BB" rm "$CREATED_PATH"
+[ ! -e "$CREATED_PATH" ] && [ ! -L "$CREATED_PATH" ] || { printf 'ERROR journal cleanup not confirmed\n'; exit 1; }
+printf 'RECOVERY_CONFIRMED\n' 

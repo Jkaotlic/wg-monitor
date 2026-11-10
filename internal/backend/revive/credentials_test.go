@@ -285,3 +285,17 @@ func TestAuthFailure_KeepsDifferentStoredPassword(t *testing.T) {
 		t.Fatal("стёрт другой, не проверенный пароль")
 	}
 }
+
+func TestPanelCredentialsNeverReturnsRootOrChangesStoredSecret(t *testing.T) {
+	e := newEnv(t)
+	e.saveFixture(t)
+	c, ok, err := e.svc.PanelCredentials(e.router)
+	if err != nil || !ok || c.RootPassword() != "" || c.AWGMLogin() != fixtureLogin || c.AWGMPassword() != fixturePanel {
+		t.Fatalf("scoped credentials invalid: ok=%v err=%v", ok, err)
+	}
+	nonce, ct, _, _, _ := e.db.RouterCredentials().Get(e.router)
+	original, err := e.svc.box.Open(e.router, nonce, ct)
+	if err != nil || original.RootPassword() != fixtureRoot {
+		t.Fatal("stored root changed")
+	}
+}

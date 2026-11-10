@@ -180,3 +180,17 @@ it('BusyBox: admin only, agent floor, confirmation and verified outcome', async 
   expect(root.textContent).toContain('BusyBox защищён от обновления')
   unmount()
 })
+
+it('Entware recovery stays visible to admin with old agent and opens confirmation', async () => {
+  for (const role of ['owner','operator']) {
+    const {root,unmount}=await mount({settings:{role,agent_version:'v0.66.3'}})
+    expect(button(root,'Восстановить команды Entware')).toBeUndefined()
+    unmount()
+  }
+  const {root,sheets,unmount}=await mount({settings:{role:'admin',agent_version:'v0.66.3-rc2'}})
+  expect(button(root,'Скачать скрипт для ручного запуска')).toBeDefined()
+  await click(button(root,'Восстановить команды Entware'))
+  expect(sheets[0].perform).toBeTypeOf('function')
+  expect(sheets[0].body).toContain('рабочий агент не требуется')
+  unmount()
+})

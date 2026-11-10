@@ -635,3 +635,11 @@ export function addAwg3Issuer(id, telegramUserID) {
 export function removeAwg3Issuer(id, telegramUserID) {
   return request(`/awg3panels/${encodeURIComponent(id)}/issuers/${encodeURIComponent(String(telegramUserID))}`, { method: 'DELETE' })
 }
+
+export function recoverRouterEntware(routerID) {
+ return request(`/routers/${routerID}/entware/recover`, { method: 'POST', body: JSON.stringify({ confirm: true }) })
+}
+
+export function fetchEntwareRecoveryScript() {
+ return request('/entware/recovery-script')
+}

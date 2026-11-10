@@ -1,3 +1,4 @@
+import { entwareRecoveryAvailable, entwareRecoverySheet, downloadEntwareRecoveryScript } from '../entwareRecovery.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouterSettings, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
 import { openExternal } from '../telegram.js'
@@ -48,7 +49,7 @@ import { manageAnchors, manageSection, manageSummaries, manageTones, versionsKno
 // Обслуживание · Люди и уведомления · Роутер и агент · Опасное. Админские
 // куски вкладка вставляет слотами (serviceSlot, peopleSlot, agentSlot,
 // dangerSlot) -- так они стоят рядом с родственными, а не хвостом после справки.
-export function SettingsSections({ routerID, routerName, asleep, openSheet, isAdmin = false, focusGroup = null, focusNonce = 0, serviceSlot = null, peopleSlot = null, agentSlot = null, dangerSlot = null }) {
+export function SettingsSections({ routerID, routerName, asleep, openSheet, openLayer, isAdmin = false, focusGroup = null, focusNonce = 0, serviceSlot = null, peopleSlot = null, agentSlot = null, dangerSlot = null }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
   const [error, setError] = useState(null)
@@ -67,6 +68,8 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
   // меняет кнопку на объяснение.
   const [awgmResult, setAwgmResult] = useState(null)
   const [opkgResult, setOpkgResult] = useState(null)
+  const [recoveryNote, setRecoveryNote] = useState('')
+  const [recoveryDownloading, setRecoveryDownloading] = useState(false)
   const [busyboxResult, setBusyboxResult] = useState(null)
   const [refusals, setRefusals] = useState({})
 
@@ -420,6 +423,21 @@ export function SettingsSections({ routerID, routerName, asleep, openSheet, isAd
                   </button>
                 ) : <p class="hint">Защита появится после обновления агента до v0.66.3.</p>}
                 {busyboxResult && <p class={busyboxResult.status === 'ok' ? 'state' : 'state state-warn'}>{maintenanceOutcomeLabel('opkg_busybox_hold', busyboxResult)}</p>}
+                {entwareRecoveryAvailable(settings) && <>
+                  <p class="hint">После сбоя обновления пропали команды? Восстановление работает и со старым агентом.</p>
+                  <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(entwareRecoverySheet({ routerID, onDone: (resp) => {
+                    if (resp?.job_id && openLayer) openLayer('job', { jobId: resp.job_id, title: 'Восстановление Entware' })
+                    else setRecoveryNote('Восстановление запущено. Итог можно проверить в боте: /entware_recover status <имя роутера>.')
+                  } }))}>Восстановить команды Entware</button>
+                  <button type="button" class="btn btn-ghost btn-wide" disabled={recoveryDownloading} onClick={async () => {
+                    setRecoveryDownloading(true)
+                    try { setRecoveryNote(await downloadEntwareRecoveryScript()) }
+                    catch { setRecoveryNote('Не удалось скачать скрипт. Его можно получить в боте: /entware_recover script.') }
+                    finally { setRecoveryDownloading(false) }
+                  }}>{recoveryDownloading ? 'Скачиваем…' : 'Скачать скрипт для ручного запуска'}</button>
+                  {recoveryNote && <p class="hint" role="status">{recoveryNote}</p>}
+                </>}
+
               </div>
             )}
             <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>

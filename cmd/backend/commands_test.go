@@ -49,7 +49,7 @@ func TestClearBotCommandMenus_AllThreeScopes(t *testing.T) {
 			t.Errorf("область %d = %+v, ждали %+v", i, f.calls[i].scope, w)
 		}
 		if i == 1 {
-			if len(f.calls[i].cmds) != 1 || f.calls[i].cmds[0].Command != "busybox_hold" {
+			if len(f.calls[i].cmds) != 2 || f.calls[i].cmds[0].Command != "busybox_hold" || f.calls[i].cmds[1].Command != "entware_recover" {
 				t.Errorf("admin emergency menu: %+v", f.calls[i].cmds)
 			}
 		} else if len(f.calls[i].cmds) != 0 {

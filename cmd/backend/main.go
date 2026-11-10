@@ -171,6 +171,15 @@ func main() {
 
 	muxDeps := core.Mux
 	muxDeps.Revive = reviveSvc
+	muxDeps.EntwareRecovery = backend.NewEntwareRecovery(muxDeps)
+	cb.SetEntwareRecovery(muxDeps.EntwareRecovery)
+	muxDeps.EntwareRecovery.Notify = func(text string) {
+		if cfg.Telegram.AdminUserID != 0 {
+			notifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			_, _ = tgClient.SendMessage(notifyCtx, cfg.Telegram.AdminUserID, nil, text, "", nil)
+		}
+	}
 	mux := backend.NewMux(muxDeps)
 	go backend.RunRolloutWorker(ctx, muxDeps, 15*time.Second)
 	srv := &http.Server{
