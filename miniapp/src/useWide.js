@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useLayoutEffect, useState } from 'preact/hooks'
 import { WIDE_QUERY } from './mode.js'
 
 function query() {
@@ -10,7 +10,7 @@ function query() {
 // сужает браузер -- приложение переходит в телефонную, не теряя навигации.
 export function useWide() {
   const [wide, setWide] = useState(() => Boolean(query()?.matches))
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mql = query()
     if (!mql) return undefined
     const onChange = (e) => setWide(Boolean(e.matches))

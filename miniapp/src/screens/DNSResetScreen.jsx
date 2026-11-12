@@ -1,5 +1,5 @@
 import { agentReplyText, agentOwnText, errorText } from '../errorText.js'
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouter, fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { serverClockOffset } from '../serverClock.js'
 import { placeText } from '../places.js'
@@ -75,7 +75,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   // Поздний ответ про роутер не должен трогать закрытый экран или перебивать новый сброс.
   const aliveRef = useRef(true)
   const resetSeq = useRef(0)
-  useEffect(() => () => { aliveRef.current = false }, [])
+  useLayoutEffect(() => () => { aliveRef.current = false }, [])
 
   function copyCommands() {
     copyText(dnsReferenceCommands()).then((ok) => setCopyState(ok ? 'ok' : 'fail'))

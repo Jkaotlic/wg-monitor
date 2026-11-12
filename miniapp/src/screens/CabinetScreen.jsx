@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { useOnClose } from '../useOnClose.js'
 import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted, fetchAwg3Issuable } from '../api.js'
 import { cabinetTabs, pickTab, cabinetPerms, secretRows, VPN_PROVIDER, CABINET_TEXTS } from '../cabinetKeys.js'
@@ -36,7 +36,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [roleError, setRoleError] = useState(false)
 
   const alive = useRef(true)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },

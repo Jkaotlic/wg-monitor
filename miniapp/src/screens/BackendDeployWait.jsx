@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useLayoutEffect, useState } from 'preact/hooks'
 import { fetchHealth } from '../api.js'
 import { DEPLOY_RELOAD_MS, deployWaitStart, deployWaitText, watchBackendDeploy } from '../backendDeploy.js'
 
@@ -14,7 +14,7 @@ const REAL_CLOCK = {
 export function BackendDeployWait({ targetVersion, onBack, reload = () => window.location.reload(), clock = REAL_CLOCK }) {
   const [state, setState] = useState(() => deployWaitStart(targetVersion, clock.now()))
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const signal = { cancelled: false }
     watchBackendDeploy({
       target: targetVersion,

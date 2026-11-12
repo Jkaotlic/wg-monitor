@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { sendCommand, COMMAND_GONE_TEXT } from './api.js'
 import { waitCommand } from './commandWait.js'
 import { asleepNote, SENT_NO_RESULT_TEXT, COMMAND_DEADLINE_TEXT } from './maintenance.js'
@@ -42,7 +42,7 @@ export function useCommand(routerID) {
   // async continuation below checks before touching state.
   const aliveRef = useRef(true)
   const sentRef = useRef(false)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       aliveRef.current = false
     },

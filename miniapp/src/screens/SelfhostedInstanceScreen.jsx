@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchSelfhosted, createSelfhosted, updateSelfhosted, toggleSelfhosted, deleteSelfhosted, checkSelfhosted, confirmSelfhostedHostKey, fetchSelfhostedClients, revokeSelfhostedClient } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
@@ -66,7 +66,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
   const alive = useRef(true)
   const valuesRef = useRef(values)
   valuesRef.current = values
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
       // Ссылка на значения могла пережить экран в замыкании -- пароль в ней

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { previewTunnelImport, fetchTunnelImport, confirmTunnelImport } from '../api.js'
 import { waitCommand, waitDeadlineMs, repeatWhilePending } from '../commandWait.js'
 import {
@@ -52,7 +52,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
   // Защита от двойного касания «Добавить»: состояние обновится только после
   // рендера, а второе касание успевает раньше.
   const adding = useRef(false)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
       confRef.current = ''

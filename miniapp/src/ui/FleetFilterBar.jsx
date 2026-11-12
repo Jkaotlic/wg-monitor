@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks'
+import { useLayoutEffect, useRef } from 'preact/hooks'
 import { FLEET_FILTERS, filterChipLabel, isFilterShortcut } from '../fleetFilter.js'
 
 // Поле поиска и чипы фильтров над списком роутеров. Чипы переносятся на
@@ -12,7 +12,7 @@ export function FleetFilterBar({ query, filter, counts, onQuery, onFilter, short
   const shortcutRef = useRef(shortcut)
   shortcutRef.current = shortcut
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e) => {
       if (!shortcutRef.current || !isFilterShortcut(e)) return
       e.preventDefault()

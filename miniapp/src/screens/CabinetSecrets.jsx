@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { addCabinetSecret, setCabinetActive, deleteCabinetSecret } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
@@ -30,7 +30,7 @@ export function CabinetSecrets({ routerID, kind, rows = [], perms, openSheet, on
   const [busyID, setBusyID] = useState('')
   const [error, setError] = useState('')
   const alive = useRef(true)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },

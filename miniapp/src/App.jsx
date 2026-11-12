@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useReducer, useState } from 'preact/hooks'
 import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { setUnauthorizedHandler } from './api.js'
@@ -55,8 +55,9 @@ export function App() {
   }, [nav.routerID])
 
   // 401 посреди работы в браузере -- истекла кука: на экран входа, место в
-  // адресе остаётся, после входа useBoot откроет его снова.
-  useEffect(() => {
+  // адресе остаётся, после входа useBoot откроет его снова. Регистрируем
+  // обработчик до ответа на первые запросы, начатые в layout-эффектах экранов.
+  useLayoutEffect(() => {
     if (mode !== 'web' || boot.status !== 'ready') return undefined
     return setUnauthorizedHandler(() => boot.expire())
   }, [mode, boot.status])
@@ -82,12 +83,12 @@ export function App() {
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
-  useEffect(() => {
+  useLayoutEffect(() => {
     setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
   }, [nav.overlay, nav.sheet, wide, pinned])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || typingTarget(e.target)) return
       const action = escapeAction(nav, { wide })

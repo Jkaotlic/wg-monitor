@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { deleteTunnel, getAutorepair, putAutorepair } from '../api.js'
 import { errorText } from '../errorText.js'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
@@ -42,7 +42,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, even
   const card = fresh ?? last.current
   const [storedOutcome, setOutcome] = useState(null)
   const alive = useRef(true)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },
