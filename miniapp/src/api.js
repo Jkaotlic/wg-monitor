@@ -158,12 +158,14 @@ export function updateFleetAgents(confirm) {
   return request('/fleet/agent/update', { method: 'POST', body: JSON.stringify({ confirm }) })
 }
 
-export function fetchFleetAgentRollout() {
-  return request('/fleet/agent/rollout')
+export function fetchFleetAgentRollout(jobID) {
+  const query = jobID ? `?job_id=${encodeURIComponent(jobID)}` : ''
+  return request(`/fleet/agent/rollout${query}`)
 }
 
-export function cancelFleetAgentRollout() {
-  return request('/fleet/agent/rollout/cancel', { method: 'POST' })
+export function cancelFleetAgentRollout(jobID) {
+  const query = jobID ? `?job_id=${encodeURIComponent(jobID)}` : ''
+  return request(`/fleet/agent/rollout/cancel${query}`, { method: 'POST' })
 }
 
 // Оживление агента: пароль уходит один раз, в теле этого POST, и больше

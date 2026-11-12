@@ -135,6 +135,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const [notice, setNotice] = useState('')
   const [fleetResult, setFleetResult] = useState(null)
   const [rolloutResp, setRolloutResp] = useState(null)
+  const rolloutID = useRef(null)
   // «Ещё ▸» на карточке -- по роутеру: раскрытие одной не трогает другие.
   const [moreOpen, setMoreOpen] = useState(() => new Set())
   const toggleMore = (id) =>
@@ -193,16 +194,19 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
 
   useEffect(() => {
     load()
-    const refreshRollout = () => fetchFleetAgentRollout()
+    const refreshRollout = () => fetchFleetAgentRollout(rolloutID.current)
       .then((resp) => {
         if (!aliveRef.current) return
-				if (!resp?.job) {
-					setRolloutResp(null)
-					return
-				}
+        if (!resp?.job) {
+          rolloutID.current = null
+          setRolloutResp(null)
+          return
+        }
+        const result = rolloutSummary(resp)
+        rolloutID.current = result.active ? resp.job.id : null
         setRolloutResp(resp)
-        setFleetResult(rolloutSummary(resp))
-        if (['complete', 'failed', 'cancelled'].includes(resp?.job?.state)) load()
+        setFleetResult(result)
+        if (!result.active) load()
       })
       .catch(() => {})
     refreshRollout()
@@ -409,6 +413,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
         perform: (typed) => updateFleetAgents(typed),
         onDone: (resp) => {
           setNotice('')
+          rolloutID.current = resp.job?.id ?? null
           setRolloutResp(resp)
           setFleetResult(rolloutSummary(resp))
           load()
@@ -624,7 +629,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                   </p>
                 ))}
                 {fleetResult.active && rolloutResp?.job && (
-                  <button type="button" class="btn btn-ghost btn-row" onClick={() => cancelFleetAgentRollout().then((resp) => { setRolloutResp(resp); setFleetResult(rolloutSummary(resp)) }).catch(() => {})}>
+                  <button type="button" class="btn btn-ghost btn-row" onClick={() => cancelFleetAgentRollout(rolloutResp.job.id).then((resp) => { setRolloutResp(resp); setFleetResult(rolloutSummary(resp)) }).catch(() => {})}>
                     Остановить раскатку
                   </button>
                 )}

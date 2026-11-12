@@ -32,12 +32,28 @@ type RolloutsRepo struct{ d *DB }
 
 func (d *DB) Rollouts() *RolloutsRepo { return &RolloutsRepo{d: d} }
 
-func (r *RolloutsRepo) Create(job RolloutJob, routerIDs []int64) error {
+func (r *RolloutsRepo) Create(job RolloutJob, routerIDs []int64, replacePausedID string) error {
 	tx, err := r.d.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if replacePausedID != "" {
+		// Retire only the paused job the caller checked. A failed insert rolls
+		// back retirement too. Per-router pending updates have their own lifecycle.
+		res, err := tx.Exec(`UPDATE rollout_jobs SET state='cancelled',updated_at=? WHERE id=? AND state='paused'`,
+			job.UpdatedAt.UTC(), replacePausedID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errors.New("paused rollout changed")
+		}
+	}
 	if _, err := tx.Exec(`INSERT INTO rollout_jobs(id,target_version,state,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
 		job.ID, job.TargetVersion, job.State, job.CreatedBy, job.CreatedAt.UTC(), job.UpdatedAt.UTC()); err != nil {
 		return err
