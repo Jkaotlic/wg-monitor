@@ -169,6 +169,7 @@ export function fleetUpdateSheetText(fleet) {
 
 export function fleetUpdateErrorText(err) {
   if (err?.code === 'confirm_mismatch') return `Слово «${FLEET_UPDATE_PHRASE}» набрано неверно — ничего не поставлено.`
+  if (err?.code === 'no_online_canary') return String(err.serverMessage ?? '').trim()
   return errorText(err)
 }
 
@@ -197,7 +198,7 @@ export function fleetUpdateSummary(results) {
 
 const ROLLOUT_PAUSE = {
   new_hard_incident: 'после обновления появилась новая тревога',
-  report_gap: 'canary перестал присылать свежие отчёты',
+  report_gap: 'от роутера перестали приходить свежие отчёты',
   deploy_failed: 'не удалось поставить обновление на следующий роутер',
 }
 
@@ -208,13 +209,14 @@ export function rolloutSummary(resp) {
   const state = resp.job.state
   const targets = resp.targets ?? []
   const observed = targets.filter((t) => t.status === 'observed').length
+  const deferred = targets.filter((t) => t.role === 'fleet' && t.status === 'queued').length
   const total = targets.length
   const byState = {
     planned: 'Готовим безопасную раскатку.',
     canary_pending: 'Canary обновляется · остальные роутеры пока не затронуты.',
     observing: 'Canary обновился · наблюдаем 10 минут перед остальными.',
     rolling: `Canary прошёл проверку · обновляем остальные (${observed} из ${total} подтверждено).`,
-    complete: `Раскатка завершена · новую версию подтвердили ${observed} из ${total}.`,
+    complete: `Раскатка завершена. Новую версию подтвердили ${observed} из ${total}.${deferred ? ` Ждёт выхода на связь: ${deferred}.` : ''}`,
     failed: 'Раскатка остановилась с ошибкой.',
     cancelled: 'Раскатка отменена.',
   }

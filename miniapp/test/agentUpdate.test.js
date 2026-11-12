@@ -19,6 +19,14 @@ describe('canary rollout summary', () => {
     expect(rolloutSummary({ job: { state: 'observing' }, targets: [{ role: 'canary', status: 'observed' }, { role: 'fleet', status: 'planned' }] }).headline).toBe('Canary обновился · наблюдаем 10 минут перед остальными.')
     expect(rolloutSummary({ job: { state: 'paused', pause_reason: 'new_hard_incident' }, targets: [] }).headline).toBe('Раскатка на паузе: после обновления появилась новая тревога.')
   })
+
+  it('показывает отдельно подтверждённые и отложенные обновления', () => {
+    const result = rolloutSummary({ job: { state: 'complete' }, targets: [
+      { role: 'canary', status: 'observed' }, { role: 'fleet', status: 'queued' },
+    ] })
+    expect(result.headline).toBe('Раскатка завершена. Новую версию подтвердили 1 из 2. Ждёт выхода на связь: 1.')
+    expect(result.active).toBe(false)
+  })
 })
 import { ApiError } from '../src/api.js'
 

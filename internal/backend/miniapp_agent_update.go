@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -206,6 +207,10 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 // fleetAgentUpdateConfirm -- слово подтверждения массового обновления.
 const fleetAgentUpdateConfirm = "обновить"
 
+// The worker and HTTP handlers share the same dispatcher. A worker tick must
+// not mistake an in-flight reservation made by the HTTP handler for a crash.
+var miniappRolloutMu sync.Mutex
+
 type miniappFleetAgentUpdateResult struct {
 	RouterID   int64  `json:"router_id"`
 	Nickname   string `json:"nickname"`
@@ -236,6 +241,13 @@ func miniappRolloutEngine(d Deps, ctx context.Context, actorID int64) (rollout.E
 			local.Context, local.ActorID = ctx, actorID
 			res, derr := agentDeployCore(d, u, target, local)
 			if derr != nil {
+				if derr.Code == deployErrPending {
+					pending, err := d.DB.Users().PendingDeploy(routerID)
+					if err == nil && pending.Version == target {
+						// An individual update was assigned after this fleet job was planned.
+						return "existing-pending", nil
+					}
+				}
 				return "", derr
 			}
 			return res.CmdID, nil
@@ -245,10 +257,16 @@ func miniappRolloutEngine(d Deps, ctx context.Context, actorID int64) (rollout.E
 			if err != nil {
 				return rollout.Probe{ReportGap: true}
 			}
-			now := time.Now().UTC()
-			fresh := u.LastSeenAt != nil && now.Sub(u.LastSeenAt.UTC()) <= 5*time.Minute
+			var lastSeen time.Time
+			if u.LastSeenAt != nil {
+				lastSeen = u.LastSeenAt.UTC()
+			}
+			fresh := !lastSeen.IsZero() && time.Since(lastSeen) <= rollout.ReportFreshness
 			hard, _ := d.DB.State().HardCount(routerID)
-			return rollout.Probe{Fresh: fresh, Version: stringValue(u.LastDeployedVersion), NewHardIncidents: hard, ReportGap: !fresh}
+			return rollout.Probe{
+				Fresh: fresh, Version: stringValue(u.LastDeployedVersion), NewHardIncidents: hard,
+				ReportGap: !fresh, LastSeenAt: lastSeen, PendingVersion: stringValue(u.PendingVersion),
+			}
 		},
 	}, true
 }
@@ -264,6 +282,8 @@ func RunRolloutWorker(ctx context.Context, d Deps, interval time.Duration) {
 		interval = 15 * time.Second
 	}
 	tick := func() {
+		miniappRolloutMu.Lock()
+		defer miniappRolloutMu.Unlock()
 		job, _, err := d.DB.Rollouts().Active()
 		if errors.Is(err, sql.ErrNoRows) {
 			return
@@ -343,14 +363,20 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
 			return
 		}
+		miniappRolloutMu.Lock()
+		defer miniappRolloutMu.Unlock()
 		users, err := d.DB.Users().GetAll()
 		if err != nil {
 			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, miniappDeployErrorText(errCodeInternal))
 			return
 		}
+		var replacePausedID string
 		if active, _, err := d.DB.Rollouts().Active(); err == nil {
-			writeMiniappRollout(w, d.DB, active)
-			return
+			if active.State != "paused" || compareDashboardReleaseTags(serverVersion, active.TargetVersion) <= 0 {
+				writeMiniappRollout(w, d.DB, active)
+				return
+			}
+			replacePausedID = active.ID
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать текущую раскатку.")
 			return
@@ -365,17 +391,21 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 			// Экран «Парк» покажет причину отдельно, через
 			// agent_update_warning (/fleet).
 			verdict := agentUpdateVerdictFor(stringValue(u.LastDeployedVersion), serverVersion)
-			if !verdict.Behind {
+			if !verdict.Behind || stringValue(u.PendingVersion) == serverVersion {
 				continue
 			}
 			hard, _ := d.DB.State().HardCount(u.ID)
-			fresh := u.LastSeenAt != nil && time.Since(u.LastSeenAt.UTC()) <= 5*time.Minute
+			fresh := u.LastSeenAt != nil && time.Since(u.LastSeenAt.UTC()) <= rollout.ReportFreshness
 			candidates = append(candidates, rollout.Candidate{RouterID: u.ID, Fresh: fresh, HardIncidents: hard})
 			candidateUsers[u.ID] = *u
 		}
+		if len(candidates) == 0 {
+			writeMiniappDeployError(w, http.StatusConflict, "no_targets", "Нет отставших агентов для обновления.")
+			return
+		}
 		canary := rollout.SelectCanary(candidates)
 		if canary == 0 {
-			writeMiniappDeployError(w, http.StatusConflict, "no_targets", "Нет отставших агентов для обновления.")
+			writeMiniappDeployError(w, http.StatusConflict, "no_online_canary", "Для начала раскатки дождитесь свежего отчёта хотя бы от одного из отставших роутеров.")
 			return
 		}
 		ids := []int64{canary}
@@ -384,8 +414,12 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 				ids = append(ids, candidate.RouterID)
 			}
 		}
-		job, err := engine.Create(serverVersion, adminID, ids)
+		job, err := engine.Create(serverVersion, adminID, ids, replacePausedID)
 		if err != nil {
+			if active, _, readErr := d.DB.Rollouts().Active(); readErr == nil && active.ID != replacePausedID {
+				writeMiniappRollout(w, d.DB, active)
+				return
+			}
 			writeMiniappDeployError(w, http.StatusConflict, "rollout_exists", "Раскатка уже идёт.")
 			return
 		}
@@ -408,6 +442,10 @@ func miniappFleetRolloutStatusHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		job, _, err := d.DB.Rollouts().Active()
+		if id := r.URL.Query().Get("job_id"); id != "" && errors.Is(err, sql.ErrNoRows) {
+			// A client tracking a job can still read its terminal result.
+			job, _, err = d.DB.Rollouts().Get(id)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			// Normal idle state, not a failed network request.  Returning 200 keeps
 			// the Park poll quiet in browser telemetry and layout diagnostics.
@@ -430,6 +468,8 @@ func miniappFleetRolloutCancelHandler(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		miniappRolloutMu.Lock()
+		defer miniappRolloutMu.Unlock()
 		job, _, err := d.DB.Rollouts().Active()
 		if errors.Is(err, sql.ErrNoRows) {
 			writeMiniappDeployError(w, http.StatusNotFound, "no_rollout", "Активной раскатки нет.")
@@ -437,6 +477,12 @@ func miniappFleetRolloutCancelHandler(d Deps) http.HandlerFunc {
 		}
 		if err != nil {
 			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, "Не удалось прочитать раскатку.")
+			return
+		}
+		if id := r.URL.Query().Get("job_id"); id != "" && id != job.ID {
+			// A stale screen is asking to cancel a different job. Show it the
+			// current job without applying the stale action to it.
+			writeMiniappRollout(w, d.DB, job)
 			return
 		}
 		engine, ok := miniappRolloutEngine(d, context.WithoutCancel(r.Context()), actor)

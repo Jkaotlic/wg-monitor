@@ -12,6 +12,8 @@ import (
 
 var errDispatchUncertain = errors.New("rollout target dispatch is uncertain")
 
+const ReportFreshness = 5 * time.Minute
+
 type Candidate struct {
 	RouterID      int64
 	Fresh         bool
@@ -30,7 +32,7 @@ func SelectCanary(candidates []Candidate) int64 {
 		}
 		return a.RouterID < b.RouterID
 	})
-	if len(ordered) == 0 {
+	if len(ordered) == 0 || !ordered[0].Fresh {
 		return 0
 	}
 	return ordered[0].RouterID
@@ -41,6 +43,8 @@ type Probe struct {
 	Version          string
 	NewHardIncidents int
 	ReportGap        bool
+	LastSeenAt       time.Time
+	PendingVersion   string
 }
 
 type Engine struct {
@@ -72,13 +76,13 @@ func rolloutID() string {
 	return "rollout-" + hex.EncodeToString(b[:])
 }
 
-func (e Engine) Create(target string, actor int64, routerIDs []int64) (db.RolloutJob, error) {
+func (e Engine) Create(target string, actor int64, routerIDs []int64, replacePausedID string) (db.RolloutJob, error) {
 	if e.DB == nil || len(routerIDs) == 0 {
 		return db.RolloutJob{}, errors.New("rollout has no targets")
 	}
 	now := e.now()
 	job := db.RolloutJob{ID: rolloutID(), TargetVersion: target, State: "planned", CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	if err := e.DB.Rollouts().Create(job, routerIDs); err != nil {
+	if err := e.DB.Rollouts().Create(job, routerIDs, replacePausedID); err != nil {
 		return db.RolloutJob{}, err
 	}
 	return job, nil
@@ -152,7 +156,15 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 				continue
 			}
 			probe := e.probe(target.RouterID)
-			if reason := badGate(probe); reason != "" {
+			reason := badGate(probe)
+			// The pending update is durable and will run on contact. An
+			// already-offline fleet router has no pre-update reports to lose.
+			if reason == "report_gap" && target.Role == "fleet" && target.Status == "queued" && target.QueuedAt != nil &&
+				probe.PendingVersion == job.TargetVersion &&
+				probe.LastSeenAt.Before(target.QueuedAt.Add(-ReportFreshness)) {
+				continue
+			}
+			if reason != "" {
 				if err := e.DB.Rollouts().Transition(id, "rolling", "paused", reason, now); err != nil {
 					return job, err
 				}

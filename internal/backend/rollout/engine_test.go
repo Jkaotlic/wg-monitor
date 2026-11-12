@@ -40,7 +40,7 @@ func TestEngineCanaryObservationThenFleetAndCompletion(t *testing.T) {
 		deploys[id]++
 		return "cmd-" + string(rune('0'+id)), nil
 	}, Probe: func(id int64) Probe { return probes[id] }}
-	job, err := e.Create("v1.2.3", 77, ids)
+	job, err := e.Create("v1.2.3", 77, ids, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestEnginePausesOnCanaryIncidentAndDoesNotDoubleEnqueueAfterRestart(t *test
 		return Engine{DB: d, Now: func() time.Time { return now }, Deploy: func(int64, string) (string, error) { deploys++; return "cmd", nil }, Probe: func(int64) Probe { return probe }}
 	}
 	e := makeEngine()
-	job, err := e.Create("v1", 1, ids)
+	job, err := e.Create("v1", 1, ids, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestEnginePausesWhenRestartFindsUncertainDispatch(t *testing.T) {
 		deploys++
 		return "cmd", nil
 	}}
-	job, err := e.Create("v1", 1, ids)
+	job, err := e.Create("v1", 1, ids, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestEnginePausesWhenRestartFindsUncertainDispatch(t *testing.T) {
 func TestEngineCancelIsPersistent(t *testing.T) {
 	d, ids := rolloutDB(t)
 	e := Engine{DB: d, Deploy: func(int64, string) (string, error) { return "cmd", nil }, Probe: func(int64) Probe { return Probe{} }}
-	job, err := e.Create("v1", 1, ids)
+	job, err := e.Create("v1", 1, ids, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,5 +152,47 @@ func TestEngineCancelIsPersistent(t *testing.T) {
 	got, _, err := d.Rollouts().Get(job.ID)
 	if err != nil || got.State != "cancelled" {
 		t.Fatalf("job=%+v err=%v", got, err)
+	}
+}
+
+func TestEngineDistinguishesOfflineFleetTargetFromLostReports(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		seenBefore time.Duration
+		hard       int
+		wantState  string
+		wantReason string
+	}{
+		{name: "already offline", seenBefore: time.Hour, wantState: "complete"},
+		{name: "lost reports after dispatch", seenBefore: time.Minute, wantState: "paused", wantReason: "report_gap"},
+		{name: "hard incident", seenBefore: time.Hour, hard: 1, wantState: "paused", wantReason: "new_hard_incident"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, ids := rolloutDB(t)
+			queuedAt := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+			now := queuedAt.Add(6 * time.Minute)
+			job := db.RolloutJob{ID: "r", TargetVersion: "v1.2.3", State: "rolling", CreatedAt: queuedAt, UpdatedAt: queuedAt}
+			if err := d.Rollouts().Create(job, ids, ""); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range ids {
+				if ok, err := d.Rollouts().MarkTargetQueued(job.ID, id, "cmd", queuedAt); err != nil || !ok {
+					t.Fatalf("seed queued target: ok=%v err=%v", ok, err)
+				}
+			}
+			if err := d.Rollouts().MarkTargetObserved(job.ID, ids[0], queuedAt); err != nil {
+				t.Fatal(err)
+			}
+			e := Engine{DB: d, Now: func() time.Time { return now }, Probe: func(id int64) Probe {
+				if id == ids[0] {
+					return Probe{Fresh: true, Version: job.TargetVersion}
+				}
+				return Probe{ReportGap: true, LastSeenAt: queuedAt.Add(-tc.seenBefore), PendingVersion: job.TargetVersion, NewHardIncidents: tc.hard}
+			}}
+			got, err := e.Tick(job.ID)
+			if err != nil || got.State != tc.wantState || got.PauseReason != tc.wantReason {
+				t.Fatalf("job=%+v err=%v, want state=%s reason=%s", got, err, tc.wantState, tc.wantReason)
+			}
+		})
 	}
 }

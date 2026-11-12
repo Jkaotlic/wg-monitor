@@ -16,7 +16,7 @@ func TestRolloutJobsPersistTargetsAndResumeState(t *testing.T) {
 	second, _ := d.Users().Insert("rest", "token-rollout-2", "", "")
 	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 	job := RolloutJob{ID: "rollout-1", TargetVersion: "v1.2.3", State: "planned", CreatedBy: 77, CreatedAt: now, UpdatedAt: now}
-	if err := d.Rollouts().Create(job, []int64{first, second}); err != nil {
+	if err := d.Rollouts().Create(job, []int64{first, second}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Rollouts().Transition("rollout-1", "planned", "canary_pending", "", now.Add(time.Minute)); err != nil {
@@ -52,7 +52,7 @@ func TestRolloutTargetCanOnlyQueueOnce(t *testing.T) {
 	defer d.Close()
 	uid, _ := d.Users().Insert("canary", "token-rollout-once", "", "")
 	now := time.Now().UTC()
-	if err := d.Rollouts().Create(RolloutJob{ID: "r", TargetVersion: "v1", State: "planned", CreatedAt: now, UpdatedAt: now}, []int64{uid}); err != nil {
+	if err := d.Rollouts().Create(RolloutJob{ID: "r", TargetVersion: "v1", State: "planned", CreatedAt: now, UpdatedAt: now}, []int64{uid}, ""); err != nil {
 		t.Fatal(err)
 	}
 	queued, err := d.Rollouts().MarkTargetQueued("r", uid, "cmd-1", now)
@@ -62,5 +62,30 @@ func TestRolloutTargetCanOnlyQueueOnce(t *testing.T) {
 	queued, err = d.Rollouts().MarkTargetQueued("r", uid, "cmd-2", now)
 	if err != nil || queued {
 		t.Fatalf("second queued=%v err=%v", queued, err)
+	}
+}
+
+func TestRolloutReplacementRollsBackIfTargetsCannotBeSaved(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "rollout.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	id, err := d.Users().Insert("canary", "token-rollout-replace", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	old := RolloutJob{ID: "old", TargetVersion: "v1.2.3", State: "paused", CreatedAt: now, UpdatedAt: now}
+	if err := d.Rollouts().Create(old, []int64{id}, ""); err != nil {
+		t.Fatal(err)
+	}
+	next := RolloutJob{ID: "next", TargetVersion: "v1.2.4", State: "planned", CreatedAt: now, UpdatedAt: now}
+	if err := d.Rollouts().Create(next, []int64{id, id}, old.ID); err == nil {
+		t.Fatal("replacement unexpectedly accepted duplicate targets")
+	}
+	active, _, err := d.Rollouts().Active()
+	if err != nil || active.ID != old.ID || active.State != "paused" {
+		t.Fatalf("lost previous rollout: job=%+v err=%v", active, err)
 	}
 }

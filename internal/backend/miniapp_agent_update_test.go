@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
@@ -434,7 +436,7 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Job.State != "canary_pending" || len(resp.Targets) != 4 {
+	if resp.Job.State != "canary_pending" || len(resp.Targets) != 3 {
 		t.Fatalf("canary rollout: job=%+v targets=%+v", resp.Job, resp.Targets)
 	}
 	if resp.Targets[0].RouterID != onlineID || resp.Targets[0].Role != "canary" || resp.Targets[0].Status != "queued" {
@@ -447,7 +449,6 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 		t.Fatalf("fleet phase touched before observation gate: %+v", st)
 	}
 	_ = ownedID
-	_ = sameID
 }
 
 func TestMiniappFleetRolloutIdleIsNormalEmptyResponse(t *testing.T) {
@@ -465,12 +466,113 @@ func TestMiniappFleetRolloutIdleIsNormalEmptyResponse(t *testing.T) {
 	}
 }
 
+func TestMiniappFleetUpdateSupersedesOlderPausedRollout(t *testing.T) {
+	d, onlineID, h, sink := agentUpdateTestMux(t)
+	if err := d.Users().UpdateLastSeen(onlineID); err != nil {
+		t.Fatal(err)
+	}
+	offlineID, err := d.Users().Insert("router-offline", "token-rollout-offline", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(offlineID, "v0.30.0"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := d.Users().MarkPendingDeploy(offlineID, "v0.32.0", now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	old := db.RolloutJob{ID: "old-rollout", TargetVersion: "v0.31.0", State: "rolling", CreatedAt: now, UpdatedAt: now}
+	if err := d.Rollouts().Create(old, []int64{onlineID, offlineID}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Rollouts().Transition(old.ID, "rolling", "paused", "report_gap", now); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+		var resp miniappFleetAgentUpdateResp
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("code=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+		}
+		if resp.Job.TargetVersion != "v0.33.0" || resp.Job.State != "canary_pending" || len(resp.Targets) != 2 || resp.Targets[0].RouterID != onlineID {
+			t.Fatalf("wrong rollout: job=%+v targets=%+v", resp.Job, resp.Targets)
+		}
+	}
+	if got := len(sink.snapshotEnqueued()); got != 1 {
+		t.Fatalf("enqueued %d updates, want one canary", got)
+	}
+	rec := postMiniappJSON(t, h, "/v1/miniapp/fleet/agent/rollout/cancel?job_id="+old.ID, `{}`, 999)
+	var active miniappFleetAgentUpdateResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &active); err != nil || rec.Code != http.StatusOK || active.Job.State != "canary_pending" {
+		t.Fatalf("stale cancellation changed the active rollout: code=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+	}
+	retired, _, err := d.Rollouts().Get(old.ID)
+	if err != nil || retired.State != "cancelled" {
+		t.Fatalf("old rollout=%+v err=%v", retired, err)
+	}
+	pending, err := d.Users().PendingDeploy(offlineID)
+	if err != nil || pending.Version != "v0.32.0" {
+		t.Fatalf("pending update before observation=%+v err=%v", pending, err)
+	}
+
+	engine, ok := miniappRolloutEngine(Deps{
+		DB: d, CommandSink: sink, PublicBaseURL: "https://backend.example.com",
+	}, context.Background(), 999)
+	if !ok {
+		t.Fatal("rollout engine not configured")
+	}
+	engine.ObservationWindow = time.Second
+	now = time.Now().UTC()
+	engine.Now = func() time.Time { return now }
+	job, _, err := d.Rollouts().Active()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(onlineID, serverVersion); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"observing", "rolling", "complete"} {
+		now = now.Add(time.Second)
+		got, err := engine.Tick(job.ID)
+		if err != nil || got.State != want {
+			t.Fatalf("rollout=%+v err=%v, want %s", got, err, want)
+		}
+	}
+	pending, err = d.Users().PendingDeploy(offlineID)
+	if err != nil || pending.Version != serverVersion {
+		t.Fatalf("deferred update after rollout=%+v err=%v", pending, err)
+	}
+
+	rec = getMiniapp(t, h, "/v1/miniapp/fleet/agent/rollout?job_id="+job.ID, 999)
+	var resp miniappFleetAgentUpdateResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK || resp.Job.State != "complete" {
+		t.Fatalf("code=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+	}
+}
+
+func TestMiniappFleetUpdateWaitsForAnOnlineCanary(t *testing.T) {
+	d, _, h, sink := agentUpdateTestMux(t)
+	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+	code, _, _ := decodeDeployError(t, rec)
+	if rec.Code != http.StatusConflict || code != "no_online_canary" {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if job, _, err := d.Rollouts().Active(); job.ID != "" || err == nil || len(sink.snapshotEnqueued()) != 0 {
+		t.Fatalf("created a rollout without an online canary: job=%+v err=%v", job, err)
+	}
+}
+
 func TestMiniappFleetAgentUpdateReportsEnqueueError(t *testing.T) {
 	old := serverVersion
 	SetVersion("v0.33.0")
 	t.Cleanup(func() { SetVersion(old) })
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeen(ownedID); err != nil {
 		t.Fatal(err)
 	}
 	h := NewMux(Deps{

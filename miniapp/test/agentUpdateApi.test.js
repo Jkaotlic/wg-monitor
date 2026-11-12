@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { updateRouterAgent, cancelRouterAgentUpdate, updateFleetAgents, ApiError } from '../src/api.js'
+import { updateRouterAgent, cancelRouterAgentUpdate, updateFleetAgents, fetchFleetAgentRollout, ApiError } from '../src/api.js'
 
 function stubFetch(reply, { ok = true, status = 202 } = {}) {
   const calls = []
@@ -45,6 +45,12 @@ describe('обновление агента: запросы', () => {
     const calls = stubFetch({ results }, { status: 200 })
     expect(await updateFleetAgents('обновить')).toEqual({ results })
     expect(calls[0]).toEqual({ url: '/v1/miniapp/fleet/agent/update', method: 'POST', body: { confirm: 'обновить' } })
+  })
+
+  it('запрашивает итог отслеживаемой раскатки по её ID', async () => {
+    const calls = stubFetch({ job: { state: 'complete' } }, { status: 200 })
+    await fetchFleetAgentRollout('rollout-example')
+    expect(calls[0].url).toBe('/v1/miniapp/fleet/agent/rollout?job_id=rollout-example')
   })
 
   it('отказ приходит кодом в ApiError.code', async () => {
