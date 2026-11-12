@@ -109,10 +109,36 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate router_update_reminders.notified_at: %w", err)
 	}
+	if err := restrictFilePerms(path); err != nil {
+		d.Close()
+		return nil, err
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
 	return &DB{db: d, path: path}, nil
+}
+
+// restrictFilePerms — SEC-01: state.db хранит токены и зашифрованные секреты
+// (docs/security-secrets-at-rest.md обещает 0600), но SQLite создаёт файлы как
+// 0666 & ^umask, и под типичным umask 022 база и WAL/SHM оказываются читаемы
+// всем локальным пользователям. Ужимаем до 0600 на каждом Open — это чинит и
+// свежие файлы, и базы, разложенные старыми версиями. Отсутствующие
+// sidecar-файлы — не ошибка (WAL/SHM появляются лениво), а вот chmod самого
+// state.db обязан пройти: лучше упасть при старте, чем молча открыть базу
+// со слишком широкими правами.
+func restrictFilePerms(path string) error {
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		err := os.Chmod(f, 0o600)
+		if err == nil {
+			continue
+		}
+		if os.IsNotExist(err) {
+			continue
+		}
+		return fmt.Errorf("chmod 0600 %s: %w", f, err)
+	}
+	return nil
 }
 
 // migrateEventsUniqueIdx is the API-01 idempotency migration. Without a UNIQUE

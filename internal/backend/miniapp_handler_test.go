@@ -48,6 +48,26 @@ func TestMiniappSessionHandler(t *testing.T) {
 	}
 }
 
+// SEC-05: вход в мини-апп публичен (лимит попыток -- по адресу, не по телу);
+// без MaxBytesReader гигантское тело читалось в память целиком. Лимит общий
+// с остальным bounded JSON проекта (64 КиБ): init_data -- килобайты.
+func TestMiniappSessionHandlerRejectsOversizedBody(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token"})
+
+	big := `{"init_data":"` + strings.Repeat("a", 128<<10) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", strings.NewReader(big))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMiniappSessionHandlerRejectsBadInitData(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

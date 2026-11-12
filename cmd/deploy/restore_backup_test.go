@@ -41,6 +41,66 @@ func TestInspectRestoreBackupReadsManifestAndAgents(t *testing.T) {
 	}
 }
 
+// SEC-03: основные члены архива раньше распаковывались без лимита -- архив с
+// раздутым state.db съедал диск во временном каталоге. У каждого члена свой
+// потолок, плюс общий на всю распаковку. Лимиты -- переменные пакета (как
+// releaseDownloadBase), чтобы тест мог их ужать, не записывая гигабайты.
+func TestInspectRestoreBackupRejectsOversizedStateDB(t *testing.T) {
+	old := restoreMemberLimits["state.db"]
+	restoreMemberLimits["state.db"] = 4
+	t.Cleanup(func() { restoreMemberLimits["state.db"] = old })
+
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     "sqlite bytes",
+		"backend.yaml": validRestoreBackendYAML(),
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want oversized member error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsOversizedBackendYAML(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     "sqlite bytes",
+		"backend.yaml": strings.Repeat("#\n", (1<<20)/2+1),
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want oversized backend.yaml error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsOversizedTotal(t *testing.T) {
+	old := maxRestoreTotalBytes
+	maxRestoreTotalBytes = 256
+	t.Cleanup(func() { maxRestoreTotalBytes = old })
+
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     strings.Repeat("s", 200),
+		"backend.yaml": validRestoreBackendYAML(),
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want total limit error, got %v", err)
+	}
+}
+
 func TestInspectRestoreBackupRejectsTraversal(t *testing.T) {
 	archive := writeRestoreBackupArchive(t, map[string]string{
 		"state.db":      "sqlite bytes",

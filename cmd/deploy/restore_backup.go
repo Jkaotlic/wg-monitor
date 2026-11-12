@@ -101,6 +101,21 @@ const (
 	maxRestoreExtraBytes = 16 << 20
 )
 
+// SEC-03: основные члены архива раньше распаковывались без лимита -- подсунутый
+// архив с раздутым state.db заполнял диск временного каталога. У каждого члена
+// свой потолок, плюс общий на всю распаковку. Переменные, а не константы -- по
+// образцу releaseDownloadBase: тест ужимает лимит, не записывая гигабайты.
+var restoreMemberLimits = map[string]int64{
+	"state.db":     1 << 30, // гигабайт с запасом на годы событий
+	"backend.yaml": 1 << 20, // настоящий конфиг -- килобайты
+	"agents.csv":   1 << 20,
+	"manifest.txt": 64 << 10,
+}
+
+// maxRestoreTotalBytes -- общий потолок распаковки во временный каталог:
+// сумма четырёх основных членов и зашифрованных хранилищ.
+var maxRestoreTotalBytes int64 = 2 << 30
+
 var restoreStoreNames = []string{restoreAmneziaStore, restoreSelfHostedStore, restoreAwg3Store, restoreHideMyStore}
 
 // storeDestination -- где бэкенд с этим конфигом ищет хранилище name: путь
@@ -276,6 +291,7 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 
 	tr := tar.NewReader(gz)
 	seen := map[string]string{}
+	var totalExtracted int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -303,13 +319,21 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 				cleanup()
 				return nil, nil, fmt.Errorf("backup archive contains duplicate restore member %q", hdr.Name)
 			}
+			limit := restoreMemberLimits[name]
+			if hdr.Size > limit {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive member %q too large: limit %d bytes", name, limit)
+			}
 			dst := filepath.Join(tmpDir, name)
 			f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("create extracted %s: %w", name, err)
 			}
-			if _, err := io.Copy(f, tr); err != nil {
+			// Счётная копия: объявленному размеру не верим, лимит держим по
+			// факту записанного, плюс общий потолок на всю распаковку.
+			written, err := io.Copy(f, io.LimitReader(tr, limit+1))
+			if err != nil {
 				f.Close()
 				cleanup()
 				return nil, nil, fmt.Errorf("extract %s: %w", name, err)
@@ -317,6 +341,15 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 			if err := f.Close(); err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("close extracted %s: %w", name, err)
+			}
+			if written > limit {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive member %q too large: limit %d bytes", name, limit)
+			}
+			totalExtracted += written
+			if totalExtracted > maxRestoreTotalBytes {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive too large: total extracted exceeds %d bytes", maxRestoreTotalBytes)
 			}
 			seen[name] = dst
 		default:
@@ -344,6 +377,11 @@ func inspectRestoreBackup(archivePath, passphrase string, validateBackendYAML fu
 			if err != nil {
 				cleanup()
 				return nil, nil, err
+			}
+			totalExtracted += int64(len(body))
+			if totalExtracted > maxRestoreTotalBytes {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive too large: total extracted exceeds %d bytes", maxRestoreTotalBytes)
 			}
 			dst := filepath.Join(tmpDir, name)
 			if err := os.WriteFile(dst, body, 0o600); err != nil {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +149,86 @@ func TestQueue_DequeueNotifiesExpiredCommands(t *testing.T) {
 		}
 	default:
 		t.Fatal("expired command handler was not called")
+	}
+}
+
+// BUG-01: просроченная pending-команда роутера, который так и не проснулся,
+// раньше жила в очереди до перезапуска процесса — Sweep вымётывал только
+// результаты и выдачи, а TTL pending проверялся лишь на Dequeue. Теперь Sweep
+// обязан уносить и её (с уведомлением expired-handler, как на Dequeue).
+func TestQueue_SweepEvictsExpiredPending(t *testing.T) {
+	q := New()
+	var dropped []string
+	q.SetExpiredCommandHandler(func(userID int64, c wire.Command) {
+		if userID == 7 {
+			dropped = append(dropped, c.ID)
+		}
+	})
+	stale := mkCmd("stale", "diag_now")
+	stale.ExpiresAt = time.Now().Add(-time.Second)
+	if err := q.Enqueue(7, stale); err != nil {
+		t.Fatalf("enqueue stale: %v", err)
+	}
+	fresh := mkCmd("fresh", "diag_now")
+	if err := q.Enqueue(7, fresh); err != nil {
+		t.Fatalf("enqueue fresh: %v", err)
+	}
+	if err := q.Enqueue(8, stale); err != nil { // чужая очередь — тоже чистится
+		t.Fatalf("enqueue other user: %v", err)
+	}
+
+	q.Sweep(time.Hour)
+
+	if len(dropped) != 1 || dropped[0] != "stale" {
+		t.Fatalf("expired handler должен получить ровно stale-команду user 7, got %v", dropped)
+	}
+	if _, ok := q.Dequeue(context.Background(), 8, 10*time.Millisecond); ok {
+		t.Fatal("просроченная команда чужого пользователя пережила Sweep")
+	}
+	got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond)
+	if !ok || got == nil || got.ID != "fresh" {
+		t.Fatalf("свежая команда обязана пережить Sweep, got %+v ok=%v", got, ok)
+	}
+	if _, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond); ok {
+		t.Fatal("после свежей команды очередь обязана быть пуста")
+	}
+}
+
+// BUG-01 (вторая половина): без потолка pending на пользователя очередь
+// спящего роутера росла бы всё время жизни процесса — каждая постановка это
+// структура в памяти. Cap защищает и от ошибки клиента, кладущего команды в
+// цикле.
+func TestQueue_EnqueueCapsPendingPerUser(t *testing.T) {
+	q := New()
+	for i := 0; i < maxPendingPerUser; i++ {
+		if err := q.Enqueue(7, mkCmd(fmt.Sprintf("c%d", i), "diag_now")); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+	if err := q.Enqueue(7, mkCmd("overflow", "diag_now")); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("сверх потолка ждали ErrQueueFull, got %v", err)
+	}
+	if _, err := q.EnqueueIfNoActive(7, mkCmd("overflow2", "restart_tunnel")); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("EnqueueIfNoActive сверх потолка ждали ErrQueueFull, got %v", err)
+	}
+	// Потолок — на пользователя, а не глобальный.
+	if err := q.Enqueue(8, mkCmd("other", "diag_now")); err != nil {
+		t.Fatalf("другой пользователь не должен упираться в чужой потолок: %v", err)
+	}
+	// Supersede-действие вытесняет свои команды до проверки потолка: очередь
+	// из одних self_update не запирает сама себя.
+	q2 := New()
+	filler := mkCmd("filler", "diag_now")
+	for i := 0; i < maxPendingPerUser-1; i++ {
+		if err := q2.Enqueue(7, mkCmd(fmt.Sprintf("u%d", i), "self_update")); err != nil {
+			t.Fatalf("enqueue self_update %d: %v", i, err)
+		}
+	}
+	if err := q2.Enqueue(7, filler); err != nil {
+		t.Fatalf("enqueue filler: %v", err)
+	}
+	if err := q2.Enqueue(7, mkCmd("final-update", "self_update")); err != nil {
+		t.Fatalf("self_update обязан вытеснить своих и вписаться: %v", err)
 	}
 }
 

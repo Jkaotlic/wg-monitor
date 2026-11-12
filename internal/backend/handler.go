@@ -517,6 +517,11 @@ type Deps struct {
 	// DistrustForwardedFor -- ключ лимита входа всегда RemoteAddr, заголовок
 	// X-Forwarded-For не читается (config trust_forwarded_for: false).
 	DistrustForwardedFor bool
+	// ReleaseProxyLimiter -- лимит промахов кэша прокси релизов по адресу
+	// (SEC-02): раздача без авторизации, и перебор старых тегов держал оба
+	// слота занятыми. nil-safe: без лимитера поведение прежнее. NewMux
+	// заполняет сам.
+	ReleaseProxyLimiter *remoteRateLimiter
 	// Replace -- движок замены конфига туннеля (мастер из шести шагов с
 	// откатом, internal/backend/replace). nil-safe: без него экран отвечает
 	// «не настроено», а не падает.
@@ -691,6 +696,14 @@ func NewMux(d Deps) http.Handler {
 	// its throughput per-token. /v1/cmd long-poll is naturally bounded; result
 	// post is small and infrequent (one per cmd) — leave un-limited.
 	reqID := requestIDMiddleware()
+	// SEC-02: прокси релизов публичен; лимитируем промахи кэша (походы на
+	// GitHub) по адресу, чтобы перебор тегов не держал слоты и не стрелял
+	// параллельными fetch'ами. Попадания в кэш бесплатны.
+	releaseLimiter := newRemoteRateLimiter(releaseProxyMissRatePerSec, releaseProxyMissBurst)
+	if releaseLimiter != nil {
+		releaseLimiter.ignoreForwarded = d.DistrustForwardedFor
+	}
+	d.ReleaseProxyLimiter = releaseLimiter
 	mux.Handle("GET /v1/releases/download/{version}/{asset}", reqID(http.HandlerFunc(releaseAssetProxyHandler(d))))
 	mux.Handle("/v1/report", reqID(auth(rate(http.HandlerFunc(reportHandler(d))))))
 	if d.CommandSink != nil {

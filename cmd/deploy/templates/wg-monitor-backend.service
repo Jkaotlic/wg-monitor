@@ -43,8 +43,19 @@ RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 
-# Networking — IPv4/IPv6 only, no UNIX sockets exposed.
-RestrictAddressFamilies=AF_INET AF_INET6
+# Networking — IPv4/IPv6 + AF_UNIX (DEPLOY-02). AF_UNIX нужен сценарию
+# «свой VPN-сервер на локальном Docker»: selfhostedamnezia.DockerRunner
+# exec'ит `docker`, а тот ходит в /var/run/docker.sock. Без AF_UNIX такая
+# площадка молча не работает.
+#
+# ВНИМАНИЕ: самого семейства мало — службе ещё нужен ДОСТУП к сокету. Доступ
+# к /var/run/docker.sock == root на хосте (через docker run -v /:/host любой
+# контейнер читает всё), поэтому шаблон НЕ добавляет SupplementaryGroups=docker
+# сам: решение принимает оператор, явно:
+#   sudo usermod -aG docker wgmonitor
+# или drop-in с SupplementaryGroups=docker на конкретной площадке, где
+# локальный Docker действительно используется.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Capabilities — drop everything; service binds to 127.0.0.1:8080, no
 # privileged port needed.

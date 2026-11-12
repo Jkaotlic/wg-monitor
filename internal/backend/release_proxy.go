@@ -36,6 +36,50 @@ const maxConcurrentReleaseProxy = 2
 
 var releaseProxySlots = make(chan struct{}, maxConcurrentReleaseProxy)
 
+// releaseSmallFetchSlots -- общий потолок параллельных походов на GitHub за
+// мелкими файлами (SEC-02). Дедуп в кэше -- по ключу, поэтому без потолка
+// пачка запросов с РАЗНЫМИ тегами открывала столько одновременных
+// соединений, сколько тегов придумал клиент.
+var releaseSmallFetchSlots = make(chan struct{}, maxConcurrentReleaseProxy)
+
+// Лимит промахов кэша прокси релизов по адресу (SEC-02). Всплеск 8 с
+// запасом накрывает первый роутер свежего выпуска (суммы, подпись, бинарь);
+// темп -- один промах в 20 секунд: перебором тегов оба слота занятыми не
+// удержать, а парку попадания в кэш бесплатны и промахи редки.
+const (
+	releaseProxyMissRatePerSec = 0.05
+	releaseProxyMissBurst      = 8
+)
+
+// allowReleaseProxyMiss списывает токен промаха кэша с адреса клиента.
+// false -- отказать с 429; retry -- срок ожидания.
+func allowReleaseProxyMiss(l *remoteRateLimiter, r *http.Request) (bool, time.Duration) {
+	if l == nil {
+		return true, 0
+	}
+	key := clientRateKeyOpt(r, !l.ignoreForwarded)
+	ok, retry := l.Allow(key)
+	if ok {
+		if bok, bretry := l.backstop.Allow(r.RemoteAddr); !bok {
+			l.refund(key)
+			return false, bretry
+		}
+	}
+	return ok, retry
+}
+
+// writeReleaseProxyLimited -- отказ по лимиту промахов: тот же контракт, что
+// у входов (429 + Retry-After), агент уже умеет ждать.
+func writeReleaseProxyLimited(w http.ResponseWriter, retry time.Duration) {
+	secs := int(retry.Round(time.Second).Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeJSONError(w, http.StatusTooManyRequests, "rate_limited",
+		"too many release fetches; retry in "+strconv.Itoa(secs)+"s")
+}
+
 func releaseAssetProxyHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -51,11 +95,16 @@ func releaseAssetProxyHandler(d Deps) http.HandlerFunc {
 		}
 		u := strings.TrimRight(releaseDownloadBase, "/") + "/" + url.PathEscape(version) + "/" + url.PathEscape(asset)
 		if limit, small := releaseSmallAssetLimit(asset); small {
-			serveReleaseSmallAsset(w, r, u, limit)
+			serveReleaseSmallAsset(w, r, u, limit, d.ReleaseProxyLimiter)
 			return
 		}
 		if d.ReleaseCacheDir != "" {
-			serveReleaseBinaryCached(w, r, d.ReleaseCacheDir, version, asset, u)
+			serveReleaseBinaryCached(w, r, d.ReleaseCacheDir, version, asset, u, d.ReleaseProxyLimiter)
+			return
+		}
+		// Без дискового кэша каждый бинарь -- промах: списываем токен всегда.
+		if ok, retry := allowReleaseProxyMiss(d.ReleaseProxyLimiter, r); !ok {
+			writeReleaseProxyLimited(w, retry)
 			return
 		}
 		select {
@@ -95,9 +144,14 @@ func releaseAssetProxyHandler(d Deps) http.HandlerFunc {
 // уже без слота и без копии в памяти. В кэш попадает только бинарь, чья
 // sha256 совпала с подписанным checksums.txt выпуска: выпуск неизменен, и
 // проверенный файл годится всем следующим.
-func serveReleaseBinaryCached(w http.ResponseWriter, r *http.Request, cacheDir, version, asset, u string) {
+func serveReleaseBinaryCached(w http.ResponseWriter, r *http.Request, cacheDir, version, asset, u string, limiter *remoteRateLimiter) {
 	path := filepath.Join(cacheDir, version, asset)
 	if serveReleaseCacheFile(w, r, path) {
+		return
+	}
+	// Промах кэша: до занятия слота списываем токен адреса (SEC-02).
+	if ok, retry := allowReleaseProxyMiss(limiter, r); !ok {
+		writeReleaseProxyLimited(w, retry)
 		return
 	}
 	select {
@@ -376,6 +430,21 @@ func (c *releaseSmallAssetCache) fetch(ctx context.Context, key string, load fun
 	c.mu.Unlock()
 
 	if !running {
+		// SEC-02: походов на GitHub одновременно не больше, чем бинарных
+		// слотов; лишним -- «занято», как на бинарях. Ждущие того же ключа
+		// получат тот же отказ и вернутся позже.
+		select {
+		case releaseSmallFetchSlots <- struct{}{}:
+			defer func() { <-releaseSmallFetchSlots }()
+		default:
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+			f.status = http.StatusServiceUnavailable
+			f.msg = "release proxy busy; retry shortly"
+			close(f.done)
+			return f.asset, f.status, f.msg
+		}
 		// Отвалившийся первый клиент не должен ронять остальных: запрос на
 		// GitHub живёт своим сроком, а не соединением того, кто его начал.
 		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseSmallAssetTimeout)
@@ -398,11 +467,22 @@ func (c *releaseSmallAssetCache) fetch(ctx context.Context, key string, load fun
 	}
 }
 
-func serveReleaseSmallAsset(w http.ResponseWriter, r *http.Request, u string, limit int64) {
+func serveReleaseSmallAsset(w http.ResponseWriter, r *http.Request, u string, limit int64, limiter *remoteRateLimiter) {
+	// Промах кэша -- поход на GitHub: списываем токен адреса (SEC-02).
+	// Попадание бесплатно: парк не должен страдать от чужого перебора тегов.
+	if _, cached := releaseSmallAssets.get(u); !cached {
+		if ok, retry := allowReleaseProxyMiss(limiter, r); !ok {
+			writeReleaseProxyLimited(w, retry)
+			return
+		}
+	}
 	got, status, msg := releaseSmallAssets.fetch(r.Context(), u, func(ctx context.Context) (releaseSmallAsset, int, string) {
 		return fetchReleaseProxyAsset(ctx, u, limit, releaseSmallAssetTimeout)
 	})
 	if status != http.StatusOK {
+		if status == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", releaseProxyRetryAfter())
+		}
 		writeJSONError(w, status, errCodeInternal, msg)
 		return
 	}

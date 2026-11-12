@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { accountSummary, optionRows } from '../cabinet.js'
@@ -39,15 +39,31 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
   // Отзывать могут админ, владелец и оператор (replaceCanRevoke); роль не
   // узнали -- кнопки нет, слова те же.
   const [canRevoke, setCanRevoke] = useState(false)
+  // BUG-02: монотонная версия ответов. Каждый запрос (опрос или запуск)
+  // получает номер; ответ применяется, только если новее уже применённого:
+  // медленный ответ опроса, ушедший до запуска замены, не откатит экран
+  // обратно к форме.
+  const reqSeq = useRef(0)
+  const appliedSeq = useRef(0)
 
   useEffect(() => {
     let alive = true
+    let timer = null
+    // Следующий опрос уходит только после ответа предыдущего: setInterval
+    // наслаивал запросы друг на друга при медленной сети.
     const poll = () => {
+      const seq = ++reqSeq.current
       fetchReplaceStatus(routerID)
         .then((j) => {
-          if (alive) setJob(j)
+          if (alive && seq > appliedSeq.current) {
+            appliedSeq.current = seq
+            setJob(j)
+          }
         })
         .catch(() => {})
+        .finally(() => {
+          if (alive) timer = setTimeout(poll, POLL_MS)
+        })
     }
     poll()
     setCanRevoke(false)
@@ -56,7 +72,6 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
         if (alive) setCanRevoke(replaceCanRevoke(st?.role))
       })
       .catch(() => {})
-    const timer = setInterval(poll, POLL_MS)
     fetchVPNAccounts(routerID)
       .then((data) => {
         if (alive) setAccounts(data.accounts ?? [])
@@ -66,7 +81,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
       })
     return () => {
       alive = false
-      clearInterval(timer)
+      if (timer) clearTimeout(timer)
     }
   }, [routerID])
 
@@ -75,6 +90,10 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
 
   function start() {
     if (!pick) return
+    // Новый номер запроса: ответы опроса, ушедшие до запуска, больше не
+    // применяются — иначе запоздалый «пусто» вернул бы форму поверх идущей
+    // замены (BUG-02).
+    const seq = ++reqSeq.current
     setStarting(true)
     setError('')
     startReplace(routerID, {
@@ -83,7 +102,12 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
       old_tunnel_id: tunnel.id,
       policy_name: policyName,
     })
-      .then((j) => setJob({ ...j, steps: j.steps ?? [] }))
+      .then((j) => {
+        if (seq > appliedSeq.current) {
+          appliedSeq.current = seq
+          setJob({ ...j, steps: j.steps ?? [] })
+        }
+      })
       .catch((err) => setError(startErrorText(err)))
       .finally(() => setStarting(false))
   }

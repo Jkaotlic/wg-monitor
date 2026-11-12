@@ -56,8 +56,10 @@ retention:
   wal_checkpoint_every: 1h
 
 # Amnezia Premium cabinet helper. vpn:// keys are added in the mini app
-# (router -> Cabinet) and stored outside state.db, so the Telegram backup
-# archive does not include subscription secrets.
+# (router -> Cabinet) and stored outside state.db, encrypted with revive.key.
+# The backup archive carries the encrypted store, but NOT revive.key itself:
+# keep a copy of /etc/wg-monitor/revive.key (or wherever revive.key_file
+# points) separately, or the restored secrets are unreadable.
 amnezia_premium:
   secrets_path: /var/lib/wg-monitor/amnezia-premium.json
 

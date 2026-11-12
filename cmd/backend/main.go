@@ -234,8 +234,8 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if r := cmdQueue.Sweep(1 * time.Hour); r > 0 {
-					logger.Debug("cmd queue swept", "results", r)
+				if r, p := cmdQueue.Sweep(1 * time.Hour); r > 0 || p > 0 {
+					logger.Debug("cmd queue swept", "results", r, "pending", p)
 				}
 			}
 		}

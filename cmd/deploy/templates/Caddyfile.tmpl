@@ -46,10 +46,20 @@
 		X-Frame-Options "DENY"
 		# Минимальный referrer.
 		Referrer-Policy "no-referrer"
-		# CSP заглушка — backend сейчас отдаёт только plain-text/JSON.
-		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+		# Глобальный CSP здесь намеренно отсутствует (DEPLOY-01): мини-апп
+		# отдаётся этим же vhost'ом, и `default-src 'none'` блокирует его
+		# ресурсы. CSP ставит сам backend там, где она нужна (rescue-страница
+		# со своими hash-based правилами).
 		# Снять Caddy-ный default Server header — лишний reconnaissance.
 		-Server
+	}
+
+	# SEC-04: backend монтирует expvar на общий mux; комментарии в коде
+	# говорят «loopback», но reverse_proxy ниже проксирует ВСЕ пути, так что
+	# /debug/vars оказывается доступен снаружи без авторизации. Явно закрываем
+	# до proxy. Локальный curl на 127.0.0.1:8080 по-прежнему работает.
+	handle /debug/vars* {
+		respond "Not Found" 404
 	}
 
 	reverse_proxy 127.0.0.1:8080 {

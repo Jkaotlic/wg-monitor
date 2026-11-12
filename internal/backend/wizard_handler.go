@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -1641,6 +1642,11 @@ func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, a
 		IssuedAt: time.Now().UTC(),
 	}
 	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
+		if errors.Is(err, cmdpkg.ErrQueueFull) {
+			writeJSONError(w, http.StatusTooManyRequests, "queue_full",
+				"router has too many pending commands; wait for it to wake up or cancel some")
+			return false, ""
+		}
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
 		return false, ""
 	}

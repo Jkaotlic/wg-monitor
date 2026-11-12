@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,6 +37,55 @@ func TestOpenIdempotent(t *testing.T) {
 		t.Fatalf("second open: %v", err)
 	}
 	d.Close()
+}
+
+// SEC-01: state.db хранит токены и зашифрованные секреты, а
+// docs/security-secrets-at-rest.md обещает 0600. Под umask 022 SQLite создаёт
+// файл (и WAL/SHM) с 0644 — Open обязан ужать права сам, и для свежей базы,
+// и для уже существующей с широкими правами.
+func TestOpenRestrictsFilePermissions(t *testing.T) {
+	assertPrivate := func(t *testing.T, files ...string) {
+		t.Helper()
+		for _, f := range files {
+			info, err := os.Stat(f)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue // sidecar-файлы WAL/SHM могут ещё не появиться
+				}
+				t.Fatalf("stat %s: %v", f, err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Errorf("%s: mode %04o, want 0600", f, got)
+			}
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Запись гарантирует появление -wal/-shm до проверки.
+	if _, err := d.SQL().Exec(`INSERT INTO users (nickname, token_hash, expected_exit_ip, awg_iface) VALUES ('perm', 'h', '198.51.100.1', 'awg0')`); err != nil {
+		t.Fatal(err)
+	}
+	assertPrivate(t, path, path+"-wal", path+"-shm")
+	d.Close()
+
+	// Существующая база с широкими правами ужимается при повторном Open.
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(f); err == nil {
+			if err := os.Chmod(f, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer d.Close()
+	assertPrivate(t, path, path+"-wal", path+"-shm")
 }
 
 func TestMigrateAckedAddsColumn(t *testing.T) {

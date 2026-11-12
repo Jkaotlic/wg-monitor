@@ -194,6 +194,33 @@ func TestMiniappCommandAllowlistEntriesAreValidWireActions(t *testing.T) {
 	}
 }
 
+// BUG-01: у спящего роутера очередь ограничена потолком; когда он исчерпан,
+// клиент должен получить внятный 429, а не generic 500 «enqueue: command
+// queue is full».
+func TestMiniappCommandQueueFullReturns429(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	q := cmdpkg.New()
+	for i := 0; i < 64; i++ {
+		if err := q.Enqueue(ownedID, wire.Command{
+			ID:       fmt.Sprintf("filler-%d", i),
+			Action:   "diag_now",
+			IssuedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("fill queue: %v", err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: q})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID),
+		bytes.NewReader([]byte(`{"action":"force_recheck"}`)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("queue full: got %d (%s), want 429", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMiniappCommandRejectsDeniedAction(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	sink := &dashboardActionSink{}

@@ -23,6 +23,17 @@ import (
 var ErrDuplicateResult = errors.New("duplicate command result")
 var ErrUnissuedResult = errors.New("command result does not match an issued command")
 
+// ErrQueueFull -- у пользователя уже maxPendingPerUser невыданных команд
+// (BUG-01). Без потолка очередь спящего роутера росла бы всё время жизни
+// процесса: рестарт — единственное, что её обнуляет.
+var ErrQueueFull = errors.New("command queue is full")
+
+// maxPendingPerUser -- потолок невыданных команд одного пользователя. Связка
+// с Sweep: протухшее вымётывается по TTL, а cap ограничивает живое. Значение
+// с запасом выше любой штатной пачки (массовая постановка из мини-аппа — до
+// ~50 за всплеск), но всё ещё конечное: цикл-баг клиента не раздует процесс.
+const maxPendingPerUser = 64
+
 type resultEntry struct {
 	result     wire.CommandResult
 	recordedAt time.Time
@@ -185,7 +196,7 @@ func (q *Queue) prepareCommand(userID int64, cmd wire.Command) (wire.Command, er
 	return cmd, nil
 }
 
-func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) (int, []wire.Command) {
+func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) (int, []wire.Command, error) {
 	var dropped []wire.Command
 	if supersedesPending(cmd.Action) {
 		filtered := q.pending[userID][:0]
@@ -202,8 +213,12 @@ func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) (int, []wire.Comma
 			q.pending[userID] = filtered
 		}
 	}
+	if len(q.pending[userID]) >= maxPendingPerUser {
+		q.log().Warn("queue enqueue rejected", "reason", "queue-full", "user_id", userID, "action", cmd.Action, "pending", len(q.pending[userID]))
+		return len(q.pending[userID]), dropped, ErrQueueFull
+	}
 	q.pending[userID] = append(q.pending[userID], cmd)
-	return len(q.pending[userID]), dropped
+	return len(q.pending[userID]), dropped, nil
 }
 
 func notifyDroppedCommands(userID int64, h ExpiredCommandHandler, dropped []wire.Command) {
@@ -223,11 +238,14 @@ func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
 		return err
 	}
 	q.mu.Lock()
-	pendingLen, dropped := q.enqueueLocked(userID, cmd)
+	pendingLen, dropped, err := q.enqueueLocked(userID, cmd)
 	onDrop := q.onDrop
 	q.mu.Unlock()
 	q.signal.Broadcast()
 	notifyDroppedCommands(userID, onDrop, dropped)
+	if err != nil {
+		return err
+	}
 	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return nil
 }
@@ -574,11 +592,14 @@ func (q *Queue) EnqueueIfNoActive(userID int64, cmd wire.Command) (bool, error) 
 		q.mu.Unlock()
 		return false, nil
 	}
-	pendingLen, dropped := q.enqueueLocked(userID, cmd)
+	pendingLen, dropped, err := q.enqueueLocked(userID, cmd)
 	onDrop := q.onDrop
 	q.mu.Unlock()
 	q.signal.Broadcast()
 	notifyDroppedCommands(userID, onDrop, dropped)
+	if err != nil {
+		return false, err
+	}
 	q.log().Debug("queue enqueue if no active", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return true, nil
 }
@@ -619,16 +640,30 @@ func (q *Queue) AwaitResult(ctx context.Context, userID int64, id string, timeou
 	}
 }
 
-// Sweep evicts result and issued entries older than ttl. Caller drives the
-// schedule (see cmd/backend/main.go); not auto-spawned to keep the package
-// dependency-free of context plumbing. Returns the number of results evicted.
-func (q *Queue) Sweep(ttl time.Duration) (results int) {
+// Sweep evicts result and issued entries older than ttl and pending commands
+// whose TTL has already expired. Caller drives the schedule (see
+// cmd/backend/main.go); not auto-spawned to keep the package dependency-free
+// of context plumbing. Returns the number of evicted results and pending
+// commands.
+//
+// BUG-01: раньше pending с истёкшим ExpiresAt жил в очереди до перезапуска
+// процесса, если роутер так и не проснулся — TTL проверялся только на
+// Dequeue. Для парка, где роутеры спят неделями, это и утечка памяти, и
+// вечно «висящая» команда на экранах. Просроченные pending уходят через тот
+// же ExpiredCommandHandler, что и на Dequeue (мини-апп по нему снимает
+// отметку «обновление назначено»).
+func (q *Queue) Sweep(ttl time.Duration) (results, pending int) {
 	if ttl <= 0 {
-		return 0
+		return 0, 0
 	}
 	cutoff := time.Now().Add(-ttl)
+	now := time.Now()
+	type droppedCmd struct {
+		userID int64
+		cmd    wire.Command
+	}
+	var dropped []droppedCmd
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	for uid, bucket := range q.results {
 		for id, e := range bucket {
 			if e.recordedAt.Before(cutoff) {
@@ -650,5 +685,29 @@ func (q *Queue) Sweep(ttl time.Duration) (results int) {
 			delete(q.issued, uid)
 		}
 	}
-	return results
+	for uid, queue := range q.pending {
+		filtered := queue[:0]
+		for _, c := range queue {
+			if commandExpired(c, now) {
+				dropped = append(dropped, droppedCmd{userID: uid, cmd: c})
+				pending++
+				continue
+			}
+			filtered = append(filtered, c)
+		}
+		if len(filtered) == 0 {
+			delete(q.pending, uid)
+		} else {
+			q.pending[uid] = filtered
+		}
+	}
+	onDrop := q.onDrop
+	q.mu.Unlock()
+	for _, d := range dropped {
+		q.log().Warn("queue sweep expired pending command", "user_id", d.userID, "cmd_id", d.cmd.ID, "action", d.cmd.Action)
+		if onDrop != nil {
+			onDrop(d.userID, d.cmd)
+		}
+	}
+	return results, pending
 }

@@ -93,6 +93,49 @@ func TestRenderCaddyfile(t *testing.T) {
 	}
 }
 
+// TestRenderCaddyfileBlocksDebugVars — SEC-04: /debug/vars на backend слушает
+// loopback, но Caddy проксирует все пути, поэтому снаружи метрики доступны без
+// авторизации. Блок handle должен стоять до общего reverse_proxy.
+func TestRenderCaddyfileBlocksDebugVars(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyParams{
+		Domain: "wgmon.example.com",
+		Email:  "admin@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	handleIdx := strings.Index(s, "handle /debug/vars*")
+	if handleIdx < 0 {
+		t.Fatalf("Caddyfile missing /debug/vars block:\n%s", s)
+	}
+	proxyIdx := strings.Index(s, "reverse_proxy 127.0.0.1:8080")
+	if proxyIdx < 0 {
+		t.Fatalf("Caddyfile missing reverse_proxy:\n%s", s)
+	}
+	if handleIdx > proxyIdx {
+		t.Errorf("/debug/vars block must precede reverse_proxy (handle at %d, proxy at %d)", handleIdx, proxyIdx)
+	}
+}
+
+// TestRenderCaddyfileNoGlobalCSP — DEPLOY-01: глобальный
+// `default-src 'none'` ломает мини-апп (блокирует его ресурсы) и перекрывает
+// собственную CSP rescue-страницы, которую ставит backend. CSP остаётся
+// прерогативой backend-ответов, а не общего header-блока Caddy.
+func TestRenderCaddyfileNoGlobalCSP(t *testing.T) {
+	got, err := RenderCaddyfile(CaddyParams{
+		Domain: "wgmon.example.com",
+		Email:  "admin@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	if strings.Contains(s, "Content-Security-Policy") {
+		t.Errorf("Caddyfile must not set a global Content-Security-Policy:\n%s", s)
+	}
+}
+
 func TestStaticTemplates(t *testing.T) {
 	for _, name := range []string{
 		"wg-monitor-backend.service",
@@ -118,6 +161,26 @@ func TestInitScriptAvailableViaInstalltmpl(t *testing.T) {
 	}
 	if !strings.Contains(s, "S99wg-monitor") {
 		t.Fatal("init script missing S99wg-monitor reference")
+	}
+}
+
+// DEPLOY-02: сценарий «свой VPN-сервер на локальном Docker» exec'ит `docker`,
+// которому нужен AF_UNIX для /var/run/docker.sock. При этом шаблон НЕ должен
+// сам выдавать SupplementaryGroups=docker: доступ к сокету -- это root на
+// хосте, и такое решение принимает оператор явно, а не молча за него.
+func TestBackendServiceAllowsUnixSocketButNotDockerGroup(t *testing.T) {
+	got, err := ReadStaticTemplate("wg-monitor-backend.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	if !strings.Contains(s, "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6") {
+		t.Errorf("backend unit без AF_UNIX — локальный Docker не заработает:\n%s", s)
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "SupplementaryGroups=") {
+			t.Errorf("backend unit не должен молча выдавать доп. группы (docker == root-equivalent):\n%s", s)
+		}
 	}
 }
 

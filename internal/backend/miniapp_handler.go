@@ -174,7 +174,12 @@ type miniappSessionResp struct {
 func miniappSessionHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req miniappSessionReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.InitData == "" {
+		// SEC-05: общий bounded-декодер проекта (64 КиБ, один JSON на тело) --
+		// вход публичен, и без MaxBytesReader тело читалось в память целиком.
+		if !decodeWizardJSON(w, r, &req) {
+			return
+		}
+		if req.InitData == "" {
 			writeJSONError(w, http.StatusBadRequest, "bad_request", "init_data required")
 			return
 		}
