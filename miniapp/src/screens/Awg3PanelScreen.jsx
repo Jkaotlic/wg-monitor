@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchAwg3Peers, fetchAwg3Panels, issueAwg3Device, issueAwg3ToRouter } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { waitCommand, waitDeadlineMs, commandOutcome } from '../commandWait.js'
@@ -36,7 +36,7 @@ export function Awg3PanelScreen({ panelId, routers = [], backLabel = 'Панел
   const alive = useRef(true)
   const seq = useRef(0)
 
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },

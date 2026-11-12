@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchRouter, fetchRouterChecks, fetchIncidentHistory, fetchRouterOperations, silenceIncident, ackIncident, muteIncident, fetchRouterVersions } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
@@ -356,7 +356,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // строка «41 сек назад» через пять минут врала: человек смотрел на прошлое,
   // поданное как настоящее. Опрос идёт только пока вкладка открыта -- Telegram
   // держит мини-апп живым дольше, чем на него смотрят.
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Новый роутер -- чистый экран: показания прошлого под чужим именем
     // были бы той же ложью, что и поздний ответ.
     setRouter(null)

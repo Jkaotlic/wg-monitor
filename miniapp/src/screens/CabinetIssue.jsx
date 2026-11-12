@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { issueVPNConfig, issueAwg3ToRouter, fetchCommandResult, sendVPNConf } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { agentReplyText } from '../errorText.js'
@@ -28,7 +28,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
   const [offerRevoke, setOfferRevoke] = useState(false)
   const [sendNotice, setSendNotice] = useState('')
   const alive = useRef(true)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },

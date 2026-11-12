@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks'
 import { navFromURL, urlFromNav } from './navUrl.js'
 import { navPinned, navReducer, localLayerDepth, LOCAL_LAYERS } from './nav.js'
 import { loadLastRouter } from './routerPick.js'
@@ -80,7 +80,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], routers = nu
     reconcile(nav)
   }, [enabled, nav.routerID, nav.tab, nav.overlay, nav.diagView, nav.overlayParams, nav.sheet])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled) return undefined
     // «Назад»/«вперёд» браузера: навигация берётся из адреса, а нормализованный
     // адрес (удалённый роутер, старый tab=routes) пишется сразу заменой. Иначе

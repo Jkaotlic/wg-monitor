@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { startProvision } from '../api.js'
 import { confirmReady } from '../sheet.js'
 import { NICKNAME_RULE } from '../formRules.js'
@@ -55,7 +55,7 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
   const alive = useRef(true)
   const valuesRef = useRef(values)
   valuesRef.current = values
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
       const live = valuesRef.current

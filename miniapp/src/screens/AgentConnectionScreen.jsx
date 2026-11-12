@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchAgentConnection, saveAgentConnection } from '../api.js'
 import {
   CONNECTION_GROUPS,
@@ -28,7 +28,7 @@ export function AgentConnectionScreen({ routerID, routerName, onClose }) {
   const [notice, setNotice] = useState('')
 
   const alive = useRef(true)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
     },

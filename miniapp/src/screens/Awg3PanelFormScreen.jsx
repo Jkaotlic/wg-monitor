@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchAwg3Panels, createAwg3Panel, updateAwg3Panel, deleteAwg3Panel } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
@@ -45,7 +45,7 @@ export function Awg3PanelFormScreen({ panelId = '', backLabel = 'Панели VP
   // же файл повторно, пока его .value не сброшен -- ref нужен, чтобы сбросить
   // его и после чтения, и после отправки (save её обнуляет отдельно).
   const fileInputRef = useRef(null)
-  useEffect(
+  useLayoutEffect(
     () => () => {
       alive.current = false
       const v = valuesRef.current

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -172,7 +172,7 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const batchRunningRef = useRef(false)
   const batchCancelRef = useRef({ cancelled: false })
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     aliveRef.current = true
     return () => {
       aliveRef.current = false

@@ -11,13 +11,13 @@
     "layout:selftest": "node layout/selftest.mjs"
   },
   "dependencies": {
-    "preact": "^10.24.3"
+    "preact": "^11.2.0"
   },
   "devDependencies": {
-    "@preact/preset-vite": "^2.9.3",
-    "jsdom": "^30.0.1",
-    "playwright": "^1.62.1",
-    "vite": "^8.2.2",
-    "vitest": "^5.0.0"
+    "@preact/preset-vite": "^2.10.6",
+    "jsdom": "^31.0.0",
+    "playwright": "^1.65.0",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
   }
 }

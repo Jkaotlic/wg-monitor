@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { dashboardLogin, redeemWebLink } from '../api.js'
 import { loginErrorText } from '../login.js'
 import { placeText } from '../places.js'
@@ -16,7 +16,7 @@ export function LoginScreen({ notice = '', linkToken = '', onLinkUsed, onSuccess
   // Токен ссылки оболочка сняла с адреса ещё до первого запроса и держит в
   // памяти. Обмен -- один раз: onLinkUsed забывает токен, чтобы после выхода
   // или истечения сессии экран входа не менял мёртвую ссылку снова.
-  useEffect(() => {
+  useLayoutEffect(() => {
     alive.current = true
     if (linkToken) {
       onLinkUsed?.()

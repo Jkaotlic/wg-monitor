@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
 import { commandOutcomeLabel, commandRefreshesList } from '../labels.js'
@@ -41,7 +41,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
   // компонент в замыкании.
   const valuesRef = useRef(values)
   valuesRef.current = values
-  useEffect(
+  useLayoutEffect(
     () => () => {
       const live = valuesRef.current
       for (const k of Object.keys(live ?? {})) live[k] = ''
@@ -57,7 +57,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
   // уже ушёл, а на его месте открыт другой: закрыть тогда -- значит закрыть
   // чужой лист.
   const alive = useRef(true)
-  useEffect(() => {
+  useLayoutEffect(() => {
     alive.current = true
     return () => {
       alive.current = false
@@ -90,7 +90,7 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
   // закрывает, во время выполнения молчит.
   const escRef = useRef(null)
   escRef.current = dismiss
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape') escRef.current?.()
     }

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useReducer, useState } from 'preact/hooks'
 import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { setUnauthorizedHandler } from './api.js'
@@ -82,12 +82,12 @@ export function App() {
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
-  useEffect(() => {
+  useLayoutEffect(() => {
     setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
   }, [nav.overlay, nav.sheet, wide, pinned])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || typingTarget(e.target)) return
       const action = escapeAction(nav, { wide })
