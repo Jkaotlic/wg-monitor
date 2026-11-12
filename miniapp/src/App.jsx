@@ -55,8 +55,9 @@ export function App() {
   }, [nav.routerID])
 
   // 401 посреди работы в браузере -- истекла кука: на экран входа, место в
-  // адресе остаётся, после входа useBoot откроет его снова.
-  useEffect(() => {
+  // адресе остаётся, после входа useBoot откроет его снова. Регистрируем
+  // обработчик до ответа на первые запросы, начатые в layout-эффектах экранов.
+  useLayoutEffect(() => {
     if (mode !== 'web' || boot.status !== 'ready') return undefined
     return setUnauthorizedHandler(() => boot.expire())
   }, [mode, boot.status])
