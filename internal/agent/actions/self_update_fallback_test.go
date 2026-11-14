@@ -131,6 +131,31 @@ func assertInstalled(t *testing.T, want []byte) {
 	}
 }
 
+func TestSelfUpdate_BackendRateLimitRetriesThenSucceeds(t *testing.T) {
+	f := newFallbackFixture(t)
+	gh, ghHits := releaseServer(t, f.good, nil)
+	useGitHubStub(t, gh.URL)
+	upstream, _ := releaseServer(t, f.good, nil)
+	var limited atomic.Bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/"+fallbackTestVersion+"/checksums.txt" && limited.CompareAndSwap(false, true) {
+			w.Header().Set("Retry-After", "12")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		http.Redirect(w, r, upstream.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(backend.Close)
+
+	if _, err := SelfUpdate(context.Background(), fallbackTestVersion, "", false, backend.URL); err != nil {
+		t.Fatal(err)
+	}
+	assertInstalled(t, f.good.artifact)
+	if ghHits.Load() != 0 || len(f.slept()) != 1 {
+		t.Fatalf("fallback hits = %d, retries = %v", ghHits.Load(), f.slept())
+	}
+}
+
 func TestSelfUpdate_BackendBusyRetriesThenSucceeds(t *testing.T) {
 	f := newFallbackFixture(t)
 	gh, ghHits := releaseServer(t, f.good, nil)

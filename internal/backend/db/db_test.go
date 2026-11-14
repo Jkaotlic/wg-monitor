@@ -88,6 +88,24 @@ func TestOpenRestrictsFilePermissions(t *testing.T) {
 	assertPrivate(t, path, path+"-wal", path+"-shm")
 }
 
+func TestOpenRestrictsPermissionsBeforeReadingInvalidDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid.db")
+	if err := os.WriteFile(path, []byte("invalid SQLite database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := Open(path); err == nil {
+		_ = d.Close()
+		t.Fatal("opened invalid database")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode = %04o, want 0600 even when opening fails", got)
+	}
+}
+
 func TestMigrateAckedAddsColumn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)

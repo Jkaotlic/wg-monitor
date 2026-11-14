@@ -28,6 +28,40 @@ type fakeDisp struct {
 	db     *db.DB
 }
 
+func TestDebugVarsRequiresDashboardAuthorization(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	for _, tt := range []struct {
+		name, configured, presented string
+		wantStatus                  int
+	}{
+		{"disabled", "", "", http.StatusNotFound},
+		{"anonymous", "dashboard-test-token", "", http.StatusUnauthorized},
+		{"wrong token", "dashboard-test-token", "wrong-token", http.StatusUnauthorized},
+		{"operator", "dashboard-test-token", "dashboard-test-token", http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := NewMux(Deps{DB: database, DashboardToken: tt.configured})
+			req := httptest.NewRequest(http.MethodGet, "/debug/vars", nil)
+			if tt.presented != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.presented)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if got := strings.Contains(rec.Body.String(), `"memstats"`); got != (tt.wantStatus == http.StatusOK) {
+				t.Fatalf("metrics present = %v", got)
+			}
+		})
+	}
+}
+
 // Apply -- как Handle: фейк ничего не доставляет, запись и учёт вызова --
 // синхронная часть, доставки нет.
 func (f *fakeDisp) Apply(uid int64, nick, check string, tr state.Transition, c wire.Check) (func(context.Context) error, error) {

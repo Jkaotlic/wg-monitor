@@ -663,11 +663,11 @@ func NewMux(d Deps) http.Handler {
 			Version string `json:"version"`
 		}{Status: "ok", Version: serverVersion})
 	})
-	// /debug/vars exposes expvar counters (OBS-13). Bound to loopback via
-	// cfg.Listen so external attackers can't hit it; if you ever expose
-	// backend behind something other than Caddy reverse-proxy, gate this
-	// behind a separate mux on a different port.
-	mux.Handle("/debug/vars", expvar.Handler())
+	// A reverse proxy can forward requests even when the backend listens
+	// on loopback. Require operator credentials at the handler as well.
+	if d.DashboardToken != "" {
+		mux.Handle("GET /debug/vars", DashboardAuthMiddleware(d.DashboardToken, d.Logger)(expvar.Handler()))
+	}
 	// /readyz: deep health — DB ping + sanity checks. External monitoring
 	// (smoke/doctor/cron) should use this. 503 means "process is up but
 	// can't service requests" — restart, page operator, etc.

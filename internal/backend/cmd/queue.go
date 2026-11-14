@@ -650,8 +650,8 @@ func (q *Queue) AwaitResult(ctx context.Context, userID int64, id string, timeou
 // процесса, если роутер так и не проснулся — TTL проверялся только на
 // Dequeue. Для парка, где роутеры спят неделями, это и утечка памяти, и
 // вечно «висящая» команда на экранах. Просроченные pending уходят через тот
-// же ExpiredCommandHandler, что и на Dequeue (мини-апп по нему снимает
-// отметку «обновление назначено»).
+// же ExpiredCommandHandler, что и на Dequeue. Для self_update назначение
+// остаётся в базе и будет заново поставлено в очередь при контакте агента.
 func (q *Queue) Sweep(ttl time.Duration) (results, pending int) {
 	if ttl <= 0 {
 		return 0, 0

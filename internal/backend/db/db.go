@@ -6,7 +6,9 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 
@@ -30,9 +32,9 @@ func Open(path string) (*DB, error) {
 	//                         meaningful corruption-risk increase under WAL.
 	//   busy_timeout(5000) — block up to 5s for the writer lock instead of
 	//                         returning SQLITE_BUSY immediately.
-	existed := true
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		existed = false
+	existed, err := prepareDatabaseFile(path)
+	if err != nil {
+		return nil, err
 	}
 	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
 	d, err := sql.Open("sqlite", dsn)
@@ -119,21 +121,30 @@ func Open(path string) (*DB, error) {
 	return &DB{db: d, path: path}, nil
 }
 
-// restrictFilePerms — SEC-01: state.db хранит токены и зашифрованные секреты
-// (docs/security-secrets-at-rest.md обещает 0600), но SQLite создаёт файлы как
-// 0666 & ^umask, и под типичным umask 022 база и WAL/SHM оказываются читаемы
-// всем локальным пользователям. Ужимаем до 0600 на каждом Open — это чинит и
-// свежие файлы, и базы, разложенные старыми версиями. Отсутствующие
-// sidecar-файлы — не ошибка (WAL/SHM появляются лениво), а вот chmod самого
-// state.db обязан пройти: лучше упасть при старте, чем молча открыть базу
-// со слишком широкими правами.
+// Prepare the database before SQLite opens it and runs migrations.
+func prepareDatabaseFile(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	switch {
+	case err == nil:
+		if err := f.Close(); err != nil {
+			return false, fmt.Errorf("close new database: %w", err)
+		}
+	case !errors.Is(err, fs.ErrExist):
+		return false, fmt.Errorf("create database: %w", err)
+	default:
+		return true, restrictFilePerms(path)
+	}
+	return false, restrictFilePerms(path)
+}
+
+// Sidecar files may be absent until the first write or after a checkpoint.
 func restrictFilePerms(path string) error {
-	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+	for i, f := range []string{path, path + "-wal", path + "-shm"} {
 		err := os.Chmod(f, 0o600)
 		if err == nil {
 			continue
 		}
-		if os.IsNotExist(err) {
+		if i > 0 && os.IsNotExist(err) {
 			continue
 		}
 		return fmt.Errorf("chmod 0600 %s: %w", f, err)

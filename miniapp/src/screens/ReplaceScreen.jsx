@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
 import { cabinetPerms } from '../cabinetKeys.js'
 import { accountSummary, optionRows } from '../cabinet.js'
@@ -30,7 +30,11 @@ export function replaceCanRevoke(role) {
   return cabinetPerms(role).revoke
 }
 
-export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
+export function ReplaceScreen(props) {
+  return <RouterReplaceScreen key={props.routerID} {...props} />
+}
+
+function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
   const [pick, setPick] = useState(null)
@@ -39,48 +43,48 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
   // Отзывать могут админ, владелец и оператор (replaceCanRevoke); роль не
   // узнали -- кнопки нет, слова те же.
   const [canRevoke, setCanRevoke] = useState(false)
-  // BUG-02: монотонная версия ответов. Каждый запрос (опрос или запуск)
-  // получает номер; ответ применяется, только если новее уже применённого:
-  // медленный ответ опроса, ушедший до запуска замены, не откатит экран
-  // обратно к форме.
-  const reqSeq = useRef(0)
-  const appliedSeq = useRef(0)
+  const alive = useRef(true)
+  const startInFlight = useRef(false)
+  const pollGeneration = useRef(0)
+
+  useLayoutEffect(() => () => { alive.current = false }, [])
 
   useEffect(() => {
-    let alive = true
     let timer = null
     // Следующий опрос уходит только после ответа предыдущего: setInterval
     // наслаивал запросы друг на друга при медленной сети.
     const poll = () => {
-      const seq = ++reqSeq.current
+      if (!alive.current) return
+      // Пока сервер не подтвердил запуск, опрос может увидеть прежнее состояние.
+      if (startInFlight.current) {
+        timer = setTimeout(poll, POLL_MS)
+        return
+      }
+      const generation = pollGeneration.current
       fetchReplaceStatus(routerID)
         .then((j) => {
-          if (alive && seq > appliedSeq.current) {
-            appliedSeq.current = seq
-            setJob(j)
-          }
+          if (alive.current && generation === pollGeneration.current) setJob(j)
         })
         .catch(() => {})
         .finally(() => {
-          if (alive) timer = setTimeout(poll, POLL_MS)
+          if (alive.current) timer = setTimeout(poll, POLL_MS)
         })
     }
     poll()
     setCanRevoke(false)
     fetchRouterSettings(routerID)
       .then((st) => {
-        if (alive) setCanRevoke(replaceCanRevoke(st?.role))
+        if (alive.current) setCanRevoke(replaceCanRevoke(st?.role))
       })
       .catch(() => {})
     fetchVPNAccounts(routerID)
       .then((data) => {
-        if (alive) setAccounts(data.accounts ?? [])
+        if (alive.current) setAccounts(data.accounts ?? [])
       })
       .catch(() => {
-        if (alive) setError('Кабинеты не ответили — выпустить конфиг не из чего.')
+        if (alive.current) setError('Кабинеты не ответили — выпустить конфиг не из чего.')
       })
     return () => {
-      alive = false
       if (timer) clearTimeout(timer)
     }
   }, [routerID])
@@ -89,11 +93,10 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
   const leftover = onOpenTunnel ? replaceLeftover(view, tunnel) : null
 
   function start() {
-    if (!pick) return
-    // Новый номер запроса: ответы опроса, ушедшие до запуска, больше не
-    // применяются — иначе запоздалый «пусто» вернул бы форму поверх идущей
-    // замены (BUG-02).
-    const seq = ++reqSeq.current
+    if (!pick || startInFlight.current) return
+    startInFlight.current = true
+    // Запрос, уже ушедший до запуска, тоже мог увидеть прежнее состояние.
+    pollGeneration.current++
     setStarting(true)
     setError('')
     startReplace(routerID, {
@@ -103,13 +106,15 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
       policy_name: policyName,
     })
       .then((j) => {
-        if (seq > appliedSeq.current) {
-          appliedSeq.current = seq
-          setJob({ ...j, steps: j.steps ?? [] })
-        }
+        if (alive.current) setJob({ ...j, steps: j.steps ?? [] })
       })
-      .catch((err) => setError(startErrorText(err)))
-      .finally(() => setStarting(false))
+      .catch((err) => {
+        if (alive.current) setError(startErrorText(err))
+      })
+      .finally(() => {
+        startInFlight.current = false
+        if (alive.current) setStarting(false)
+      })
   }
 
   const showForm = view.idle && !starting
