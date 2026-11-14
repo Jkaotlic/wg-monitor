@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
-import { it, expect, vi, beforeEach } from 'vitest'
+import { it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
 // BUG-02: опрос статуса замены ходил setInterval'ом, запросы наслаивались, и
 // запоздалый ответ (ушедший ДО запуска замены, вернувшийся после) откатывал
 // экран: setJob(null) возвращал форму поверх идущей операции.
-const mocks = vi.hoisted(() => ({ statusCalls: [] }))
+const mocks = vi.hoisted(() => ({ statusCalls: [], startCalls: [] }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
   const real = await importOriginal()
   return {
     ...real,
-    fetchReplaceStatus: () => new Promise((resolve) => mocks.statusCalls.push({ resolve })),
+    fetchReplaceStatus: (routerID) => new Promise((resolve) => mocks.statusCalls.push({ routerID, resolve })),
     fetchVPNAccounts: () =>
       Promise.resolve({
         accounts: [
@@ -27,44 +27,81 @@ vi.mock('../src/api.js', async (importOriginal) => {
         ],
       }),
     fetchRouterSettings: () => Promise.resolve({ role: 'owner' }),
-    startReplace: () => Promise.resolve({ job_id: 'j-new', state: 'running', running: true, steps: [] }),
+    startReplace: (routerID) => new Promise((resolve) => mocks.startCalls.push({ routerID, resolve })),
   }
 })
 
 const { ReplaceScreen } = await import('../src/screens/ReplaceScreen.jsx')
 
-const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+const started = { job_id: 'j-new', state: 'running', running: true, steps: [] }
+let root
+
+const open = async (routerID) => {
+  await act(async () => render(
+    <ReplaceScreen routerID={routerID} tunnel={{ id: 'Wireguard0', name: 'старый' }} policyName="VPN" onClose={() => {}} />,
+    root,
+  ))
+  await act(async () => {})
+}
+const clickText = (text) => act(async () => {
+  const button = [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
+  expect(button).toBeDefined()
+  button.click()
+})
+const start = async () => {
+  await clickText('Нидерланды')
+  await clickText('Заменить конфиг')
+}
 
 beforeEach(() => {
   mocks.statusCalls = []
+  mocks.startCalls = []
+  vi.useFakeTimers()
+  root = document.createElement('div')
+  document.body.appendChild(root)
+})
+
+afterEach(async () => {
+  await act(async () => render(null, root))
+  root.remove()
+  vi.useRealTimers()
 })
 
 it('запоздалый ответ опроса не возвращает форму поверх запущенной замены', async () => {
-  const root = document.createElement('div')
-  document.body.appendChild(root)
-  await act(async () =>
-    render(
-      <ReplaceScreen routerID={7} tunnel={{ id: 'Wireguard0', name: 'старый' }} policyName="VPN" onClose={() => {}} />,
-      root,
-    ),
-  )
-  await flush()
-  await flush()
-
-  const option = [...root.querySelectorAll('.list-row')].find((r) => r.textContent.includes('Нидерланды'))
-  await act(async () => option.click())
-  await flush()
-  const startBtn = [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Заменить конфиг')
-  await act(async () => startBtn.click())
-  await flush()
-  await flush()
+  await open(7)
+  await start()
+  await act(async () => mocks.startCalls[0].resolve(started))
   expect(root.textContent).toContain('Идёт замена')
 
   // Опрос, ушедший до запуска, вернулся только сейчас — с устаревшим «пусто».
-  expect(mocks.statusCalls.length).toBeGreaterThan(0)
   await act(async () => mocks.statusCalls[0].resolve(null))
-  await flush()
-
   expect(root.textContent).toContain('Идёт замена')
-  render(null, root)
+})
+
+it('опрос, начатый до подтверждения POST, не подавляет успешный запуск', async () => {
+  await open(7)
+  await act(async () => mocks.statusCalls[0].resolve(null))
+  await start()
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  // Если опрос успел уйти, сервер мог ответить «пусто» до фиксации запуска.
+  if (mocks.statusCalls[1]) await act(async () => mocks.statusCalls[1].resolve(null))
+  await act(async () => mocks.startCalls[0].resolve(started))
+  expect(root.textContent).toContain('Идёт замена')
+
+  const pollsBefore = mocks.statusCalls.length
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+  expect(mocks.statusCalls).toHaveLength(pollsBefore + 1)
+  await act(async () => mocks.statusCalls.at(-1).resolve({ ...started, state: 'done', running: false }))
+  expect(root.textContent).toContain('Чем кончилось')
+})
+
+it('ответ запуска для прежнего роутера не меняет новый экран', async () => {
+  await open(7)
+  await start()
+  await open(8)
+  await act(async () => mocks.startCalls[0].resolve(started))
+
+  expect(root.textContent).not.toContain('Идёт замена')
+  expect(root.textContent).toContain('Нидерланды')
+  expect(mocks.statusCalls.at(-1).routerID).toBe(8)
 })

@@ -85,13 +85,17 @@ func TestCmdResult_ReleaseProxyBusyOnLastAttemptDoesNotGiveUp(t *testing.T) {
 func TestIsReleaseProxyBusyFailure(t *testing.T) {
 	cases := map[string]bool{
 		wire.SelfUpdateBusyMarker + ": x": true,
-		"download checksums.txt: HTTP 503 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt":         true,
-		"download checksums.txt.sig: HTTP 503 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt.sig": true,
+		"download checksums.txt: HTTP 503 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt":                                                                                                                                                                                              true,
+		"download checksums.txt.sig: HTTP 503 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt.sig":                                                                                                                                                                                      true,
+		"download checksums.txt: HTTP 429 for https://h.example.com/v1/releases/download/v0.66.7/checksums.txt":                                                                                                                                                                                              true,
+		"github: download checksums.txt: HTTP 403 for https://github.com/Jkaotlic/wg-monitor/releases/download/v0.66.7/checksums.txt; backend: download checksums.txt: HTTP 429 for https://h.example.com/v1/releases/download/v0.66.7/checksums.txt":                                                        true,
+		"github: download checksums.txt: HTTP 403 for https://github.com/Jkaotlic/wg-monitor/releases/download/v0.66.7/checksums.txt; backend: download checksums.txt: dial tcp: i/o timeout; retry via 198.51.100.10 failed: HTTP 429 for https://h.example.com/v1/releases/download/v0.66.7/checksums.txt": true,
 		// 503 от GitHub -- не наш прокси.
 		"download checksums.txt: HTTP 503 for https://github.com/Jkaotlic/wg-monitor/releases/download/v0.43.0/checksums.txt": false,
 		"download checksums.txt: HTTP 502 for https://h.example.com/v1/releases/download/v0.43.0/checksums.txt":               false,
 		"sha256 mismatch: want a got b": false,
 		// Новый агент: прокси занят, но GitHub отдал выпуск с чужой подписью.
+		"github: verify checksums.txt signature: bad; backend: download checksums.txt: HTTP 429 for https://h.example.com/v1/releases/download/v0.66.7/checksums.txt": false,
 		"github: verify checksums.txt signature: bad; backend: download checksums.txt: HTTP 503 for https://h.example.com/v1/releases/download/v0.45.0/checksums.txt": false,
 		"": false,
 	}

@@ -125,7 +125,7 @@ const (
 // left untouched on the old binary.
 //
 // Источник (v0.45). Выпуск качается с адреса команды -- обычно зеркала на
-// нашем бэкенде. На 503 «прокси занят» агент ждёт Retry-After с разбросом (до
+// нашем бэкенде. На 503 или 429 агент ждёт Retry-After с разбросом (до
 // 5 минут на всё, с запасом до срока действия) и повторяет. Если бэкенд так и
 // не отдал выпуск (занят, 5xx, 404, сеть -- уже после запасного IP), тот же
 // выпуск берётся с GitHub (SelfUpdateRepoBase) с той же проверкой подписи и
@@ -226,7 +226,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 }
 
 // selfUpdateSource -- откуда качается выпуск: наше зеркало на бэкенде или
-// GitHub. busy не nil -- на 503 «прокси занят» ждать Retry-After и повторять.
+// GitHub. busy не nil -- на 503 или 429 ждать Retry-After и повторять.
 type selfUpdateSource struct {
 	name          string
 	base          string
@@ -356,13 +356,13 @@ func (b *selfUpdateBusyWait) take(wait time.Duration) bool {
 	return true
 }
 
-// retryBusy повторяет fn, пока прокси отвечает 503 и бюджет позволяет ждать.
+// retryBusy повторяет fn при 503 или 429, пока бюджет позволяет ждать.
 // Пауза -- Retry-After с разбросом до половины сверху: повторы не идут толпой.
 func (s *selfUpdateSource) retryBusy(ctx context.Context, fn func() error) error {
 	for {
 		err := fn()
 		var he *selfUpdateHTTPError
-		if err == nil || s.busy == nil || !errors.As(err, &he) || he.Status != http.StatusServiceUnavailable {
+		if err == nil || s.busy == nil || !errors.As(err, &he) || !he.proxyBusy() {
 			return err
 		}
 		wait := parseSelfUpdateRetryAfter(he.RetryAfter)
@@ -420,7 +420,11 @@ func selfUpdateIsFetchError(err error) bool {
 // selfUpdateIsBusy -- наш прокси так и остался занят.
 func selfUpdateIsBusy(err error) bool {
 	var he *selfUpdateHTTPError
-	return selfUpdateIsFetchError(err) && errors.As(err, &he) && he.Status == http.StatusServiceUnavailable
+	return selfUpdateIsFetchError(err) && errors.As(err, &he) && he.proxyBusy()
+}
+
+func (e *selfUpdateHTTPError) proxyBusy() bool {
+	return e.Status == http.StatusServiceUnavailable || e.Status == http.StatusTooManyRequests
 }
 
 // selfUpdateShouldFallBack -- можно ли после этой неудачи бэкенда идти на

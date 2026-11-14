@@ -143,10 +143,15 @@ func recordPendingDeployFailure(d Deps, uid int64, nickname, target, output stri
 // потратить.
 var legacyBusyOutput = regexp.MustCompile(`^download [^:\s]+: HTTP 503 for \S+/v1/releases/download/`)
 
+// Agents through v0.66.7 fall back immediately on the mirror's HTTP 429.
+// Count it as temporary only when the GitHub fallback also failed to download.
+var legacyRateLimitOutput = regexp.MustCompile(`^(github: download .*; backend: )?download [^:\s]+: (.*; retry via [^;]+ failed: )?HTTP 429 for \S+/v1/releases/download/`)
+
 // isReleaseProxyBusyFailure -- неудача self_update из-за занятого прокси
 // релизов, а не из-за роутера.
 func isReleaseProxyBusyFailure(output string) bool {
-	return strings.Contains(output, wire.SelfUpdateBusyMarker) || legacyBusyOutput.MatchString(output)
+	return strings.Contains(output, wire.SelfUpdateBusyMarker) ||
+		legacyBusyOutput.MatchString(output) || legacyRateLimitOutput.MatchString(output)
 }
 
 // activeCommandReleaser -- узкая часть очереди: отпустить выданную команду
