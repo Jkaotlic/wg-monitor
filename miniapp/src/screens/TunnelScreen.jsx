@@ -31,7 +31,7 @@ import { awgmBadge, awgmToneClass } from '../awgmBadge.js'
 // Удаление необратимо, поэтому подтверждается набором имени, а сервер сам
 // проверяет правила и главный выход по свежему снимку. Экран не предлагает
 // кнопку, которая заведомо получит отказ, и говорит причину теми же словами.
-export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, eventTunnels, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
+export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, eventTunnels, freshnessOptions = { enforceFreshness: true, requireTimestamp: true }, tunnelID, role, openSheet, onClose, onChanged, onOpenRebind, onRestart, canReplace = false, onReplace }) {
   // Слова о состоянии -- по снимку с вердиктом проверок, как в списке (A1.1):
   // иначе роутерное «running» спорит с проверкой «не отвечает».
   const fresh = tunnelCard(verdictSnapshot ?? snapshot, tunnelID)
@@ -255,7 +255,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, verdictSnapshot, even
   // Слово awg-manager (v0.65) -- из проекции проверки (events.tunnels), не из
   // снимка с вердиктом: здесь же «Состояние» говорит слово бота, и обе строки
   // рядом показывают расхождение. Пояснение -- задержка или причина.
-  const awgm = awgmBadge((eventTunnels ?? []).find((x) => x?.tunnel_id === card?.id))
+  const awgm = awgmBadge((eventTunnels ?? []).find((x) => x?.tunnel_id === card?.id), freshnessOptions)
 
   const meta = (snapshot?.tunnels ?? []).find((x) => x.id === card?.id)
   const tunnelRunning = meta ? Boolean(meta.enabled) && (!meta.status || meta.status === 'running') : true

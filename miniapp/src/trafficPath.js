@@ -1,3 +1,6 @@
+import { tunnelEventFresh } from './tunnelFreshness.js'
+import { capTunnelState } from './statusEvidence.js'
+
 // Состояния схемы пути трафика.
 //
 // Схема заменила абстрактный прибор с портами DNS/EXT/HR/AWGM/AGEN: тот
@@ -74,14 +77,14 @@ export function carrierLine({ traffic, tunnels }) {
 // проверки: `status` в проекции несёт «ok|fail» конечного автомата, и путать
 // их значит рисовать зелёную ветку там, где VPN-туннель остановлен.
 function isRunning(t) {
-  return t?.run_state === 'running'
+  return t?.run_state === 'running' || t?.run_state === 'up'
 }
 
 // Годен ли VPN-туннель нести трафик: поднят, проверка не провалена и тревоги
 // по нему нет. Поднятый, но не отвечающий (обмен ключами 24 минуты назад) --
 // не резерв, а видимость резерва.
 export function isAlive(t, incidents = []) {
-  return isRunning(t) && t.status !== 'fail' && !incidents?.some((i) => i.check_name === `tunnel_${t.tunnel_id}`)
+  return isRunning(t) && t.enabled !== false && t.status === 'ok' && !incidents?.some((i) => i.check_name === `tunnel_${t.tunnel_id}`)
 }
 
 // Несущий назван роутером, а не выбран нами.
@@ -93,6 +96,16 @@ export function carrierKnown({ traffic, tunnels }) {
 export function carrierAlive({ traffic, tunnels, incidents = [] }) {
   const line = carrierLine({ traffic, tunnels })
   return line != null && isAlive(line, incidents) && !carrierDeadByServer(traffic)
+}
+
+export function carrierState({ traffic, tunnels, incidents = [] }) {
+  const t = carrierLine({ traffic, tunnels })
+  if (carrierDeadByServer(traffic)) return 'down'
+  if (!t) return 'unknown'
+  if (isAlive(t, incidents)) return 'up'
+  if (isDead(t, incidents) || t.status === 'fail' || t.enabled === false ||
+      ['down', 'dead', 'broken', 'disabled', 'stopped', 'off'].includes(t.run_state)) return 'down'
+  return 'unknown'
 }
 
 // Мёртвый -- тот, кто должен работать, но не работает: тревога по нему или
@@ -115,13 +128,12 @@ function unnamedBranch({ tunnels, incidents }) {
   return 'unknown'
 }
 
-function tunnelBranch({ line, traffic, tunnels, incidents, stale }) {
-  if (stale) return 'unknown'
+function tunnelBranch({ line, traffic, tunnels, incidents }) {
   if (!line) return unnamedBranch({ tunnels, incidents })
   // То же правило живости, что у шапки (carrierAlive): проваленная проверка
   // несущего -- уже «молчит», даже пока тревога не набрала порог. Иначе
   // схема рисовала бы зелёное рядом с шапкой, где этот туннель мёртв.
-  return carrierAlive({ traffic, tunnels, incidents }) ? 'up' : 'down'
+  return carrierState({ traffic, tunnels, incidents })
 }
 
 // Живые запасные звенья политики несущего по слову бэкенда, или null, если
@@ -141,10 +153,10 @@ export function reserveIDs({ traffic, tunnels }) {
 // несущий не назван, резерв есть, только если живых больше одного, но назвать
 // его -- угадать ({ tunnel_id: '' }). Раньше резервом считался любой running,
 // и мёртвое звено объявлялось «готовым подхватить».
-export function reserveLine({ traffic, tunnels = [], incidents = [], via = '' }) {
+export function reserveLine({ traffic, tunnels = [], incidents = [], via = '', freshness = {} }) {
   const ids = reserveIDs({ traffic, tunnels })
-  if (ids) return tunnels.find((t) => ids.includes(t.tunnel_id))
-  const alive = tunnels.filter((t) => isAlive(t, incidents))
+  const alive = tunnels.filter((t) => isAlive(t, incidents) && (!freshness.enforceFreshness || tunnelEventFresh(t, freshness.nowMs)))
+  if (ids) return alive.find((t) => ids.includes(t.tunnel_id) && t.tunnel_id !== carrierID(traffic))
   if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== carrierID(traffic))
   return alive.length > 1 ? { tunnel_id: '' } : undefined
 }
@@ -183,7 +195,7 @@ export function backupCopy({ backupLine, carrierDown = false, deadReserve = null
     }
   }
   if (!backupLine) {
-    return { title: 'Запасного VPN-туннеля нет', note: 'если VPN-туннель ляжет, обход блокировок пропадёт до починки', tone: 'warn' }
+    return { title: 'Готовый запасной VPN-туннель не подтверждён', note: 'при сбое основного автоматическое переключение может не сработать', tone: 'warn' }
   }
   const named = backupLine.name ? `«${backupLine.name}»` : ''
   if (carrierDown) {
@@ -210,7 +222,7 @@ export function lineVia(t, traffic) {
 
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false, evidence = null } = {}) {
   const t = carrierLine({ traffic, tunnels })
-  const tunnel = capTunnelState(tunnelBranch({ line: t, traffic, tunnels, incidents, stale }), evidence)
+  const tunnel = stale ? 'unknown' : capTunnelState(tunnelBranch({ line: t, traffic, tunnels, incidents }), evidence)
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
@@ -223,4 +235,3 @@ export function pathState({ traffic, incidents = [], tunnels = [], stale = false
     latencyMs: t && typeof t.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
   }
 }
-import { capTunnelState } from './statusEvidence.js'

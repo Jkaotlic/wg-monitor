@@ -39,7 +39,7 @@ describe.each(CARRIER_SCENARIOS)('вкладка «VPN-туннели», B1: $ti
     const root = await mount(s)
     expect(heroTitle(root)).toBe(s.expect.name)
     if (s.expect.name && !s.expect.alive) {
-      expect(root.textContent).toContain('Несёт трафик, но не отвечает')
+      expect(root.textContent).toContain('Назначен несущим, но не отвечает')
       expect(root.textContent).not.toContain('Работает сейчас')
     }
     if (!s.expect.name) {

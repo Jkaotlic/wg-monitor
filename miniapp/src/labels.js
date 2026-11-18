@@ -1,3 +1,4 @@
+import { tunnelEventFresh } from './tunnelFreshness.js'
 // The single place system vocabulary becomes human vocabulary.
 //
 // Wording is ported from the bot rather than invented: the operator reads those
@@ -234,9 +235,11 @@ export function tunnelStateLabel(t) {
   if (t.enabled == null) return 'неизвестно'
   // Проверка главнее состояния роутера (A1.1): упавшая проверка не оставляет «работает».
   if (t.run_state === 'running' && (t.status === 'fail' || t.status === 'dead')) return 'поднят, но не отвечает'
-  if (t.run_state && t.run_state !== 'running') {
+  if (t.run_state && t.run_state !== 'running' && t.run_state !== 'up') {
     return { stopped: 'остановлен', disabled: 'выключен', dead: 'не на связи', fail: 'не на связи', failed: 'не на связи' }[t.run_state] ?? t.run_state
   }
+  if (!t.run_state) return 'состояние неизвестно'
+  if (t.status !== 'ok') return 'поднят, не проверено'
   if (t.handshake_age_sec == null) return 'обмена ключами ещё не было'
   return 'работает'
 }
@@ -269,20 +272,24 @@ export function isOwnTunnel(t) {
 
 // ОДИН счёт на все экраны («Роутер», «Проверки», вкладка «VPN-туннели»):
 // свои / работают / не проверено.
-export function tunnelCountSummary(tunnels = [], incidents = []) {
-  const own = (tunnels ?? []).filter(isOwnTunnel)
+export function tunnelCountSummary(tunnels = [], incidents = [], freshness = {}) {
+  const own = (tunnels ?? []).filter(isOwnTunnel).map((t) => {
+    if ((!['ok', 'fail', 'dead', 'unknown'].includes(t.status) || (t.status === 'ok' && !t.run_state && t.enabled !== false)) ||
+        (freshness.enforceFreshness && !tunnelEventFresh(t, freshness.nowMs, freshness.maxAgeMs))) return { ...t, status: 'unknown' }
+    return t
+  })
   const working = own.filter(
     (t) =>
       tunnelStateLabel(t) === 'работает' &&
-      t.status !== 'fail' &&
-      t.status !== 'unknown' &&
+      t.status === 'ok' &&
+      (t.run_state === 'running' || t.run_state === 'up') &&
       !(incidents ?? []).some((i) => i.check_name === `tunnel_${t.tunnel_id}`),
   ).length
   return { total: own.length, working, unchecked: own.filter((t) => t.status === 'unknown').length }
 }
 
-export function workingTunnelNote(live, total, unchecked = 0) {
-  const base = `${live === 1 ? 'работает' : 'работают'} из ${total} настроенных`
+export function workingTunnelNote(live, total, unchecked = 0, scope = 'настроенных') {
+  const base = `${live === 1 ? 'работает' : 'работают'} из ${total} ${scope}`
   return unchecked > 0 ? `${base} · ${unchecked} ${NOT_CHECKED_LABEL}` : base
 }
 
@@ -531,6 +538,7 @@ export const TUNNEL_LIVE_LABEL = {
 // (check_unverified) -- «работает» сказать нельзя: то же слово, что в
 // удалении VPN-туннеля (tunnelDelete.js).
 export function tunnelTargetLabel(t) {
+  if (t?.checkStale) return t.live === 'down' ? 'не отвечает, проверка устарела' : 'проверка устарела'
   if (t?.checkFailed) return 'поднят, но не отвечает'
   if (t?.checkUnverified && t?.live === 'up') return 'поднят, не проверено'
   // Включённый, но не поднявшийся -- «не отвечает», как на вкладке «VPN-туннели»;

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
@@ -16,7 +17,7 @@ func carrierTraffic(t *testing.T, hydra string, rows ...db.EventRow) miniappTraf
 	t.Helper()
 	byCheck := map[string]db.EventRow{}
 	if hydra != "" {
-		byCheck["hydraroute"] = db.EventRow{CheckName: "hydraroute", Status: "ok", DetailsJSON: hydra}
+		byCheck["hydraroute"] = db.EventRow{CheckName: "hydraroute", TS: time.Now(), Status: "ok", DetailsJSON: hydra}
 	}
 	var tunnels []miniappTunnel
 	for _, r := range rows {
@@ -32,7 +33,7 @@ func carrierTraffic(t *testing.T, hydra string, rows ...db.EventRow) miniappTraf
 
 func wantCarrier(t *testing.T, got miniappTraffic, id, basis string, alive bool) {
 	t.Helper()
-	if got.CarrierTunnelID != id || got.CarrierBasis != basis || got.CarrierAlive != alive {
+	if got.CarrierTunnelID != id || got.CarrierBasis != basis || (id != "" && (got.CarrierAlive == nil || *got.CarrierAlive != alive)) || (id == "" && got.CarrierAlive != nil) {
 		t.Fatalf("несущий = %q/%q/alive=%v, хотим %q/%q/alive=%v (traffic %+v)", got.CarrierTunnelID, got.CarrierBasis, got.CarrierAlive, id, basis, alive, got)
 	}
 }
@@ -149,4 +150,54 @@ func TestMiniappCarrierDefaultEgressSingle(t *testing.T) {
 		t.Fatalf("mode = %q, хотим vpn", got.Mode)
 	}
 	wantCarrier(t, got, "awg14", "single", true)
+}
+
+func TestCarrierUnknownAndUnavailableReserves(t *testing.T) {
+	hydra := strings.NewReplacer("%ACTIVE%", "awg14", "%FALLBACK%", "awg10").Replace(workrouterHydraPolicies)
+	for _, fallback := range []string{
+		`{"status":"stopped","enabled":true,"active_default_known":true}`,
+		`{"status":"running","enabled":false,"active_default_known":true}`,
+	} {
+		got := carrierTraffic(t, hydra,
+			carrierTunnelRow("awg14", "", "unknown", rowHipAlive),
+			carrierTunnelRow("awg10", "", "ok", fallback))
+		b, err := json.Marshal(got)
+		if err != nil || got.CarrierTunnelID != "awg14" || strings.Contains(string(b), `"carrier_alive"`) || !strings.Contains(string(b), `"reserve_tunnel_ids":[]`) {
+			t.Errorf("unverified carrier and unavailable reserve: %s, %v", b, err)
+		}
+	}
+}
+
+func TestPolicyReservesRequireFreshMeasurementsAndPolicy(t *testing.T) {
+	now := time.Now().UTC()
+	hydra := strings.NewReplacer("%ACTIVE%", "line", "%FALLBACK%", "reserve").Replace(workrouterHydraPolicies)
+	for _, tc := range []struct {
+		name                  string
+		reserveAge, policyAge time.Duration
+		want                  bool
+	}{
+		{"fresh", time.Minute, time.Minute, true},
+		{"old reserve", 20 * time.Minute, time.Minute, false},
+		{"future reserve", -20 * time.Minute, time.Minute, false},
+		{"old policy", time.Minute, 20 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checks := map[string]db.EventRow{"hydraroute": {TS: now.Add(-tc.policyAge), DetailsJSON: hydra}}
+			tunnels := []miniappTunnel{
+				{TunnelID: "line", RunState: "running", Status: "ok", ActiveDefaultKnown: true, TS: now.Format(time.RFC3339)},
+				{TunnelID: "reserve", RunState: "running", Status: "ok", ActiveDefaultKnown: true, TS: now.Add(-tc.reserveAge).Format(time.RFC3339)},
+			}
+			got := miniappDeriveTraffic(tunnels, checks)
+			if (len(got.ReserveTunnelIDs) != 0) != tc.want {
+				t.Fatalf("reserve list %v, want available=%v", got.ReserveTunnelIDs, tc.want)
+			}
+			if tc.policyAge > statusEvidenceFreshFor && got.CarrierAlive != nil {
+				t.Fatalf("old policy supported a current carrier verdict: %+v", got)
+			}
+			tunnels[0].TS = now.Add(-20 * time.Minute).Format(time.RFC3339)
+			if stale := miniappDeriveTraffic(tunnels, checks); stale.CarrierAlive != nil {
+				t.Fatalf("old carrier measurement supported a current verdict: %+v", stale)
+			}
+		})
+	}
 }

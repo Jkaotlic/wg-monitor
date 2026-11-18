@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import SNAP from './fixtures/split_reserve_dead.json'
@@ -22,10 +22,21 @@ vi.mock('../src/useCommand.js', () => ({
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
+let mountedRoot
+
+afterEach(async () => {
+  if (mountedRoot) {
+    await act(() => render(null, mountedRoot))
+    mountedRoot.remove()
+    mountedRoot = null
+  }
+})
+
 async function mount(traffic, reserveOnlyAlert = false) {
   mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
   mocks.checks = { ...structuredClone(SNAP.events), traffic }
   const root = document.createElement('div')
+  mountedRoot = root
   document.body.appendChild(root)
   await act(async () =>
     render(
@@ -45,8 +56,6 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
     const svg = root.querySelector('.traffic-path').textContent
     expect(svg).not.toContain('VPN-ТУННЕЛЬ МОЛЧИТ')
     expect(root.textContent).not.toContain('Запасной VPN-туннель готов')
-    render(null, root)
-    root.remove()
   })
 
   it('агент назвал несущего: зелёная ветка через vpn-hip, 117 мс, резерва нет', async () => {
@@ -64,10 +73,8 @@ describe('«Сейчас» на снимке workrouter 18.09', () => {
     // v0.50: запасной есть, но упал, и шапка о нём говорит (тревога по
     // vpn-nl) -- плитки «Запасного нет» нет, вердикт один.
     expect(root.querySelector('.hero').textContent).toContain('Запасной «vpn-nl» не отвечает')
-    expect(root.textContent).not.toContain('Запасного VPN-туннеля нет')
+    expect(root.textContent).not.toContain('Готовый запасной VPN-туннель не подтверждён')
     // Адрес панели -- строкой под именем роутера в шапке телефона.
     expect(root.querySelector('.hero .panel-line').textContent).toBe('awg.example.com')
-    render(null, root)
-    root.remove()
   })
 })

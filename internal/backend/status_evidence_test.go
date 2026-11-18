@@ -67,7 +67,7 @@ func TestStatusEvidenceRefusesFutureAddressRoutingClockSkew(t *testing.T) {
 func TestStatusEvidencePolicyCarrierIsBoundedByHydraRouteFreshness(t *testing.T) {
 	now := time.Date(2026, 11, 6, 10, 10, 0, 0, time.UTC)
 	tunnels := []miniappTunnel{{TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected", TS: now.Add(-time.Minute).Format(time.RFC3339)}}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 	checks := map[string]db.EventRow{"hydraroute": {CheckName: "hydraroute", Status: "ok", TS: now.Add(-6 * time.Minute)}}
 
 	got := deriveStatusEvidenceFromChecks(tunnels, traffic, checks, now)
@@ -79,7 +79,7 @@ func TestStatusEvidencePolicyCarrierIsBoundedByHydraRouteFreshness(t *testing.T)
 func TestStatusEvidencePolicyCarrierRequiresHydraRouteEvidence(t *testing.T) {
 	now := time.Date(2026, 11, 6, 10, 1, 0, 0, time.UTC)
 	tunnels := []miniappTunnel{{TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected", TS: now.Add(-time.Minute).Format(time.RFC3339)}}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 	got := deriveStatusEvidenceFromChecks(tunnels, traffic, nil, now)
 	if got.State != "unknown" || got.ReasonCode != "routing_evidence_missing" {
 		t.Fatalf("missing policy source was ignored: %+v", got)
@@ -92,7 +92,7 @@ func TestStatusEvidenceFreshAgreementIsVerifiedHealthy(t *testing.T) {
 		TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected",
 		TS: "2026-11-06T10:00:00Z", RoutesDNS: 10, RoutesStatic: 2,
 	}}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 
 	got := deriveStatusEvidence(tunnels, traffic, now)
 
@@ -116,7 +116,7 @@ func TestStatusEvidenceMakesSourceConflictExplicit(t *testing.T) {
 		TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "disconnected",
 		TS: "2026-11-06T10:00:00Z",
 	}}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 
 	got := deriveStatusEvidence(tunnels, traffic, now)
 
@@ -131,7 +131,7 @@ func TestStatusEvidenceRefusesStaleHealthy(t *testing.T) {
 		TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected",
 		TS: "2026-11-06T09:55:00Z",
 	}}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 
 	got := deriveStatusEvidence(tunnels, traffic, now)
 
@@ -141,7 +141,7 @@ func TestStatusEvidenceRefusesStaleHealthy(t *testing.T) {
 }
 
 func TestStatusEvidenceMissingTimestampIsUnknown(t *testing.T) {
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 	got := deriveStatusEvidence([]miniappTunnel{{TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected"}}, traffic, time.Now())
 
 	if got.State != "unknown" || got.ReasonCode != "evidence_time_missing" || got.Confidence != "none" {
@@ -151,7 +151,7 @@ func TestStatusEvidenceMissingTimestampIsUnknown(t *testing.T) {
 
 func TestStatusEvidenceRefusesFutureClockSkewAsFreshGreen(t *testing.T) {
 	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierAlive: new(true)}
 	got := deriveStatusEvidence([]miniappTunnel{{TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected", TS: "2026-11-06T11:00:00Z"}}, traffic, now)
 	if got.State != "unknown" || got.ReasonCode != "clock_skew" {
 		t.Fatalf("future evidence was trusted: %+v", got)
@@ -164,7 +164,7 @@ func TestStatusEvidenceUsesNewestDuplicateTunnelRow(t *testing.T) {
 		{TunnelID: "awg10", Status: "fail", RunState: "broken", AwgmConn: "disconnected", TS: "2026-11-06T09:59:00Z"},
 		{TunnelID: "awg10", Status: "ok", RunState: "running", AwgmConn: "connected", TS: "2026-11-06T10:00:00Z"},
 	}
-	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: true}
+	traffic := miniappTraffic{Mode: miniappTrafficVPN, CarrierTunnelID: "awg10", CarrierBasis: miniappCarrierPolicy, CarrierAlive: new(true)}
 
 	got := deriveStatusEvidence(tunnels, traffic, now)
 
@@ -198,5 +198,16 @@ func TestMiniappEventsExposesBackendStatusEvidence(t *testing.T) {
 	}
 	if resp.Evidence.State != "healthy" || resp.Evidence.ReasonCode != "sources_agree" || resp.Evidence.AffectedRoutes != 7 {
 		t.Fatalf("evidence = %+v", resp.Evidence)
+	}
+}
+
+func TestStatusEvidenceStoppedPolicyCarrierWithoutReserve(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	tunnels := []miniappTunnel{{TunnelID: "line", ActiveDefaultKnown: true, RunState: "stopped", Status: "fail", TS: now.Format(time.RFC3339)}}
+	checks := map[string]db.EventRow{"hydraroute": {TS: now, Status: "ok", DetailsJSON: `{"running":true,"policies":[{"active_tunnel_id":"line","via_vpn":true,"dns":1}]}`}}
+	traffic := miniappDeriveTraffic(tunnels, checks)
+	evidence := deriveStatusEvidenceFromChecks(tunnels, traffic, checks, now)
+	if traffic.Mode != miniappTrafficSplit || traffic.EgressTunnelID != "line" || evidence.State != "failed" {
+		t.Fatalf("policy still routes into stopped tunnel: mode=%s egress=%s evidence=%+v", traffic.Mode, traffic.EgressTunnelID, evidence)
 	}
 }

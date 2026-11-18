@@ -176,7 +176,16 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	// recovers — without this, an old "tunnels=fail" incident has no recovery
 	// path because the success branch only emits per-tunnel checks.
 	enabledCount := 0
+	// "direct" is explicit. Any other routeTag must resolve to a row the
+	// screen will receive, or a missing VPN would be reported as direct WAN.
+	screenDefault := ""
+	if activeDefaultID == wire.DefaultEgressDirect {
+		screenDefault = activeDefaultID
+	}
 	for _, tu := range tunnels.Tunnels {
+		if tu.ID == activeDefaultID && tunnelTypeChecked(tu) {
+			screenDefault = activeDefaultID
+		}
 		if tu.Enabled {
 			enabledCount++
 		}
@@ -193,7 +202,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
 		// «не знаем», а не «правил нет».
 		rc.Unknown = routeCounts == nil
-		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix, carrier, probeBlind)
+		chk := evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, screenDefault, matrix, carrier, probeBlind)
 		if graced[tu.ID] && chk.Details != nil {
 			// Остановлен недавно: правила за ним сохранены окном терпимости.
 			chk.Details["run_grace"] = true
@@ -482,9 +491,10 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	// Ключа нет вовсе, когда данных нет: пустое значение хуже отсутствия --
 	// ноль на экране читается как «мгновенно».
 	if matrix != nil {
-		if ms, ok := matrix.BestLatency(tu.ID); ok {
+		now := time.Now()
+		if ms, observed := matrix.BestLatency(tu.ID, now.Add(-matrixFreshWindow), now.Add(maxHandshakeFutureSkew)); !observed.IsZero() {
 			details["matrix_latency_ms"] = ms
-			details["matrix_updated_at"] = matrix.UpdatedAt
+			details["matrix_updated_at"] = observed.UTC().Format(time.RFC3339Nano)
 		}
 	}
 
@@ -669,13 +679,9 @@ func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.
 // ячейки (ts) главнее; нет ts или он в незнакомом виде -- общая отметка
 // матрицы (updatedAt), как было до CHK-05.
 func matrixCellFresh(matrix *awgmgr.MonitoringMatrix, c awgmgr.MatrixCell, now time.Time) bool {
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(c.TS))
-	if err != nil {
-		if ts, err = time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt)); err != nil {
-			return false
-		}
-	}
-	return now.Sub(ts) <= matrixFreshWindow
+	ts := c.ObservedAt(matrix.UpdatedAt)
+	age := now.Sub(ts)
+	return age >= -maxHandshakeFutureSkew && age <= matrixFreshWindow
 }
 
 // probeFailedReason -- причина отказа по матрице; её же узнаёт
@@ -752,7 +758,7 @@ func matrixTargetDown(matrix *awgmgr.MonitoringMatrix, tunnels []awgmgr.Tunnel, 
 		if !tu.Enabled {
 			continue
 		}
-		if t := tu.LastHandshake.Time(); t != nil && now.Sub(*t) <= maxAge {
+		if t := tu.LastHandshake.Time(); t != nil && now.Sub(*t) >= -maxHandshakeFutureSkew && now.Sub(*t) <= maxAge {
 			return true
 		}
 	}

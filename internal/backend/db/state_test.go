@@ -30,6 +30,39 @@ func TestIncidentStateRoundtrip(t *testing.T) {
 	}
 }
 
+func TestHardCountSinceUsesIncidentOnset(t *testing.T) {
+	d := newTestDB(t)
+	id, err := d.Users().Insert("router", "token-hard-count", "198.51.100.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := time.Date(2026, 11, 6, 10, 0, 0, 500, time.UTC)
+	older := since.Add(-time.Nanosecond)
+	later := since.Add(time.Nanosecond)
+	for _, incident := range []struct {
+		name, status string
+		onset        *time.Time
+	}{
+		{"older", "hard", &older},
+		{"equal", "hard", &since},
+		{"later", "hard", &later},
+		{"unknown", "hard", nil},
+		{"soft", "fail", &later},
+	} {
+		if err := d.State().Save(id, incident.name, IncidentState{
+			CurrentStatus: incident.status, HardSince: incident.onset,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, err := d.State().HardCountSince(id, since); err != nil || count != 3 {
+		t.Fatalf("count=%d err=%v, want 3", count, err)
+	}
+	if count, err := d.State().HardCountSince(id, time.Time{}); err != nil || count != 4 {
+		t.Fatalf("count without baseline=%d err=%v, want 4", count, err)
+	}
+}
+
 func TestDailySoftFlapsIncr(t *testing.T) {
 	d := newTestDB(t)
 	tok := "4444444444444444444444444444444444444444444444444444444444444444"

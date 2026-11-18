@@ -1,3 +1,4 @@
+import { useTunnelFreshness } from '../useTunnelFreshness.js'
 import { agentReplyText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
@@ -37,8 +38,9 @@ import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 // вывода и два разных действия.
 const CHAIN_TITLE = {
   active: 'Работает сейчас',
-  activeDown: 'Несёт трафик, но не отвечает',
+  activeDown: 'Назначен несущим, но не отвечает',
   ready: 'Готов подхватить',
+  unconfirmedReserve: 'Готовность к подхвату не подтверждена',
   down: 'Не отвечает',
   off: 'Выключен вручную',
   unknown: 'Состояние неизвестно',
@@ -206,6 +208,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   useOnClose(routesOpen, () => requestTunnelStatus(run, deadline))
 
   useEffect(() => {
+    setChecks(null)
+    setChecksFailed(false)
     setSnapshot(null)
     setSnapshotAt(null)
     setRole('')
@@ -236,27 +240,31 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         setChecksFailed(false)
       })
       .catch(() => {
-        if (alive) setChecksFailed(true)
+        if (alive) {
+          setChecks(null)
+          setChecksFailed(true)
+        }
       })
     return () => {
       alive = false
     }
   }, [routerID, result])
 
+  const freshnessOptions = useTunnelFreshness(checks?.clockOffsetMs)
   const shown = withOpenAlarms(
-    withCheckVerdict(snapshot, checks, { failed: checksFailed, enforceFreshness: true, requireTimestamp: true }),
+    withCheckVerdict(snapshot, checks, { failed: checksFailed, ...freshnessOptions }),
     checks?.incidents,
   )
   // Несущего называет сервер тем же правилом, что экран «Роутер» (B1):
   // traffic из того же ответа /events, что и проверки.
   // Слово awg-manager (v0.65) -- из проекции проверки того же ответа, не из
   // снимка с вердиктом: там у мёртвого VPN-туннеля уже «dead» бота.
-  const view = tunnelsView(shown, checks?.traffic, checks?.tunnels, { enforceFreshness: true, requireTimestamp: true })
+  const view = tunnelsView(shown, checks?.traffic, checks?.tunnels, freshnessOptions)
   const freshnessText = checksFailed
     ? 'Проверки не загрузились — состояние удалённой стороны неизвестно.'
     : view.freshness?.stale
       ? view.freshness.ageSec != null
-        ? `Проверки устарели · последний ответ ${humanAge(view.freshness.ageSec)} назад`
+        ? `Проверки устарели · самый давний ответ ${humanAge(view.freshness.ageSec)} назад`
         : 'Проверки устарели · время последнего ответа неизвестно'
       : view.freshness?.known
         ? `Проверено ${humanAge(view.freshness.ageSec)} назад`
@@ -271,7 +279,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const listByID = new Map(list.map((t) => [t.id, t]))
   const overviewRows = tunnelOverviewRows(view).filter((t) => listByID.has(t.id))
   // Счёт, заголовок и подпись -- одной функцией, с тревогами (I1, M2).
-  const summary = tunnelsTabSummary(list, checks)
+  const summary = tunnelsTabSummary(list, checks, freshnessOptions)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
@@ -363,7 +371,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Что предложить звену цепочки. Активное трогать нечем -- оно несёт трафик
   // прямо сейчас, и «выключить» на нём не переключатель, а обрыв.
   const chainAction = (c) => {
-    if (['active', 'unknown', 'activeUnknown', 'checkUnknown', 'activeStale', 'checkStale'].includes(c.role)) return null
+    if (['active', 'unknown', 'unconfirmedReserve', 'activeUnknown', 'checkUnknown', 'activeStale', 'checkStale'].includes(c.role)) return null
     if (c.role === 'down' || c.role === 'activeDown') return restartButton(c)
     return toggleButton(c)
   }
@@ -435,7 +443,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {snapshot && <EvidenceSummary evidence={evidence} />}
 
       {view.active && (
-        <Section title={view.active.live === 'down' || view.active.checkUnknown || view.active.checkStale || evidence?.state === 'failed' || evidenceUncertain ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
+        <Section title={view.active.live !== 'up' || view.active.unverified || view.active.checkUnknown || view.active.checkStale || evidence?.state === 'failed' || evidenceUncertain ? 'VPN-туннель, который несёт трафик' : 'VPN-туннель, который работает'}>
           <Hero>
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
@@ -449,6 +457,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               <StateTag tone="warn">поднят, проверка не пришла: сервер не ответил</StateTag>
             ) : view.active.checkStale ? (
               <StateTag tone="warn">поднят, проверка устарела</StateTag>
+            ) : view.active.live === 'unknown' ? (
+              <StateTag tone="warn">Состояние VPN-туннеля неизвестно</StateTag>
             ) : view.active.unverified ? (
               <StateTag tone="warn">поднят, не проверено</StateTag>
             ) : (
@@ -476,7 +486,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
                       ? 'назад, но трафик не проходит'
                       : view.active.checkUnknown
                         ? 'назад, проверка не пришла'
-                      : 'назад, канал живой'
+                      : 'назад'
                 }
               />
               <Stat label="несёт" value={view.active.rules} unit={pluralRu(view.active.rules, 'правило', 'правила', 'правил')} note={view.active.rulesNote || undefined} />
@@ -519,9 +529,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
       {snapshot && view.state === 'none' && (
         <Section title="VPN-туннель, который работает">
           <Hero cold>
-            <StateTag tone="danger">ни один VPN-туннель не несёт трафик</StateTag>
+            <StateTag tone="warn">Несущий VPN-туннель не определён</StateTag>
             <p class="traffic-detail" style="padding-bottom:16px">
-              Трафик уходит через провайдера. Если так не задумано — поднимите VPN-туннель на экране ниже.
+              Снимок роутера не указывает активный VPN-туннель. По этим данным нельзя определить путь трафика.
             </p>
           </Hero>
         </Section>
@@ -565,7 +575,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         <Section title={summary.title}>
           <div class="tunnel-overview-head">
             <p class="state">{summary.note}</p>
-            <span>{view.state === 'singbox' ? 'Роутер выбирает маршрут для каждого адреса.' : 'Порядок сверху вниз — порядок подхвата.'}</span>
+            {view.state === 'singbox' ? <span>Роутер выбирает маршрут для каждого адреса.</span> : view.chain.length > 0 && <span>Сначала звенья цепочки по приоритету, затем остальные VPN-туннели.</span>}
           </div>
           <div class="card tunnel-overview">
             {overviewRows.map((t) => {
@@ -607,6 +617,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           snapshot={snapshot}
           verdictSnapshot={shown}
           eventTunnels={checks?.tunnels}
+          freshnessOptions={freshnessOptions}
           tunnelID={layerParams.tunnelID}
           role={role}
           openSheet={openSheet}

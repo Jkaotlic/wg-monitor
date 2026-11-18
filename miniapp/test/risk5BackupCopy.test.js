@@ -14,6 +14,6 @@ describe('RISK 5: несущий молчит, запасной жив -- тра
 
   it('несущий жив -- прежние слова', () => {
     expect(backupCopy({ backupLine: { tunnel_id: 'awg10', name: 'vpn-nl' }, carrierDown: false }).title).toBe('Запасной VPN-туннель готов')
-    expect(backupCopy({ backupLine: undefined, carrierDown: true }).title).toBe('Запасного VPN-туннеля нет')
+    expect(backupCopy({ backupLine: undefined, carrierDown: true }).title).toBe('Готовый запасной VPN-туннель не подтверждён')
   })
 })

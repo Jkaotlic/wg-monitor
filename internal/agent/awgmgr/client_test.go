@@ -365,7 +365,8 @@ func TestClient_TunnelTraffic_UnsupportedBuildSaysSo(t *testing.T) {
 }
 
 func TestMonitoringMatrix_BestLatency(t *testing.T) {
-	m := &MonitoringMatrix{Cells: []MatrixCell{
+	now := time.Now().UTC().Truncate(time.Second)
+	m := &MonitoringMatrix{UpdatedAt: now.Format(time.RFC3339), Cells: []MatrixCell{
 		{TunnelID: "awg10", LatencyMs: 226, OK: true},
 		{TunnelID: "awg14", LatencyMs: 84, OK: true},
 		// Провалившаяся проба -- не задержка, а отсутствие ответа: взять её
@@ -373,11 +374,11 @@ func TestMonitoringMatrix_BestLatency(t *testing.T) {
 		{TunnelID: "awg14", LatencyMs: 0, OK: false},
 	}}
 
-	got, ok := m.BestLatency("awg14")
-	if !ok || got != 84 {
-		t.Fatalf("BestLatency(awg14) = %d, %v; хотим 84, true", got, ok)
+	got, at := m.BestLatency("awg14", now, now)
+	if !at.Equal(now) || got != 84 {
+		t.Fatalf("BestLatency(awg14) = %d, %v; хотим 84, true", got, at)
 	}
-	if _, ok := m.BestLatency("awg99"); ok {
+	if _, at := m.BestLatency("awg99", now, now); !at.IsZero() {
 		t.Fatal("для незнакомой линии задержки нет, и это не ошибка")
 	}
 }
@@ -417,8 +418,9 @@ func TestMonitoringMatrix_ParsesLiveShape(t *testing.T) {
 	if m.UpdatedAt != "2026-09-09T09:32:23Z" {
 		t.Fatalf("UpdatedAt = %q", m.UpdatedAt)
 	}
-	if got, ok := m.BestLatency("awg10"); !ok || got != 84 {
-		t.Fatalf("BestLatency = %d, %v", got, ok)
+	snapshot, _ := time.Parse(time.RFC3339, m.UpdatedAt)
+	if got, at := m.BestLatency("awg10", snapshot.Add(-time.Minute), snapshot); at.IsZero() || got != 84 {
+		t.Fatalf("BestLatency = %d, %v", got, at)
 	}
 }
 
@@ -444,5 +446,19 @@ func TestClient_TunnelsAll_StuckFields(t *testing.T) {
 	}
 	if br.Status != "broken" || br.StatusDetails != "Не запустился — перезапустите туннель" || !br.Locked {
 		t.Errorf("broken tunnel: %+v", br)
+	}
+}
+
+func TestTunnelsAllRequiresExplicitInventory(t *testing.T) {
+	for _, body := range []string{`{"success":true}`, `{"success":true,"data":{}}`, `{"success":true,"data":{"tunnels":null}}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			if got, err := New(srv.URL).TunnelsAll(context.Background()); err == nil {
+				t.Fatalf("incomplete inventory could erase known tunnels: %+v", got)
+			}
+		})
 	}
 }

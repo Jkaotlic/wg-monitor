@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { workingTunnelCount, uncheckedTunnelCount, tunnelCountSummary } from '../src/labels.js'
 import { withCheckVerdict } from '../src/routes.js'
-import { tunnelList, tunnelListSummary } from '../src/tunnelDelete.js'
+import { routerTunnelCounts, tunnelList, tunnelListSummary } from '../src/tunnelDelete.js'
 
 // v0.56, спека B3: «Роутер»/«Проверки» и вкладка «VPN-туннели» считают
 // VPN-туннели одним определением: «свой» -- управляемый awg-manager,
@@ -68,14 +68,22 @@ import sandbox from './fixtures/sandbox_counts.json'
 describe.each(['sandbox-broken', 'sandbox-work'])('B3 на данных песочницы: %s', (name) => {
   const s = sandbox[name]
   it('«Роутер»/«Проверки» и вкладка дают один счёт', () => {
-    const main = tunnelCountSummary(s.events.tunnels, s.incidents)
+    const main = routerTunnelCounts(s.snapshot, s.events.tunnels, s.incidents)
     const tab = tunnelListSummary(tunnelList(withCheckVerdict(s.snapshot, s.events)), s.incidents, s.events.tunnels)
     expect(tab).toEqual(main)
-    expect(main.total).toBe(s.events.tunnels.length)
+    expect(main.total).toBe(s.snapshot.tunnels.filter((t) => t.type === 'managed').length)
   })
 
   it('без загруженных проверок вкладка не придумывает чужое: чужой NDMS-интерфейс не считается', () => {
     const tab = tunnelListSummary(tunnelList(s.snapshot), [], [])
     expect(tab.total).toBe(s.snapshot.tunnels.filter((t) => t.type === 'managed').length)
   })
+})
+
+it('равное число строк не позволяет заменить отсутствующую проверку посторонним VPN-туннелем', () => {
+  const list = tunnelList(snapshot)
+  const ok = { status: 'ok', run_state: 'running', enabled: true, handshake_age_sec: 2 }
+  const checks = ['awg10', 'awg12', 'removed'].map((tunnel_id) => ({ ...ok, tunnel_id }))
+  expect(tunnelListSummary(list, [], checks)).toEqual({ total: 3, working: 1, unchecked: 1 })
+  expect(tunnelCountSummary([{ ...ok, tunnel_id: 'awg10', status: undefined }])).toEqual({ total: 1, working: 0, unchecked: 1 })
 })

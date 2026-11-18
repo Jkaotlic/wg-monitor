@@ -78,7 +78,7 @@ describe('I1: вкладки видят открытые тревоги', () => 
     const tab = readFileSync(new URL('../src/screens/TunnelsTab.jsx', import.meta.url), 'utf8')
     const routes = readFileSync(new URL('../src/screens/RoutesTab.jsx', import.meta.url), 'utf8')
     expect(tab).toMatch(/fetchRouterChecksWithIncidents\(routerID\)/)
-    expect(tab).toMatch(/tunnelsTabSummary\(list, checks\)/)
+    expect(tab).toMatch(/tunnelsTabSummary\(list, checks, freshnessOptions\)/)
     expect(tab).not.toMatch(/tunnelListSummary\(/)
     expect(routes).toMatch(/fetchRouterChecksWithIncidents\(routerID\)/)
     expect(routes).toMatch(/routingVerdict\(shown, checks\?\.traffic, checks\?\.incidents\)/)
@@ -96,9 +96,8 @@ describe('M2: заголовок «Все VPN-туннели · N» -- по по
     const s = tunnelsTabSummary(list, { ...events, incidents: [] })
     expect(list.length).toBe(3)
     expect(s.title).toBe('Все VPN-туннели · 3')
-    expect(s.counts.total).toBe(2)
-    expect(s.note).toMatch(/^\d+ работа\S* из 2 /)
-    expect(s.note).toMatch(/в списке 3/)
+    expect(s.counts).toEqual({ total: 3, working: 2, unchecked: 1 })
+    expect(s.note).toBe('2 работают из 3 настроенных · 1 не проверено')
   })
 
   it('числа совпадают -- подпись прежняя, без оговорки', () => {

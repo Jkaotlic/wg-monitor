@@ -482,6 +482,12 @@ func TestMiniappFleetUpdateSupersedesOlderPausedRollout(t *testing.T) {
 	if err := d.Users().MarkPendingDeploy(offlineID, "v0.32.0", now.Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
+	oldIncident := now.Add(-24 * time.Hour)
+	if err := d.State().Save(offlineID, "agent_heartbeat", db.IncidentState{
+		CurrentStatus: "hard", HardSince: &oldIncident,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	old := db.RolloutJob{ID: "old-rollout", TargetVersion: "v0.31.0", State: "rolling", CreatedAt: now, UpdatedAt: now}
 	if err := d.Rollouts().Create(old, []int64{onlineID, offlineID}, ""); err != nil {
 		t.Fatal(err)
@@ -543,6 +549,10 @@ func TestMiniappFleetUpdateSupersedesOlderPausedRollout(t *testing.T) {
 	pending, err = d.Users().PendingDeploy(offlineID)
 	if err != nil || pending.Version != serverVersion {
 		t.Fatalf("deferred update after rollout=%+v err=%v", pending, err)
+	}
+	incident, err := d.State().Get(offlineID, "agent_heartbeat")
+	if err != nil || incident.CurrentStatus != "hard" {
+		t.Fatalf("existing incident=%+v err=%v", incident, err)
 	}
 
 	rec = getMiniapp(t, h, "/v1/miniapp/fleet/agent/rollout?job_id="+job.ID, 999)

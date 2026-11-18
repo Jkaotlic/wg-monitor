@@ -187,9 +187,9 @@ type miniappTraffic struct {
 	// ReserveTunnelIDs -- запасные звенья набора, несущего обход, которые
 	// живы по своей проверке tunnel_* (status ok): кто подхватит обход, если
 	// несущий ляжет. Заполняется только когда несущий назван по сводке
-	// политик агента; пусто -- резерва нет или агент о нём не сообщил
-	// (отличает их наличие EgressTunnelID при режиме split).
-	ReserveTunnelIDs []string `json:"reserve_tunnel_ids,omitempty"`
+	// политик агента. Пустой список -- проверенного резерва нет, без поля --
+	// сведений о резерве нет.
+	ReserveTunnelIDs []string `json:"reserve_tunnel_ids,omitzero"`
 	// CarrierTunnelID / CarrierBasis / CarrierAlive -- несущий VPN-туннель
 	// обхода по одному правилу для экранов «Роутер» и «VPN-туннели»
 	// (miniappCarrier, v0.56). Экраны называют несущим только его и не
@@ -197,9 +197,10 @@ type miniappTraffic struct {
 	// (или sing-box: маршрут выбирается для каждого адреса).
 	CarrierTunnelID string `json:"carrier_tunnel_id,omitempty"`
 	CarrierBasis    string `json:"carrier_basis"`
-	// CarrierAlive: несущий поднят и его проверка tunnel_* не провалена.
+	// CarrierAlive: несущий поднят и его проверка tunnel_* прошла.
+	// nil -- нет несущего либо его живость неизвестна.
 	// false при названном несущем -- «несёт, но не отвечает», а не «работает».
-	CarrierAlive bool `json:"carrier_alive"`
+	CarrierAlive *bool `json:"carrier_alive,omitempty"`
 }
 
 // Откуда известен несущий (miniappTraffic.CarrierBasis).
@@ -256,13 +257,18 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 	if row, ok := byCheck["hydraroute"]; ok {
 		_ = json.Unmarshal([]byte(row.DetailsJSON), &hd)
 	}
+	now := time.Now()
 	var pol *wire.PolicyBrief
-	out.CarrierTunnelID, out.CarrierBasis, out.CarrierAlive, pol = miniappCarrier(tunnels, hd, out)
-	// Несущий политики не совпал с главным выходом (активное звено лежит,
-	// и выход назван по единственному живому): резерв -- живые запасные
-	// звенья политики несущего, а не пусто.
-	if pol != nil && out.CarrierTunnelID != out.EgressTunnelID && out.ReserveTunnelIDs == nil {
-		out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol)
+	out.CarrierTunnelID, out.CarrierBasis, out.CarrierAlive, pol = miniappCarrier(tunnels, hd, out, now)
+	// Запасные берём из политики выбранного несущего, даже если главный
+	// выход роутера идёт по другой линии.
+	if pol != nil {
+		if miniappObservationFresh(byCheck["hydraroute"].TS, now) {
+			out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol, now)
+		} else {
+			out.CarrierAlive = nil
+			out.ReserveTunnelIDs = []string{}
+		}
 	}
 	return out
 }
@@ -285,28 +291,11 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 // провалена.
 //
 // pol -- политика несущего при basis policy, иначе nil.
-func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappTraffic) (id, basis string, alive bool, pol *wire.PolicyBrief) {
+func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappTraffic, now time.Time) (id, basis string, alive *bool, pol *wire.PolicyBrief) {
 	if tr.Mode == miniappTrafficSingbox {
-		return "", miniappCarrierNone, false, nil
+		return "", miniappCarrierNone, nil, nil
 	}
-	var (
-		carrier *miniappTunnel
-		best    int
-	)
-	for i := range hd.Policies {
-		p := &hd.Policies[i]
-		executed := miniappPolicyExecuted(p, hd)
-		if executed <= 0 || !p.ViaVPN || p.ActiveTunnelID == "" {
-			continue
-		}
-		t := miniappTunnelByID(tunnels, p.ActiveTunnelID)
-		if t == nil {
-			continue
-		}
-		if carrier == nil || executed > best {
-			carrier, best, pol = t, executed, p
-		}
-	}
+	carrier, pol := miniappPolicyCarrier(tunnels, hd)
 	basis = miniappCarrierPolicy
 	if carrier == nil && tr.EgressTunnelID != "" {
 		// Главный выход -- слово роутера (routeTag). Единственный живой при
@@ -319,9 +308,31 @@ func miniappCarrier(tunnels []miniappTunnel, hd miniappHydraDetails, tr miniappT
 		}
 	}
 	if carrier == nil {
-		return "", miniappCarrierNone, false, nil
+		return "", miniappCarrierNone, nil, nil
 	}
-	return carrier.TunnelID, basis, miniappTunnelCarriesRules(carrier) && carrier.Status != "fail", pol
+	return carrier.TunnelID, basis, miniappTunnelAlive(carrier, now), pol
+}
+
+// Unknown checks and missing run state carry no verdict. A disabled tunnel
+// can legitimately report an OK check while carrying no traffic.
+func miniappTunnelAlive(t *miniappTunnel, now time.Time) *bool {
+	observed, err := time.Parse(time.RFC3339, t.TS)
+	if err != nil || !miniappObservationFresh(observed, now) {
+		return nil
+	}
+	if t.Status == "fail" || (t.Enabled != nil && !*t.Enabled) {
+		return new(false)
+	}
+	if !miniappTunnelCarriesRules(t) {
+		if t.RunState == "" || t.RunState == "unknown" {
+			return nil
+		}
+		return new(false)
+	}
+	if t.Status == "ok" {
+		return new(true)
+	}
+	return nil
 }
 
 // miniappDeriveTrafficMode -- режим и главный выход без несущего.
@@ -373,14 +384,13 @@ func miniappDeriveTrafficMode(tunnels []miniappTunnel, byCheck map[string]db.Eve
 		// раздельная маршрутизация: всё, что не названо правилами, идёт мимо
 		// VPN, а заблокированное уводят правила. Так настроены рабочий роутер
 		// и testkeen, и жёлтое «обход не работает» на них было неправдой.
-		if carrier, pol := miniappPolicyCarrier(tunnels, hd); carrier != nil {
+		if carrier, _ := miniappPolicyCarrier(tunnels, hd); carrier != nil {
 			// Несущего назвал сам роутер: активное звено набора с правилами.
 			// Без этого при двух живых экран брал первый running и красил
 			// живой обход тревогой запасного (workrouter, 18.09.2026).
 			out.Mode = miniappTrafficSplit
 			out.EgressTunnelID = carrier.TunnelID
 			out.EgressTunnelName = carrier.Name
-			out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol)
 		} else if bypass, carrier := miniappBypassByRules(tunnels, hd); bypass {
 			out.Mode = miniappTrafficSplit
 			if carrier != nil {
@@ -441,12 +451,12 @@ func miniappTunnelCarriesRules(t *miniappTunnel) bool {
 // агента: активное звено политики, у которой есть исполняемые правила.
 // Правила HydraRoute Neo исполняются только запущенным HydraRoute, остальные
 // правила политики -- самим роутером. Несущий обязан быть среди туннелей
-// экрана и работать: ссылка на линию, которой экран не показывает, -- не
+// экрана: ссылка на линию, которой экран не показывает, -- не
 // ответ. Политик с правилами несколько -- несущим считается та, что
 // исполняет больше правил (первая при равенстве).
 //
 // nil -- сводки нет (старый агент) или ни одна политика с правилами не идёт
-// через живой VPN-туннель; тогда отвечает miniappBypassByRules.
+// через известный VPN-туннель; тогда отвечает miniappBypassByRules.
 func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*miniappTunnel, *wire.PolicyBrief) {
 	var (
 		best    *wire.PolicyBrief
@@ -460,7 +470,7 @@ func miniappPolicyCarrier(tunnels []miniappTunnel, hd miniappHydraDetails) (*min
 			continue
 		}
 		t := miniappTunnelByID(tunnels, p.ActiveTunnelID)
-		if t == nil || !miniappTunnelCarriesRules(t) {
+		if t == nil {
 			continue
 		}
 		if best == nil || executed > bestExecuted {
@@ -483,17 +493,19 @@ func miniappPolicyExecuted(p *wire.PolicyBrief, hd miniappHydraDetails) int {
 // miniappPolicyReserve -- запасные звенья набора, живые по своей проверке:
 // роль fallback (интерфейс поднят) ещё не значит, что туннель что-то везёт --
 // на workrouter запасной был поднят с обменом ключами 24-минутной давности.
-func miniappPolicyReserve(tunnels []miniappTunnel, p *wire.PolicyBrief) []string {
+func miniappPolicyReserve(tunnels []miniappTunnel, p *wire.PolicyBrief, now time.Time) []string {
 	if p == nil {
 		return nil
 	}
-	var out []string
+	out := []string{}
 	for _, l := range p.Links {
 		if l.Role != "fallback" || l.TunnelID == "" || l.TunnelID == p.ActiveTunnelID {
 			continue
 		}
-		if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.Status == "ok" {
-			out = append(out, l.TunnelID)
+		if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.RunState == "running" {
+			if alive := miniappTunnelAlive(t, now); alive != nil && *alive {
+				out = append(out, l.TunnelID)
+			}
 		}
 	}
 	return out

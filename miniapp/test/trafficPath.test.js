@@ -10,7 +10,7 @@ describe('pathState', () => {
     const s = pathState({
       traffic: { mode: 'vpn', egress_tunnel_id: 'awg12', egress_tunnel_name: 'Амстердам' },
       incidents: [],
-      tunnels: [{ tunnel_id: 'awg12', run_state: 'running', matrix_latency_ms: 84 }],
+      tunnels: [{ tunnel_id: 'awg12', run_state: 'running', status: 'ok', matrix_latency_ms: 84 }],
     })
     expect(s.tunnel).toBe('up')
     expect(s.direct).toBe('up')
@@ -72,7 +72,7 @@ describe('pathState на sing-box', () => {
       incidents: [],
       tunnels: [
         { tunnel_id: 'awg10', name: 'Франкфурт', run_state: 'stopped' },
-        { tunnel_id: 'awg12', name: 'Амстердам', run_state: 'running', matrix_latency_ms: 84 },
+        { tunnel_id: 'awg12', name: 'Амстердам', run_state: 'running', status: 'ok', matrix_latency_ms: 84 },
       ],
     })
     expect(s.tunnel).toBe('up')
@@ -85,4 +85,8 @@ describe('pathState на sing-box', () => {
     expect(s.tunnel).toBe('unknown')
     expect(s.via).toBe('')
   })
+})
+
+it('после потери связи прежний отказ не выдаётся за состояние прямо сейчас', () => {
+  expect(pathState({ stale: true, evidence: { state: 'failed' } }).tunnel).toBe('unknown')
 })

@@ -1,3 +1,5 @@
+import { serverClockOffset } from './serverClock.js'
+
 const BASE = '/v1/miniapp'
 const DASHBOARD = '/v1/dashboard'
 
@@ -207,7 +209,8 @@ export function fetchRouterChecks(id) {
 // отчёта) вкладка звала работающим, а «Роутер» -- нет. Два чтения базы,
 // команд роутеру нет.
 export function fetchRouterChecksWithIncidents(id) {
-  return Promise.all([fetchRouterChecks(id), fetchRouter(id)]).then(([ev, r]) => ({ ...ev, incidents: r?.incidents ?? [] }))
+  const router = fetchRouter(id).then((r) => ({ incidents: r?.incidents ?? [], clockOffsetMs: serverClockOffset(r?.router) }))
+  return Promise.all([fetchRouterChecks(id), router]).then(([ev, detail]) => ({ ...ev, ...detail }))
 }
 
 // Снимок версий, вышедшие обновления и -- отдельно -- причины незнания.

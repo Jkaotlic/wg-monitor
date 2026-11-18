@@ -56,7 +56,7 @@ func TestReleaseWorkflowBindsTagIntoSignedChecksums(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	recheck := strings.Index(text, "Re-checksum with SBOM included")
+	recheck := strings.Index(text, "sha256sum wg-monitor-* > checksums.txt")
 	bind := strings.Index(text, "VERSION-")
 	sign := strings.Index(text, "cmd/release-sign")
 	if recheck < 0 || bind < 0 || sign < 0 {

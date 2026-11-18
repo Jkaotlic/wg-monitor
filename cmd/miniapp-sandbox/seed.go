@@ -183,6 +183,12 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 	// пояснением на карточке; экран пишет «awg-manager: Сломан» и пояснение.
 	tunnelBad := `{"tunnel_id":"awg12","tunnel_name":"vpn-nl","status":"broken","enabled":true,"handshake_age_sec":5400,"ping_check_status":"fail","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"рукопожатия нет 90 минут",` +
 		`"awgm_conn":"disconnected","awgm_conn_reason":"timeout","awgm_status_details":"Не запустился — перезапустите туннель"}`
+	// У исправного стенда есть политика с единственным активным звеном для
+	// мастера замены. На сломанном стенде маршрут выбирается по адресу.
+	hydra := `{"running":true,"routes_hrneo":37,"routes_ndms":4,"routes_static":12,"active_backend":"hr_neo","policies":[{"name":"HydraRoute","active_tunnel_id":"awg12","via_vpn":true,"dns":32,"hr_neo":28,"links":[{"tunnel_id":"awg12","role":"active"},{"tunnel_id":"awg10","role":"fallback"}]}]}`
+	if broken {
+		hydra = `{"running":true,"routes_hrneo":37,"routes_ndms":4,"routes_static":12,"active_backend":"hr_neo","singbox_router_active":true}`
+	}
 	rows := []struct {
 		name    string
 		status  string
@@ -190,7 +196,7 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 	}{
 		{"agent_heartbeat", "ok", `{}`},
 		{"dns", "ok", `{"endpoints":4,"failed_count":0,"rkn_probed":true,"rkn_suspect":false}`},
-		{"hydraroute", "ok", `{"routes_hrneo":37,"routes_ndms":4,"routes_static":12,"active_backend":"hr_neo","singbox_router_active":true}`},
+		{"hydraroute", "ok", hydra},
 		{"awg_manager", "ok", `{"version":"2.17.2","firmware":"4.3.9"}`},
 		{"external_reach", "ok", `{"targets_total":3,"targets_failed":[],"targets_degraded":[]}`},
 		{"tunnel_awg12", "ok", tunnelOK},

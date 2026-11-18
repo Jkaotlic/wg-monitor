@@ -70,7 +70,10 @@ function unprotectedNames(root) {
 function routerData() {
   const checks = structuredClone(respond('GET', '/v1/miniapp/routers/2/events'))
   const names = { awg12: 'vpn-nl', awg10: 'vpn-de' }
-  for (const t of checks.tunnels) if (names[t.tunnel_id]) t.name = names[t.tunnel_id]
+  for (const t of checks.tunnels) {
+    if (names[t.tunnel_id]) t.name = names[t.tunnel_id]
+    t.ts = new Date().toISOString()
+  }
   checks.traffic.egress_tunnel_name = 'vpn-nl'
   return { router: { router: ROUTERS[1], incidents: [] }, checks }
 }

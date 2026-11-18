@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
@@ -19,7 +20,7 @@ const workrouterHydraPolicies = `{"installed":true,"running":true,"routes_hrneo"
 	{"name":"RU","active_tunnel_id":"","via_vpn":false,"dns":2,"hr_neo":2,"links":[{"tunnel_id":"","role":"active"}]}]}`
 
 func carrierTunnelRow(id, name, status, details string) db.EventRow {
-	return db.EventRow{CheckName: "tunnel_" + id, Status: status, DetailsJSON: details}
+	return db.EventRow{CheckName: "tunnel_" + id, TS: time.Now(), Status: status, DetailsJSON: details}
 }
 
 func workrouterCarrierTraffic(t *testing.T, active, fallback string, hydra string) miniappTraffic {
@@ -31,7 +32,7 @@ func workrouterCarrierTraffic(t *testing.T, active, fallback string, hydra strin
 	if hydra == "" {
 		hydra = strings.NewReplacer("%ACTIVE%", active, "%FALLBACK%", fallback).Replace(workrouterHydraPolicies)
 	}
-	byCheck := map[string]db.EventRow{"hydraroute": {CheckName: "hydraroute", Status: "ok", DetailsJSON: hydra}}
+	byCheck := map[string]db.EventRow{"hydraroute": {CheckName: "hydraroute", TS: time.Now(), Status: "ok", DetailsJSON: hydra}}
 	var tunnels []miniappTunnel
 	for _, r := range rows {
 		tu, ok := miniappTunnelFromEvent(r)
@@ -57,8 +58,8 @@ func TestMiniappTrafficCarrierFromPolicies(t *testing.T) {
 		t.Fatalf("запасной awg10 мёртв по проверке -- резерва нет, получили %v", got.ReserveTunnelIDs)
 	}
 	b, _ := json.Marshal(got)
-	if strings.Contains(string(b), "reserve_tunnel_ids") {
-		t.Errorf("пустой резерв уехал в JSON: %s", b)
+	if !strings.Contains(string(b), `"reserve_tunnel_ids":[]`) {
+		t.Errorf("пустой резерв не попал в JSON: %s", b)
 	}
 }
 

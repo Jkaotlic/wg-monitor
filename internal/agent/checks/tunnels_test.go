@@ -639,7 +639,7 @@ func TestTunnelsCheckReportsUnknownEgressWhenSettingsFail(t *testing.T) {
 
 // matrixStub -- заглушка awg-manager, отвечающая ровно тем, что нужно проверке
 // туннеля. withMatrix=false воспроизводит роутер старше 2.18: эндпоинта нет.
-func matrixStub(t *testing.T, withMatrix bool) *httptest.Server {
+func matrixStub(t *testing.T, withMatrix bool, stamp string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -663,7 +663,7 @@ func matrixStub(t *testing.T, withMatrix bool) *httptest.Server {
 				"targets":[{"id":"cc","host":"example.com","name":"example.com"}],
 				"tunnels":[{"id":"awg10","name":"line-a","ifaceName":"opkgtun10"}],
 				"cells":[{"targetId":"cc","tunnelId":"awg10","latencyMs":84,"ok":true,"isSelf":true}],
-				"updatedAt":"2026-09-09T09:32:23Z"}}`))
+				"updatedAt":"` + stamp + `"}}`))
 		case "/api/test/connectivity":
 			// Сборка без проверки связи (v0.65): на вердикт она не влияет.
 			w.WriteHeader(http.StatusNotFound)
@@ -688,7 +688,8 @@ func tunnelCheckFor(t *testing.T, baseURL, tunnelID string) wire.Check {
 // Задержка из матрицы кладётся РЯДОМ с ping-check, а не вместо него: это
 // разные измерения, и подменять одно другим значило бы потерять оба.
 func TestTunnelCheck_CarriesMatrixLatency(t *testing.T) {
-	srv := matrixStub(t, true)
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	srv := matrixStub(t, true, stamp)
 	defer srv.Close()
 
 	c := tunnelCheckFor(t, srv.URL, "awg10")
@@ -696,7 +697,7 @@ func TestTunnelCheck_CarriesMatrixLatency(t *testing.T) {
 	if got := c.Details["matrix_latency_ms"]; got != 84 {
 		t.Fatalf("matrix_latency_ms = %v, хотим 84", got)
 	}
-	if c.Details["matrix_updated_at"] != "2026-09-09T09:32:23Z" {
+	if c.Details["matrix_updated_at"] != stamp {
 		t.Fatalf("время снимка не доехало: %v", c.Details["matrix_updated_at"])
 	}
 }
@@ -705,7 +706,7 @@ func TestTunnelCheck_CarriesMatrixLatency(t *testing.T) {
 // без задержки, но и без провала -- иначе обновление awg-manager стало бы
 // условием работы мониторинга.
 func TestTunnelCheck_SurvivesMissingMatrix(t *testing.T) {
-	srv := matrixStub(t, false)
+	srv := matrixStub(t, false, "")
 	defer srv.Close()
 
 	c := tunnelCheckFor(t, srv.URL, "awg10")
@@ -1143,5 +1144,42 @@ func TestTunnelsCheck_PolicyRulesCreditedToLiveLink(t *testing.T) {
 	}
 	if _, has := got["tunnel_awg50"].Details["routes_dns"]; has {
 		t.Fatalf("правило осталось за вторым звеном: %+v", got["tunnel_awg50"].Details)
+	}
+}
+
+func TestMatrixEvidenceRespectsClockAndSampleAge(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	stamp := func(offset time.Duration) string { return now.Add(offset).Format(time.RFC3339) }
+	matrix := &awgmgr.MonitoringMatrix{UpdatedAt: stamp(0), Cells: []awgmgr.MatrixCell{
+		{TunnelID: "line", OK: true, LatencyMs: 2, TS: stamp(-time.Hour)},
+		{TunnelID: "line", OK: true, LatencyMs: 1, TS: stamp(time.Hour)},
+		{TunnelID: "line", OK: true, LatencyMs: 52, TS: stamp(-time.Minute)},
+	}}
+	tu := awgmgr.Tunnel{ID: "line", Enabled: true, Status: "running"}
+	check := evalTunnel(tu, awgmgr.PingCheckTunnel{}, routeCounts{}, now, time.Minute, "", matrix, nil, false)
+	if check.Details["matrix_latency_ms"] != 52 || check.Details["matrix_updated_at"] != stamp(-time.Minute) {
+		t.Errorf("latency must come from the fresh cell: %v", check.Details)
+	}
+	matrix.Cells = matrix.Cells[1:2]
+	if matrixSaysAlive(matrix, "line", now) {
+		t.Error("future measurement treated as current proof of connectivity")
+	}
+}
+
+func TestTunnelsCheckReportsUnknownEgressWhenTaggedTunnelMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"tunnels":[{"id":"line","type":"awg","enabled":false}]}}`)
+		case "/api/settings/get":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"download":{"routeTag":"awg-removed","routeKind":"awg"}}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	check := tunnelCheckFor(t, srv.URL, "line")
+	if check.Details["active_default_known"] != false {
+		t.Fatalf("unresolved reference to another tunnel would become direct WAN on screen: %+v", check.Details)
 	}
 }

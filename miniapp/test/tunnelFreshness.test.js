@@ -59,3 +59,18 @@ describe('повторное чтение снимка', () => {
     expect(snapshotState({ snapshot, result: { status: 'error' } })).toBe('stale-refused')
   })
 })
+
+it('будущая проверка не перекрашивает снимок и слово awg-manager в зелёный', async () => {
+  const { awgmBadge } = await import('../src/awgmBadge.js')
+  const event = { tunnel_id: 'awg10', run_state: 'running', awgm_conn: 'connected', status: 'ok', ts: '2026-11-06T10:03:00Z' }
+  const options = { nowMs: NOW, enforceFreshness: true, requireTimestamp: true }
+  expect(withCheckVerdict(SNAPSHOT, { tunnels: [event] }, options).tunnels[0].status).toBe('broken')
+  expect(awgmBadge(event, options).tone).not.toBe('ok')
+})
+
+it('сводка вкладки не считает старую проверку работающей', async () => {
+  const { tunnelsTabSummary } = await import('../src/tunnelDelete.js')
+  const event = { tunnel_id: 'awg10', run_state: 'running', enabled: true, handshake_age_sec: 2, status: 'ok', ts: '2026-11-06T09:00:00Z' }
+  const rows = tunnelList(withCheckVerdict(SNAPSHOT, { tunnels: [event] }, { nowMs: NOW, enforceFreshness: true, requireTimestamp: true }))
+  expect(tunnelsTabSummary(rows, { tunnels: [event] }, { nowMs: NOW, enforceFreshness: true }).counts.working).toBe(0)
+})

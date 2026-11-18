@@ -53,7 +53,7 @@ describe('переустановка агента сейчас', () => {
       ['version', 'text'],
     ])
     const version = f.find((x) => x.name === 'version')
-    expect(version.hint({ version: '' })).toBe('Пусто — последняя версия.')
+    expect(version.hint({ version: '' })).toBe('Обычно ставится версия сервера. Если у сервера нет номера выпуска, он выберет последний выпуск.')
     expect(version.hint({ version: '0.3' })).toBe('Версия пишется так: v0.36.0.')
   })
 

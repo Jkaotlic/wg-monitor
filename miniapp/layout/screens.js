@@ -8,7 +8,7 @@
 // Какой роутер снят на самом деле, run.mjs пишет в запись; не тот -- провал.
 export const ROLES = ['admin', 'owner1', 'owner3', 'operator', 'issuer', 'none']
 // «Последний выпуск» песочницы (флаг -latest): Парк предлагает раскатку до него.
-export const SANDBOX_LATEST = 'v0.34.0'
+export const SANDBOX_LATEST = 'v0.67.0'
 // Роутер с остановленным HydraRoute Neo: run.mjs передаёт его песочнице флагом -hrneo-stopped.
 export const HRNEO_STOPPED = 'дача-северная'
 export const WIDTHS = [360, 390, 1024, 1440]
@@ -67,7 +67,7 @@ export const SCREENS = [
   { id: 'reboot', roles: OWNERS, router: 'sandbox-home', steps: [...MANAGE, { click: 'Перезагрузить роутер' }, { fill: '$router' }] },
   { id: 'agentcfg', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть настройки агента' }] },
   { id: 'agentconn', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть подключение агента' }] },
-  { id: 'dnsreset', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть сброс DNS' }] },
+  { id: 'dnsreset', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть эталонный DNS' }] },
   { id: 'packages', roles: ['admin'], router: 'sandbox-home', steps: [...MANAGE, { click: 'Открыть пакеты по расписанию' }] },
   // Владелец трёх роутеров: ещё один длинный роутер текущим.
   // Полоса «Мои роутеры» в прокрученном состоянии (только телефон: на широкой
@@ -108,7 +108,7 @@ export const SCREENS = [
   // «Ход работы»: переустановка агента на настоящем движке заданий песочницы
   // (подменён только терминал роутера). Пароль -- любое слово: настоящих
   // секретов в песочнице нет. Снимается итог задания -- он устойчив.
-  { id: 'job', roles: ['admin'], steps: [PARK, { clickAll: 'Ещё' }, { click: 'Переустановить агент' }, { fillSel: '#sheet-field-root_password', value: 'sandbox' }, { fillSel: '#sheet-confirm-input', value: '$confirm' }, { click: 'Переустановить' }, { waitText: 'Агент переустановлен и на связи', ms: 40000 }] },
+  { id: 'job', roles: ['admin'], steps: [PARK, { clickAll: 'Ещё' }, { first: '.park-row:has(.data-row-main:text-is("sandbox-home")) button:text-is("Переустановить агент")' }, { fillSel: '#sheet-field-root_password', value: 'sandbox' }, { fillSel: '#sheet-confirm-input', value: '$confirm' }, { click: 'Переустановить' }, { waitText: 'Агент переустановлен и на связи', ms: 40000 }] },
   // Ожидание раскатки бэкенда: слой закреплён, песочница заявку принимает и
   // молчит (-backend-update ignore). После снимка -- перезагрузка страницы.
   { id: 'backenddeploy', roles: ['admin'], reload: true, steps: [PARK, { click: `Обновить бэкенд до ${SANDBOX_LATEST}` }, { fillSel: '#sheet-confirm-input', value: '$confirm' }, { click: 'Обновить бэкенд' }, { waitText: `Бэкенд обновляется до ${SANDBOX_LATEST}` }, { waitText: 'прежней версией' }] },

@@ -6,7 +6,14 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
-const statusEvidenceFreshFor = 5 * time.Minute
+const (
+	statusEvidenceFreshFor  = 5 * time.Minute
+	statusEvidenceClockSkew = 2 * time.Minute
+)
+
+func miniappObservationFresh(observed, now time.Time) bool {
+	return !observed.IsZero() && !observed.Before(now.Add(-statusEvidenceFreshFor)) && !observed.After(now.Add(statusEvidenceClockSkew))
+}
 
 // statusEvidence is the backend-owned explanation for the current traffic
 // status. Screens may choose different copy, but they must not independently
@@ -51,7 +58,7 @@ func deriveStatusEvidence(tunnels []miniappTunnel, traffic miniappTraffic, now t
 		return base
 	}
 	observed = observed.UTC()
-	if observed.After(now.UTC().Add(2 * time.Minute)) {
+	if observed.After(now.UTC().Add(statusEvidenceClockSkew)) {
 		base.ObservedAt = observed.Format(time.RFC3339)
 		base.ReasonCode = "clock_skew"
 		return base
@@ -65,8 +72,8 @@ func deriveStatusEvidence(tunnels []miniappTunnel, traffic miniappTraffic, now t
 		return base
 	}
 
-	botUp := carrier.Status == "ok"
-	botDown := carrier.Status == "fail" || !traffic.CarrierAlive
+	botUp := carrier.Status == "ok" && traffic.CarrierAlive != nil && *traffic.CarrierAlive
+	botDown := carrier.Status == "fail" || (traffic.CarrierAlive != nil && !*traffic.CarrierAlive)
 	awgmUp := carrier.AwgmConn == "connected"
 	awgmDown := carrier.AwgmConn == "disconnected"
 	if (botUp && awgmDown) || (botDown && awgmUp) {
@@ -121,7 +128,7 @@ func deriveStatusEvidenceFromChecks(tunnels []miniappTunnel, traffic miniappTraf
 		}
 		observed := row.TS.UTC()
 		base.Sources = append(base.Sources, statusEvidenceSource{Source: "hydraroute", State: row.Status, ObservedAt: observed.Format(time.RFC3339)})
-		if observed.After(now.UTC().Add(2 * time.Minute)) {
+		if observed.After(now.UTC().Add(statusEvidenceClockSkew)) {
 			base.State, base.ReasonCode, base.Confidence = "unknown", "clock_skew", "none"
 			return base
 		}
@@ -160,7 +167,7 @@ func deriveStatusEvidenceFromChecks(tunnels []miniappTunnel, traffic miniappTraf
 		return base
 	}
 	observed := row.TS.UTC()
-	if observed.After(now.UTC().Add(2 * time.Minute)) {
+	if observed.After(now.UTC().Add(statusEvidenceClockSkew)) {
 		base.ObservedAt = observed.Format(time.RFC3339)
 		base.ReasonCode = "clock_skew"
 		return base

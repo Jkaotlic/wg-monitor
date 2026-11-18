@@ -100,7 +100,7 @@ export function stepError(step, values) {
         return 'Для входа в веб нужны логин и пароль панели.'
       }
       if (values.awgmAuth === 'api-key' && trimmed(values.awgmAPIKey) === '') return 'Нужен ключ API панели.'
-      if (trimmed(values.version) !== '' && !normalizeAgentVersion(values.version)) return 'Версия пишется так: v0.36.0. Пусто — последняя.'
+      if (trimmed(values.version) !== '' && !normalizeAgentVersion(values.version)) return 'Версия пишется так: v0.36.0. Для автоматического выбора оставьте поле пустым.'
       return ''
     }
     default:
@@ -140,7 +140,7 @@ export function provisionSummary(values) {
     { label: 'Панель awg-manager', value: trimmed(values.awgmURL) },
     { label: 'Вход в панель', value: AWGM_AUTH_OPTIONS.find((o) => o.value === values.awgmAuth)?.label ?? '' },
     { label: 'Пароль root', value: trimmed(values.rootPassword) ? 'введён' : 'не введён' },
-    { label: 'Версия агента', value: normalizeAgentVersion(values.version) || trimmed(values.version) || 'последняя' },
+    { label: 'Версия агента', value: normalizeAgentVersion(values.version) || trimmed(values.version) || 'выберет сервер' },
   )
   return rows
 }

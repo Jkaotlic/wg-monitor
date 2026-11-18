@@ -96,6 +96,30 @@ func (s *StateRepo) HardCount(userID int64) (int, error) {
 	return n, err
 }
 
+// HardCountSince counts open hard incidents that started at or after since.
+// Without an onset timestamp, keep the incident in the safety check.
+func (s *StateRepo) HardCountSince(userID int64, since time.Time) (int, error) {
+	if since.IsZero() {
+		return s.HardCount(userID)
+	}
+	rows, err := s.d.db.Query(`SELECT hard_since FROM incident_state WHERE user_id=? AND current_status='hard'`, userID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var count int
+	for rows.Next() {
+		var onset sql.NullTime
+		if err := rows.Scan(&onset); err != nil {
+			return 0, err
+		}
+		if !onset.Valid || !onset.Time.Before(since) {
+			count++
+		}
+	}
+	return count, rows.Err()
+}
+
 func (s *StateRepo) IncSoftFlap(userID int64, checkName, date string) error {
 	_, err := s.d.db.Exec(
 		`INSERT INTO daily_soft_flaps(user_id, check_name, date, flap_count) VALUES (?,?,?,1)

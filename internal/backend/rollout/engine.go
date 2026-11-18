@@ -45,6 +45,7 @@ type Probe struct {
 	ReportGap        bool
 	LastSeenAt       time.Time
 	PendingVersion   string
+	Unavailable      bool
 }
 
 type Engine struct {
@@ -52,7 +53,7 @@ type Engine struct {
 	ObservationWindow time.Duration
 	Now               func() time.Time
 	Deploy            func(routerID int64, target string) (commandID string, err error)
-	Probe             func(routerID int64) Probe
+	Probe             func(routerID int64, queuedAt time.Time) Probe
 }
 
 func (e Engine) now() time.Time {
@@ -111,7 +112,7 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 			return job, err
 		}
 	case "canary_pending":
-		probe := e.probe(targets[0].RouterID)
+		probe := e.probe(targets[0])
 		if reason := badGate(probe); reason != "" {
 			if err := e.DB.Rollouts().Transition(id, "canary_pending", "paused", reason, now); err != nil {
 				return job, err
@@ -125,14 +126,19 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 			}
 		}
 	case "observing":
-		probe := e.probe(targets[0].RouterID)
-		if reason := badGate(probe); reason != "" {
+		probe := e.probe(targets[0])
+		reason := badGate(probe)
+		if reason == "" && probe.Fresh && probe.Version != job.TargetVersion {
+			reason = "canary_version_changed"
+		}
+		if reason != "" {
 			if err := e.DB.Rollouts().Transition(id, "observing", "paused", reason, now); err != nil {
 				return job, err
 			}
 			break
 		}
-		if job.ObservationStartedAt != nil && now.Sub(*job.ObservationStartedAt) >= e.window() {
+		if probe.Fresh && probe.Version == job.TargetVersion &&
+			job.ObservationStartedAt != nil && now.Sub(*job.ObservationStartedAt) >= e.window() {
 			for _, target := range targets[1:] {
 				if target.Status == "planned" {
 					if err := e.queue(job, target, now); err != nil {
@@ -155,7 +161,7 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 			if target.Status == "observed" {
 				continue
 			}
-			probe := e.probe(target.RouterID)
+			probe := e.probe(target)
 			reason := badGate(probe)
 			// The pending update is durable and will run on contact. An
 			// already-offline fleet router has no pre-update reports to lose.
@@ -189,13 +195,20 @@ func (e Engine) current(id string) (db.RolloutJob, error) {
 	job, _, err := e.DB.Rollouts().Get(id)
 	return job, err
 }
-func (e Engine) probe(id int64) Probe {
+func (e Engine) probe(target db.RolloutTarget) Probe {
 	if e.Probe == nil {
 		return Probe{}
 	}
-	return e.Probe(id)
+	var queuedAt time.Time
+	if target.QueuedAt != nil {
+		queuedAt = *target.QueuedAt
+	}
+	return e.Probe(target.RouterID, queuedAt)
 }
 func badGate(p Probe) string {
+	if p.Unavailable {
+		return "probe_unavailable"
+	}
 	if p.NewHardIncidents > 0 {
 		return "new_hard_incident"
 	}

@@ -1,10 +1,13 @@
+import { useTunnelFreshness } from '../useTunnelFreshness.js'
 import { agentReplyText, agentOwnText } from '../errorText.js'
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { DIAG_SECTIONS, parseDiag, checkRows, reportHint } from '../diag.js'
 import { dnsSplitView } from '../dnsSplit.js'
-import { humanAge, tunnelCountSummary, workingTunnelNote } from '../labels.js'
+import { routerTunnelCounts } from '../tunnelDelete.js'
+import { recentRouteSnapshot } from '../routes.js'
+import { humanAge, workingTunnelNote } from '../labels.js'
 import { isStale } from '../staleness.js'
 import { serverClockOffset } from '../serverClock.js'
 import { agoText } from '../when.js'
@@ -45,6 +48,7 @@ export function DiagGroup({ id, children }) {
 export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [data, setData] = useState(null)
+  const freshness = useTunnelFreshness(data?.clockOffsetMs)
   const [error, setError] = useState(null)
   const [showRaw, setShowRaw] = useState(false)
 
@@ -82,11 +86,12 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
     return error ? <ErrorLine text={error} onRetry={load} /> : <p class="state">Загрузка…</p>
   }
 
-  const rows = checkRows(data)
   const age = data.router?.last_seen_age_sec
   const silent = isStale(data.router)
   // То же правило, что на «Сейчас» (MINI-07).
-  const tunnelCounts = tunnelCountSummary(data.tunnels, data.incidents)
+  const inventory = recentRouteSnapshot(routerID)
+  const tunnelCounts = routerTunnelCounts(inventory, data.tunnels, data.incidents, { ...freshness, enforceFreshness: data.clockOffsetMs != null })
+  const rows = checkRows({ ...data, tunnelCounts })
   const tunnelsAlive = tunnelCounts.working
   const tunnelsUnchecked = tunnelCounts.unchecked
   const parsedReport = report.result?.status === 'ok' ? parseDiag(report.result.output) : null
@@ -111,15 +116,15 @@ export function DiagTab({ routerID, asleep, isAdmin = false, openSheet }) {
       <div class="stat-grid">
         <Stat
           label="VPN-туннели"
-          value={silent || !data.tunnels.length ? null : tunnelsAlive}
+          value={silent || !tunnelCounts.total ? null : tunnelsAlive}
           note={
             silent
               ? 'данные устарели'
-              : data.tunnels.length
-                ? workingTunnelNote(tunnelsAlive, tunnelCounts.total, tunnelsUnchecked)
+              : tunnelCounts.total
+                ? workingTunnelNote(tunnelsAlive, tunnelCounts.total, tunnelsUnchecked, inventory ? 'настроенных' : 'в отчёте')
                 : 'роутер не сообщил ни одного'
           }
-          tone={!silent && data.tunnels.length && tunnelsAlive === 0 && tunnelsUnchecked === 0 ? 'danger' : undefined}
+          tone={!silent && tunnelCounts.total && tunnelsAlive === 0 && tunnelsUnchecked === 0 ? 'danger' : undefined}
         />
         <Stat
           label="отчёт о себе"

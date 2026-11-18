@@ -77,7 +77,7 @@ describe('v0.48: ссылка на Парк', () => {
     mocks.session = { ok: true, is_admin: true, via: 'telegram' }
     const root = await mountAt('/miniapp/?tab=park')
     expect(root.querySelector('.overlay')).toBe(null)
-    expect(root.querySelector('.park-tab .stub-park')).toBeTruthy()
+    await vi.waitFor(() => expect(root.querySelector('.park-tab .stub-park')).toBeTruthy())
     cleanup(root)
   })
 
@@ -98,7 +98,7 @@ describe('v0.48: «Парк» на широком экране', () => {
     expect([...root.querySelectorAll('.side-tabs .side-link')].map((b) => b.textContent.trim())).toEqual(['Парк', 'Роутер', 'VPN-туннели', 'Проверки', 'Настройки'])
     await act(async () => button(root.querySelector('.side-tabs'), 'Парк').click())
     await flush()
-    expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
+    await vi.waitFor(() => expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy())
     expect(window.location.search).toBe('?router=2&tab=park')
     cleanup(root)
   })
@@ -107,7 +107,7 @@ describe('v0.48: «Парк» на широком экране', () => {
     setWide(true)
     mocks.session = { ok: true, is_admin: true, via: 'web' }
     const root = await mountAt('/dashboard/')
-    expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy()
+    await vi.waitFor(() => expect(root.querySelector('main .park-tab .stub-park')).toBeTruthy())
     expect(button(root.querySelector('.side-tabs'), 'Парк').classList.contains('side-link-active')).toBe(true)
     expect(root.querySelector('.side-foot').textContent).not.toContain('Парк')
     expect(window.location.search).toBe('?tab=park')

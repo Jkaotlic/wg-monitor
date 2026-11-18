@@ -340,7 +340,8 @@ func workRouteSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 			},
 			{ID: "ISP", Name: "Провайдер", Iface: "ISP", Type: "ndms", Enabled: true, Available: true, RestartMethod: "none"},
 		},
-		Counts: map[string]wire.TunnelCounts{},
+		// The Figma rule below is bound directly to OpkgTun14.
+		Counts: map[string]wire.TunnelCounts{"awg14": {DNS: 1}},
 		Policies: []wire.RoutePolicySummary{
 			{
 				Name: "HydraRoute", Description: "обход блокировок",
