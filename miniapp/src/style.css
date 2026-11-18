@@ -600,6 +600,12 @@ body {
   color: var(--text);
 }
 
+.history-entry > small {
+  display: block;
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
 .history-entry-fail {
   color: var(--danger);
 }
@@ -5916,6 +5922,7 @@ body {
 .tunnel-overview-checkStale .tunnel-overview-rail { background: var(--warn); }
 
 .tunnel-overview-copy {
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -6021,7 +6028,7 @@ body {
   .tunnel-overview-row,
   .tunnel-overview-row.settings-row,
   .tunnel-overview-row.chain-link { grid-template-columns: minmax(0, 1fr); padding-right: 0; }
-  .tunnel-overview-actions { padding: 0 var(--sp-3) var(--sp-3) var(--sp-4); }
+  .tunnel-overview-actions { flex-wrap: wrap; padding: 0 var(--sp-3) var(--sp-3) var(--sp-4); }
   .tunnel-overview-actions:empty { display: none; }
   .snapshot-banner { grid-template-columns: minmax(0, 1fr); }
   .snapshot-banner > .btn { grid-column: 1; grid-row: auto; justify-self: start; }

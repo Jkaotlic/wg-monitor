@@ -4,7 +4,10 @@
 // it the daemon serves the SvelteKit SPA shell instead of JSON.
 package awgmgr
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 type Envelope[T any] struct {
 	Success bool `json:"success"`
@@ -296,18 +299,32 @@ type MatrixCell struct {
 	TS        string `json:"ts"`
 }
 
-// BestLatency -- лучшая УСПЕШНАЯ проба линии. Провалившаяся ячейка несёт
-// latencyMs=0, и печатать её как «0 мс» значило бы объявить мёртвую линию
-// самой быстрой на экране.
-func (m *MonitoringMatrix) BestLatency(tunnelID string) (int, bool) {
-	best, found := 0, false
+// ObservedAt uses the cell's timestamp when available. Older awg-manager
+// versions only timestamp the matrix as a whole.
+func (c MatrixCell) ObservedAt(matrixTimestamp string) time.Time {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(c.TS))
+	if err != nil {
+		at, _ = time.Parse(time.RFC3339, strings.TrimSpace(matrixTimestamp))
+	}
+	return at
+}
+
+// BestLatency returns the fastest successful cell in the observation window,
+// together with the time of that same measurement.
+func (m *MonitoringMatrix) BestLatency(tunnelID string, from, until time.Time) (int, time.Time) {
+	var observed time.Time
+	best := 0
 	for _, c := range m.Cells {
-		if c.TunnelID != tunnelID || !c.OK {
+		if c.TunnelID != tunnelID || !c.OK || c.LatencyMs < 0 {
 			continue
 		}
-		if !found || c.LatencyMs < best {
-			best, found = c.LatencyMs, true
+		at := c.ObservedAt(m.UpdatedAt)
+		if at.IsZero() || at.Before(from) || at.After(until) {
+			continue
+		}
+		if observed.IsZero() || c.LatencyMs < best || (c.LatencyMs == best && at.After(observed)) {
+			best, observed = c.LatencyMs, at
 		}
 	}
-	return best, found
+	return best, observed
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
@@ -31,6 +31,20 @@ vi.mock('../src/api.js', async (importOriginal) => ({
   fetchRouterChecksWithIncidents: (id) => Promise.resolve((() => Promise.resolve(mocks.checks))(id)).then((ev) => ({ incidents: [], ...ev })),
 }))
 
+let root
+function createRoot() {
+  root = document.createElement('div')
+  document.body.appendChild(root)
+  return root
+}
+
+afterEach(async () => {
+  if (!root) return
+  await act(async () => render(null, root))
+  root.remove()
+  root = null
+})
+
 const { RoutesTab } = await import('../src/screens/RoutesTab.jsx')
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
@@ -59,9 +73,8 @@ const SNAP = {
 
 async function mount(layer, layerParams) {
   mocks.snap = SNAP
-  mocks.checks = { tunnels: [{ tunnel_id: 'nwg3', status: 'fail' }] }
-  const root = document.createElement('div')
-  document.body.appendChild(root)
+  mocks.checks = { tunnels: [{ tunnel_id: 'nwg3', status: 'fail', ts: new Date().toISOString() }] }
+  const root = createRoot()
   await act(async () => render(<RoutesTab routerID={7} asleep={false} openSheet={() => {}} layer={layer} layerParams={layerParams} openLayer={() => {}} closeLayer={() => {}} />, root))
   for (let i = 0; i < 3; i++) await flush()
   return root
@@ -73,14 +86,12 @@ describe('выбор цели: проверка главнее', () => {
     const row = [...root.querySelectorAll('.list-row-btn')].find((b) => b.textContent.includes('old-home'))
     expect(row.textContent).toContain('поднят, но не отвечает')
     expect(row.textContent).not.toContain('работает')
-    render(null, root)
   })
 
   it('«Кто станет главным» -- то же', async () => {
     const root = await mount('routepick', { pick: 'promote', from: 'nwg1' })
     const row = [...root.querySelectorAll('.list-row-btn')].find((b) => b.textContent.includes('old-home'))
     expect(row.textContent).toContain('поднят, но не отвечает')
-    render(null, root)
   })
 
   it('«Добавить сайт» -- «Куда вести трафик»', async () => {
@@ -88,7 +99,6 @@ describe('выбор цели: проверка главнее', () => {
     const row = [...root.querySelectorAll('.list-row-btn')].find((b) => b.textContent.includes('old-home'))
     expect(row.textContent).toContain('поднят, но не отвечает')
     expect(row.textContent).not.toContain('работает')
-    render(null, root)
   })
 })
 
@@ -97,7 +107,6 @@ describe('A1.1, раунд 2: плашка основного и «включё�
     const root = await mount('routes', {})
     expect(root.textContent).toContain('назначен основным, но не отвечает')
     expect(root.textContent).not.toContain('назначен основным, но выключен')
-    render(null, root)
   })
 
   it('лист переноса: включённый, но не поднявшийся -- «не отвечает», выключенный настройкой -- «выключен»', async () => {
@@ -106,7 +115,6 @@ describe('A1.1, раунд 2: плашка основного и «включё�
     expect(row('vpn-de').textContent).toContain('не отвечает')
     expect(row('vpn-de').textContent).not.toContain('выключен')
     expect(row('off-one').textContent).toContain('выключен')
-    render(null, root)
   })
 })
 
@@ -117,13 +125,11 @@ describe('заголовок «Маршрутов» говорит то же, ч
     expect(root.textContent).toContain('назначен основным, но не отвечает')
     expect(root.textContent).toContain('Главный VPN-туннель «old-home» не отвечает')
     expect(root.textContent).not.toContain('Обход идёт через «old-home»')
-    render(null, root)
   })
 
   it('главный включён, но не поднялся -- «не отвечает», не «выключен»', async () => {
     const snap = { ...SNAP, tunnels: SNAP.tunnels.map((t) => (t.id === 'nwg3' ? { ...t, status: 'down' } : t)) }
-    const root = document.createElement('div')
-    document.body.appendChild(root)
+    const root = createRoot()
     mocks.snap = snap
     mocks.checks = { tunnels: [] }
     await act(async () => render(<RoutesTab routerID={7} asleep={false} openSheet={() => {}} layer="routes" layerParams={{}} openLayer={() => {}} closeLayer={() => {}} />, root))
@@ -131,6 +137,5 @@ describe('заголовок «Маршрутов» говорит то же, ч
     expect(root.textContent).toContain('назначен основным, но не отвечает')
     expect(root.textContent).toContain('Главный VPN-туннель «old-home» не отвечает')
     expect(root.textContent).not.toContain('но он выключен')
-    render(null, root)
   })
 })

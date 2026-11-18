@@ -8,8 +8,8 @@ import { pathState } from '../src/trafficPath.js'
 
 const ONLINE = { status: 'online', nickname: 'workrouter', last_seen_age_sec: 20 }
 const TWO_LIVE = [
-  { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', matrix_latency_ms: 40 },
-  { tunnel_id: 'awg14', name: 'vpn-de', run_state: 'running', matrix_latency_ms: 70 },
+  { tunnel_id: 'awg10', name: 'vpn-nl', run_state: 'running', status: 'ok', matrix_latency_ms: 40 },
+  { tunnel_id: 'awg14', name: 'vpn-de', run_state: 'running', status: 'ok', matrix_latency_ms: 70 },
 ]
 
 describe('раздельная маршрутизация на главном экране', () => {

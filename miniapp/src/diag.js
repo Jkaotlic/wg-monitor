@@ -279,7 +279,7 @@ function awgmRow(check, clock) {
 //
 // Работающий -- по тому же правилу, что плитка «VPN-туннели» (MINI-07,
 // labels.workingTunnelCount): поднят, проверка не провалена, тревоги нет.
-function tunnelsRow(check, tunnels, clock, incidents, evidence) {
+function tunnelsRow(check, tunnels, clock, incidents, evidence, counts) {
   if (evidence?.state === 'failed') {
     return { answer: 'нет', tone: 'danger', value: 'отказ подтверждён сервером' }
   }
@@ -287,10 +287,10 @@ function tunnelsRow(check, tunnels, clock, incidents, evidence) {
     return { answer: 'не знаем', tone: 'muted', value: statusEvidenceCopy(evidence)?.title ?? 'источники не дали единого ответа' }
   }
   const list = Array.isArray(tunnels) ? tunnels : []
-  if (list.length === 0) {
+  if (list.length === 0 && !counts?.total) {
     return { answer: check?.status === 'ok' ? 'да' : 'не знаем', value: measuredAt(check?.ts, clock) }
   }
-  const { working: alive, total, unchecked } = tunnelCountSummary(list, incidents)
+  const { working: alive, total, unchecked } = counts ?? tunnelCountSummary(list, incidents, { enforceFreshness: clock.clockOffsetMs != null, nowMs: clock.nowMs + (clock.clockOffsetMs ?? 0) })
   // «Не проверено» -- ни работающий, ни упавший (статус unknown, v0.46).
   const broken = total - alive - unchecked
   const value = `${alive} из ${total} ${alive === 1 ? 'работает' : 'работают'}${unchecked > 0 ? `, ${unchecked} ${UNCHECKED}` : ''}`
@@ -301,7 +301,7 @@ function tunnelsRow(check, tunnels, clock, incidents, evidence) {
 }
 
 
-export function checkRows({ checks = [], tunnels = [], incidents = [], evidence = null, router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
+export function checkRows({ checks = [], tunnels = [], tunnelCounts = null, incidents = [], evidence = null, router = null, clockOffsetMs = null, nowMs = Date.now() } = {}) {
   const clock = { clockOffsetMs, nowMs }
   const byName = new Map((checks ?? []).map((c) => [c.check_name, c]))
   // Молчащий роутер делает устаревшими ВСЕ показания: то, что показано ниже,
@@ -325,7 +325,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], evidence 
     const check = byName.get(key)
     // Строка туннелей держится на проекции tunnels[], а не на сводной
     // проверке: роутер, не приславший её, всё равно прислал сами туннели.
-    if (!check && !(key === 'tunnels' && tunnels?.length)) continue
+    if (!check && !(key === 'tunnels' && (tunnels?.length || tunnelCounts?.total))) continue
     let body
     // Проверка ничего не проверила (unknown, v0.46): «не проверено», серым.
     if (check?.status === 'unknown' && key !== 'tunnels') body = { answer: UNCHECKED, tone: 'muted', value: measuredAt(check.ts, clock) }
@@ -334,7 +334,7 @@ export function checkRows({ checks = [], tunnels = [], incidents = [], evidence 
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
     else if (key === 'dns_ru') body = { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
-    else body = tunnelsRow(check ?? null, tunnels, clock, incidents, evidence)
+    else body = tunnelsRow(check ?? null, tunnels, clock, incidents, evidence, tunnelCounts)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({

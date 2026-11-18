@@ -200,6 +200,8 @@ const ROLLOUT_PAUSE = {
   new_hard_incident: 'после обновления появилась новая тревога',
   report_gap: 'от роутера перестали приходить свежие отчёты',
   deploy_failed: 'не удалось поставить обновление на следующий роутер',
+  canary_version_changed: 'тестовый роутер перестал сообщать целевую версию',
+  probe_unavailable: 'сервер не смог проверить состояние роутера',
 }
 
 export function rolloutSummary(resp) {

@@ -14,7 +14,7 @@
 //
 // tone -- смысл цвета, не класс: ok | warn | bad | muted.
 
-import { TUNNEL_EVENT_FRESH_MS, tunnelEventAgeSec } from './routes.js'
+import { TUNNEL_EVENT_FRESH_MS, tunnelEventAgeSec, tunnelEventFresh } from './tunnelFreshness.js'
 
 const BY_STATUS = {
   broken: { label: 'Сломан', tone: 'bad' },
@@ -34,7 +34,7 @@ export function awgmBadge(t, { nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH
   if (ageSec == null) {
     return requireTimestamp ? { label: 'Данные устарели', tone: 'muted', note: 'время проверки неизвестно', stale: true, ageSec: null } : badge
   }
-  if (ageSec * 1000 <= maxAgeMs) return badge
+  if (tunnelEventFresh(t, nowMs, maxAgeMs)) return badge
   return {
     label: 'Данные устарели',
     tone: 'muted',

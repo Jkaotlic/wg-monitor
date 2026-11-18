@@ -135,12 +135,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum * > checksums.txt
-          cat checksums.txt
-
       # DEPLOY-09: SBOM (SPDX-JSON) of the released source tree. Lets
       # downstream consumers run CVE scanners (grype, trivy) against a
       # pinned manifest instead of re-deriving deps. Anchore's sbom-action
@@ -157,10 +151,10 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      - name: Re-checksum with SBOM included
+      - name: Generate checksums for binaries and SBOM
         run: |
           cd dist
-          sha256sum * > checksums.txt
+          sha256sum wg-monitor-* > checksums.txt
           cat checksums.txt
 
       # AGENT-02: подпись доказывает «выпущено нами», но не «какой выпуск».

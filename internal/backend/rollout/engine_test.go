@@ -39,7 +39,7 @@ func TestEngineCanaryObservationThenFleetAndCompletion(t *testing.T) {
 	e := Engine{DB: d, ObservationWindow: 10 * time.Minute, Now: func() time.Time { return now }, Deploy: func(id int64, target string) (string, error) {
 		deploys[id]++
 		return "cmd-" + string(rune('0'+id)), nil
-	}, Probe: func(id int64) Probe { return probes[id] }}
+	}, Probe: func(id int64, _ time.Time) Probe { return probes[id] }}
 	job, err := e.Create("v1.2.3", 77, ids, "")
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestEnginePausesOnCanaryIncidentAndDoesNotDoubleEnqueueAfterRestart(t *test
 	deploys := 0
 	probe := Probe{}
 	makeEngine := func() Engine {
-		return Engine{DB: d, Now: func() time.Time { return now }, Deploy: func(int64, string) (string, error) { deploys++; return "cmd", nil }, Probe: func(int64) Probe { return probe }}
+		return Engine{DB: d, Now: func() time.Time { return now }, Deploy: func(int64, string) (string, error) { deploys++; return "cmd", nil }, Probe: func(int64, time.Time) Probe { return probe }}
 	}
 	e := makeEngine()
 	job, err := e.Create("v1", 1, ids, "")
@@ -139,9 +139,37 @@ func TestEnginePausesWhenRestartFindsUncertainDispatch(t *testing.T) {
 	}
 }
 
+func TestEnginePausesWhenCanaryRevertsDuringObservation(t *testing.T) {
+	d, ids := rolloutDB(t)
+	now := time.Now().UTC()
+	deploys := 0
+	probe := Probe{Fresh: true, Version: "v1.2.3"}
+	e := Engine{
+		DB: d, ObservationWindow: time.Minute, Now: func() time.Time { return now },
+		Deploy: func(int64, string) (string, error) { deploys++; return "cmd", nil },
+		Probe:  func(int64, time.Time) Probe { return probe },
+	}
+	job, err := e.Create("v1.2.3", 1, ids, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"canary_pending", "observing"} {
+		got, err := e.Tick(job.ID)
+		if err != nil || got.State != want {
+			t.Fatalf("job=%+v err=%v, want %s", got, err, want)
+		}
+	}
+	probe.Version = "v1.2.2"
+	now = now.Add(time.Minute)
+	got, err := e.Tick(job.ID)
+	if err != nil || got.State != "paused" || got.PauseReason != "canary_version_changed" || deploys != 1 {
+		t.Fatalf("job=%+v err=%v deploys=%d", got, err, deploys)
+	}
+}
+
 func TestEngineCancelIsPersistent(t *testing.T) {
 	d, ids := rolloutDB(t)
-	e := Engine{DB: d, Deploy: func(int64, string) (string, error) { return "cmd", nil }, Probe: func(int64) Probe { return Probe{} }}
+	e := Engine{DB: d, Deploy: func(int64, string) (string, error) { return "cmd", nil }, Probe: func(int64, time.Time) Probe { return Probe{} }}
 	job, err := e.Create("v1", 1, ids, "")
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +211,7 @@ func TestEngineDistinguishesOfflineFleetTargetFromLostReports(t *testing.T) {
 			if err := d.Rollouts().MarkTargetObserved(job.ID, ids[0], queuedAt); err != nil {
 				t.Fatal(err)
 			}
-			e := Engine{DB: d, Now: func() time.Time { return now }, Probe: func(id int64) Probe {
+			e := Engine{DB: d, Now: func() time.Time { return now }, Probe: func(id int64, _ time.Time) Probe {
 				if id == ids[0] {
 					return Probe{Fresh: true, Version: job.TargetVersion}
 				}

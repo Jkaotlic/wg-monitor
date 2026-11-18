@@ -203,8 +203,8 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
               label="Версия агента"
               value={values.version}
               onInput={set('version')}
-              placeholder="последняя"
-              hint="Пусто — последняя версия. Своя пишется так: v0.36.0."
+              placeholder="выберет сервер"
+              hint="Обычно ставится версия сервера. Если у сервера нет номера выпуска, он выберет последний выпуск. Своя пишется так: v0.36.0."
             />
             {secretsCleared && <p class="wizard-warn wizard-secrets-cleared">{SECRETS_CLEARED_TEXT}</p>}
             <p class="wizard-note">{PROVISION_SECRET_NOTE}</p>

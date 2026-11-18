@@ -5,7 +5,7 @@
 // клиенту не верит. Клиент считает то же заранее и так же, как сервер
 // (miniappTunnelRuleCount -- порт tunnelRows), чтобы не предлагать кнопку,
 // которая заведомо получит отказ, -- и говорит теми же словами, что при отказе.
-import { tunnelRows, tunnelSwitchedOff } from './routes.js'
+import { tunnelRows, tunnelSwitchedOff, withCheckVerdict } from './routes.js'
 import { rulesCount, tunnelLiveLabel, tunnelCountSummary, workingTunnelNote } from './labels.js'
 import { commandOutcome } from './commandWait.js'
 
@@ -46,47 +46,38 @@ export function tunnelList(snapshot, incidents = []) {
     .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id), alarmed.has(r.id) || Boolean(meta.get(r.id)?.alarm_open)) }))
 }
 
-// Счёт для вкладки -- ТЕМ ЖЕ определением, что на «Роутере» и «Проверках»:
-// свой VPN-туннель -- тот, по которому есть строка проверки tunnel_* (агент
-// пишет её по управляемым awg-manager), работает -- поднят и проверка не
-// провалена (labels.tunnelCountSummary). Поэтому при загруженных проверках
-// считаются САМИ строки проверок, исключая лишь тех, кого снимок назвал
-// чужими (type != managed): числа на экранах совпадают по построению.
-// Проверки не загрузились -- строки вкладки приводятся к виду tunnel_*.
-export function tunnelListSummary(list, incidents = [], checkRows = []) {
-  const rows = Array.isArray(checkRows) ? checkRows : []
-  if (rows.length > 0) {
-    const foreign = new Set((list ?? []).filter((r) => !isManaged(r.type)).map((r) => r.id))
-    return tunnelCountSummary(rows.filter((c) => !foreign.has(c.tunnel_id)), incidents)
-  }
-  return tunnelCountSummary(
-    (list ?? []).map((r) => ({
-      tunnel_id: r.id,
-      type: r.type,
-      handshake_age_sec: 0,
-      enabled: !r.switchedOff,
-      run_state: r.live === 'up' ? 'running' : r.switchedOff ? 'stopped' : 'dead',
-      status: r.checkFailed ? 'fail' : r.checkUnverified ? 'unknown' : 'ok',
-    })),
-    incidents,
-  )
+// Снимок определяет состав списка. Строки проверок приходят отдельно и могут
+// содержать другой набор ID даже при одинаковом числе записей.
+export function tunnelListSummary(list, incidents = [], checkRows = [], freshnessOptions) {
+  const byID = new Map((checkRows ?? []).map((row) => [row.tunnel_id, row]))
+  const events = (list ?? []).filter((row) => isManaged(row.type)).map((row) => {
+    const event = byID.get(row.id)
+    if (row.switchedOff) return { ...event, tunnel_id: row.id, enabled: false, status: 'ok' }
+    if (!event || row.checkUnverified || row.checkStale || row.live === 'unknown') {
+      return { ...event, tunnel_id: row.id, status: 'unknown' }
+    }
+    if (row.live === 'down') return { ...event, tunnel_id: row.id, status: 'fail' }
+    return event
+  })
+  return tunnelCountSummary(events, incidents, freshnessOptions)
 }
 
-// Счёт и заголовок вкладки «VPN-туннели» -- одной функцией, как их зовёт
-// экран. Тревоги -- из checks.incidents (fetchRouterChecksWithIncidents),
-// те же, что у «Роутера» (I1). Число в заголовке -- показанные строки: под
-// «Все VPN-туннели · 4» стоят четыре строки. Счёт «работают из N» -- по
-// проверкам, как на «Роутере»; разошлись (у VPN-туннеля нет строки проверки
-// или проверка есть, а в снимке его нет) -- подпись говорит это прямо (M2).
-export function tunnelsTabSummary(list, checks) {
+// На экране роутера опись может остаться от недавнего открытия вкладки.
+// Когда её нет, доступны только туннели текущего отчёта агента.
+export function routerTunnelCounts(snapshot, tunnels, incidents, freshnessOptions) {
+  if (!Array.isArray(snapshot?.tunnels)) return tunnelCountSummary(tunnels, incidents, freshnessOptions)
+  const shown = withCheckVerdict(snapshot, { tunnels }, freshnessOptions)
+  return tunnelListSummary(tunnelList(shown, incidents), incidents, tunnels, freshnessOptions)
+}
+
+export function tunnelsTabSummary(list, checks, freshnessOptions) {
   const rows = list ?? []
-  const counts = tunnelListSummary(rows, checks?.incidents ?? [], checks?.tunnels)
+  const counts = tunnelListSummary(rows, checks?.incidents ?? [], checks?.tunnels, freshnessOptions)
   const base = workingTunnelNote(counts.working, counts.total, counts.unchecked)
   // На «Роутере» и «Проверках» число работающих -- значение плитки, а
   // подпись -- её хвост. Здесь подпись -- обычная строка, и без числа она
   // читалась «работают из 3 настроенных» (Fix 2): число ставится впереди.
-  const withNumber = `${counts.working} ${base}`
-  const note = counts.total === rows.length ? withNumber : `${withNumber} — по проверкам роутера; в списке ${rows.length}`
+  const note = `${counts.working} ${base}`
   return { counts, title: `${TUNNEL_TEXTS.listTitle} · ${rows.length}`, note }
 }
 

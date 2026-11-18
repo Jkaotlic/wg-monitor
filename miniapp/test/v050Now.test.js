@@ -63,8 +63,8 @@ describe('«запасного нет» против «запасной упал
   })
 
   it('запасного правда нет -- прежняя плитка', () => {
-    expect(backupCopy({ backupLine: undefined }).title).toBe('Запасного VPN-туннеля нет')
-    expect(backupCopy({ backupLine: undefined, deadReserve: null, heroCovers: true }).title).toBe('Запасного VPN-туннеля нет')
+    expect(backupCopy({ backupLine: undefined }).title).toBe('Готовый запасной VPN-туннель не подтверждён')
+    expect(backupCopy({ backupLine: undefined, deadReserve: null, heroCovers: true }).title).toBe('Готовый запасной VPN-туннель не подтверждён')
   })
 })
 

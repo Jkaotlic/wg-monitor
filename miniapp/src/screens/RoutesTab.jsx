@@ -1,3 +1,4 @@
+import { useTunnelFreshness } from '../useTunnelFreshness.js'
 import { agentReplyText, errorText } from '../errorText.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
@@ -88,6 +89,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   const refresh = () => run('route_status', {}, deadline)
 
   useEffect(() => {
+    setChecks(null)
+    setChecksFailed(false)
     setSnapshot(null)
     run('route_status', {}, deadline)
     // Снимок запрашивается при каждой смене роутера; перезапрос -- кнопкой.
@@ -108,7 +111,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         setChecksFailed(false)
       })
       .catch(() => {
-        if (alive) setChecksFailed(true)
+        if (alive) {
+          setChecks(null)
+          setChecksFailed(true)
+        }
       })
     return () => {
       alive = false
@@ -270,7 +276,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   const phase = snapshotState({ busy, error, result, snapshot })
 
   const policies = policyRows(snapshot)
-  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed })
+  const freshnessOptions = useTunnelFreshness(checks?.clockOffsetMs)
+  const shown = withCheckVerdict(snapshot, checks, { failed: checksFailed, ...freshnessOptions })
   // Заголовок говорит то же, что плашки: по снимку с вердиктом проверок.
   // Несущий -- тем же правилом, что «Роутер» и «VPN-туннели» (B1).
   const verdict = shown ? routingVerdict(shown, checks?.traffic, checks?.incidents) : null
@@ -404,6 +411,13 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
       <p class="router-lastseen">Что отправлено в обход, а что идёт напрямую через провайдера.</p>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
+      {phase === 'refreshing' && <p class="snapshot-banner snapshot-banner-progress">Обновляем маршруты. Пока показан предыдущий снимок.</p>}
+      {(phase === 'stale-error' || phase === 'stale-refused') && (
+        <div class="snapshot-banner snapshot-banner-error">
+          <strong>Маршруты не обновились. Показан предыдущий снимок.</strong>
+          <ErrorLine text={error || agentReplyText(result, 'Роутер не отдал снимок.')} busy={busy} onRetry={refresh} />
+        </div>
+      )}
       {phase === 'error' && <ErrorLine text={error} busy={busy} onRetry={refresh} />}
       {phase === 'refused' && (
         <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок маршрутизации — попробуйте ещё раз через минуту.')}</p>

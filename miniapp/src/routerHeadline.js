@@ -10,7 +10,8 @@
 // против которой написана половина этого приложения.
 import { humanAge, incidentCopy } from './labels.js'
 import { agoText } from './when.js'
-import { carrierAlive, carrierLine, isAlive, lineVia, reserveIDs } from './trafficPath.js'
+import { carrierAlive, carrierState, carrierLine, isAlive, lineVia, reserveLine } from './trafficPath.js'
+import { statusEvidenceCopy } from './statusEvidence.js'
 import { isStale } from './staleness.js'
 
 // reserveOnlyAlert -- признак строки /v1/miniapp/routers (reserve_only_alert):
@@ -18,7 +19,7 @@ import { isStale } from './staleness.js'
 // только сервер (он видит политики целиком); экран «всё работает» без его
 // слова не говорит: на роутере с двумя политиками мёртвый туннель другой
 // политики -- не запасной, и то, что идёт через него, не открывается.
-export function routerHeadline({ router, traffic, incidents = [], tunnels = [], reserveOnlyAlert } = {}) {
+export function routerHeadline({ router, traffic, incidents = [], tunnels = [], reserveOnlyAlert, evidence, freshness } = {}) {
   const only = reserveOnlyAlert ?? router?.reserve_only_alert ?? false
   const age = router?.last_seen_age_sec
   // Молчащий роутер делает УСТАРЕВШИМИ все показания на экране, а не только
@@ -51,6 +52,19 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
     }
   }
 
+  if (evidence?.state && evidence.state !== 'healthy') {
+    const service = incidents.find((incident) => !incident.check_name.startsWith('tunnel_'))
+    if (service) return plainHeadline(service.check_name, stale)
+    const copy = statusEvidenceCopy(evidence)
+    return {
+      tone: evidence.state === 'failed' ? 'danger' : 'warn',
+      cold: true,
+      stale,
+      tag: copy?.title ?? 'Связь требует проверки',
+      verdict: evidence.state === 'failed' ? 'Последняя проверка подтвердила сбой.' : 'Доступность обхода пока не подтверждена.',
+    }
+  }
+
   // Живой роутер с открытой тревогой: называем поломку, а не её номер.
   // Первая тревога в списке -- та, которую бэкенд счёл главной. Но смягчённый
   // (warn) вывод по упавшему туннелю не имеет права спрятать тревогу службы:
@@ -58,7 +72,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   if (incidents.length > 0) {
     const first = incidents[0].check_name
     if (first.startsWith('tunnel_')) {
-      const t = tunnelHeadline({ name: first, traffic, incidents, tunnels, stale, only })
+      const t = tunnelHeadline({ name: first, traffic, incidents, tunnels, stale, only, freshness })
       const plain = incidents.find((i) => !i.check_name.startsWith('tunnel_'))
       if (t.tone !== 'warn' || !plain) return t
       return plainHeadline(plain.check_name, stale)
@@ -78,6 +92,9 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   // неизвестном главном выходе политика ведёт заблокированное в несущего
   // (ревью B1). На sing-box несущего нет вовсе.
   if (traffic?.mode !== 'singbox' && carrier && !carrierAlive({ traffic, tunnels, incidents })) {
+    if (carrierState({ traffic, tunnels, incidents }) === 'unknown') {
+      return { tone: 'warn', cold: true, stale, tag: 'VPN-туннель обхода не проверен', verdict: `Для обхода назначен «${via}». Доступность через него пока неизвестна.` }
+    }
     return {
       tone: 'warn',
       cold: true,
@@ -185,7 +202,7 @@ function plainHeadline(name, stale) {
 // Тревога по VPN-туннелю. У туннеля из тревоги человеческого имени нет:
 // «awg12» -- идентификатор, который человек нигде не видел. В шапке называем
 // ПОСЛЕДСТВИЕ, а сам туннель и его имя остаются в карточке тревоги.
-function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
+function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only, freshness }) {
   const lineName = (t) => t?.name || t?.tunnel_id
   const base = { cold: true, stale, check: name }
   // Несущего назвал сам роутер (агент v0.41+): схема и заголовок обязаны
@@ -207,10 +224,8 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only }) {
           verdict: `«${deadName}» не отвечает: то, что роутер ведёт через него, не откроется. Обход через «${via}» работает.`,
         }
       }
-      const reserves =
-        reserveIDs({ traffic, tunnels }) ??
-        tunnels.filter((t) => t !== carrier && isAlive(t, incidents)).map((t) => t.tunnel_id)
-      if (reserves.length === 0) {
+      const reserve = reserveLine({ traffic, tunnels, incidents, via, freshness })
+      if (!reserve) {
         return {
           ...base,
           tone: 'warn',

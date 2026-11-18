@@ -26,7 +26,6 @@
     "status": "alert"
   },
   "traffic": {
-    "carrier_alive": false,
     "carrier_basis": "none",
     "contested_default": true,
     "mode": "split"

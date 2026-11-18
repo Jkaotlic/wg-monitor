@@ -6,6 +6,7 @@
 // подтверждением и откатом, она относится к фазе рабочего места оператора.
 // Пока экран только показывает.
 
+import { TUNNEL_EVENT_FRESH_MS, tunnelEventFresh } from './tunnelFreshness.js'
 import { rulesCount, pluralRu } from './labels.js'
 import { withSnapshotCarrier } from './trafficPath.js'
 
@@ -49,19 +50,6 @@ export function tunnelSwitchedOff(t) {
 // интерфейса ничего не доказывает: раньше сбой загрузки возвращал мёртвому
 // туннелю «работает». Поднятые туннели получают пустой статус -- «состояние
 // неизвестно»; выключенные настройкой остаются выключенными.
-export const TUNNEL_EVENT_FRESH_MS = 5 * 60_000
-
-export function tunnelEventAgeSec(event, nowMs = Date.now()) {
-  const at = Date.parse(event?.ts ?? '')
-  if (!Number.isFinite(at)) return null
-  return Math.max(0, Math.floor((nowMs - at) / 1000))
-}
-
-export function tunnelEventFresh(event, nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH_MS) {
-  const age = tunnelEventAgeSec(event, nowMs)
-  return age != null && age * 1000 <= maxAgeMs
-}
-
 export function withCheckVerdict(snapshot, events, { failed = false, nowMs = Date.now(), maxAgeMs = TUNNEL_EVENT_FRESH_MS, enforceFreshness = false, requireTimestamp = false } = {}) {
   if (failed && snapshot && Array.isArray(snapshot.tunnels)) {
     return {
@@ -81,7 +69,7 @@ export function withCheckVerdict(snapshot, events, { failed = false, nowMs = Dat
   const failing = new Set(freshRows.filter((t) => t?.status === 'fail').map((t) => t.tunnel_id))
   // Проверка ничего не проверила (unknown, v0.46): интерфейс поднят, а жива
   // ли удалённая сторона -- неизвестно. Статус снимка не трогаем, только метка.
-  const unchecked = new Set(freshRows.filter((t) => t?.status === 'unknown').map((t) => t.tunnel_id))
+  const unchecked = new Set(freshRows.filter((t) => t?.status !== 'ok' && t?.status !== 'fail').map((t) => t.tunnel_id))
   // И в обратную сторону (Fix 3 v0.56): последняя проверка -- ok и роутер в
   // ней сказал running, а снимок маршрутов -- «down». Проверки и счёт зовут
   // его работающим; строка, «Порядок подхвата» и «Маршруты» -- тоже.
@@ -89,16 +77,20 @@ export function withCheckVerdict(snapshot, events, { failed = false, nowMs = Dat
   const passing = new Set(
     freshRows.filter((t) => t?.status === 'ok' && t?.run_state === 'running').map((t) => t.tunnel_id),
   )
-  if (!snapshot || (failing.size === 0 && unchecked.size === 0 && passing.size === 0 && stale.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
+  const reported = new Set(eventRows.map((t) => t?.tunnel_id))
+  if (!snapshot || (!requireTimestamp && failing.size === 0 && unchecked.size === 0 && passing.size === 0 && stale.size === 0) || !Array.isArray(snapshot.tunnels)) return snapshot
   return {
     ...snapshot,
     tunnels: snapshot.tunnels.map((t) => {
-      if (stale.has(t.id)) return { ...t, verdict_stale: true }
-      if (passing.has(t.id) && tunnelLive(t) === 'down' && !tunnelSwitchedOff(t)) return { ...t, status: 'running', check_ok: true }
-      if (tunnelLive(t) !== 'up' || tunnelSwitchedOff(t)) return t
+      if (stale.has(t.id) && !tunnelSwitchedOff(t)) return { ...t, verdict_stale: true }
+      if (tunnelSwitchedOff(t)) return t
+      const live = tunnelLive(t)
+      if (live === 'unknown' && failing.has(t.id)) return { ...t, status: 'dead' }
+      if (passing.has(t.id) && live !== 'up') return { ...t, status: 'running', check_ok: true }
+      if (live !== 'up') return t
       // check_failed -- метка для слов: роутер туннель поднял, проверка нет.
       if (failing.has(t.id)) return { ...t, status: 'dead', check_failed: true }
-      if (unchecked.has(t.id)) return { ...t, check_unverified: true }
+      if (unchecked.has(t.id) || (requireTimestamp && !reported.has(t.id))) return { ...t, check_unverified: true }
       return t
     }),
   }
@@ -193,6 +185,18 @@ function rulesThrough(snapshot, tunnelID) {
 // incidents -- открытые тревоги из того же ответа, что у «Роутера»
 // (fetchRouterChecksWithIncidents): несущий с открытой тревогой по нему --
 // не «обход идёт», как и на «Роутере» (carrierAlive, I1).
+function uncertain(t) {
+  return tunnelLive(t) === 'unknown' || t.verdict_stale || t.verdict_unknown || t.check_unverified
+}
+
+function unverifiedRoute(t) {
+  return {
+    mode: 'unknown',
+    title: `Доступность VPN-туннеля «${t.name || t.id}» не подтверждена`,
+    detail: 'Маршрут назначен. Для проверки связи нужен свежий результат.',
+  }
+}
+
 export function routingVerdict(snapshot, traffic, incidents = []) {
   const partial = Boolean(snapshot?.warnings?.length)
 
@@ -229,6 +233,7 @@ export function routingVerdict(snapshot, traffic, incidents = []) {
           detail: 'Заблокированное роутер ведёт через него — такие сайты могут не открываться.',
         }
       }
+      if (uncertain(t)) return { ...unverifiedRoute(t), partial }
       const n = rulesThrough(snapshot, t.id)
       return {
         mode: 'vpn',
@@ -259,6 +264,7 @@ export function routingVerdict(snapshot, traffic, incidents = []) {
 
   if (carrying.length === 1) {
     const t = carrying[0]
+    if (uncertain(t)) return { ...unverifiedRoute(t), partial }
     // Единого «весь трафик идёт туда-то» в этой системе не существует: через
     // VPN-туннель идёт только прописанное, остальное -- напрямую через провайдера.
     // Прежний вердикт обещал общий ответ и расходился с главным экраном,
@@ -444,6 +450,7 @@ export function tunnelRows(snapshot) {
       switchedOff: tunnelSwitchedOff(t),
       // Проверка пришла, но ничего не проверила: «работает» тоже нельзя.
       checkUnverified: Boolean(t.check_unverified),
+      checkStale: Boolean(t.verdict_stale),
       type: t.type ?? '',
       total: own + viaPolicy.dns,
       policyRules: viaPolicy.dns,
@@ -552,7 +559,7 @@ export function defaultRouteBadge(row) {
   // Проверка главнее (A1.1): поднят на роутере, но не отвечает -- не «выключен».
   if (row.checkFailed) return { tone: 'muted', text: 'назначен основным, но не отвечает' }
   if (row.live === 'down') return { tone: 'muted', text: row.switchedOff === false ? 'назначен основным, но не отвечает' : 'назначен основным, но выключен' }
-  if (row.live === 'unknown') return { tone: 'muted', text: 'назначен основным' }
+  if (row.live === 'unknown' || row.checkStale || row.checkUnverified) return { tone: 'muted', text: 'назначен основным' }
   return { tone: 'ok', text: 'основной маршрут' }
 }
 
@@ -631,6 +638,7 @@ export function promoteTargets(snapshot, activeTunnelID) {
         checkFailed: Boolean(t?.check_failed),
         switchedOff: t ? tunnelSwitchedOff(t) : false,
         checkUnverified: Boolean(t?.check_unverified),
+        checkStale: Boolean(t?.verdict_stale),
       })
     }
   }

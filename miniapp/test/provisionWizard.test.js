@@ -48,7 +48,7 @@ describe('варианты', () => {
     expect(PROVISION_SECRET_NOTE).toBe(`Если на сервере настроено оживление агента, пароль root сохранится там зашифрованным — для авто-оживления, если агент надолго отстанет. Стереть его — ${placeText('forgetPassword')}.`)
   })
 
-  it('начальные значения: путь не выбран, дома, вход в веб, версия -- последняя', () => {
+  it('начальные значения: путь не выбран, дома, вход в веб, версию выбирает сервер', () => {
     expect(initialWizardValues()).toEqual({
       path: '', nickname: '', agentKind: 'static', awgmURL: '', awgmAuth: 'web',
       rootPassword: '', awgmLogin: '', awgmPassword: '', awgmAPIKey: '', version: '',
@@ -97,7 +97,7 @@ describe('проверка шагов', () => {
     expect(stepError('access', install({ awgmAuth: 'api-key', awgmAPIKey: ' ' }))).toBe('Нужен ключ API панели.')
     expect(stepError('access', install({ awgmAuth: 'none', awgmLogin: '', awgmPassword: '' }))).toBe('')
     expect(stepError('access', install({ awgmAuth: 'other' }))).toBe('Выберите способ входа в панель.')
-    expect(stepError('access', install({ version: 'latest' }))).toBe('Версия пишется так: v0.36.0. Пусто — последняя.')
+    expect(stepError('access', install({ version: 'latest' }))).toBe('Версия пишется так: v0.36.0. Для автоматического выбора оставьте поле пустым.')
     expect(stepError('access', install({ version: 'v0.36.0' }))).toBe('')
     expect(stepError('access', install())).toBe('')
   })
@@ -153,7 +153,7 @@ describe('сводка', () => {
       { label: 'Панель awg-manager', value: 'https://router.example.com' },
       { label: 'Вход в панель', value: 'Вход в веб (логин и пароль)' },
       { label: 'Пароль root', value: 'введён' },
-      { label: 'Версия агента', value: 'последняя' },
+      { label: 'Версия агента', value: 'выберет сервер' },
     ])
     expect(JSON.stringify(rows)).not.toContain('root pass')
     expect(JSON.stringify(rows)).not.toContain('panel pass')

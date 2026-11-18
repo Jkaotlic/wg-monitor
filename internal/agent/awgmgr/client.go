@@ -311,6 +311,9 @@ func (c *Client) TunnelsAll(ctx context.Context) (*TunnelsAll, error) {
 	if !env.Success {
 		return nil, fmt.Errorf("awgmgr tunnels/all: success=false")
 	}
+	if env.Data.Tunnels == nil {
+		return nil, fmt.Errorf("awgmgr tunnels/all: missing tunnel inventory")
+	}
 	return &env.Data, nil
 }
 
@@ -383,7 +386,11 @@ func (c *Client) MonitoringMatrix(ctx context.Context) (*MonitoringMatrix, error
 // (5 с), и обрезанная проверка выглядела бы как «не ответил» вместо «Нет
 // связи». Поэтому запрос идёт без него: срок обязан задать ctx вызывающего.
 func (c *Client) TestConnectivity(ctx context.Context, tunnelID string) (*Connectivity, error) {
-	var env Envelope[Connectivity]
+	var env Envelope[struct {
+		Connected *bool  `json:"connected"`
+		Latency   *int   `json:"latency"`
+		Reason    string `json:"reason"`
+	}]
 	if err := c.getVia(ctx, c.streamHTTPClient(), "/api/test/connectivity?id="+url.QueryEscape(tunnelID), &env, 1<<20, slog.LevelDebug); err != nil {
 		if IsEndpointMissing(err) {
 			return nil, fmt.Errorf("%w: проверка связи появилась в awg-manager позже", ErrUnsupportedByRouter)
@@ -393,7 +400,10 @@ func (c *Client) TestConnectivity(ctx context.Context, tunnelID string) (*Connec
 	if !env.Success {
 		return nil, fmt.Errorf("awgmgr test/connectivity: success=false")
 	}
-	return &env.Data, nil
+	if env.Data.Connected == nil {
+		return nil, fmt.Errorf("awgmgr test/connectivity: missing connected verdict")
+	}
+	return &Connectivity{Connected: *env.Data.Connected, Latency: env.Data.Latency, Reason: env.Data.Reason}, nil
 }
 
 func (c *Client) SystemInfo(ctx context.Context) (*SystemInfo, error) {

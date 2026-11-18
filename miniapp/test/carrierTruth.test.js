@@ -91,7 +91,9 @@ describe('несущий известен', () => {
 
   it('запасной берётся из reserve_tunnel_ids, а не из числа поднятых', () => {
     const traffic = { mode: 'split', egress_tunnel_id: 'awg10', egress_tunnel_name: 'nl2', reserve_tunnel_ids: ['awg14'] }
-    expect(reserveLine({ traffic, tunnels, incidents: [], via: 'nl2' })?.tunnel_id).toBe('awg14')
+    expect(reserveLine({ traffic, tunnels, incidents: [], via: 'nl2' })).toBeUndefined()
+    const recovered = tunnels.map((t) => ({ ...t, status: 'ok' }))
+    expect(reserveLine({ traffic, tunnels: recovered, incidents: [], via: 'nl2' })?.tunnel_id).toBe('awg14')
     const none = { ...traffic, reserve_tunnel_ids: [] }
     expect(reserveLine({ traffic: none, tunnels, incidents: [], via: 'nl2' })).toBeUndefined()
   })
@@ -127,4 +129,17 @@ describe('строка списка роутеров', () => {
     const r = fleetRow({ id: 1, nickname: 'w', status: 'alert', last_seen_age_sec: 5 })
     expect(r.pill).toEqual({ tone: 'danger', text: 'тревога' })
   })
+})
+
+it('в резерв не попадает туннель со старой проверкой или открытой тревогой, даже если сервер перечислил его', () => {
+  const nowMs = Date.parse('2026-11-18T08:00:00Z')
+  const traffic = { mode: 'split', carrier_tunnel_id: 'main', carrier_basis: 'policy', reserve_tunnel_ids: ['old', 'alarm', 'fresh'] }
+  const ids = ['main', 'old', 'alarm', 'fresh']
+  const tunnels = ids.map((id) => ({
+    tunnel_id: id, status: 'ok', run_state: 'running', ts: new Date(nowMs - (id === 'old' ? 600_000 : 1_000)).toISOString(),
+  }))
+  const args = { traffic, tunnels, incidents: [{ check_name: 'tunnel_alarm' }], via: 'main', freshness: { nowMs, enforceFreshness: true } }
+  expect(reserveLine(args)?.tunnel_id).toBe('fresh')
+  expect(reserveLine({ ...args, traffic: { ...traffic, reserve_tunnel_ids: ['old', 'alarm'] } })).toBeUndefined()
+  expect(reserveLine({ ...args, traffic: { mode: 'vpn', egress_tunnel_id: 'main' } })?.tunnel_id).toBe('fresh')
 })

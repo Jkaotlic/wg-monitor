@@ -252,17 +252,20 @@ func miniappRolloutEngine(d Deps, ctx context.Context, actorID int64) (rollout.E
 			}
 			return res.CmdID, nil
 		},
-		Probe: func(routerID int64) rollout.Probe {
+		Probe: func(routerID int64, queuedAt time.Time) rollout.Probe {
 			u, err := d.DB.Users().GetByID(routerID)
 			if err != nil {
-				return rollout.Probe{ReportGap: true}
+				return rollout.Probe{Unavailable: true}
 			}
 			var lastSeen time.Time
 			if u.LastSeenAt != nil {
 				lastSeen = u.LastSeenAt.UTC()
 			}
 			fresh := !lastSeen.IsZero() && time.Since(lastSeen) <= rollout.ReportFreshness
-			hard, _ := d.DB.State().HardCount(routerID)
+			hard, err := d.DB.State().HardCountSince(routerID, queuedAt)
+			if err != nil {
+				return rollout.Probe{Unavailable: true}
+			}
 			return rollout.Probe{
 				Fresh: fresh, Version: stringValue(u.LastDeployedVersion), NewHardIncidents: hard,
 				ReportGap: !fresh, LastSeenAt: lastSeen, PendingVersion: stringValue(u.PendingVersion),

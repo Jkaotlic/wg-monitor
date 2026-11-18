@@ -139,7 +139,7 @@ describe('упавшая линия при живом резерве', () => {
       incidents: [{ check_name: 'tunnel_awg12' }],
       tunnels: [
         { tunnel_id: 'awg12', name: 'Амстердам', run_state: 'stopped' },
-        { tunnel_id: 'awg10', name: 'Франкфурт', run_state: 'running' },
+        { tunnel_id: 'awg10', name: 'Франкфурт', run_state: 'running', status: 'ok' },
       ],
     })
     expect(h.tag).not.toMatch(/не открывается/)

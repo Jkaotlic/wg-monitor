@@ -96,3 +96,17 @@ func TestClient_TestConnectivity_SuccessFalseIsError(t *testing.T) {
 		t.Fatalf("success=false -- сбой, а не «нет эндпоинта»: %v", err)
 	}
 }
+
+func TestClientTestConnectivityRequiresExplicitVerdict(t *testing.T) {
+	for _, body := range []string{`{"success":true}`, `{"success":true,"data":null}`, `{"success":true,"data":{"connected":null}}`, `{"success":true,"data":{"latency":22}}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			if got, err := New(srv.URL).TestConnectivity(context.Background(), "line"); err == nil {
+				t.Fatalf("incomplete response supplied a verdict: %+v", got)
+			}
+		})
+	}
+}

@@ -432,7 +432,7 @@ async function runPass(bin, role, width, port) {
   // ожидании -- экран снимается в устойчивом состоянии, а не за секунду до
   // перезагрузки страницы; -hrneo-stopped: роутер с остановленным HydraRoute
   // Neo (по умолчанию песочница никого не останавливает).
-  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-latest', SANDBOX_LATEST, '-backend-update', 'ignore', '-hrneo-stopped', HRNEO_STOPPED, '-backup', backupMode], {
+  const child = spawn(bin, ['-addr', `127.0.0.1:${port}`, '-role', role, '-db', path.join(dir, 'sandbox.db'), '-version', 'v0.66.0', '-latest', SANDBOX_LATEST, '-backend-update', 'ignore', '-hrneo-stopped', HRNEO_STOPPED, '-backup', backupMode], {
     cwd: REPO,
     detached: true,
     stdio: ['ignore', logFd, logFd],
@@ -517,7 +517,7 @@ async function runPass(bin, role, width, port) {
 try {
   const bin = buildSandbox()
   for (const [i, role] of roles.entries()) {
-    const port = 8121 + i
+    const port = Number(args['port-base'] ?? 8121) + i
     for (const width of widths) {
       if (await portBusy(port)) throw new Error(`порт ${port} занят чужим процессом -- песочницу не запускаю`)
       await runPass(bin, role, width, port)

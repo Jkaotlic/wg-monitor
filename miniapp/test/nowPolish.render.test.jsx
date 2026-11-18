@@ -73,8 +73,24 @@ describe('«Сейчас» без повторов', () => {
     const { root } = await mount()
     expect(root.querySelector('.hero').textContent).not.toMatch(/VPN-туннел\S* из \d/)
     expect(root.textContent).not.toMatch(/\d+ шт\./)
-    expect(root.querySelector('.stat-grid').textContent).toContain('из 2 настроенных')
+    expect(root.querySelector('.stat-grid').textContent).toContain('из 2 в отчёте')
     cleanup(root)
+  })
+
+  it('недавняя опись на «Роутере» исключает чужую проверку и сохраняет непроверенный туннель', async () => {
+    const { rememberRouteSnapshot } = await import('../src/routes.js')
+    const inventory = { tunnels: [
+      { id: 'awg14', type: 'managed', status: 'running' },
+      { id: 'without-check', type: 'managed', status: 'running' },
+    ] }
+    rememberRouteSnapshot(56, inventory)
+    const { root } = await mount()
+    try {
+      expect(root.querySelector('.stat-grid').textContent).toContain('1работает из 2 настроенных · 1 не проверено')
+    } finally {
+      await act(async () => cleanup(root))
+      rememberRouteSnapshot(56, inventory, 0)
+    }
   })
 
   it('проваленные проверки -- списком, спойлера нет (v0.52)', async () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
@@ -16,6 +16,20 @@ vi.mock('../src/api.js', async (importOriginal) => ({
   fetchRouterFacts: () => Promise.resolve(null),
 }))
 
+let root
+function createRoot() {
+  root = document.createElement('div')
+  document.body.appendChild(root)
+  return root
+}
+
+afterEach(async () => {
+  if (!root) return
+  await act(async () => render(null, root))
+  root.remove()
+  root = null
+})
+
 const { ManageTab } = await import('../src/screens/ManageTab.jsx')
 const { DiagTab } = await import('../src/screens/DiagTab.jsx')
 const { AppContext } = await import('../src/appContext.js')
@@ -25,8 +39,7 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 const button = (root, text) => [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
 
 async function mount(node) {
-  const root = document.createElement('div')
-  document.body.appendChild(root)
+  const root = createRoot()
   await act(async () => render(<AppContext.Provider value={{ mode: 'miniapp', wide: false }}>{node}</AppContext.Provider>, root))
   await flush()
   await flush()
@@ -47,10 +60,6 @@ const manage = (isAdmin, focusGroup = null) =>
       onOpenPackages={noop}
     />,
   )
-const cleanup = (root) => {
-  render(null, root)
-  root.remove()
-}
 const opened = (root) => Object.fromEntries([...root.querySelectorAll('details.manage-group')].map((d) => [d.id, d.open]))
 const chips = (root) => [...root.querySelectorAll('.manage-anchors .manage-anchor')].map((b) => b.textContent)
 
@@ -69,6 +78,5 @@ describe('«Проверка связи» и «Осмотр» -- на вклад
     expect(button(root, 'Осмотреть роутер')).toBeTruthy()
     expect(root.textContent).toContain('Журнал awg-manager')
     expect(root.querySelectorAll('.btn-primary')).toHaveLength(1)
-    cleanup(root)
   })
 })

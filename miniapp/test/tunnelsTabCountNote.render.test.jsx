@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import sandbox from './fixtures/sandbox_counts.json'
-import { tunnelCountSummary } from '../src/labels.js'
+import { routerTunnelCounts } from '../src/tunnelDelete.js'
 
 const mocks = vi.hoisted(() => ({ ev: null }))
 vi.mock('../src/api.js', async (importOriginal) => ({
@@ -25,14 +25,15 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 describe.each(['sandbox-broken', 'sandbox-work'])('вкладка «VPN-туннели» на данных песочницы: %s', (name) => {
   it('подпись называет число работающих -- то же, что «Роутер» и «Проверки»', async () => {
     const s = sandbox[name]
-    mocks.ev = { checks: [], ...s.events, incidents: s.incidents }
+    const clockOffsetMs = Date.parse(s.events.tunnels[0].ts) - Date.now()
+    mocks.ev = { checks: [], ...s.events, incidents: s.incidents, clockOffsetMs }
     CMD.value = { busy: false, result: { status: 'ok', output: JSON.stringify(s.snapshot) }, error: null, errorCode: null, run: () => Promise.resolve(null) }
     const root = document.createElement('div')
     document.body.appendChild(root)
     await act(async () => render(<TunnelsTab routerID={7} asleep={false} openSheet={() => {}} />, root))
     await flush()
     // Так считают «Роутер» (RouterDetail.jsx) и «Проверки» (DiagTab.jsx).
-    const main = tunnelCountSummary(s.events.tunnels, s.incidents)
+    const main = routerTunnelCounts(s.snapshot, s.events.tunnels, s.incidents)
     const note = [...root.querySelectorAll('p.state')].map((p) => p.textContent).find((t) => /настроенных/.test(t))
     expect(note).toBeTruthy()
     expect(note).toMatch(new RegExp(`^${main.working} работа\\S* из ${main.total} настроенных`))

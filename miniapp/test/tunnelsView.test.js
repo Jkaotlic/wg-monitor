@@ -300,3 +300,8 @@ describe('tunnelsView -- слово awg-manager', () => {
     expect(v.active.awgm).toBe(null)
   })
 })
+
+it('явный пустой список резервов не превращает поднятое звено в готовый резерв', () => {
+  const traffic = { mode: 'split', carrier_basis: 'policy', carrier_tunnel_id: 'awg11', carrier_alive: true, reserve_tunnel_ids: [] }
+  expect(tunnelsView(SNAP, traffic).chain.find((link) => link.tunnelID === 'awg20').role).toBe('unconfirmedReserve')
+})

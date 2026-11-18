@@ -1,3 +1,5 @@
+import { pluralRu } from './labels.js'
+
 const COPY = {
   sources_agree: ['ok', 'Источники согласны'],
   source_conflict: ['warn', 'Источники расходятся'],
@@ -10,6 +12,7 @@ const COPY = {
   direct_path: ['ok', 'Трафик идёт напрямую'],
   route_control_failed: ['danger', 'Правила маршрутизации не работают'],
   route_control_unknown: ['muted', 'Состояние маршрутизации неизвестно'],
+  routing_evidence_stale: ['muted', 'Проверка маршрутизации устарела'],
   routing_evidence_missing: ['muted', 'Нет свежей проверки маршрутизации'],
   bot_check_unknown: ['muted', 'Проверка туннеля не завершена'],
   router_state_unknown: ['muted', 'Роутер не подтвердил состояние'],
@@ -32,6 +35,6 @@ export function statusEvidenceCopy(evidence) {
   return {
     tone,
     title,
-    detail: routes > 0 ? `${routes} правил маршрутизации требуют проверки` : '',
+    detail: routes > 0 ? `${routes} ${pluralRu(routes, 'правило маршрутизации требует', 'правила маршрутизации требуют', 'правил маршрутизации требуют')} проверки` : '',
   }
 }

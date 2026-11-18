@@ -7,6 +7,9 @@ import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve,
 import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 import { incidentStoryView } from '../incidentStory.js'
 import { operationView } from '../operations.js'
+import { useTunnelFreshness } from '../useTunnelFreshness.js'
+import { serverClockOffset } from '../serverClock.js'
+import { routerTunnelCounts } from '../tunnelDelete.js'
 import { recentRouteSnapshot } from '../routes.js'
 import { whenText, sinceText, untilText } from '../when.js'
 import { errorText } from '../errorText.js'
@@ -29,7 +32,6 @@ import {
   checkLabel,
   tunnelOf,
   checkState as checkStateOf,
-  tunnelCountSummary,
   workingTunnelNote,
   commandOutcomeLabel,
   incidentCopy,
@@ -284,6 +286,8 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
 
 export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab, openLayer, repairOpen = false, otherAlert = null, onOpenRouter, onOpenService }) {
   const { wide } = useContext(AppContext)
+  const [clockOffsetMs, setClockOffsetMs] = useState(null)
+  const freshness = useTunnelFreshness(clockOffsetMs)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
@@ -294,7 +298,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // Сервер несущего не знает -- активное звено из недавнего снимка маршрутов
   // роутера (его снимали вкладки «VPN-туннели» и «Маршруты»): шапка и схема
   // называют того же, что вкладка (B1). Команду роутеру отсюда не шлём.
-  const traffic = withSnapshotCarrier(serverTraffic, recentRouteSnapshot(id))
+  const inventory = recentRouteSnapshot(id)
+  const traffic = withSnapshotCarrier(serverTraffic, inventory)
   const [error, setError] = useState(null)
   const loadSeq = useRef(0)
   // Версии -- один раз на роутер, не с пульсом: сервер отмечает новости
@@ -333,6 +338,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
         if (my !== loadSeq.current) return
         setError(null)
         setRouter(r.router)
+        setClockOffsetMs(serverClockOffset(r.router))
         setIncidents(r.incidents ?? [])
         setChecks(c.checks ?? [])
         setTunnels(c.tunnels ?? [])
@@ -431,13 +437,13 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // routerHeadline: молчащий роутер перебивает любое другое показание.
   // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
   // нет» говорим только по слову сервера (он видит политики целиком).
-  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
+  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert, evidence, freshness })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale, evidence })
   // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
   // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
   // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
   // говорить про тот же несущий туннель, что и она.
-  const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via })
+  const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via, freshness })
   // Запасной есть, но упал -- это не «запасного нет» (v0.50, спека п. 1.3).
   // Когда шапка уже говорит о тревоге по VPN-туннелю, плитка молчит.
   const deadReserve = backupLine ? null : deadReserveLine({ traffic, tunnels, incidents, via: path.via })
@@ -446,7 +452,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
   // running с мёртвой удалённой стороной, и плитка писала «2 из 2».
   // Один счёт на экран: свои / работают / не проверено -- одним вызовом.
-  const counts = tunnelCountSummary(tunnels, incidents)
+  const counts = routerTunnelCounts(inventory, tunnels, incidents, { ...freshness, enforceFreshness: clockOffsetMs != null })
   const liveCount = counts.working
   const ownTotal = counts.total
   // «Не проверено» -- ни работающий, ни упавший (unknown, v0.46).
@@ -511,15 +517,15 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
       />
       <Stat
         label="VPN-туннели"
-        value={headline.stale || !tunnels.length ? null : liveCount}
+        value={headline.stale || !ownTotal ? null : liveCount}
         note={
           headline.stale
             ? 'роутер молчит — данные устарели'
-            : tunnels.length
-              ? workingTunnelNote(liveCount, ownTotal, uncheckedCount)
+            : ownTotal
+              ? workingTunnelNote(liveCount, ownTotal, uncheckedCount, inventory ? 'настроенных' : 'в отчёте')
               : 'роутер не сообщил ни одного'
         }
-        tone={!headline.stale && tunnels.length && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}
+        tone={!headline.stale && ownTotal && liveCount === 0 && uncheckedCount === 0 ? 'danger' : undefined}
       />
     </div>
   )

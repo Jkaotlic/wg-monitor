@@ -75,7 +75,7 @@ export function reinstallSheetText(router) {
 
 function versionHint(values) {
   const raw = trimmed(values?.version)
-  if (!raw) return 'Пусто — последняя версия.'
+  if (!raw) return 'Обычно ставится версия сервера. Если у сервера нет номера выпуска, он выберет последний выпуск.'
   return goodVersion(raw) ? '' : `Версия пишется так: ${VERSION_EXAMPLE}.`
 }
 
@@ -83,7 +83,7 @@ export function reinstallFields() {
   return [
     { name: 'root_password', label: 'Пароль root', type: 'password' },
     ...PANEL_FIELDS,
-    { name: 'version', label: 'Версия агента', type: 'text', placeholder: 'последняя', hint: versionHint },
+    { name: 'version', label: 'Версия агента', type: 'text', placeholder: 'выберет сервер', hint: versionHint },
   ]
 }
 

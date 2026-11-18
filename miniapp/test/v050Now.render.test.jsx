@@ -181,7 +181,7 @@ describe('«Сейчас» при тревоге (спека п. 1.1–1.3)', ()
   it('упавший запасной: вердикт героя говорит, плитки «Запасного нет» нет', async () => {
     const { root } = await mountNow()
     expect(root.querySelector('.hero').textContent).toContain('vpn-nl')
-    expect(root.textContent).not.toContain('Запасного VPN-туннеля нет')
+    expect(root.textContent).not.toContain('Готовый запасной VPN-туннель не подтверждён')
     // Про упавший запасной говорит один вердикт -- шапка; плитка резерва не дублирует.
     expect(root.textContent).not.toContain('подхватить будет некому')
     cleanup(root)
@@ -207,7 +207,7 @@ describe('«Сейчас» без тревог и без туннелей (Revie
     expect(o).not.toContain('alerts')
     expect(limes(root)).toHaveLength(0)
     expect(root.textContent).not.toContain('не отвечает')
-    expect(root.textContent).toContain('Запасного VPN-туннеля нет')
+    expect(root.textContent).toContain('Готовый запасной VPN-туннель не подтверждён')
     cleanup(root)
   })
 })

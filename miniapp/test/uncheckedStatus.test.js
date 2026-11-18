@@ -57,3 +57,51 @@ describe('статус unknown -- «не проверено»', () => {
     expect(label).toBe('поднят, не проверено')
   })
 })
+
+describe('непроверенная связь на всех экранах', () => {
+  const traffic = { mode: 'split', carrier_basis: 'policy', carrier_tunnel_id: 'awg11', reserve_tunnel_ids: [] }
+  const line = { tunnel_id: 'awg11', run_state: 'running', enabled: true, status: 'unknown', handshake_age_sec: 16 }
+  const snap = {
+    tunnels: [{ id: 'awg11', type: 'managed', status: 'running' }],
+    policies: [{ name: 'VPN', active_tunnel_id: 'awg11', interfaces: [{ tunnel_id: 'awg11' }] }],
+  }
+  it('схема, шапка, цепочка и маршрут не объявляют непроверенную связь рабочей или сломанной', async () => {
+    const { pathState } = await import('../src/trafficPath.js')
+    const { routerHeadline } = await import('../src/routerHeadline.js')
+    const { tunnelsView } = await import('../src/tunnelsView.js')
+    const { routingVerdict } = await import('../src/routes.js')
+    const { tunnelStateLabel } = await import('../src/labels.js')
+    const args = { traffic, tunnels: [line], router: LIVE }
+    const shown = withCheckVerdict(snap, { tunnels: [line] })
+    expect(pathState(args).tunnel).toBe('unknown')
+    expect(routerHeadline(args).tag).toMatch(/не проверен/)
+    expect(tunnelsView(shown, traffic).chain[0].role).toBe('activeUnknown')
+    expect(routingVerdict(shown, traffic).mode).toBe('unknown')
+    expect(tunnelStateLabel(line)).toContain('не проверено')
+  })
+
+  it('отсутствие проверки в полном ответе не подтверждает работу поднятого интерфейса', () => {
+    const shown = withCheckVerdict(snap, { tunnels: [] }, { requireTimestamp: true })
+    expect(tunnelList(shown)[0].stateLabel).toBe('поднят, не проверено')
+  })
+})
+
+it('старый снимок без status: свежий fail виден, без проверки обе ветки маршрутов неизвестны', async () => {
+  const { routingVerdict } = await import('../src/routes.js')
+  const snapshot = { tunnels: [{ id: 'awg11', type: 'managed', default_route: true }] }
+  const traffic = { mode: 'vpn', carrier_basis: 'policy', carrier_tunnel_id: 'awg11' }
+  const failed = withCheckVerdict(snapshot, { tunnels: [{ tunnel_id: 'awg11', status: 'fail' }] })
+  expect(tunnelList(failed)[0].stateLabel).toBe('не отвечает')
+  for (const tr of [traffic, undefined]) expect(routingVerdict(snapshot, tr).mode).toBe('unknown')
+})
+
+it('одного работающего интерфейса или одной ok-проверки недостаточно для вывода о канале', async () => {
+  const { pathState } = await import('../src/trafficPath.js')
+  const { routerHeadline } = await import('../src/routerHeadline.js')
+  const traffic = { mode: 'vpn', carrier_basis: 'policy', carrier_tunnel_id: 'wg0' }
+  for (const info of [{ status: 'ok' }, { run_state: 'running' }]) {
+    const args = { router: LIVE, traffic, tunnels: [{ tunnel_id: 'wg0', ...info }] }
+    expect(pathState(args).tunnel).toBe('unknown')
+    expect(routerHeadline(args).tag).toMatch(/не проверен/)
+  }
+})

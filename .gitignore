@@ -56,6 +56,12 @@ config.yaml
 .worktrees/
 # Claude Code local session/worktree state (native EnterWorktree tool)
 .claude/
+.agents/
+.codex/
+.specstory/
+/docs/superpowers/
+/docs/operations/
+/audit/
 
 # Deploy wizard local config (contains hosts; not secrets, but local-only)
 wizard.toml

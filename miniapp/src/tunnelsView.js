@@ -5,7 +5,8 @@
 // сначала "работает ли сейчас", потом "что будет, если ляжет", и только
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
-import { tunnelEventAgeSec, tunnelEventFresh, tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
+import { tunnelEventAgeSec, tunnelEventFresh } from './tunnelFreshness.js'
+import { tunnelLive, tunnelSwitchedOff, tunnelRows } from './routes.js'
 import { withSnapshotCarrier } from './trafficPath.js'
 import { ALARM_OPEN_LABEL } from './tunnelDelete.js'
 import { awgmBadge } from './awgmBadge.js'
@@ -20,7 +21,7 @@ import { awgmBadge } from './awgmBadge.js'
 // решении там, где случилась поломка, и подсовывал кнопку «включить» VPN-туннелю,
 // который и так включён. Различение бесплатное: enabled -- это настройка,
 // status -- факт, и они приходят порознь.
-function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
+function chainRole(link, tunnel, activeTunnelID, { carrierDead = false, reserveIDs } = {}) {
   const live = tunnelLive(tunnel ?? {})
   // Назначенный несущим, но мёртвый (проверка провалена, см. withCheckVerdict,
   // или сервер сказал carrier_alive=false): трафик в него уходит и теряется --
@@ -30,15 +31,17 @@ function chainRole(link, tunnel, activeTunnelID, { carrierDead = false } = {}) {
     if (tunnel?.verdict_stale) return 'activeStale'
     // Проверки не загрузились (withCheckVerdict, verdict_unknown): несёт ли он
     // трафик на деле -- неизвестно, «Работает сейчас» было бы догадкой.
-    return tunnel?.verdict_unknown ? 'activeUnknown' : 'active'
+    return live === 'unknown' || tunnel?.check_unverified ? 'activeUnknown' : 'active'
   }
   // Тревога открыта, проверка уже ok: «отвечает» сказать нельзя.
   if (tunnel?.alarm_open) return 'down'
-  if (tunnel?.verdict_stale) return 'checkStale'
-  if (live === 'up') return 'ready'
   if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
+  if (live === 'down') return 'down'
+  if (tunnel?.verdict_stale) return 'checkStale'
+  if (tunnel?.check_unverified) return 'checkUnknown'
+  if (live === 'up') return reserveIDs && !reserveIDs.includes(link.tunnel_id) ? 'unconfirmedReserve' : 'ready'
   if (live === 'unknown') return tunnel?.verdict_unknown ? 'checkUnknown' : 'unknown'
-  return 'down'
+  return 'unknown'
 }
 
 // Значение справа не повторяет заголовок строки: "Работает сейчас" и рядом
@@ -49,6 +52,7 @@ const ROLE_NOTE = {
   active: '',
   activeDown: 'трафик не проходит',
   ready: 'отвечает',
+  unconfirmedReserve: 'резерв не подтверждён',
   down: 'включён',
   off: 'выключен',
   unknown: 'роутер не сказал',
@@ -129,6 +133,7 @@ function unusedOf(tunnels, chain, awgm) {
     .map((t) => {
       const live = tunnelLive(t)
       const switchedOff = tunnelSwitchedOff(t)
+      const role = chainRole({}, t, '')
       const badge = awgmOf(awgm, t.id)
       return {
         id: t.id,
@@ -136,7 +141,7 @@ function unusedOf(tunnels, chain, awgm) {
         title: lineTitle(t.name),
         code: t.id,
         live,
-        role: live === 'up' ? 'unusedUp' : switchedOff ? 'off' : live === 'down' ? 'down' : t.verdict_stale ? 'checkStale' : 'unknown',
+        role: role === 'ready' ? 'unusedUp' : role,
         switchedOff,
         verdictStale: Boolean(t.verdict_stale),
         checkUnknown: Boolean(t.verdict_unknown),
@@ -176,7 +181,11 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = [], freshnes
   const empty = { state: 'none', active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
-  if (tunnels.length === 0) return empty
+  if (tunnels.length === 0) {
+    if (serverTraffic?.mode === 'direct') return { ...empty, state: 'direct' }
+    if (serverTraffic?.mode === 'singbox') return { ...empty, state: 'singbox' }
+    return empty
+  }
 
   const byID = new Map(tunnels.map((t) => [t.id, t]))
   const eventRows = Array.isArray(eventTunnels) ? eventTunnels : []
@@ -254,7 +263,7 @@ export function tunnelsView(snapshot, serverTraffic, eventTunnels = [], freshnes
   }
   active.sourceConflict = sourceConflict(active.live, active.awgm)
 
-  const chain = chainOf(policy, byID, carrierID, { carrierDead }, awgm)
+  const chain = chainOf(policy, byID, carrierID, { carrierDead, reserveIDs: traffic?.reserve_tunnel_ids }, awgm)
   return { state: 'carrier', active, policyName: policy?.name ?? '', chain, unused: unusedOf(tunnels, chain, awgm), freshness }
 }
 

@@ -37,7 +37,7 @@ describe('routingVerdict', () => {
 
   it('линия с default_route -- она несёт обход, но не «весь трафик»', () => {
     const v = routingVerdict({
-      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', default_route: true }],
+      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', status: 'running', default_route: true }],
       counts: { awg12: { dns: 2 } },
       rules: [
         { bind: 'OpkgTun12', name: 'Figma' },
@@ -67,7 +67,7 @@ describe('routingVerdict', () => {
     // Счёт линии приходит из counts снимка: явно названные правила плюс те,
     // что даёт политика. В списке ниже видны только первые.
     const snapshot = {
-      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', default_route: true }],
+      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', status: 'running', default_route: true }],
       counts: { awg12: { dns: 5, static: 1 } },
       rules: [{ id: '1', bind: 'opkgtun12', name: 'Figma' }],
     }
@@ -723,7 +723,7 @@ describe('promoteTargets', () => {
   // интерфейса -- другая операция с другим радиусом поражения.
   it('предлагает звенья цепочки, кроме уже активного', () => {
     expect(promoteTargets(SNAP, 'awg11')).toEqual([
-      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down', checkFailed: false, checkUnverified: false, switchedOff: true },
+      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down', checkFailed: false, checkStale: false, checkUnverified: false, switchedOff: true },
     ])
   })
 
