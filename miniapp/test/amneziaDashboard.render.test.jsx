@@ -45,3 +45,16 @@ it('оператору не показывает форму ключа и выд
   expect(root.querySelector('form')).toBeNull()
   expect(root.textContent).toContain('владельцу')
 })
+
+it('сохраняет готовый файл при отказе обновления подписки', async () => {
+  openPremiumFiles.mockResolvedValueOnce(account).mockRejectedValueOnce(new Error('network'))
+  downloadPremiumFile.mockResolvedValue({ filename: 'amnezia_nl.conf', conf: '[Interface]\n[Peer]\n' })
+  URL.createObjectURL = vi.fn(() => 'blob:ready')
+  URL.revokeObjectURL = vi.fn()
+  render(<AmneziaDashboard routerID={7} rows={rows} perms={{ remove: true }} />, root)
+  await act(async () => root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true })))
+  await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent === 'Выпустить .conf').click())
+  await vi.waitFor(() => expect(root.textContent).toContain('данные подписки'.replace('д', 'Д')))
+  expect(root.querySelector('a[download]').href).toContain('blob:ready')
+  expect(downloadPremiumFile).toHaveBeenCalledTimes(1)
+})

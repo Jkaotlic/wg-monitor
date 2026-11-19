@@ -114,7 +114,7 @@ export function AmneziaDashboard({ routerID, rows = [], perms = {}, onChanged })
           <button type="submit" class="btn btn-primary btn-wide" disabled={Boolean(busy) || (!key.trim() && rows.length === 0)}>{busy === 'account' ? 'Проверяем ключ…' : key.trim() ? 'Проверить и сохранить' : 'Открыть подписку'}</button>
         </form>
         {account && <div>
-          {accountStale && <p class="hint" role="status">Конфиг готов. Данные подписки показаны до выпуска — обновите их кнопкой «Открыть подписку».</p>}
+          {accountStale && <p class="hint" role="status">{file ? 'Конфиг готов. ' : ''}Данные подписки показаны до выпуска — обновите их кнопкой «Открыть подписку».</p>}
           <p class="hint">Занято мест: {account.active_device_count} из {account.max_device_count}. {account.subscription_end_date ? `Подписка до ${account.subscription_end_date.slice(0, 10)}.` : ''}</p>
           <div class="field"><label for={`premium-country-${routerID}`}>Страна VPN</label>
             <select id={`premium-country-${routerID}`} aria-label="Страна VPN" value={country} disabled={Boolean(busy)} onChange={(event) => { setCountry(event.currentTarget.value); clearFile() }}>
