@@ -236,10 +236,10 @@ describe('кабинет роутера: вкладки и ключи', () => {
     cleanup(root)
   })
 
-  it('старый сервер разрешает API Premium, но вход только через официальный кабинет', async () => {
+  it('встроенный выпуск файла доступен отдельно от автоматической установки', async () => {
     mocks.accounts[0].disabled = false
     const { root } = await mount()
-    expect(button(root, 'Открыть личный кабинет Amnezia ↗')).toBeTruthy()
+    expect(button(root, 'Открыть подписку')).toBeTruthy()
     expect(button(root, 'Добавить ключ')).toBeFalsy()
     expect(button(root, 'Сделать активным')).toBeFalsy()
     expect(root.querySelector('.cabinet-options')).toBeNull()
@@ -354,7 +354,7 @@ describe('кабинет роутера: вкладки и ключи', () => {
 })
 
 describe('кабинет роутера: Amnezia отключён (v0.61.3)', () => {
-  const NOTE = 'Выпуск через кабинет Amnezia Premium отключён: автор awg-manager предупреждает, что получение конфигов через кабинет может заблокировать подписку. Конфиги берите в приложении или личном кабинете Amnezia.'
+  const NOTE = 'Автоматическая установка Amnezia Premium отключена. Для выпуска файла используйте форму выше.'
   beforeEach(() => {
     mocks.accounts[0] = { provider: 'amnezia', label: 'Amnezia Premium', connected: false, disabled: true, note: NOTE }
   })
@@ -369,7 +369,7 @@ describe('кабинет роутера: Amnezia отключён (v0.61.3)', ()
     expect(buttons(root, 'Отозвать')).toHaveLength(0)
     expect(root.querySelector('.cabinet-options')).toBe(null)
     expect(root.textContent.split(NOTE).length - 1).toBe(1)
-    expect(button(root, 'Открыть личный кабинет Amnezia ↗')).toBeTruthy()
+    expect(button(root, 'Открыть подписку')).toBeTruthy()
     expect(button(root, 'Загрузить скачанный .conf')).toBeTruthy()
     cleanup(root)
   })
@@ -382,10 +382,10 @@ describe('кабинет роутера: Amnezia отключён (v0.61.3)', ()
     cleanup(root)
   })
 
-  it('ключей нет -- только причина', async () => {
+  it('при отсутствии ключа доступен ввод ключа для выпуска файла', async () => {
     mocks.cabinets.amnezia.keys = []
     const { root } = await mount()
-    expect(root.textContent).toContain(NOTE)
+    expect(root.querySelector('input[type=password]')).toBeTruthy()
     expect(root.textContent).not.toContain('ещё не добавлен')
     expect(button(root, 'Добавить ключ')).toBeFalsy()
     cleanup(root)

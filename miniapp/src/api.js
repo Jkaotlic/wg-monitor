@@ -648,3 +648,18 @@ export function recoverRouterEntware(routerID) {
 export function fetchEntwareRecoveryScript() {
  return request('/entware/recovery-script')
 }
+
+// Premium country files are requested explicitly. A download failure is not
+// retried because the provider may already have allocated a subscription slot.
+export function openPremiumFiles(routerID, body) {
+  return request(`/routers/${routerID}/cabinets/amnezia/files/account`, {
+    method: 'POST', body: JSON.stringify(body),
+  })
+}
+
+export function downloadPremiumFile(routerID, keyID, country, declaredCountry) {
+  return request(`/routers/${routerID}/cabinets/amnezia/files/download`, {
+    method: 'POST',
+    body: JSON.stringify({ key_id: keyID, country, declared_country: declaredCountry, confirm: true }),
+  })
+}

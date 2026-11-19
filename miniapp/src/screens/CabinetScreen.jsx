@@ -193,7 +193,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         )}
         {externalPremium && (
           <>
-            <AmneziaDashboard />
+            <AmneziaDashboard key={routerID} routerID={routerID} rows={rows} perms={perms} onChanged={changed} />
             {perms.manage && openLayer && (
               <button type="button" class="btn btn-ghost btn-wide" onClick={() => openLayer('confimport', { returnTo: 'cabinet', returnParams: { ...layerParams, tab: current } })}>
                 Загрузить скачанный .conf
@@ -218,7 +218,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
                 perms={perms}
                 openSheet={openSheet}
                 onChanged={changed}
-                disabledNote={account?.disabled && account.note || 'Сохранённые ключи можно удалить.'}
+                disabledNote="Автоматическая установка Amnezia Premium отключена. Для выпуска файла используйте форму выше."
               />
             </details>
           ) : account?.disabled && account.note ? <p class="hint">{account.note}</p> : null
