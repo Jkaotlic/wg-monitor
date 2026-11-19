@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { issueVPNConfig, issueAwg3ToRouter, fetchCommandResult, sendVPNConf } from '../api.js'
+import { installPremiumFile, issueVPNConfig, issueAwg3ToRouter, fetchCommandResult, sendVPNConf } from '../api.js'
 import { localSheet } from '../sheet.js'
 import { agentReplyText } from '../errorText.js'
 import { firstAgentLine } from '../commandWait.js'
@@ -48,7 +48,9 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
     const args = issueArgs(pending)
     try {
       const { cmd_id: id, tunnel_name: name } =
-        pending.provider === 'awg3panel'
+        pending.provider === 'amnezia' && pending.keyID
+          ? await installPremiumFile(routerID, pending.keyID, args.option, pending.declaredCountry)
+          : pending.provider === 'awg3panel'
           ? await issueAwg3ToRouter(routerID, args.instanceID, args.option)
           : await issueVPNConfig(routerID, args.provider, args.option, args.instanceID)
       const until = Date.now() + (asleep ? 6 * 60_000 : 90_000)
@@ -77,7 +79,9 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
       setOutcome('Конфиг выпущен, но роутер пока не подтвердил импорт. Откройте экран VPN-туннелей позже.')
     } catch (err) {
       if (!alive.current) return
-      const failure = issueFailure(err, perms, pending.provider)
+      const failure = pending.provider === 'amnezia'
+        ? { text: err.serverMessage || 'Ответ о выпуске не получен. Откройте подписку и проверьте страну перед повтором.', offerRevoke: false }
+        : issueFailure(err, perms, pending.provider)
       setPhase('done')
       setFailed(true)
       setOutcome(failure.text)
@@ -126,12 +130,12 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
           {CABINET_TEXTS.backToList}
         </button>
       )}
-      {phase !== 'running' && (
+      {phase !== 'running' && !(pending.provider === 'amnezia' && phase === 'done' && !failed) && (
         <button type="button" class="btn btn-primary btn-wide" onClick={issue}>
           {phase !== 'done' ? 'Выпустить и положить на роутер' : failed ? 'Попробовать ещё раз' : 'Выпустить ещё раз'}
         </button>
       )}
-      {perms.sendConf && pending.provider !== 'awg3panel' && phase !== 'running' && (
+      {perms.sendConf && pending.provider !== 'awg3panel' && !(pending.provider === 'amnezia' && pending.keyID) && phase !== 'running' && (
         <button type="button" class="btn btn-ghost btn-wide cabinet-send" onClick={sendConf}>
           Прислать .conf в личку
         </button>

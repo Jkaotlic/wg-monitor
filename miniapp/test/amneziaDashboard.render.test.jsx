@@ -58,3 +58,17 @@ it('сохраняет готовый файл при отказе обновл�
   expect(root.querySelector('a[download]').href).toContain('blob:ready')
   expect(downloadPremiumFile).toHaveBeenCalledTimes(1)
 })
+
+it('предлагает явную установку выбранной страны и подписки на роутер', async () => {
+  openPremiumFiles.mockResolvedValue(account)
+  const onPick = vi.fn()
+  render(<AmneziaDashboard routerID={7} rows={rows} perms={{ remove: true }} onPick={onPick} />, root)
+  await act(async () => root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true })))
+  const region = root.querySelector('[aria-label="Откуда подключаетесь"]')
+  await act(async () => { region.value='ag'; region.dispatchEvent(new Event('change', { bubbles: true })) })
+  const install = [...root.querySelectorAll('button')].find(b => b.textContent === 'Выпустить и положить на роутер')
+  expect(install).toBeTruthy()
+  await act(async () => install.click())
+  expect(onPick).toHaveBeenCalledWith(expect.objectContaining({provider:'amnezia', keyID:'key1', declaredCountry:'ag', option:expect.objectContaining({id:'nl'})}))
+  expect(downloadPremiumFile).not.toHaveBeenCalled()
+})

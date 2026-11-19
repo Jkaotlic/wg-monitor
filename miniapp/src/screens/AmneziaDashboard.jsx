@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { Section } from '../ui/Section.jsx'
 import { openPremiumFiles, downloadPremiumFile } from '../api.js'
 
-export function AmneziaDashboard({ routerID, rows = [], perms = {}, onChanged }) {
+export function AmneziaDashboard({ routerID, rows = [], perms = {}, onChanged, onPick }) {
   const [key, setKey] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [session, setSession] = useState(null)
@@ -126,8 +126,12 @@ export function AmneziaDashboard({ routerID, rows = [], perms = {}, onChanged })
               <option value="ru">Россия</option><option value="ag">Другая страна</option>
             </select>
           </div>
-          <p class="hint">Файл содержит приватный ключ. Для роутера нужна поддержка AWG 3.1. AWG Manager может отклонить конфиг Amnezia Premium.</p>
+          <p class="hint">Файл содержит приватный ключ. Для роутера нужна поддержка AWG 3.1. При установке из копии для роутера убирается только комментарий с ключом подписки. Скачиваемый файл остаётся исходным.</p>
           <button type="button" class="btn btn-primary btn-wide" disabled={Boolean(busy) || !country} onClick={generate}>{busy === 'download' ? 'Выпускаем конфиг…' : issued.has(country) ? 'Получить .conf' : 'Выпустить .conf'}</button>
+          {onPick && <button type="button" class="btn btn-primary btn-wide" disabled={Boolean(busy) || !country} onClick={() => onPick({
+            provider: 'amnezia', title: 'Amnezia Premium', keyID: session.key_id, declaredCountry: declared,
+            option: { id: country, label: account.available_countries.find(item => item.server_country_code === country)?.server_country_name || country, note: issued.has(country) },
+          })}>Выпустить и положить на роутер</button>}
           {file && <p role="status"><a class="btn btn-primary btn-wide" href={file.url} download={file.name}>Скачать готовый .conf</a></p>}
         </div>}
       </>}

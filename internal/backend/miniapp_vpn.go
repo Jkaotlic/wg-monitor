@@ -346,6 +346,12 @@ func miniappVPNIssueAwg3(d Deps, w http.ResponseWriter, r *http.Request, tgUser,
 // повторяет поведение бота: выпуск того же имени заменяет прежний туннель, а
 // не плодит второй.
 func miniappEnqueueTunnelImport(d Deps, routerID int64, conf []byte, tunnelName, importBackend string) (string, error) {
+	return miniappEnqueueTunnelImportMode(d, routerID, conf, tunnelName, importBackend, true)
+}
+
+// Explicit Premium installs create a new tunnel, without the agent's legacy
+// address-based replacement fallback.
+func miniappEnqueueTunnelImportMode(d Deps, routerID int64, conf []byte, tunnelName, importBackend string, replace bool) (string, error) {
 	if importBackend == "" {
 		importBackend = "nativewg"
 	}
@@ -359,7 +365,7 @@ func miniappEnqueueTunnelImport(d Deps, routerID int64, conf []byte, tunnelName,
 		Args: map[string]any{
 			"conf":    base64.StdEncoding.EncodeToString(conf),
 			"name":    tunnelName,
-			"replace": true,
+			"replace": replace,
 			"backend": importBackend,
 		},
 		IssuedAt: time.Now().UTC(),

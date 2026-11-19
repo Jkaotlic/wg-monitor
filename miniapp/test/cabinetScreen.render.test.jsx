@@ -73,6 +73,11 @@ vi.mock('../src/api.js', async (importOriginal) => {
       log('awg3issue', id, panel, iface)
       return Promise.resolve({ cmd_id: 'c1', tunnel_name: 'a3-main_awg1' })
     },
+    openPremiumFiles: () => Promise.resolve({key_id:'k1',account:{available_countries:[{server_country_code:'nl',server_country_name:'Нидерланды'}],active_device_count:1,max_device_count:5}}),
+    installPremiumFile: (id,key,country,region) => {
+      log('premiuminstall',id,key,country,region)
+      return Promise.resolve({cmd_id:'premium-command',tunnel_name:'amnezia_nl_synthetic'})
+    },
     fetchCommandResult: () => Promise.resolve(mocks.result ?? { status: 'ok', output: '' }),
     sendVPNConf: (id, body) => {
       log('send', id, body)
@@ -354,7 +359,7 @@ describe('кабинет роутера: вкладки и ключи', () => {
 })
 
 describe('кабинет роутера: Amnezia отключён (v0.61.3)', () => {
-  const NOTE = 'Автоматическая установка Amnezia Premium отключена. Для выпуска файла используйте форму выше.'
+  const NOTE = 'Для выпуска и установки Amnezia Premium выберите подписку и страну в форме выше.'
   beforeEach(() => {
     mocks.accounts[0] = { provider: 'amnezia', label: 'Amnezia Premium', connected: false, disabled: true, note: NOTE }
   })
@@ -634,4 +639,20 @@ describe('кабинет роутера: вкладка «Панель VPN-се�
     expect(button(root, 'Повторить')).toBeTruthy()
     cleanup(root)
   })
+})
+
+it('Amnezia: выбор страны открывает подтверждение и устанавливает через общую навигацию', async () => {
+ const {root,seen}=await mount()
+ await act(async()=>root.querySelector('form').dispatchEvent(new Event('submit',{cancelable:true})))
+ await flush()
+ await act(async()=>button(root,'Выпустить и положить на роутер').click())
+ await flush()
+ expect(root.textContent).toContain('Что произойдёт')
+ expect(root.textContent).toContain('Нидерланды')
+ await act(async()=>button(root,'Выпустить и положить на роутер').click())
+ await flush()
+ expect(calls('premiuminstall')).toEqual([['premiuminstall',7,'k1','nl','ru']])
+ expect(seen.issued).toBe(1)
+ expect(root.textContent).toContain('импортирован как')
+ cleanup(root)
 })

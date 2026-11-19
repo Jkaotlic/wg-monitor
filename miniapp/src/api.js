@@ -663,3 +663,10 @@ export function downloadPremiumFile(routerID, keyID, country, declaredCountry) {
     body: JSON.stringify({ key_id: keyID, country, declared_country: declaredCountry, confirm: true }),
   })
 }
+
+export function installPremiumFile(routerID, keyID, country, declaredCountry) {
+  return request(`/routers/${routerID}/cabinets/amnezia/files/install`, {
+    method: 'POST',
+    body: JSON.stringify({ key_id: keyID, country, declared_country: declaredCountry, confirm: true }),
+  })
+}
