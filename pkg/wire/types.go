@@ -82,6 +82,7 @@ var validCommandActions = map[string]bool{
 	"force_recheck":         true,
 	// dns_open -- «открывается ли сайт с этого роутера»: имя разрешается через
 	// dns-proxy роутера, затем TCP на 443. Только чтение, аргумент -- одно имя.
+	"dns_probe":            true,
 	"dns_open":             true,
 	"tunnel_enable":        true,
 	"tunnel_disable":       true,

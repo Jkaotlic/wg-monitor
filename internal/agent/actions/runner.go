@@ -72,6 +72,8 @@ type OpkgExecutor interface {
 
 // Runner is built once at agent startup and re-used per-command.
 type Runner struct {
+	// DNSCheck reuses the report check for an admin-triggered read-only snapshot.
+	DNSCheck func(context.Context) wire.Check
 	// OnCommand -- наблюдатель команд (сторож зависаний, v0.59): зовётся
 	// до и после действия, чтобы окно тишины считалось от конца долгой
 	// команды. nil -- никто не слушает.
@@ -465,6 +467,16 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", "pingcheck-now triggered", payload
+	case "dns_probe":
+		if r.DNSCheck == nil {
+			return "err", "dns_probe: check not configured", payload
+		}
+		check := r.DNSCheck(ctx)
+		out, err := dnsDiagnosticJSON(check)
+		if err != nil {
+			return "err", "dns_probe: encoding failed", payload
+		}
+		return "ok", out, payload
 	case "diag_now":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
