@@ -4,6 +4,7 @@ import { orderChecks } from '../checksOrder.js'
 import { maintenanceNotice } from '../maintenanceNotice.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState, reserveLine, backupCopy, deadReserveLine, heroCoversReserve, withSnapshotCarrier } from '../trafficPath.js'
+import { currentStatusEvidence } from '../statusEvidence.js'
 import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 import { incidentStoryView } from '../incidentStory.js'
 import { operationView } from '../operations.js'
@@ -284,7 +285,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
   )
 }
 
-export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab, openLayer, repairOpen = false, otherAlert = null, onOpenRouter, onOpenService }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab, openLayer, repairOpen = false, otherAlert = null, onOpenRouter, onOpenService, onOpenRoutes, onOpenReplace }) {
   const { wide } = useContext(AppContext)
   const [clockOffsetMs, setClockOffsetMs] = useState(null)
   const freshness = useTunnelFreshness(clockOffsetMs)
@@ -293,7 +294,8 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   const [checks, setChecks] = useState(null)
   const [tunnels, setTunnels] = useState([])
   const [serverTraffic, setTraffic] = useState(null)
-  const [evidence, setEvidence] = useState(null)
+  const [reportedEvidence, setEvidence] = useState(null)
+  const evidence = currentStatusEvidence(reportedEvidence, freshness.nowMs)
   const [operations, setOperations] = useState([])
   // Сервер несущего не знает -- активное звено из недавнего снимка маршрутов
   // роутера (его снимали вкладки «VPN-туннели» и «Маршруты»): шапка и схема
@@ -438,7 +440,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
   // нет» говорим только по слову сервера (он видит политики целиком).
   const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert, evidence, freshness })
-  const path = pathState({ traffic, incidents, tunnels, stale: headline.stale, evidence })
+  const path = pathState({ traffic, incidents, tunnels, stale: headline.stale, evidence, freshness })
   // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
   // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
   // Правила -- в trafficPath.reserveLine, рядом со схемой: они обязаны
@@ -446,7 +448,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   const backupLine = reserveLine({ traffic, tunnels, incidents, via: path.via, freshness })
   // Запасной есть, но упал -- это не «запасного нет» (v0.50, спека п. 1.3).
   // Когда шапка уже говорит о тревоге по VPN-туннелю, плитка молчит.
-  const deadReserve = backupLine ? null : deadReserveLine({ traffic, tunnels, incidents, via: path.via })
+  const deadReserve = backupLine ? null : deadReserveLine({ traffic, tunnels, incidents, via: path.via, freshness, reserveOnlyAlert: reserveOnlyAlert ?? router.reserve_only_alert })
   const heroCovers = heroCoversReserve(deadReserve, headline.check)
   // Работающий -- поднятый интерфейс, чья проверка не провалена и по кому нет
   // тревоги. Одного «поднят» мало: на workrouter 18.09 интерфейс nl2 стоял
@@ -472,7 +474,7 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
       <p class="traffic-detail" style="margin-top:6px">
         <Quoted text={headline.verdict} />
       </p>
-      <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} evidence={evidence} />
+      <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} evidence={evidence} freshness={freshness} />
       <EvidenceSummary evidence={evidence} />
       {/* Число туннелей -- только в плитке «VPN-туннели» ниже (спека C1):
           здесь оно повторяло плитку. Остаётся лишь оговорка про устаревшие
@@ -589,10 +591,12 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
       </section>
     ) : null
 
-  const tunnelsNavBlock = (
-    <div style="margin-top:20px">
-      <NavCard title="VPN-туннели и резерв" onClick={() => onTab?.('tunnels')} />
-    </div>
+  const vpnActions = (
+    <nav class="router-actions" aria-label="Управление VPN">
+      {onOpenRoutes && <NavCard title="Маршруты" onClick={onOpenRoutes} />}
+      {onOpenReplace && <NavCard quiet title="Перевыпустить туннель" onClick={onOpenReplace} />}
+      <NavCard quiet title="VPN-туннели и резерв" onClick={() => onTab?.('tunnels')} />
+    </nav>
   )
 
   const otherAlertBlock = otherAlert ? (
@@ -641,47 +645,35 @@ export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab,
   ) : null
 
   if (!wide) {
-    // Порядок -- по срочности (v0.50, спека п. 1.1): при тревоге сразу под
-    // шапкой -- тревоги с «Починить», чтобы кнопка была в первом экране на
-    // 360 px; без тревоги incidentsBlock пуст, и порядок прежний.
-    // Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
-    // что сломано, потом куда идёт трафик, потом состояние туннелей, и
-    // только затем действия. Тревога -- единственное, ради чего экран
-    // вообще открывают в плохой день, поэтому она выше прибора.
     return (
       <div class="screen">
         {otherAlertBlock}
         {heroBlock}
         {incidentsBlock}
-        {maintBlock}
-        {statsBlock}
         {backupBlock}
-        {tunnelsNavBlock}
+        {vpnActions}
+        {maintBlock}
         {checksBlock}
+        {statsBlock}
         {operationsBlock}
       </div>
     )
   }
 
-  // Широкий экран: слева -- что происходит (тревога другого роутера, схема
-  // пути, обслуживание, плитки, резерв, переход к VPN-туннелям, проверки не в
-  // порядке), справа -- активные тревоги с «Починить». Сравнение адресов
-  // выхода и быстрые действия с v0.52 живут на «Проверках» и в «Настройках».
-  // Порядок внутри колонок тот же, что на телефоне.
   return (
     <div class="screen now-grid">
       <div class="now-main">
         {otherAlertBlock}
         {heroBlock}
-        {maintBlock}
-        {statsBlock}
         {backupBlock}
-        {tunnelsNavBlock}
+        {vpnActions}
+        {maintBlock}
         {checksBlock}
-        {operationsBlock}
+        {statsBlock}
       </div>
       <div class="now-side">
         {incidentsBlock}
+        {operationsBlock}
       </div>
     </div>
   )

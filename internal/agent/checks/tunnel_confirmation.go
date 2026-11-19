@@ -118,7 +118,7 @@ func confirmSuspectTunnels(ctx context.Context, checks []wire.Check, tunnels []a
 		// from shared data-path failure. Check those otherwise OK/unknown
 		// results too, while preserving deliberate unused-line suppression.
 		if checks[i].Status != "fail" {
-			if checks[i].Details["matrix_ok"] != false || checks[i].Details["note"] == "tunnel has no DNS/static routes and pingCheck is disabled" {
+			if checks[i].Details["matrix_ok"] != false || checks[i].Details["note"] == wire.UnusedTunnelNote {
 				continue
 			}
 			reason, _ := checks[i].Details["unverified_problems"].(string)

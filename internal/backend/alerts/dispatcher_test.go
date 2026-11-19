@@ -496,6 +496,9 @@ func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
 	d := newDB(t)
 	tok := "3333333333333333333333333333333333333333333333333333333333333333"
 	uid, _ := d.Users().Insert("clockuser", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1001); err != nil {
+		t.Fatal(err)
+	}
 	tg := &fakeTG{}
 	disp := NewDispatcher(d, tg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -925,5 +928,40 @@ func TestDispatcher_NoteAlertActionSkipsRecoveredCheck(t *testing.T) {
 	}
 	if text != before || strings.Contains(text, "13:00") || len(kb.InlineKeyboard) != len(beforeKB.InlineKeyboard) {
 		t.Fatalf("восстановившаяся карточка дополнена: %q %+v", text, kb)
+	}
+}
+
+func TestMutedHardAndRecoveryKeepIncidentWithoutDelivery(t *testing.T) {
+	d := newDB(t)
+	uid, err := d.Users().Insert("muted-router", strings.Repeat("4", 64), "198.51.100.15", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.NotifyMutes().SetMuted(1001, uid, true); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	di := NewDispatcher(d, f, Config{})
+	now := time.Now()
+	tr := state.Transition{Kind: state.Hard, Next: db.IncidentState{CurrentStatus: "hard", HardSince: &now, LastAlertAt: &now}}
+	if err := di.Handle(context.Background(), uid, "muted-router", "dns", tr, chk("dns", "fail", nil)); err != nil {
+		t.Fatal(err)
+	}
+	st, err := d.State().Get(uid, "dns")
+	if err != nil || st.CurrentStatus != "hard" || st.LastAlertAt != nil {
+		t.Fatalf("unexpected delivery record: %+v (%v)", st, err)
+	}
+	if err := d.NotifyMutes().SetMuted(1001, uid, false); err != nil {
+		t.Fatal(err)
+	}
+	tr = state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok"}}
+	if err := di.Handle(context.Background(), uid, "muted-router", "dns", tr, chk("dns", "ok", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sent)+len(f.sentWithKeyboard) != 0 {
+		t.Fatal("delivered recovery for a muted, undelivered alert")
 	}
 }

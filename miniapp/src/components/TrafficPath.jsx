@@ -29,12 +29,12 @@ const TUNNEL_CAPTION = {
 export function pathLabel(s, stale) {
   const name = s.via ? `VPN-туннель «${s.via}»` : 'VPN-туннель'
   const tunnel = s.tunnel === 'down' ? `${name} не отвечает` : s.tunnel === 'unknown' ? 'про VPN-туннель роутер не сказал' : `заблокированное идёт через ${name}`
-  const direct = stale ? 'прямой путь — неизвестно, роутер молчит' : 'остальное — напрямую, без VPN-туннеля'
+  const direct = stale ? 'прямой путь — неизвестно, роутер молчит' : 'прямой доступ отдельно не проверен'
   return `Путь трафика: ${tunnel}; ${direct}`
 }
 
-export function TrafficPath({ traffic, incidents, tunnels, stale, evidence = null }) {
-  const s = pathState({ traffic, incidents, tunnels, stale, evidence })
+export function TrafficPath({ traffic, incidents, tunnels, stale, evidence = null, freshness }) {
+  const s = pathState({ traffic, incidents, tunnels, stale, evidence, freshness })
   const viaLabel = s.via || 'VPN-туннель'
 
   return (
@@ -74,7 +74,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale, evidence = nul
         <div class={`tp-branch tp-branch-direct${stale ? ' tp-branch-stale' : ''}`}>
           <span class="tp-kicker">{stale ? 'НЕИЗВЕСТНО' : 'НАПРЯМУЮ'}</span>
           <span class="tp-title">Без VPN-туннеля</span>
-          <span class="tp-note">банки, госуслуги, ТВ</span>
+          <span class="tp-note">доступность отдельно не проверена</span>
         </div>
       </div>
     </div>

@@ -93,13 +93,13 @@ export function carrierKnown({ traffic, tunnels }) {
 }
 
 // Несущий жив: и по своей проверке и тревогам (isAlive), и по слову сервера.
-export function carrierAlive({ traffic, tunnels, incidents = [] }) {
-  const line = carrierLine({ traffic, tunnels })
-  return line != null && isAlive(line, incidents) && !carrierDeadByServer(traffic)
+export function carrierAlive(args) {
+  return carrierState(args) === 'up'
 }
 
-export function carrierState({ traffic, tunnels, incidents = [] }) {
+export function carrierState({ traffic, tunnels, incidents = [], freshness }) {
   const t = carrierLine({ traffic, tunnels })
+  if (freshness?.enforceFreshness && !tunnelEventFresh(t, freshness.nowMs)) return 'unknown'
   if (carrierDeadByServer(traffic)) return 'down'
   if (!t) return 'unknown'
   if (isAlive(t, incidents)) return 'up'
@@ -128,46 +128,34 @@ function unnamedBranch({ tunnels, incidents }) {
   return 'unknown'
 }
 
-function tunnelBranch({ line, traffic, tunnels, incidents }) {
-  if (!line) return unnamedBranch({ tunnels, incidents })
+function tunnelBranch({ line, traffic, tunnels, incidents, freshness }) {
+  if (!line) {
+    const current = freshness?.enforceFreshness ? tunnels.filter((t) => tunnelEventFresh(t, freshness.nowMs)) : tunnels
+    return unnamedBranch({ tunnels: current, incidents })
+  }
   // То же правило живости, что у шапки (carrierAlive): проваленная проверка
   // несущего -- уже «молчит», даже пока тревога не набрала порог. Иначе
   // схема рисовала бы зелёное рядом с шапкой, где этот туннель мёртв.
-  return carrierState({ traffic, tunnels, incidents })
+  return carrierState({ traffic, tunnels, incidents, freshness })
 }
 
-// Живые запасные звенья политики несущего по слову бэкенда, или null, если
-// бэкенд их не считал. Поле omitempty: при раздельной маршрутизации с
-// названным несущим его отсутствие значит «живых запасных нет» -- так
-// бэкенд отвечает и старым агентам, у которых несущий назван потому, что
-// живой туннель один.
-export function reserveIDs({ traffic, tunnels }) {
-  if (Array.isArray(traffic?.reserve_tunnel_ids)) return traffic.reserve_tunnel_ids
-  if (traffic?.mode === 'split' && carrierKnown({ traffic, tunnels })) return []
-  return null
-}
-
-// Запасной VPN-туннель -- ответ на «а если этот ляжет». Новый бэкенд знает
-// запасные звенья политики несущего и отдаёт живые в reserve_tunnel_ids: им и
-// верим. Без поля (старый агент) -- любой ЖИВОЙ туннель, кроме несущего; когда
-// несущий не назван, резерв есть, только если живых больше одного, но назвать
-// его -- угадать ({ tunnel_id: '' }). Раньше резервом считался любой running,
-// и мёртвое звено объявлялось «готовым подхватить».
-export function reserveLine({ traffic, tunnels = [], incidents = [], via = '', freshness = {} }) {
-  const ids = reserveIDs({ traffic, tunnels })
-  const alive = tunnels.filter((t) => isAlive(t, incidents) && (!freshness.enforceFreshness || tunnelEventFresh(t, freshness.nowMs)))
-  if (ids) return alive.find((t) => ids.includes(t.tunnel_id) && t.tunnel_id !== carrierID(traffic))
-  if (via) return alive.find((t) => (t.name || t.tunnel_id) !== via && t.tunnel_id !== carrierID(traffic))
-  return alive.length > 1 ? { tunnel_id: '' } : undefined
+// A second running tunnel is only a spare if the routing policy assigns it.
+export function reserveLine({ traffic, tunnels = [], incidents = [], freshness = {} }) {
+  const ids = traffic?.reserve_tunnel_ids
+  if (!Array.isArray(ids)) return undefined
+  return tunnels.find((t) => ids.includes(t.tunnel_id) && t.tunnel_id !== carrierID(traffic) &&
+    isAlive(t, incidents) && (!freshness.enforceFreshness || tunnelEventFresh(t, freshness.nowMs)))
 }
 
 // Запасной, который есть, но мёртв (тревога по нему или поднят с проваленной
 // проверкой), -- не то же, что «запасного нет» (v0.50, спека п. 1.3).
 // Несущий исключается по id и по имени, которое схема написала на ветке.
 // Выключенный руками мёртвым не считается: на него трафик и не рассчитан.
-export function deadReserveLine({ traffic, tunnels = [], incidents = [], via = '' }) {
+export function deadReserveLine({ traffic, tunnels = [], incidents = [], via = '', freshness, reserveOnlyAlert = false }) {
   const carrier = carrierID(traffic)
-  return tunnels.find((t) => t.tunnel_id !== carrier && (t.name || t.tunnel_id) !== via && isDead(t, incidents))
+  const assigned = traffic?.fallback_tunnel_ids ??
+    (reserveOnlyAlert ? incidents.map((i) => i.check_name.replace(/^tunnel_/, '')) : [])
+  return tunnels.find((t) => assigned.includes(t.tunnel_id) && (!freshness?.enforceFreshness || tunnelEventFresh(t, freshness.nowMs)) && t.tunnel_id !== carrier && (t.name || t.tunnel_id) !== via && isDead(t, incidents))
 }
 
 // Слова строки резерва под схемой. Несущий молчит, а запасной жив -- «готов,
@@ -190,7 +178,7 @@ export function backupCopy({ backupLine, carrierDown = false, deadReserve = null
     const dead = deadReserve.name ? `«${deadReserve.name}»` : ''
     return {
       title: dead ? `Запасной ${dead} не отвечает` : 'Запасной VPN-туннель не отвечает',
-      note: 'если основной ляжет, подхватить будет некому — почините запасной',
+      note: 'проверьте связь через этот запасной туннель',
       tone: 'warn',
     }
   }
@@ -207,7 +195,7 @@ export function backupCopy({ backupLine, carrierDown = false, deadReserve = null
   }
   return {
     title: 'Запасной VPN-туннель готов',
-    note: named ? `${named} подхватит, если этот замолчит` : 'второй VPN-туннель подхватит, если один замолчит',
+    note: named ? `${named} отвечает на проверку` : 'второй VPN-туннель отвечает на проверку',
     tone: 'ok',
   }
 }
@@ -220,18 +208,20 @@ export function lineVia(t, traffic) {
   return t.name || egressName || t.tunnel_id
 }
 
-export function pathState({ traffic, incidents = [], tunnels = [], stale = false, evidence = null } = {}) {
+export function pathState({ traffic, incidents = [], tunnels = [], stale = false, evidence = null, freshness } = {}) {
   const t = carrierLine({ traffic, tunnels })
-  const tunnel = stale ? 'unknown' : capTunnelState(tunnelBranch({ line: t, traffic, tunnels, incidents }), evidence)
+  const tunnel = stale ? 'unknown' : capTunnelState(tunnelBranch({ line: t, traffic, tunnels, incidents, freshness }), evidence)
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
     // упавшим VPN-туннелем значило бы говорить человеку «интернета нет», когда
     // банки и госуслуги у него работают.
-    direct: stale ? 'unknown' : 'up',
+    direct: 'unknown',
     // Подпись ветки -- только названный несущий: подписать её первым
     // попавшимся именем и его задержкой значило бы угадать.
     via: lineVia(t, traffic),
-    latencyMs: t && typeof t.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
+    latencyMs: !stale && Number.isFinite(t?.matrix_latency_ms) &&
+      (!freshness?.enforceFreshness || tunnelEventFresh({ ts: t.matrix_updated_at }, freshness.nowMs))
+      ? t.matrix_latency_ms : null,
   }
 }

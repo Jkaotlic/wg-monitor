@@ -155,7 +155,7 @@ func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time
 // MarkHard -- строка проверки стала hard и тревога по ней ушла: hard_since,
 // last_alert_at, счётчики. Тишину и «понятно» не трогает -- человек мог
 // нажать кнопку под тревогой, пока шла рассылка. Зовёт сторож молчания
-// после «Роутер не на связи» (BOT-05).
+// после «Роутер не на связи» (BOT-05). Нулевой alertAt сохраняет инцидент без отметки доставки.
 func (s *StateRepo) MarkHard(userID int64, checkName string, hardSince, alertAt time.Time) error {
 	_, err := s.d.db.Exec(
 		`INSERT INTO incident_state(user_id, check_name, consecutive_fails, consecutive_oks, current_status,
@@ -168,7 +168,7 @@ func (s *StateRepo) MarkHard(userID int64, checkName string, hardSince, alertAt 
 		    hard_since        = excluded.hard_since,
 		    last_alert_msg_id = NULL,
 		    last_alert_at     = excluded.last_alert_at`,
-		userID, checkName, hardSince.UTC(), alertAt.UTC())
+		userID, checkName, hardSince.UTC(), nullableTime(alertAt))
 	return err
 }
 

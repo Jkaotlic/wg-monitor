@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -37,6 +38,29 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 	return parseEventTS(tsStr.String)
 }
 
+// LatestReportContact also works when retention has pruned the original
+// events, or a hook reported contact without any check rows.
+func (e *EventsRepo) LatestReportContact(ctx context.Context, userID int64) (time.Time, error) {
+	var lastSeen sql.NullTime
+	var event sql.NullString
+	err := e.d.db.QueryRowContext(ctx, `SELECT last_seen_at,
+		(SELECT MAX(ts) FROM events WHERE user_id = users.id)
+		FROM users WHERE id = ?`, userID).Scan(&lastSeen, &event)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if event.Valid {
+		t, err := parseEventTS(event.String)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if t.After(lastSeen.Time) {
+			return t, nil
+		}
+	}
+	return lastSeen.Time, nil
+}
+
 // LatestPerUserAll returns one (user_id → MAX(ts)) entry per user that has at
 // least one event. Used by the heartbeat watcher to replace its N+1 loop
 // (PERF-03/DB-09). Users with no events at all are absent from the map.
@@ -66,7 +90,7 @@ func (e *EventsRepo) LatestPerUserAll() (map[int64]time.Time, error) {
 		}
 		t, err := parseEventTS(tsStr.String)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("latest event for user %d: %w", uid, err)
 		}
 		out[uid] = t
 	}
@@ -242,11 +266,30 @@ func (e *EventsRepo) LatestEventsByPrefixSince(userID int64, prefix string, sinc
 }
 
 func (e *EventsRepo) PruneBefore(cutoff time.Time) (int64, error) {
-	res, err := e.d.db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.UTC())
-	if err != nil {
-		return 0, err
+	return e.PruneBeforeContext(context.Background(), cutoff)
+}
+
+// PruneBeforeContext releases the single database connection after each
+// batch so new reports and heartbeat scans can run during daily retention.
+func (e *EventsRepo) PruneBeforeContext(ctx context.Context, cutoff time.Time) (int64, error) {
+	const batchSize = 256
+	var deleted int64
+	for {
+		res, err := e.d.db.ExecContext(ctx, `DELETE FROM events WHERE id IN (
+			SELECT id FROM events WHERE ts < ? ORDER BY ts, id LIMIT ?
+		)`, cutoff.UTC(), batchSize)
+		if err != nil {
+			return deleted, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return deleted, err
+		}
+		deleted += n
+		if n < batchSize {
+			return deleted, nil
+		}
 	}
-	return res.RowsAffected()
 }
 
 // EventRow holds a single event from the events table.
@@ -346,6 +389,7 @@ func parseEventTS(s string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339Nano,
 		time.RFC3339,
+		time.DateTime,
 		"2006-01-02 15:04:05.999999999 -0700 MST",
 		"2006-01-02 15:04:05 -0700 MST",
 		"2006-01-02T15:04:05.999999999Z07:00",

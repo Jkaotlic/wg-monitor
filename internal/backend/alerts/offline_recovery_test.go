@@ -219,3 +219,24 @@ func TestSendOfflineSilencedGoesSilent(t *testing.T) {
 		t.Fatalf("под тишиной ушло со звуком: %+v", stg.sentWithKeyboard)
 	}
 }
+
+func TestMutedOfflineNeverRecordedAsDelivered(t *testing.T) {
+	sender := &fakeTG{}
+	r := newOfflineRig(t, sender)
+	if err := r.d.NotifyMutes().SetMuted(1201, r.uid, true); err != nil {
+		t.Fatal(err)
+	}
+	before := r.w.Snapshot().OfflineSent
+	r.scan()
+	st, err := r.d.State().Get(r.uid, "agent_heartbeat")
+	if err != nil || st.CurrentStatus != "hard" || st.LastAlertAt != nil || r.w.Snapshot().OfflineSent != before {
+		t.Fatalf("muted offline: state=%+v err=%v", st, err)
+	}
+	if err := r.d.NotifyMutes().SetMuted(1201, r.uid, false); err != nil {
+		t.Fatal(err)
+	}
+	r.comeBack(t)
+	if len(sender.sent) != 0 {
+		t.Fatal("recovery sent without an offline notification")
+	}
+}

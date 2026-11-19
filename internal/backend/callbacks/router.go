@@ -78,7 +78,7 @@ func (r *Router) Run(ctx context.Context) error {
 				return nil
 			}
 			attempt++
-			wait := time.Duration(math.Min(math.Pow(2, float64(attempt)), 60)) * time.Second
+			wait := pollRetryDelay(attempt, err)
 			slog.Warn("getUpdates failed; backoff", "err", err, "wait", wait)
 			select {
 			case <-ctx.Done():
@@ -98,6 +98,12 @@ func (r *Router) Run(ctx context.Context) error {
 			_ = r.saveOffset(offset)
 		}
 	}
+}
+
+func pollRetryDelay(attempt int, err error) time.Duration {
+	backoff := time.Duration(math.Min(math.Pow(2, float64(attempt)), 60)) * time.Second
+	retryAfter, _ := tg.RateLimitDelay(err)
+	return max(backoff, retryAfter)
 }
 
 func (r *Router) handleUpdate(ctx context.Context, u tg.Update) {

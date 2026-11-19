@@ -116,7 +116,7 @@ func deriveStatusEvidence(tunnels []miniappTunnel, traffic miniappTraffic, now t
 // "carrier_unknown" would turn a valid topology into a false warning, so the
 // fresh HydraRoute verdict is the evidence for those modes.
 func deriveStatusEvidenceFromChecks(tunnels []miniappTunnel, traffic miniappTraffic, checks map[string]db.EventRow, now time.Time) statusEvidence {
-	if traffic.Mode != miniappTrafficSingbox && traffic.Mode != miniappTrafficDirect {
+	if traffic.Mode != miniappTrafficSingbox && (traffic.Mode != miniappTrafficDirect || traffic.CarrierTunnelID != "") {
 		base := deriveStatusEvidence(tunnels, traffic, now)
 		if traffic.CarrierBasis != miniappCarrierPolicy {
 			return base
@@ -139,6 +139,8 @@ func deriveStatusEvidenceFromChecks(tunnels []miniappTunnel, traffic miniappTraf
 			return base
 		}
 		if row.Status == "fail" {
+			base.ObservedAt = observed.Format(time.RFC3339)
+			base.FreshUntil = observed.Add(statusEvidenceFreshFor).Format(time.RFC3339)
 			base.State, base.ReasonCode, base.Confidence = "failed", "route_control_failed", "high"
 			return base
 		}

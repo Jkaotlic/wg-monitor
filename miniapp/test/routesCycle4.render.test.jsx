@@ -249,11 +249,43 @@ describe('приёмка: «Маршруты»', () => {
     const { root, seen } = await mount()
     const details = root.querySelector('details.routes-details')
     const hr = [...root.querySelectorAll('.section')].find((s) => s.querySelector('.section-title')?.textContent === HRNEO_TEXTS.title)
-    expect(details && hr).toBeTruthy()
-    expect(details.compareDocumentPosition(hr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(details.open).toBe(false)
+    expect(details.querySelector('summary h2')).toBeTruthy()
+    expect(details.contains(hr)).toBe(true)
+    expect(hr.querySelector('.section-title').tagName).toBe('H3')
     await act(async () => byText(tunnelRow(root, 'amsterdam'), 'Перенести всё').click())
     await pickTarget(root, 'spare')
     expect(seen.sheets.at(-1).commandLabel).toBe('перенос правил')
+    render(null, root)
+  })
+})
+
+describe('быстрые действия с маршрутами', () => {
+  it('до проверки сайта можно выбрать источник и цель, затем подтвердить перенос', async () => {
+    const { root, seen } = await mount()
+    const lookup = root.querySelector('#route-lookup-site')
+    const transfer = byText(root, 'Перенести правила')
+    expect(transfer).toBeTruthy()
+    for (const button of [transfer, byText(root, 'Добавить сайт или адрес')]) {
+      expect(button.compareDocumentPosition(lookup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    await act(async () => transfer.click())
+    const sources = root.querySelector('#route-transfer-sources')
+    expect([...sources.querySelectorAll('.row-title')].map((node) => node.textContent)).toEqual(['amsterdam', 'old-home', 'Напрямую (WAN)'])
+    await act(async () => sources.querySelector('button').click())
+    expect(seen.sheets).toHaveLength(0)
+    await pickTarget(root, 'spare')
+    expect(seen.sheets.at(-1)).toMatchObject({ action: 'route_rebind', args: { src_tunnel_id: 'nwg1', dst_tunnel_id: 'nwg2' } })
+    render(null, root)
+  })
+
+  it('при неполном снимке быстрые изменения недоступны, причина видна перед проверкой сайта', async () => {
+    mocks.answers.route_status = { status: 'ok', output: JSON.stringify({ ...SNAP, warnings: ['timeout'] }) }
+    const { root } = await mount()
+    expect(byText(root, 'Перенести правила')).toBeUndefined()
+    expect(byText(root, 'Добавить сайт или адрес')).toBeUndefined()
+    const reason = [...root.querySelectorAll('.admin-note')].find((node) => node.textContent.includes('менять маршруты'))
+    expect(reason.compareDocumentPosition(root.querySelector('#route-lookup-site')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     render(null, root)
   })
 })

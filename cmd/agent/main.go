@@ -497,7 +497,7 @@ func buildDNSSplitCheck(awgClient *awgmgr.Client) *checks.DNSSplit {
 		Endpoints:  readDNSEndpoints,
 		Resolve:    resolveVia,
 		RouteLookup: dnsSplitRouteLookup(func(ctx context.Context, host string) (string, error) {
-			return actions.RouteLookup(ctx, awgClient, host, 0)
+			return actions.RouteLookup(ctx, awgClient, host, int(firmwareSiteGroups.Load()))
 		}),
 		PerProbeTimeout: 2 * time.Second,
 		MinInterval:     dnsSplitInterval,
@@ -508,6 +508,10 @@ func buildDNSSplitCheck(awgClient *awgmgr.Client) *checks.DNSSplit {
 // последнему чтению running-config. Своего чтения у него нет: значение
 // записывает то же чтение, что кормит проверки DNS.
 var firmwareSiteGroups atomic.Int64
+
+func init() {
+	firmwareSiteGroups.Store(-1) // No successful running-config read yet.
+}
 
 // noteRunningConfig запоминает признак списков прошивки из уже прочитанного
 // конфига. Содержимое списков не разбирается.
@@ -521,14 +525,14 @@ func readDNSEndpoints(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
 }
 
 // readDNSEndpointsVia -- то же чтение через заданный запуск команд. Сбой
-// чтения сбрасывает признак списков прошивки в 0: число из прошлого
+// чтения сбрасывает признак списков прошивки в «неизвестно»: число из прошлого
 // удачного чтения выдавалось бы за нынешнее (ревью v0.56, I2).
 func readDNSEndpointsVia(ctx context.Context, r keenetic.CmdRunner) ([]keenetic.DNSEndpoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	rc, err := keenetic.NDMC{Runner: r}.Show(ctx, "running-config")
 	if err != nil {
-		firmwareSiteGroups.Store(0)
+		firmwareSiteGroups.Store(-1)
 		return nil, err
 	}
 	noteRunningConfig(rc)

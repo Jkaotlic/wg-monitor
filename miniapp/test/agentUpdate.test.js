@@ -65,16 +65,16 @@ const INTERNAL = /self_update|pending|version_audit|router_doctor|agent_behind|d
 describe('состояние обновления в строке роутера', () => {
   it('выключенный с отложенным обновлением -- ждёт включения, а не ошибка', () => {
     const s = agentUpdateState(OFF_PENDING)
-    expect(s.text).toBe('ждёт включения: v0.33.0 поставится, когда роутер выйдет на связь')
+    expect(s.text).toBe('назначено v0.33.0 · ждём связи с роутером')
     expect(s.tone).toBe('warn')
     expect(s.canCancel).toBe(true)
     expect(s.canUpdate).toBe(false)
   })
 
   it('спящий с отметкой -- тоже ждёт включения', () => {
-    expect(agentUpdateState({ ...OFF_PENDING, status: 'sleeping' }).text).toContain('поставится, когда роутер выйдет на связь')
+    expect(agentUpdateState({ ...OFF_PENDING, status: 'sleeping' }).text).toContain('ждём связи с роутером')
     // gachimikhail 15.09: статус alert, молчит 12 суток -- тоже «ждёт включения»
-    expect(agentUpdateState({ ...OFF_PENDING, status: 'alert', last_seen_age_sec: 1040226 }).text).toContain('поставится, когда роутер выйдет на связь')
+    expect(agentUpdateState({ ...OFF_PENDING, status: 'alert', last_seen_age_sec: 1040226 }).text).toContain('ждём связи с роутером')
   })
 
   // Ledger #1: одна неудачная попытка, потом роутер выключили. Сервер
@@ -83,23 +83,23 @@ describe('состояние обновления в строке роутера
   it('выключенный с причиной прошлой неудачи -- всё равно ждёт включения', () => {
     const s = agentUpdateState({ ...FAILING, status: 'offline', last_seen_age_sec: 345600 })
     expect(s.tone).toBe('warn')
-    expect(s.text).toBe('ждёт включения: v0.33.0 поставится, когда роутер выйдет на связь · прошлая попытка: на роутере не хватает места')
+    expect(s.text).toBe('назначено v0.33.0 · ждём связи с роутером · прошлая попытка: на роутере не хватает места')
     expect(s.text).not.toContain('не ставится')
     expect(s.canCancel).toBe(true)
     expect(s.canUpdate).toBe(false)
   })
 
   it('на связи и ставится -- говорит версию и число попыток с верным склонением', () => {
-    expect(agentUpdateState(ONLINE_TRYING).text).toBe('ставится v0.33.0 · 2 попытки')
-    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 1 }).text).toBe('ставится v0.33.0 · 1 попытка')
-    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 5 }).text).toBe('ставится v0.33.0 · 5 попыток')
-    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 0 }).text).toBe('ставится v0.33.0')
+    expect(agentUpdateState(ONLINE_TRYING).text).toBe('назначено обновление до v0.33.0 · 2 попытки')
+    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 1 }).text).toBe('назначено обновление до v0.33.0 · 1 попытка')
+    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 5 }).text).toBe('назначено обновление до v0.33.0 · 5 попыток')
+    expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 0 }).text).toBe('назначено обновление до v0.33.0')
   })
 
   it('последняя попытка сорвалась -- причина словами сервера и тон danger', () => {
     const s = agentUpdateState(FAILING)
-    expect(s.text).toBe('не ставится v0.33.0: на роутере не хватает места · 2 попытки')
-    expect(s.tone).toBe('danger')
+    expect(s.text).toBe('назначено v0.33.0 · прошлая попытка: на роутере не хватает места · 2 попытки')
+    expect(s.tone).toBe('warn')
     expect(s.canCancel).toBe(true)
   })
 
@@ -224,13 +224,13 @@ describe('отказы сервера словами', () => {
 describe('итог одного обновления', () => {
   it('deferred -- поставится, когда роутер выйдет на связь', () => {
     expect(agentUpdateDoneText({ queued: true, deferred: true, target_version: 'v0.33.0' }, 'bronya')).toBe(
-      'Обновление «bronya» до v0.33.0 поставится, когда роутер выйдет на связь.',
+      'Обновление «bronya» до v0.33.0 назначено. Ждём связи с роутером.',
     )
   })
 
   it('на связи -- отправлено, версия сменится после отчёта', () => {
     expect(agentUpdateDoneText({ queued: true, deferred: false, target_version: 'v0.33.0' }, 'home')).toBe(
-      'Обновление «home» до v0.33.0 отправлено на роутер. Новая версия появится после его следующего отчёта.',
+      'Обновление «home» до v0.33.0 поставлено в очередь. Установку подтвердит отчёт роутера.',
     )
   })
 
@@ -248,7 +248,7 @@ describe('лист обновления одного роутера', () => {
   })
 
   it('спящий или выключенный -- обещает постановку при выходе на связь', () => {
-    expect(agentUpdateSheetText(BEHIND, 'v0.33.0').body).toContain('обновление поставится, когда он выйдет на связь')
+    expect(agentUpdateSheetText(BEHIND, 'v0.33.0').body).toContain('сервер сохранит назначение до следующего контакта')
     expect(agentUpdateSheetText({ ...BEHIND, status: 'online' }, 'v0.33.0').body).not.toContain('выйдет на связь')
   })
 
@@ -295,8 +295,8 @@ describe('обновить всех отставших', () => {
     // Ключ строки -- router_id: два роутера могут дать одинаковый текст
     // («поставится, когда роутер выйдет на связь»), а ключи должны остаться разными.
     expect(s.lines).toEqual([
-      { id: 11, text: '«bronya»: поставится, когда роутер выйдет на связь' },
-      { id: 17, text: '«garage»: поставится, когда роутер выйдет на связь' },
+      { id: 11, text: '«bronya»: обновление назначено, ждём связи с роутером' },
+      { id: 17, text: '«garage»: обновление назначено, ждём связи с роутером' },
       { id: 18, text: '«old»: пропущен — агент слишком старый — только переустановка' },
       { id: 19, text: '«x»: не получилось — ошибка на сервере' },
     ])

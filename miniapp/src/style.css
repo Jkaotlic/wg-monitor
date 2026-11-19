@@ -6057,3 +6057,13 @@ body {
 
 .evidence-summary-warn { color: var(--warn); }
 .evidence-summary-danger { color: var(--danger); }
+
+.router-actions {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+.router-actions .nav-card {
+  min-height: 46px;
+}

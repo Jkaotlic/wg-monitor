@@ -28,7 +28,7 @@ import {
 } from '../routes.js'
 import { fetchRouterSettings, fetchRouterChecksWithIncidents } from '../api.js'
 import { tunnelTargetLabel } from '../labels.js'
-import { Section } from '../ui/Section.jsx'
+import { HeadingGroup, Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -39,6 +39,7 @@ import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 import { HrneoBlock } from './HrneoBlock.jsx'
 import { NativeDNSSection } from './SignalSections.jsx'
+import './RoutesTab.css'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
@@ -66,6 +67,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
   // Роль -- для кнопок HydraRoute Neo: запуск и остановка у владельца и админа,
   // перезапуск -- тем же кругом, что в Настройках.
   const [role, setRole] = useState('')
+  const [selectingSource, setSelectingSource] = useState(false)
   useEffect(() => {
     setRole('')
     let alive = true
@@ -92,6 +94,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
     setChecks(null)
     setChecksFailed(false)
     setSnapshot(null)
+    setSelectingSource(false)
     run('route_status', {}, deadline)
     // Снимок запрашивается при каждой смене роутера; перезапрос -- кнопкой.
   }, [routerID])
@@ -381,6 +384,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
     !(snapshot.warnings?.length) &&
     !snapshot.singbox_router?.enabled
 
+  const transferSources = tunnels.filter((t) => canRebindTunnel(t) && rebindTargets(rows, t.id).length > 0)
+  if (other && rebindTargets(rows, other.id).length > 0) transferSources.push(other)
+  const transferIDs = new Set(transferSources.map((source) => source.id))
+
   // Пришли с экрана VPN-туннеля «перенести правила»: открыть выбор цели один
   // раз, как только снимок позволяет менять. Правила только общего набора
   // переносятся сменой главного звена -- тогда открывается она.
@@ -423,7 +430,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         <p class="state state-error">{agentReplyText(result, 'Роутер не отдал снимок маршрутизации — попробуйте ещё раз через минуту.')}</p>
       )}
       {phase === 'unreadable' && (
-        <p class="state state-error">Снимок пришёл, но разобрать его не удалось — покажем как есть ниже.</p>
+        <p class="state state-error">Не удалось прочитать снимок маршрутов. Нажмите «Обновить», чтобы запросить его ещё раз.</p>
       )}
 
       {verdict && (
@@ -451,6 +458,41 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         </Section>
       )}
 
+      {canMutate && (
+        <Section title="Действия с правилами">
+          <div class="routes-actions">
+            <button type="button" class="btn btn-primary" onClick={() => openLayer?.('routeadd')}>
+              Добавить сайт или адрес
+            </button>
+            {transferSources.length > 0 && (
+              <button type="button" class="btn btn-ghost" aria-expanded={selectingSource}
+                aria-controls="route-transfer-sources" onClick={() => setSelectingSource(!selectingSource)}>
+                Перенести правила
+              </button>
+            )}
+          </div>
+          {transferSources.length > 0 && (
+            <div id="route-transfer-sources" hidden={!selectingSource}>
+              <h3 class="rules-bind">Откуда перенести правила?</h3>
+              <ul class="card list-reset">
+                {transferSources.map((source) => (
+                  <ListRow key={source.id} title={source.name} sub={rebindSubtitle(source)}
+                    onClick={() => askRebind(source)} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {snapshot && !canMutate && openSheet && (
+        <p class="admin-note">
+          {snapshot.singbox_router?.enabled
+            ? 'Маршрут выбирает sing-box — изменение правил на этом экране недоступно.'
+            : 'Снимок неполный — менять маршруты по нему нельзя.'}
+        </p>
+      )}
+
       {/* Вопрос «а этот сайт куда?». Только чтение, поэтому виден и без
           права менять; кнопка вторичная -- сигнальный цвет остаётся у
           добавления. */}
@@ -465,7 +507,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
               autocomplete="off"
               autocapitalize="off"
               spellcheck={false}
-              placeholder="например, claude.ai"
+              placeholder="например, example.com"
               value={siteInput}
               onInput={(e) => {
                 setSiteInput(e.currentTarget.value)
@@ -519,14 +561,6 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
         </form>
       </Section>
 
-      {/* Сигнальный цвет -- одному действию на экране, и это оно: всё
-          остальное здесь либо читается, либо правит уже существующее. */}
-      {canMutate && (
-        <button type="button" class="btn btn-primary btn-wide" onClick={() => openLayer?.('routeadd')}>
-          Добавить сайт или адрес
-        </button>
-      )}
-
       {snapshot && (
         <Section title="VPN-туннели и что через них идёт">
           {rebindNone && (
@@ -538,7 +572,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
             <ul class="card list-reset">
               {tunnels.map((t) => {
                 const badge = defaultRouteBadge(t)
-                const canRebind = canMutate && canRebindTunnel(t) && rebindTargets(rows, t.id).length > 0
+                const canRebind = canMutate && transferIDs.has(t.id)
                 const canPromote = canMutate && promoteTargets(snapshot, t.id).length > 0
                 return (
                   <li key={t.id} class="row tunnel-row">
@@ -573,7 +607,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
                     <span class="row-title">{other.name}</span>
                   </span>
                   <span class="tunnel-sub">{otherSourceSummary(other)}</span>
-                  {canMutate && rebindTargets(rows, OTHER_SOURCE_ID).length > 0 && (
+                  {canMutate && transferIDs.has(OTHER_SOURCE_ID) && (
                     <span class="row-actions action-row">
                       <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(other)}>
                         Перенести всё
@@ -592,53 +626,6 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
       )}
 
 
-      {/* Цепочки, роли звеньев и счётчики механизмов -- словарь движка
-          маршрутизации. Владельцу роутера он не адресован, но оператору
-          нужен, поэтому не выброшен, а убран на шаг глубже: сверху ответ,
-          инженерия по тапу -- как на главном экране. */}
-      {policies.length > 0 && (
-        <details class="checks-spoiler routes-details">
-          <summary class="section-title checks-spoiler-summary">
-            Подробности: порядок подхвата и механизмы
-          </summary>
-          <ul class="card list-reset">
-            {policies.map((p) => (
-              <li key={p.name} class="row tunnel-row">
-                <span class="row-title">
-                  {p.name}
-                  {p.egress ? <span class="policy-egress">{p.egress}</span> : null}
-                </span>
-                <span class="tunnel-sub">{policyRuleSummary(p)}</span>
-                {p.chain.length > 0 ? (
-                  <ol class="policy-chain list-reset">
-                    {p.chain.map((i, idx) => (
-                      <li key={i.bind} class={`policy-link policy-link-${i.role}`}>
-                        <span class="policy-link-order">{idx + 1}</span>
-                        <span class="policy-link-name">{i.label}</span>
-                        <span class="policy-link-role">{POLICY_ROLE_LABEL[i.role] ?? i.role}</span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  // Пустая цепочка -- тоже правда, а не пробел: у политики
-                  // нет ни одного интерфейса, и экран обязан сказать это,
-                  // а не молчать пустым списком.
-                  <p class="policy-chain-empty">привязки нет</p>
-                )}
-              </li>
-            ))}
-          </ul>
-          <p class="admin-note">
-            Первый работающий VPN-туннель в списке и несёт трафик, остальные ждут как резерв.
-          </p>
-        </details>
-      )}
-
-      {/* Блок HydraRoute Neo -- не от снимка маршрутов: он берёт состояние из
-          своей инвентаризации, а «Перезапустить» без снимка -- единственный
-          способ достучаться до Neo, когда route_status не отвечает. */}
-      <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
-
       {groups.length > 0 && (
         <Section title="Названные сайты и адреса">
           {planProblem && <ErrorLine text={planProblem} busy={plan.busy} onRetry={() => askDelete(planFailed)} />}
@@ -646,8 +633,8 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
             <ErrorLine text={migrateProblem} busy={migrate.busy} onRetry={() => askMigrate(migrateFailed.rule)} />
           )}
           {groups.map((g) => (
-            <div key={g.bind} class="rules-group">
-              <h3 class="rules-bind">{g.label}</h3>
+            <details key={g.bind} class="rules-group checks-spoiler">
+              <summary class="checks-spoiler-summary">{g.label} · {g.rules.length}</summary>
               <ul class="card list-reset">
                 {g.rules.slice(0, 20).map((r) => (
                   <li key={r.id} class="row tunnel-row">
@@ -683,28 +670,63 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '', layer 
               {g.rules.length > 20 && (
                 <p class="admin-note">Показаны первые 20 из {g.rules.length}.</p>
               )}
-            </div>
+            </details>
           ))}
         </Section>
       )}
 
-      <NativeDNSSection routerID={routerID} tunnels={snapshot?.tunnels ?? []} />
+      <details class="checks-spoiler routes-details">
+        <summary class="checks-spoiler-summary">
+          <h2 class="section-title">Порядок подхвата, HydraRoute Neo и DNS</h2>
+        </summary>
+        {/* Цепочки, роли звеньев и счётчики механизмов -- словарь движка
+            маршрутизации. Владельцу роутера он не адресован, но оператору
+            нужен, поэтому не выброшен, а убран на шаг глубже: сверху ответ,
+            инженерия по тапу -- как на главном экране. */}
+        {policies.length > 0 && (
+          <section>
+            <h3 class="rules-bind">Порядок подхвата</h3>
+            <ul class="card list-reset">
+              {policies.map((p) => (
+                <li key={p.name} class="row tunnel-row">
+                  <span class="row-title">
+                    {p.name}
+                    {p.egress ? <span class="policy-egress">{p.egress}</span> : null}
+                  </span>
+                  <span class="tunnel-sub">{policyRuleSummary(p)}</span>
+                  {p.chain.length > 0 ? (
+                    <ol class="policy-chain list-reset">
+                      {p.chain.map((i, idx) => (
+                        <li key={i.bind} class={`policy-link policy-link-${i.role}`}>
+                          <span class="policy-link-order">{idx + 1}</span>
+                          <span class="policy-link-name">{i.label}</span>
+                          <span class="policy-link-role">{POLICY_ROLE_LABEL[i.role] ?? i.role}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    // Пустая цепочка -- тоже правда, а не пробел: у политики
+                    // нет ни одного интерфейса, и экран обязан сказать это,
+                    // а не молчать пустым списком.
+                    <p class="policy-chain-empty">привязки нет</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p class="admin-note">
+              Первый работающий VPN-туннель в списке и несёт трафик, остальные ждут как резерв.
+            </p>
+          </section>
+        )}
 
-      {snapshot && !canMutate && openSheet && (
-        <p class="admin-note">
-          {snapshot.singbox_router?.enabled
-            ? 'Маршрут выбирает sing-box — правила ниже не действуют, и менять их отсюда бессмысленно.'
-            : 'Снимок неполный — менять маршруты по нему нельзя.'}
-        </p>
-      )}
-
-      {snapshot && (
-        <p class="admin-note">
-          Здесь названо только то, что отправлено в обход поимённо. Через VPN-туннель идёт ещё и
-          общий набор — его видно в «Подробностях». Каждую правку роутер сначала показывает
-          планом целиком и только потом применяет; отменить можно любую.
-        </p>
-      )}
+        {/* Блок HydraRoute Neo -- не от снимка маршрутов: он берёт состояние из
+            своей инвентаризации, а «Перезапустить» без снимка -- единственный
+            способ достучаться до Neo, когда route_status не отвечает. */}
+        <HeadingGroup>
+          <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
+          <NativeDNSSection routerID={routerID} tunnels={snapshot?.tunnels ?? []} />
+        </HeadingGroup>
+      </details>
 
       {/* Выбор цели -- свой слой поверх экрана. Подтверждение он не заменяет:
           выбранное едет в тот же шит, что и всё остальное. */}

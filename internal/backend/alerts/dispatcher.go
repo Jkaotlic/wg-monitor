@@ -296,6 +296,8 @@ func (di *Dispatcher) deliverRecovery(ctx context.Context, userID int64, nicknam
 	if di.covered != nil && di.covered(userID, checkName) {
 		slog.Info("«восстановилось» не шлём: итог починки уже в тревоге",
 			"user_id", userID, "check", checkName)
+	} else if prev.CurrentStatus == "hard" && di.hardNeverDelivered(userID, checkName, prev, prevErr) {
+		slog.Info("первая тревога не доставлена: восстановление без сообщения", "user_id", userID, "check", checkName)
 	} else if err := di.notify.ReplyToEach(ctx, userID, checkName, text, "", Silenced(next, di.now())); err != nil {
 		// Не дошло никому: автомат уже в ok, напоминаний не будет.
 		// Долг повторит обход напоминаний (realert) ответом на ту же
@@ -406,14 +408,11 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 		}
 		return 0, err
 	}
-	di.rememberHard(userID, checkName, text, kb)
 	if delivered == 0 {
-		// Слать некому: владелец не привязан, операторы не заведены либо
-		// всем недоставимо. Тревога не теряется -- её видно в сводке
-		// дашборда; здесь только след в логе.
-		slog.Warn("тревогу некому доставить",
-			"user_id", userID, "nickname", nickname, "check", checkName)
+		slog.Info("тревога не отправлена: нет доступных получателей", "user_id", userID, "check", checkName)
+		return 0, di.d.State().ClearLastAlertAt(userID, checkName)
 	}
+	di.rememberHard(userID, checkName, text, kb)
 	// Кому какое сообщение ушло, помнит alert_messages; здесь только
 	// отметка времени -- по ней realert решает, пора ли напомнить.
 	if err := di.d.State().BumpLastAlertAt(userID, checkName, di.now()); err != nil {
@@ -428,7 +427,7 @@ func (di *Dispatcher) DeliverHard(ctx context.Context, userID int64, nickname, c
 // тревоге сообщил бы человеку о починке того, о чём он не знал (M-7).
 // Ошибка чтения -- «не знаем», долг остаётся, как раньше.
 func (di *Dispatcher) hardNeverDelivered(userID int64, checkName string, prev db.IncidentState, prevErr error) bool {
-	if prevErr != nil || prev.LastAlertAt != nil {
+	if prevErr != nil || prev.LastAlertAt != nil || prev.LastAlertMsgID != nil {
 		return false
 	}
 	msgs, err := di.d.AlertMessages().List(userID, checkName)
@@ -525,11 +524,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		return err
 	}
 	if delivered == 0 {
-		// Слать некому: владелец не привязан, операторов нет либо все
-		// недоступны. Как и у HARD-тревоги, это не сбой отправки -- сторож не
-		// должен повторять её на каждом обходе; видно это в сводке дашборда.
-		slog.Warn("«роутер не на связи» некому доставить",
-			"user_id", userID, "nickname", nickname)
+		return notify.ErrNoAvailableRecipients
 	}
 	return nil
 }

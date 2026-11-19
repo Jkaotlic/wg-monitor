@@ -54,6 +54,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           openSheet={openSheet}
           onTab={(tab) => dispatch({ type: 'tab', tab })}
           openLayer={(overlay, params) => dispatch({ type: 'overlay', overlay, params })}
+          onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes', params: { returnTo: 'router' } })}
+          onOpenReplace={() => dispatch({ type: 'overlay', overlay: 'replace', params: { returnTo: 'router' } })}
           repairOpen={nav.overlay === 'repair'}
           otherAlert={strip ? otherAlertRouter(routers, nav.routerID) : null}
           onOpenRouter={(id) => dispatch({ type: 'router', id })}

@@ -1276,7 +1276,7 @@ func TestExpiredSelfUpdateKeepsPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	expired := wire.Command{
 		ID:        "cmd-expired",
 		Action:    "self_update",
@@ -1309,7 +1309,7 @@ func TestSupersededSelfUpdateKeepsPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, id := range []string{"cmd-old", "cmd-new"} {
 		if err := q.Enqueue(uid, wire.Command{
 			ID:       id,
@@ -2378,5 +2378,34 @@ func TestHandleReport_MobileWakeSkippedWhenOfflineAlertOpen(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if got := len(wake.snapshot()); got != 0 {
 		t.Fatalf("карточка пробуждения поверх открытой тревоги «не на связи»: %d", got)
+	}
+}
+
+func TestRolledBackReportDoesNotWakeRouter(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "rollback.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	token := strings.Repeat("ab", 32)
+	uid, err := d.Users().InsertWithKind("mobile", token, "198.51.100.1", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.SQL().Exec("UPDATE users SET last_seen_at = ? WHERE id = ?", time.Now().Add(-time.Hour).UTC(), uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.SQL().Exec("CREATE TRIGGER fail_ingest BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT,'write failed'); END"); err != nil {
+		t.Fatal(err)
+	}
+	wake, resume := &fakeWakeNotifier{}, &fakeResumer{}
+	h := NewMux(Deps{DB: d, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), WakeNotifier: wake, Resumer: resume, Dispatcher: &fakeDisp{db: d}})
+	req := httptest.NewRequest("POST", "/v1/report", strings.NewReader(`{"resumed":true,"checks":[{"name":"dns","status":"ok"}]}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	WaitRelayDrain()
+	if w.Code != http.StatusInternalServerError || len(wake.snapshot()) != 0 || len(resume.resumed) != 0 {
+		t.Fatalf("response=%d wake=%d resume=%d", w.Code, len(wake.snapshot()), len(resume.resumed))
 	}
 }

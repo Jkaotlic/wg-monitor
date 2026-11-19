@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pathState } from '../src/trafficPath.js'
+import { deadReserveLine, pathState } from '../src/trafficPath.js'
 
 // Форма линии -- как её отдаёт бэкенд (internal/backend/miniapp_tunnels.go):
 // run_state -- слово роутера о туннеле, status -- вердикт проверки. Путать их
@@ -13,7 +13,7 @@ describe('pathState', () => {
       tunnels: [{ tunnel_id: 'awg12', run_state: 'running', status: 'ok', matrix_latency_ms: 84 }],
     })
     expect(s.tunnel).toBe('up')
-    expect(s.direct).toBe('up')
+    expect(s.direct).toBe('unknown')
     expect(s.via).toBe('Амстердам')
     expect(s.latencyMs).toBe(84)
   })
@@ -27,7 +27,7 @@ describe('pathState', () => {
       tunnels: [{ tunnel_id: 'awg12', run_state: 'stopped' }],
     })
     expect(s.tunnel).toBe('down')
-    expect(s.direct).toBe('up')
+    expect(s.direct).toBe('unknown')
   })
 
   // Без матрицы задержки нет -- и рисовать ноль нельзя: ноль читается как
@@ -89,4 +89,26 @@ describe('pathState на sing-box', () => {
 
 it('после потери связи прежний отказ не выдаётся за состояние прямо сейчас', () => {
   expect(pathState({ stale: true, evidence: { state: 'failed' } }).tunnel).toBe('unknown')
+})
+
+it('свежий отчёт с истёкшим замером не показывает прежнюю задержку', () => {
+  const nowMs = Date.UTC(2026, 10, 18, 12)
+  const row = { tunnel_id: 'a', status: 'ok', run_state: 'running', ts: new Date(nowMs).toISOString(),
+    matrix_latency_ms: 40, matrix_updated_at: new Date(nowMs - 360000).toISOString() }
+  const state = pathState({ traffic: { egress_tunnel_id: 'a' }, tunnels: [row], freshness: { nowMs, enforceFreshness: true } })
+  expect(state.tunnel).toBe('up')
+  expect(state.latencyMs).toBeNull()
+})
+
+it.each(['ok', 'fail'])('устаревшая проверка %s не задаёт состояние ветки', (status) => {
+  const nowMs = Date.UTC(2026, 10, 18, 12)
+  const traffic = { carrier_basis: 'policy', carrier_tunnel_id: 'a', carrier_alive: status === 'ok' }
+  const tunnels = [{ tunnel_id: 'a', status, run_state: 'running', ts: new Date(nowMs - 360000).toISOString() }]
+  expect(pathState({ traffic, tunnels, freshness: { nowMs, enforceFreshness: true } }).tunnel).toBe('unknown')
+})
+
+it('отказ туннеля другой политики не означает потерю резерва', () => {
+  const traffic = { carrier_tunnel_id: 'main', carrier_basis: 'policy', fallback_tunnel_ids: ['spare'] }
+  const tunnels = [{ tunnel_id: 'other', run_state: 'running', status: 'fail' }]
+  expect(deadReserveLine({ traffic, tunnels })).toBeUndefined()
 })

@@ -29,7 +29,8 @@ const NEW = [TUNNELS, { click: 'Новый VPN-туннель' }]
 const CABINET = [...NEW, { sheetChoice: 'Amnezia' }]
 const PARK = { tab: 'Парк' }
 const MANAGE = [{ tab: 'Настройки' }, { expandAll: true }]
-const ROUTES = [TUNNELS, { click: 'Маршруты: куда идёт трафик' }]
+const ROUTES = [{ tab: 'Роутер' }, { click: 'Маршруты' }]
+const ROUTE_DETAILS = [...ROUTES, { click: 'Порядок подхвата, HydraRoute Neo и DNS' }]
 const AWG3 = [PARK, { click: 'Панели VPN-серверов' }]
 
 // Порядок: экраны беды -- первыми, пока тревога песочницы свежая (стареет за
@@ -41,9 +42,10 @@ export const SCREENS = [
   { id: 'tunnels', roles: ALL, router: 'sandbox-home', steps: [TUNNELS] },
   { id: 'new-tunnel-sheet', roles: ALL, router: 'sandbox-home', steps: NEW },
   { id: 'cabinet', roles: ALL, router: 'sandbox-home', steps: CABINET },
+  { id: 'router-premium', roles: ALL, router: 'sandbox-home', steps: [{ tab: 'Роутер' }, { click: 'Перевыпустить туннель' }, { click: 'Кабинет Amnezia Premium' }, { expect: 'Открыть личный кабинет Amnezia' }] },
   { id: 'cabinet-hidemy', roles: ALL, router: 'sandbox-home', steps: [...CABINET, { segment: 'HideMy' }] },
   { id: 'cabinet-selfhosted', roles: ['admin'], router: 'sandbox-home', steps: [...CABINET, { segment: 'Свой сервер' }] },
-  { id: 'cabinet-issue', roles: ALL, router: 'sandbox-home', steps: [...CABINET, { first: '.cabinet-option-main:not([disabled])' }] },
+  { id: 'cabinet-issue', roles: ALL, router: 'sandbox-home', steps: [...CABINET, { segment: 'HideMy' }, { first: '.cabinet-option-main:not([disabled])' }] },
   // Допущенный видит и запертую панель old: «сообщите администратору» (спека §8).
   // Фраза -- своя у роли и ищется в верхнем слое (run.mjs), а не по всей странице:
   // слой под ним её не подменит. Тексты -- awg3Panel.js ISSUER_PANEL_DOWN и CabinetAwg3.jsx.
@@ -54,13 +56,13 @@ export const SCREENS = [
   { id: 'replace', roles: ALL, router: 'sandbox-home', steps: [TUNNELS, { tunnelWith: 'Заменить конфиг' }, { click: 'Заменить конфиг' }] },
   { id: 'routes', roles: ALL, router: 'sandbox-home', steps: ROUTES },
   { id: 'routeadd', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Добавить сайт или адрес' }] },
-  { id: 'routepick', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Перенести' }] },
-  { id: 'make-default', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Сделать главным' }] },
-  { id: 'hrneo-stop', roles: OWNERS, router: 'sandbox-home', steps: [...ROUTES, { click: 'Остановить' }] },
+  { id: 'routepick', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Перенести правила' }, { first: '#route-transfer-sources button' }, { expect: 'Куда перенести' }] },
+  { id: 'make-default', roles: ALL, router: 'sandbox-home', steps: [...ROUTES, { click: 'Сделать главным' }, { expect: 'Кто станет главным' }] },
+  { id: 'hrneo-stop', roles: OWNERS, router: 'sandbox-home', steps: [...ROUTE_DETAILS, { click: 'Остановить' }, { expect: 'Остановить HydraRoute.Neo' }] },
   // «Запустить» -- только когда HydraRoute Neo остановлен: у админа и владельца
   // трёх это засеянный роутер. У владельца одного роутер единственный и нужен
   // запущенным для hrneo-stop -- его экран ниже, последним: он сам останавливает.
-  { id: 'hrneo-start', roles: ['admin', 'owner3'], router: HRNEO_STOPPED, routers: { owner3: HRNEO_STOPPED }, steps: [...ROUTES, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
+  { id: 'hrneo-start', roles: ['admin', 'owner3'], router: HRNEO_STOPPED, routers: { owner3: HRNEO_STOPPED }, steps: [...ROUTE_DETAILS, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
   { id: 'diag-now', roles: ALL, router: 'sandbox-home', steps: [{ tab: 'Проверки' }] },
   { id: 'diag-history', roles: ALL, router: 'sandbox-home', steps: [{ tab: 'Проверки' }, { segment: 'Что было' }] },
   { id: 'manage', roles: ALL, router: 'sandbox-home', steps: MANAGE },
@@ -104,7 +106,7 @@ export const SCREENS = [
   { id: 'noaccess-checked', roles: ['none'], steps: [{ click: 'Проверить снова' }, { waitText: 'Пока ничего не изменилось' }] },
   // Владелец одного роутера: останавливает HydraRoute Neo настоящей командой и
   // открывает лист «Запустить». Последним: дальше роутер остаётся с остановленным.
-  { id: 'hrneo-start', roles: ['owner1'], router: 'sandbox-home', steps: [...ROUTES, { waitButton: 'Остановить' }, { click: 'Остановить' }, { click: 'Остановить' }, { waitButton: 'Закрыть' }, { click: 'Закрыть' }, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
+  { id: 'hrneo-start', roles: ['owner1'], router: 'sandbox-home', steps: [...ROUTE_DETAILS, { waitButton: 'Остановить' }, { click: 'Остановить' }, { click: 'Остановить' }, { waitButton: 'Закрыть' }, { click: 'Закрыть' }, { waitButton: 'Запустить' }, { click: 'Запустить' }, { expect: 'Запустить HydraRoute.Neo\\?' }] },
   // «Ход работы»: переустановка агента на настоящем движке заданий песочницы
   // (подменён только терминал роутера). Пароль -- любое слово: настоящих
   // секретов в песочнице нет. Снимается итог задания -- он устойчив.

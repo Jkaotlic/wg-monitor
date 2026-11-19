@@ -269,8 +269,7 @@ func (c *countingDeliverer) DeliverHard(context.Context, int64, string, string, 
 
 // Единственный владелец тревоги «не на связи» -- сторож молчания (BOT-05):
 // даже если строка agent_heartbeat = hard оказалась без отметки отправки
-// (старые данные), realert не шлёт полную карточку FormatHard, а только
-// короткое напоминание.
+// realert ждёт первичной доставки сторожем.
 func TestRealertNeverDeliversHardCardForHeartbeat(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
@@ -289,8 +288,8 @@ func TestRealertNeverDeliversHardCardForHeartbeat(t *testing.T) {
 	if cd.n != 0 {
 		t.Fatalf("realert отправил карточку тревоги по agent_heartbeat: %d", cd.n)
 	}
-	if f.count() != 1 || !strings.Contains(f.sent[0], "Всё ещё") {
-		t.Fatalf("ждали одно короткое напоминание, ушло %q", f.sent)
+	if f.count() != 0 {
+		t.Fatalf("ушло напоминание до первой доставки: %q", f.sent)
 	}
 }
 

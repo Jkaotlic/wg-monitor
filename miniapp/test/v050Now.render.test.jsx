@@ -50,7 +50,7 @@ beforeEach(() => {
   mocks.sent = 0
   mocks.sendError = new ApiError(400, 'unknown', '/routers/7/commands failed: 400')
   mocks.router = { router: structuredClone(SNAP.router), incidents: structuredClone(SNAP.incidents) }
-  mocks.checks = { ...structuredClone(SNAP.events), traffic: { ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' } }
+  mocks.checks = { ...structuredClone(SNAP.events), traffic: { ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', fallback_tunnel_ids: ['awg10'] } }
   mocks.access = { owner: null, operators: [] }
 })
 

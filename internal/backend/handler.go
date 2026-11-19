@@ -1037,9 +1037,6 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// агентом под этим именем отбрасывается.
 		rep.Checks = slices.DeleteFunc(rep.Checks, func(c wire.Check) bool { return c.Name == bypassLeakCheck })
 
-		if reportIsFresh && rep.Resumed && d.Resumer != nil {
-			d.Resumer.MarkResumed(uid)
-		}
 		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, mobileWakeAfter(d))
 		if notifyWake && offlineAlertOpen(d, uid) {
 			// M-3: при heartbeat.mobile_lifecycle=false мобильный роутер
@@ -1048,24 +1045,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 			// стала бы вторым сообщением о том же возвращении.
 			notifyWake = false
 		}
-		// The operator-facing wake card uses the backend-observed last_seen
-		// gap. Older agents can over-report Resumed=true after short mobile
-		// jitter; a clean agent restart after real sleep may not set Resumed.
-		if notifyWake {
-			if d.WakeNotifier != nil {
-				checks := append([]wire.Check(nil), rep.Checks...)
-				nickname := nick
-				spawnRelay(d, "wake", func(bg context.Context) {
-					if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
-						d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
-					}
-				})
-			}
-		}
+		// The wake card describes only the checks actually sent by the router.
+		reportedChecks := rep.Checks
 
 		// v0.56: вердикт «трафик мимо VPN-туннеля» -- до транзакции, тем же
-		// путём в events, что и строки агента. Считается после карточки
-		// пробуждения: в ней только то, что прислал роутер. Хук-отчёт и
+		// путём в events, что и строки агента. Хук-отчёт и
 		// несвежий не считаются: внеочередные отчёты ускорили бы порог «три
 		// подряд», а несвежий рассказывает про прошлое.
 		if reportIsFresh && rep.Trigger != wire.TriggerHook {
@@ -1091,9 +1075,22 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "tx begin")
 			return
 		}
-		if _, err := tx.ExecContext(ingestCtx,
+		// Reports may have queued concurrently since reportUserByID. Recheck
+		// the gap under the same transaction that advances last_seen_at.
+		if notifyWake {
+			var previous *time.Time
+			if err := tx.QueryRowContext(ingestCtx, "SELECT last_seen_at FROM users WHERE id = ?", uid).Scan(&previous); err != nil {
+				tx.Rollback()
+				d.Logger.Warn("report: last seen lookup", "nickname", nick, "err", err)
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "last seen lookup")
+				return
+			}
+			notifyWake = previous != nil && ts.Sub(*previous) >= mobileWakeAfter(d)
+		}
+		progress, err := tx.ExecContext(ingestCtx,
 			`UPDATE users SET last_seen_at = ?
-			   WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`, ts, uid, ts); err != nil {
+			   WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`, ts, uid, ts)
+		if err != nil {
 			tx.Rollback()
 			d.Logger.Warn("update last_seen", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
@@ -1159,6 +1156,12 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "unstick events")
 			return
 		}
+		if err := tx.Commit(); err != nil {
+			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "commit")
+			return
+		}
+
 		if dupes > 0 {
 			addReportDup(dupes)
 			d.Logger.Info("report idempotent retry",
@@ -1167,10 +1170,18 @@ func reportHandler(d Deps) http.HandlerFunc {
 			)
 		}
 		incReports()
-		if err := tx.Commit(); err != nil {
-			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "commit")
-			return
+		advanced, _ := progress.RowsAffected()
+		if advanced > 0 {
+			if rep.Resumed && d.Resumer != nil {
+				d.Resumer.MarkResumed(uid)
+			}
+			if notifyWake && d.WakeNotifier != nil {
+				spawnRelay(d, "wake", func(bg context.Context) {
+					if err := d.WakeNotifier.SendWake(bg, uid, nick, reportedChecks); err != nil {
+						d.Logger.Warn("wake notifier", "nickname", nick, "err", err)
+					}
+				})
+			}
 		}
 
 		// Снимок версий роутера. Отчёт приносит только «стало», а «было»

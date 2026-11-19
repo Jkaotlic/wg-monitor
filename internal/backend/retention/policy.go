@@ -104,7 +104,7 @@ const updateRemindersKeepDismissed = 90 * 24 * time.Hour
 
 func (p *Policy) prune(ctx context.Context) error {
 	cutoff := p.now().Add(-time.Duration(p.Cfg.EventsDays) * 24 * time.Hour)
-	deleted, err := p.DB.Events().PruneBefore(cutoff)
+	deleted, err := p.DB.Events().PruneBeforeContext(ctx, cutoff)
 	if err != nil {
 		return err
 	}

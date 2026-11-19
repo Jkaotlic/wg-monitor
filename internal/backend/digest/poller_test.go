@@ -125,3 +125,31 @@ func TestDigest_GoesToAdminDM(t *testing.T) {
 		t.Fatalf("адресаты=%v, ждали личку админа 500", f.chats)
 	}
 }
+
+func TestDigestRetriesUnknownStateInsteadOfReportingOffline(t *testing.T) {
+	d := openDB(t)
+	uid, err := d.Users().Insert("home", "digest-secret", "198.51.100.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec("UPDATE users SET last_seen_at = ? WHERE id = ?", fixedNow, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec("ALTER TABLE events RENAME TO saved_events"); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{AdminUserID: 500, HourMSK: 9})
+	p.SetNow(func() time.Time { return fixedNow })
+	p.TickForTest(context.Background())
+	if f.count() != 0 {
+		t.Fatal("sent a fleet verdict without a snapshot")
+	}
+	if _, err := d.SQL().Exec("ALTER TABLE saved_events RENAME TO events"); err != nil {
+		t.Fatal(err)
+	}
+	p.TickForTest(context.Background())
+	if f.count() != 1 || !strings.Contains(f.sent[0], "1 из 1") {
+		t.Fatalf("missing fresh contact after retry: %#v", f.sent)
+	}
+}

@@ -4,6 +4,7 @@ import { fetchCabinets, fetchVPNAccounts, fetchRouterSettings, fetchSelfhosted, 
 import { cabinetTabs, pickTab, cabinetPerms, secretRows, VPN_PROVIDER, CABINET_TEXTS } from '../cabinetKeys.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { SegmentTabs } from '../ui/SegmentTabs.jsx'
+import { AmneziaDashboard } from './AmneziaDashboard.jsx'
 import { CabinetSecrets } from './CabinetSecrets.jsx'
 import { CabinetOptions } from './CabinetOptions.jsx'
 import { CabinetAwg3 } from './CabinetAwg3.jsx'
@@ -152,11 +153,11 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
 
   function accountFor(kind) {
     if (accounts == null) return null
-    return accounts[VPN_PROVIDER[kind]] ?? { provider: VPN_PROVIDER[kind], connected: false, note: CABINET_TEXTS.accountError }
+    return accounts[VPN_PROVIDER[kind]] ?? { provider: VPN_PROVIDER[kind], disabled: kind === 'amnezia', connected: false, note: CABINET_TEXTS.accountError }
   }
 
   function body() {
-    if (pending) {
+    if (pending && pending.provider !== 'amnezia') {
       return (
         <CabinetIssue
           key={`${pending.provider}:${pending.option.id}`}
@@ -171,8 +172,9 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         />
       )
     }
-    if (!cabinets && !loadError) return <p class="state">{CABINET_TEXTS.loading}</p>
     const rows = cabinets && current !== 'selfhosted' && current !== 'awg3' ? secretRows(cabinets, current) : []
+    const account = accountFor(current)
+    const externalPremium = current === 'amnezia'
     return (
       <>
         <SegmentTabs
@@ -189,10 +191,37 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
             {notice}
           </p>
         )}
+        {externalPremium && (
+          <>
+            <AmneziaDashboard />
+            {perms.manage && openLayer && (
+              <button type="button" class="btn btn-ghost btn-wide" onClick={() => openLayer('confimport', { returnTo: 'cabinet', returnParams: { ...layerParams, tab: current } })}>
+                Загрузить скачанный .conf
+              </button>
+            )}
+          </>
+        )}
         {current === 'awg3' ? (
           <CabinetAwg3 panels={awg3Panels} error={awg3Failed ? CABINET_TEXTS.awg3LoadError : ''} onRetry={loadAwg3} onPick={pick} admin={perms.admin} />
+        ) : !cabinets && !loadError ? (
+          <p class="state">{CABINET_TEXTS.loading}</p>
         ) : loadError ? (
           <p class="state state-error">{loadError}</p>
+        ) : externalPremium ? (
+          rows.length > 0 && perms.remove ? (
+            <details class="checks-spoiler">
+              <summary class="checks-spoiler-summary">Ранее сохранённые ключи ({rows.length})</summary>
+              <CabinetSecrets
+                routerID={routerID}
+                kind="amnezia"
+                rows={rows}
+                perms={perms}
+                openSheet={openSheet}
+                onChanged={changed}
+                disabledNote={account?.disabled && account.note || 'Сохранённые ключи можно удалить.'}
+              />
+            </details>
+          ) : account?.disabled && account.note ? <p class="hint">{account.note}</p> : null
         ) : current === 'selfhosted' ? (
           <CabinetSelfhosted instances={instances} error={instancesError} onPick={pick} />
         ) : (
@@ -205,16 +234,16 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
               perms={perms}
               openSheet={openSheet}
               onChanged={changed}
-              disabledNote={accountFor(current)?.disabled === true ? accountFor(current)?.note || CABINET_TEXTS.disabled : ''}
+              disabledNote={account?.disabled === true ? account.note || CABINET_TEXTS.disabled : ''}
             />
             {/* Кабинет выключен целиком (v0.61.3: «Amnezia Premium») -- выпускать
                 нечего, причина уже сказана над ключами. */}
-            {rows.length > 0 && accountFor(current)?.disabled !== true && (
+            {rows.length > 0 && account?.disabled !== true && (
               <CabinetOptions
                 routerID={routerID}
                 routerName={routerName}
                 kind={current}
-                account={accountFor(current)}
+                account={account}
                 perms={perms}
                 openSheet={openSheet}
                 onPick={pick}
@@ -228,7 +257,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   return (
-    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={pinned ? undefined : pending ? leaveIssue : onClose}>
+    <Overlay title={title} backLabel={pending || layerParams.returnTo ? 'Назад' : 'VPN-туннели'} onBack={pinned ? undefined : pending ? leaveIssue : onClose}>
       <div class="screen cabinet">
         {roleError && (
           <div class="card cabinet-role-error">

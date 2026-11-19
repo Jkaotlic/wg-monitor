@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
@@ -57,7 +56,7 @@ func cmdShowDiscoveredDNS(args []string) {
 type osRunner struct{}
 
 func (osRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := keenetic.CommandContext(ctx, name, args...)
 	out, err := cmd.Output()
 	return string(out), err
 }

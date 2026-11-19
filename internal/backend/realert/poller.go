@@ -438,12 +438,11 @@ func (p *Poller) tick(ctx context.Context) {
 			continue
 		}
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
-		// agent_heartbeat -- исключение: первую тревогу «Роутер не на связи»
-		// шлёт только сторож молчания (свой текст, свои повторы после
-		// сбоя), realert по ней -- только напоминания (BOT-05). Строка без
-		// отметки (старые данные) получает напоминание, а не карточку
-		// FormatHard -- иначе у тревоги было бы два владельца.
-		if st.LastAlertAt == nil && p.hard != nil && sh.CheckName != heartbeatCheck {
+		// The heartbeat watcher owns the first offline notice, including retries.
+		if st.LastAlertAt == nil && sh.CheckName == heartbeatCheck {
+			continue
+		}
+		if st.LastAlertAt == nil && p.hard != nil {
 			// Первая тревога не дошла никому: шлём её саму, с записью в
 			// alert_messages и памятью для нити починки (BOT-01).
 			// Очередь доставок проверки общая с отчётом (карточка,
@@ -470,7 +469,7 @@ func (p *Poller) tick(ctx context.Context) {
 				}
 				continue
 			}
-			_, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, fresh, check)
+			delivered, err := p.hard.DeliverHard(ctx, sh.UserID, u.Nickname, sh.CheckName, fresh, check)
 			release()
 			if err != nil {
 				if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
@@ -482,7 +481,9 @@ func (p *Poller) tick(ctx context.Context) {
 				}
 				continue
 			}
-			p.recordSendOutcome(sh.UserID, sh.CheckName, true)
+			if delivered > 0 {
+				p.recordSendOutcome(sh.UserID, sh.CheckName, true)
+			}
 			continue
 		}
 		neighbors := p.neighborsFor(sh.UserID, sh.CheckName, check.Details)
@@ -502,7 +503,7 @@ func (p *Poller) tick(ctx context.Context) {
 		// проверку на час. Keep in sync with alerts.Dispatcher.Handle.
 		appURL := tg.MiniAppRouterURL(p.cfg.MiniAppBaseURL, sh.UserID)
 		kb := tg.AlertKeyboard(sh.UserID, sh.CheckName, appURL)
-		_, err = p.notify.SendKeyboard(ctx, sh.UserID, text, "", &kb)
+		delivered, err := p.notify.SendKeyboard(ctx, sh.UserID, text, "", &kb)
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
@@ -512,6 +513,9 @@ func (p *Poller) tick(ctx context.Context) {
 				return // stop this batch; retry later without advancing LastAlertAt
 			}
 			continue // do not advance LastAlertAt → retry next tick
+		}
+		if delivered == 0 {
+			continue
 		}
 		p.recordSendOutcome(sh.UserID, sh.CheckName, true)
 		// Realerts are sent as standalone messages (replyTo nil above);

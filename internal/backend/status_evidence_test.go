@@ -211,3 +211,25 @@ func TestStatusEvidenceStoppedPolicyCarrierWithoutReserve(t *testing.T) {
 		t.Fatalf("policy still routes into stopped tunnel: mode=%s egress=%s evidence=%+v", traffic.Mode, traffic.EgressTunnelID, evidence)
 	}
 }
+
+func TestRoutingFailureExpiresFromRoutingCheck(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	lastRoute := now.Add(-4 * time.Minute)
+	got := deriveStatusEvidenceFromChecks(
+		[]miniappTunnel{{TunnelID: "line", TS: now.Format(time.RFC3339), Status: "ok", RunState: "running"}},
+		miniappTraffic{Mode: miniappTrafficSplit, CarrierBasis: miniappCarrierPolicy, CarrierTunnelID: "line"},
+		map[string]db.EventRow{"hydraroute": {Status: "fail", TS: lastRoute}}, now)
+	if got.State != "failed" || got.FreshUntil != lastRoute.Add(statusEvidenceFreshFor).Format(time.RFC3339) {
+		t.Fatalf("routing failure has incorrect lifetime: %+v", got)
+	}
+}
+
+func TestDirectDefaultWithVPNPolicyUsesCarrierEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	tunnels := []miniappTunnel{{TunnelID: "line", Status: "fail", RunState: "stopped", TS: now.Format(time.RFC3339)}}
+	traffic := miniappTraffic{Mode: miniappTrafficDirect, CarrierTunnelID: "line", CarrierBasis: miniappCarrierPolicy}
+	got := deriveStatusEvidenceFromChecks(tunnels, traffic, map[string]db.EventRow{"hydraroute": {Status: "ok", TS: now}}, now)
+	if got.ReasonCode != "carrier_failed" {
+		t.Fatalf("direct WAN masked failed policy tunnel: %+v", got)
+	}
+}

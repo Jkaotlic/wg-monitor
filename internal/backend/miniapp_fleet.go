@@ -161,8 +161,9 @@ type miniappFleetUnreachable struct {
 }
 
 type miniappFleetNotify struct {
-	Unreachable              []miniappFleetUnreachable `json:"unreachable"`
-	RoutersWithoutRecipients []string                  `json:"routers_without_recipients"`
+	Unreachable                   []miniappFleetUnreachable `json:"unreachable"`
+	RoutersWithoutRecipients      []string                  `json:"routers_without_recipients"`
+	RoutersWithAllRecipientsMuted []string                  `json:"routers_with_all_recipients_muted"`
 }
 
 type miniappFleetWatchdog struct {
@@ -389,8 +390,9 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 
 		gaps := buildDashboardNotifyGaps(d)
 		resp.Notify = miniappFleetNotify{
-			Unreachable:              []miniappFleetUnreachable{},
-			RoutersWithoutRecipients: gaps.RoutersWithoutRecipients,
+			Unreachable:                   []miniappFleetUnreachable{},
+			RoutersWithoutRecipients:      gaps.RoutersWithoutRecipients,
+			RoutersWithAllRecipientsMuted: gaps.RoutersWithAllRecipientsMuted,
 		}
 		if resp.Notify.RoutersWithoutRecipients == nil {
 			resp.Notify.RoutersWithoutRecipients = []string{}

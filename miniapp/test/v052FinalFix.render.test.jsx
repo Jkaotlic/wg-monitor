@@ -216,3 +216,29 @@ describe('п. 2: строка «Маршруты» без активного VPN
     cleanup(root)
   })
 })
+
+
+describe('перевыпуск с главного экрана', () => {
+  const origin = { returnTo: 'router' }
+  it('показывает подтверждённую цель и открывает выбранный кабинет с возвратом', async () => {
+    const openLayer = vi.fn()
+    const root = await mount({ layer: 'replace', layerParams: origin, openLayer })
+    const overlay = root.querySelector('.overlay')
+    expect(overlay.querySelector('h1').textContent).toContain('vpn-nl')
+    expect(overlay.textContent).toContain('Policy0')
+    await act(async () => btn(overlay, 'Кабинет HideMy.name').click())
+    expect(openLayer).toHaveBeenCalledWith('cabinet', { tab: 'hidemy', returnTo: 'replace', returnParams: origin })
+    cleanup(root)
+  })
+
+  it('объясняет отсутствие цели и оставляет доступ к Amnezia', async () => {
+    setSnap({ tunnels: [], policies: [] })
+    const openLayer = vi.fn()
+    const root = await mount({ layer: 'replace', layerParams: origin, openLayer })
+    const overlay = root.querySelector('.overlay')
+    expect(overlay.textContent).toContain('нужен активный VPN-туннель')
+    await act(async () => btn(overlay, 'Кабинет Amnezia Premium').click())
+    expect(openLayer).toHaveBeenCalledWith('cabinet', { tab: 'amnezia', returnTo: 'replace', returnParams: origin })
+    cleanup(root)
+  })
+})

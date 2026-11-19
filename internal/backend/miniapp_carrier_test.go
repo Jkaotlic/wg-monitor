@@ -201,3 +201,18 @@ func TestPolicyReservesRequireFreshMeasurementsAndPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestTrafficFactsDoNotAdvertiseUnconfirmedSpare(t *testing.T) {
+	db, uid, _, _ := seedMiniappFleet(t)
+	seedWorkrouterEvents(t, db, uid, "awg10", "awg14")
+	facts := AlertTrafficFacts(db)
+	if got := facts(uid, "tunnel_awg10"); got == nil || got.Spare == "" {
+		t.Fatalf("fresh spare missing: %+v", got)
+	}
+	if err := db.Events().Insert(uid, "tunnel_awg14", "ok", `{"status":"running","unverified":true}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := facts(uid, "tunnel_awg10"); got != nil {
+		t.Fatalf("unknown spare cannot support a traffic claim: %+v", got)
+	}
+}

@@ -1145,6 +1145,17 @@ func TestDashboardSummaryRoutersWithoutRecipientsIgnoresAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uid, err := d.Users().Insert("router-muted", "token-m", "198.51.100.2", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(uid, 1001, 1002); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.NotifyMutes().SetMuted(1001, uid, true); err != nil {
+		t.Fatal(err)
+	}
+
 	h := NewMux(Deps{
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DB:                  d,
@@ -1161,10 +1172,14 @@ func TestDashboardSummaryRoutersWithoutRecipientsIgnoresAdmin(t *testing.T) {
 	var got struct {
 		Notify struct {
 			RoutersWithoutRecipients []string `json:"routers_without_recipients"`
+			Muted                    []string `json:"routers_with_all_recipients_muted"`
 		} `json:"notify"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
+	}
+	if len(got.Notify.Muted) != 1 || got.Notify.Muted[0] != "router-muted" {
+		t.Fatalf("expected a separately classified muted router, got %v", got.Notify.Muted)
 	}
 	if len(got.Notify.RoutersWithoutRecipients) != 1 || got.Notify.RoutersWithoutRecipients[0] != "router-orphan" {
 		t.Fatalf("роутеры без адресата=%v, ждали router-orphan при настроенном админе", got.Notify.RoutersWithoutRecipients)

@@ -272,3 +272,18 @@ func TestSilence_LineNamesWhoPressed(t *testing.T) {
 		}
 	}
 }
+
+func TestPollRetryDelay(t *testing.T) {
+	limited := &tg.APIError{Code: 429, RetryAfter: 5 * time.Second}
+	for _, tc := range []struct {
+		attempt int
+		err     error
+		want    time.Duration
+	}{
+		{1, limited, 5 * time.Second}, {3, limited, 8 * time.Second}, {10, fmt.Errorf("gateway"), 60 * time.Second},
+	} {
+		if got := pollRetryDelay(tc.attempt, tc.err); got != tc.want {
+			t.Errorf("attempt %d: got %s, want %s", tc.attempt, got, tc.want)
+		}
+	}
+}

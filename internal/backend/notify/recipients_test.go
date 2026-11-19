@@ -199,11 +199,11 @@ func TestOwnerAndOperators_NeverAdminButHonoursMute(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := OwnerAndOperators(d, router)
+	got, assigned, err := OwnerAndOperators(d, router)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 {
+	if len(got) != 0 || assigned != 1 {
 		t.Fatalf("получатели=%v, ждали пусто: админа здесь нет, владелец выключил", got)
 	}
 }

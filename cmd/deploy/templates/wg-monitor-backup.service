@@ -4,6 +4,10 @@ Documentation=https://github.com/Jkaotlic/wg-monitor
 
 [Service]
 Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+IOWeight=10
 User=wgmonitor
 Group=wgmonitor
 # Один запуск делает оба архива: малый (без истории событий) уходит админу в

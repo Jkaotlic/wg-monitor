@@ -319,6 +319,9 @@ func TestBackupServiceRunsBothKindsWithRetention(t *testing.T) {
 		"--out-dir /var/lib/wg-monitor/backups --kind both " +
 		"--small-keep-daily 7 --small-keep-weekly 4 --full-keep-daily 3 --full-keep-weekly 0 --send-telegram\n"
 	for name, svc := range map[string]string{"static": string(static), "rendered": string(rendered)} {
+		if !strings.Contains(svc, "IOSchedulingClass=best-effort\nIOSchedulingPriority=7") {
+			t.Errorf("%s: backup should yield disk bandwidth to monitoring", name)
+		}
 		if !strings.Contains(svc, wantExec) {
 			t.Errorf("%s: ExecStart не тот, ждали\n%s\nполучили:\n%s", name, wantExec, svc)
 		}

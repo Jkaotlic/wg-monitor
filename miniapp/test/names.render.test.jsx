@@ -75,6 +75,7 @@ function routerData() {
     t.ts = new Date().toISOString()
   }
   checks.traffic.egress_tunnel_name = 'vpn-nl'
+  checks.traffic.reserve_tunnel_ids = ['awg10']
   return { router: { router: ROUTERS[1], incidents: [] }, checks }
 }
 
@@ -87,11 +88,11 @@ describe('главный экран роутера', () => {
     const root = await mount(<RouterDetail id={2} openSheet={() => {}} onTab={() => {}} />)
 
     const verdict = root.querySelector('.hero .traffic-detail')
-    expect(verdict.textContent).toBe('Заблокированное открывается через «vpn-nl». Остальное идёт напрямую, как обычно.')
+    expect(verdict.textContent).toBe('Заблокированное открывается через «vpn-nl». Остальные сайты могут идти напрямую.')
     expect([...verdict.querySelectorAll('.q')].map((q) => q.textContent)).toEqual(['«vpn-nl»'])
 
     const backup = root.querySelector('.row-note')
-    expect(backup.textContent).toBe('«vpn-de» подхватит, если этот замолчит')
+    expect(backup.textContent).toBe('«vpn-de» отвечает на проверку')
     expect(backup.querySelector('.q').textContent).toBe('«vpn-de»')
 
     expect(unprotectedNames(root)).toEqual([])

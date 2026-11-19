@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"errors"
 	"log/slog"
 	"time"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -21,19 +23,34 @@ type expiredCommandHandlerSetter interface {
 // первым делом опрашивал команды, натыкался на протухшую, и отметка исчезала
 // раньше, чем её увидел отчёт (bronya, gachimikhail: 11.09 -> 15.09.2026).
 // Новую команду положит досылка на контакте (deploy_wake.go).
-//
-// Параметр *db.DB здесь раньше был (снятие отметки жило в этом обработчике);
-// сейчас функция только логирует, базу не трогает -- сигнатура без него (B4).
-func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, logger *slog.Logger) {
+func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, database *db.DB, logger *slog.Logger) {
 	if q == nil {
 		return
 	}
 	q.SetExpiredCommandHandler(func(userID int64, cmd wire.Command) {
+		now := time.Now().UTC()
+		if database != nil {
+			err := FinishOperationByCommand(database, cmd.ID, "not_delivered", "", now)
+			if err != nil && !errors.Is(err, db.ErrOperationNotFound) && !errors.Is(err, db.ErrOperationAlreadyFinished) && logger != nil {
+				logger.Warn("could not record undelivered command", "cmd_id", cmd.ID, "err", err)
+			}
+		}
 		if cmd.Action != "self_update" || logger == nil {
 			return
 		}
-		logger.Info("self_update dropped from queue; pending deploy kept",
-			"user_id", userID, "cmd_id", cmd.ID, "target_version", commandVersionArg(cmd))
+		attrs := []any{"user_id", userID, "cmd_id", cmd.ID, "target_version", commandVersionArg(cmd)}
+		if database != nil {
+			st, err := database.Users().PendingDeploy(userID)
+			if err == nil && st.Version != "" && st.Version == commandVersionArg(cmd) && !pendingDeployExpired(st.Since, now) {
+				logger.Info("self_update not issued; update remains scheduled", attrs...)
+				return
+			}
+		}
+		if !cmd.ExpiresAt.IsZero() && !now.Before(cmd.ExpiresAt) {
+			logger.Warn("self_update expired before issue without a confirmed matching intent", attrs...)
+		} else {
+			logger.Info("self_update superseded before issue", attrs...)
+		}
 	})
 }
 

@@ -17,8 +17,8 @@ vi.mock('../src/api.js', async (importOriginal) => {
       Promise.resolve({
         accounts: [
           {
-            provider: 'amnezia',
-            label: 'Amnezia Premium',
+            provider: 'hidemyname',
+            label: 'HideMy.name',
             connected: true,
             devices_used: 1,
             devices_max: 3,

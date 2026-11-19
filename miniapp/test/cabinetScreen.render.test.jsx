@@ -62,7 +62,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     issueVPNConfig: (id, provider, option, instance) => {
       log('issue', id, provider, option, instance)
       if (mocks.issueReply === 'hang') return new Promise(() => {})
-      return reply(mocks.issueReply, { cmd_id: 'c1', tunnel_name: 'amnezia_de' })
+      return reply(mocks.issueReply, { cmd_id: 'c1', tunnel_name: 'hidemy_de' })
     },
     fetchAwg3Issuable: (id) => {
       log('awg3list', id)
@@ -94,7 +94,7 @@ const CABINETS = {
       { id: 'k1', label: 'основной', mask: 'a1b2', active: true },
     ],
   },
-  hidemy: { codes: [] },
+  hidemy: { codes: [{ id: 'k2', mask: 'c3d4', active: false }, { id: 'k1', label: 'основной', mask: 'a1b2', active: true }] },
   selfhosted: { available: false },
 }
 
@@ -113,8 +113,8 @@ const ACCOUNTS = [
   {
     provider: 'hidemyname',
     label: 'HideMy.name',
-    connected: false,
-    note: 'Код доступа не сохранён. Отправьте его боту в теме роутера — приложение коды не спрашивает.',
+    connected: true,
+    options: [{ id: 'de', label: 'Германия' }],
   },
 ]
 
@@ -236,64 +236,79 @@ describe('кабинет роутера: вкладки и ключи', () => {
     cleanup(root)
   })
 
-  it('ключи с маской, активный первым; владельцу -- все кнопки', async () => {
+  it('старый сервер разрешает API Premium, но вход только через официальный кабинет', async () => {
+    mocks.accounts[0].disabled = false
     const { root } = await mount()
+    expect(button(root, 'Открыть личный кабинет Amnezia ↗')).toBeTruthy()
+    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    expect(button(root, 'Сделать активным')).toBeFalsy()
+    expect(root.querySelector('.cabinet-options')).toBeNull()
+    expect(buttons(root, 'Удалить')).toHaveLength(2)
+    cleanup(root)
+  })
+
+  it('коды с маской, активный первым; владельцу -- все кнопки', async () => {
+    const { root } = await mount()
+    await tab(root, 'HideMy')
     const rows = [...root.querySelectorAll('.cabinet-secret')]
-    expect(rows.map((r) => r.querySelector('.row-title').textContent)).toEqual(['основной', 'Ключ без подписи'])
-    expect(rows[0].querySelector('.list-row-sub').textContent).toBe('ключ …a1b2 · активный')
+    expect(rows.map((r) => r.querySelector('.row-title').textContent)).toEqual(['основной', 'Код без подписи'])
+    expect(rows[0].querySelector('.list-row-sub').textContent).toBe('код …a1b2 · активный')
     expect(rows[0].classList.contains('cabinet-secret-active')).toBe(true)
-    expect(rows[1].querySelector('.list-row-sub').textContent).toBe('ключ …c3d4')
+    expect(rows[1].querySelector('.list-row-sub').textContent).toBe('код …c3d4')
     expect(buttons(root, 'Сделать активным')).toHaveLength(1)
     expect(buttons(root, 'Удалить')).toHaveLength(2)
-    expect(button(root, 'Добавить ключ')).toBeTruthy()
-    expect(buttons(root, 'Отозвать')).toHaveLength(1)
+    expect(button(root, 'Добавить код')).toBeTruthy()
+    expect(buttons(root, 'Отозвать')).toHaveLength(0)
     cleanup(root)
   })
 
-  it('оператор: добавить, сделать активным, отозвать -- да; удалить ключ -- нет (v0.52, §7)', async () => {
+  it('оператор: добавить, сделать активным -- да; удалить код -- нет (v0.52, §7)', async () => {
     mocks.role = 'operator'
     const { root } = await mount()
-    expect(button(root, 'Добавить ключ')).toBeTruthy()
+    await tab(root, 'HideMy')
+    expect(button(root, 'Добавить код')).toBeTruthy()
     expect(buttons(root, 'Сделать активным')).toHaveLength(1)
     expect(buttons(root, 'Удалить')).toHaveLength(0)
-    expect(buttons(root, 'Отозвать')).toHaveLength(1)
+    expect(buttons(root, 'Отозвать')).toHaveLength(0)
     cleanup(root)
   })
 
-  it('добавить ключ: поле-пароль new-password, секрет только в запросе и стирается, список перечитан', async () => {
+  it('добавить код: поле-пароль new-password, секрет только в запросе и стирается, список перечитан', async () => {
     const { root, sheets } = await mount()
-    await act(async () => button(root, 'Добавить ключ').click())
+    await tab(root, 'HideMy')
+    await act(async () => button(root, 'Добавить код').click())
     expect(sheets).toHaveLength(1)
     const sheet = sheets[0]
-    expect(sheet.title).toBe('Добавить ключ Amnezia Premium')
+    expect(sheet.title).toBe('Добавить код HideMy.name')
     const sheetRoot = await mountSheet(sheet)
     const input = sheetRoot.querySelector('#sheet-field-secret')
     expect(input.type).toBe('password')
     expect(input.getAttribute('autocomplete')).toBe('new-password')
-    await fill(sheetRoot, 'sheet-field-secret', 'vpn://SECRET-KEY')
+    await fill(sheetRoot, 'sheet-field-secret', 'DEMO-CODE-123')
     await fill(sheetRoot, 'sheet-field-label', 'запасной')
     await submit(sheetRoot)
-    expect(calls('add')).toEqual([['add', 7, 'amnezia', 'vpn://SECRET-KEY', 'запасной']])
+    expect(calls('add')).toEqual([['add', 7, 'hidemy', 'DEMO-CODE-123', 'запасной']])
     expect(sheetRoot.querySelector('#sheet-field-secret').value).toBe('')
-    expect(JSON.stringify(sheet)).not.toContain('SECRET-KEY')
+    expect(JSON.stringify(sheet)).not.toContain('DEMO-CODE-123')
     await flush()
     await flush()
     expect(calls('cabinets')).toHaveLength(2)
-    expect(root.querySelector('.cabinet-notice').textContent).toBe('Ключ сохранён.')
-    expect(root.textContent).not.toContain('SECRET-KEY')
+    expect(root.querySelector('.cabinet-notice').textContent).toBe('Код сохранён.')
+    expect(root.textContent).not.toContain('DEMO-CODE-123')
     cleanup(sheetRoot)
     cleanup(root)
   })
 
   it('кабинет отказал -- его слова на листе, секрет стёрт, подпись осталась', async () => {
-    mocks.addReply = new ApiError(422, 'cabinet_rejected', 'x', 'Кабинет не принял ключ: подписка истекла')
+    mocks.addReply = new ApiError(422, 'cabinet_rejected', 'x', 'Кабинет не принял код: подписка истекла')
     const { root, sheets } = await mount()
-    await act(async () => button(root, 'Добавить ключ').click())
+    await tab(root, 'HideMy')
+    await act(async () => button(root, 'Добавить код').click())
     const sheetRoot = await mountSheet(sheets[0])
-    await fill(sheetRoot, 'sheet-field-secret', 'vpn://BAD')
+    await fill(sheetRoot, 'sheet-field-secret', 'DEMO-BAD')
     await fill(sheetRoot, 'sheet-field-label', 'запасной')
     await submit(sheetRoot)
-    expect(sheetRoot.textContent).toContain('Кабинет не принял ключ: подписка истекла')
+    expect(sheetRoot.textContent).toContain('Кабинет не принял код: подписка истекла')
     expect(sheetRoot.querySelector('#sheet-field-secret').value).toBe('')
     expect(sheetRoot.querySelector('#sheet-field-label').value).toBe('запасной')
     expect(calls('cabinets')).toHaveLength(1)
@@ -303,11 +318,12 @@ describe('кабинет роутера: вкладки и ключи', () => {
 
   it('сделать активным -- запрос, итог, список перечитан', async () => {
     const { root } = await mount()
+    await tab(root, 'HideMy')
     await act(async () => button(root, 'Сделать активным').click())
     await flush()
     await flush()
-    expect(calls('active')).toEqual([['active', 7, 'amnezia', 'k2']])
-    expect(root.querySelector('.cabinet-notice').textContent).toBe('Активный ключ — «Ключ без подписи».')
+    expect(calls('active')).toEqual([['active', 7, 'hidemy', 'k2']])
+    expect(root.querySelector('.cabinet-notice').textContent).toBe('Активный код — «Код без подписи».')
     expect(calls('cabinets')).toHaveLength(2)
     cleanup(root)
   })
@@ -326,6 +342,7 @@ describe('кабинет роутера: вкладки и ключи', () => {
   })
 
   it('HideMy без кодов -- просьба добавить код, слов про бота нет, стран нет', async () => {
+    mocks.cabinets.hidemy.codes = []
     const { root } = await mount()
     await tab(root, 'HideMy')
     expect(root.textContent).toContain('Код доступа HideMy.name ещё не добавлен.')
@@ -352,6 +369,8 @@ describe('кабинет роутера: Amnezia отключён (v0.61.3)', ()
     expect(buttons(root, 'Отозвать')).toHaveLength(0)
     expect(root.querySelector('.cabinet-options')).toBe(null)
     expect(root.textContent.split(NOTE).length - 1).toBe(1)
+    expect(button(root, 'Открыть личный кабинет Amnezia ↗')).toBeTruthy()
+    expect(button(root, 'Загрузить скачанный .conf')).toBeTruthy()
     cleanup(root)
   })
 
@@ -380,79 +399,17 @@ describe('кабинет роутера: Amnezia отключён (v0.61.3)', ()
   })
 })
 
-describe('кабинет роутера: страны и отзыв', () => {
-  it('отозвать выпущенную страну -- набор имени роутера', async () => {
-    const { root, sheets } = await mount()
-    const nl = [...root.querySelectorAll('.cabinet-option')].find((li) => li.textContent.includes('Нидерланды'))
-    await act(async () => nl.querySelector('.cabinet-danger').click())
-    expect(sheets[0]).toMatchObject({ title: 'Отозвать «Нидерланды»?', danger: true, confirmPhrase: 'dacha-1' })
-    const sheetRoot = await mountSheet(sheets[0])
-    await fill(sheetRoot, 'sheet-confirm-input', 'dacha-1')
-    await submit(sheetRoot)
-    expect(calls('revoke')).toEqual([['revoke', 7, 'nl', 'dacha-1']])
-    await flush()
-    expect(root.querySelector('.cabinet-notice').textContent).toBe('Конфиг «Нидерланды» отозван, место в подписке свободно.')
-    cleanup(sheetRoot)
-    cleanup(root)
-  })
-
-  it('мест нет -- новые страны закрыты, выпущенная активна, «Отозвать» есть', async () => {
-    mocks.accounts[0].devices_used = 3
-    const { root } = await mount()
-    expect(root.textContent).toContain('выпуск новых стран закрыт')
-    expect(root.textContent).toContain('Освободите место — отзовите одну из выпущенных стран ниже')
-    const main = (label) => [...root.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
-    expect(main('Германия').disabled).toBe(true)
-    expect(main('Нидерланды').disabled).toBe(false)
-    expect(buttons(root, 'Отозвать')).toHaveLength(1)
-    cleanup(root)
-  })
-
-  it('стрелка -- у доступной страны без «Отозвать»; у погашенной и рядом с «Отозвать» -- нет', async () => {
-    let { root } = await mount()
-    const main = (r, label) => [...r.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
-    expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBeTruthy()
-    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBe(null)
-    cleanup(root)
-
-    mocks.accounts[0].devices_used = 3
-    root = (await mount()).root
-    expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBe(null)
-    cleanup(root)
-
-    // Оператор отзывает, как владелец: у выпущенной страны стрелки нет, рядом «Отозвать».
-    mocks.role = 'operator'
-    root = (await mount()).root
-    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBe(null)
-    expect(buttons(root, 'Отозвать')).toHaveLength(1)
-    cleanup(root)
-  })
-
-  it('мест нет: выпущенную страну можно выпустить заново и прислать .conf', async () => {
-    mocks.accounts[0].devices_used = 3
-    const { root, sheets } = await mount()
-    await pickOption(root, 'Нидерланды')
-    expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
-    await act(async () => button(root, 'Прислать .conf в личку').click())
-    expect(sheets[0].title).toBe('Прислать .conf в личку?')
-    await act(async () => button(root, 'Выпустить и положить на роутер').click())
-    await flush()
-    await flush()
-    expect(calls('issue')).toEqual([['issue', 7, 'amnezia', 'nl', '']])
-    cleanup(root)
-  })
-})
-
 describe('кабинет роутера: выпуск', () => {
   it('успех: выбор, «назад» к списку, выпуск и итог', async () => {
     const { root, seen } = await mount()
+    await tab(root, 'HideMy')
     await pickOption(root, 'Германия')
     expect(root.querySelector('.overlay-back').textContent).toContain('Назад')
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
     await flush()
     await flush()
-    expect(calls('issue')).toEqual([['issue', 7, 'amnezia', 'de', '']])
-    expect(root.textContent).toContain('Конфиг выпущен и импортирован как «amnezia_de»')
+    expect(calls('issue')).toEqual([['issue', 7, 'hidemyname', 'de', '']])
+    expect(root.textContent).toContain('Конфиг выпущен и импортирован как «hidemy_de»')
     expect(seen.issued).toBe(1)
     await act(async () => root.querySelector('.overlay-back').click())
     expect(root.querySelector('.segment-tabs')).toBeTruthy()
@@ -462,44 +419,29 @@ describe('кабинет роутера: выпуск', () => {
     cleanup(root)
   })
 
-  it('slot_busy -- слова и возврат к списку, где можно отозвать', async () => {
+  it('HideMy сообщает об отсутствии мест и позволяет повторить выпуск', async () => {
     mocks.issueReply = new ApiError(409, 'slot_busy', 'x')
     const { root } = await mount()
+    await tab(root, 'HideMy')
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
     await flush()
-    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.')
-    // Неудача -- «попробовать ещё раз», а не «выпустить ещё раз».
+    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет.')
     expect(button(root, 'Попробовать ещё раз')).toBeTruthy()
-    expect(button(root, 'Выпустить ещё раз')).toBeFalsy()
-    await act(async () => button(root, 'Выбрать, что отозвать').click())
-    // Подписка перечитывается эффектом закрытия слоя выпуска: один такт.
-    await flush()
-    expect(buttons(root, 'Отозвать')).toHaveLength(1)
-    cleanup(root)
-  })
-
-  it('slot_busy у оператора -- как у владельца: отозвать можно (v0.52, §7)', async () => {
-    mocks.role = 'operator'
-    mocks.issueReply = new ApiError(409, 'slot_busy', 'x')
-    const { root } = await mount()
-    await pickOption(root, 'Германия')
-    await act(async () => button(root, 'Выпустить и положить на роутер').click())
-    await flush()
-    expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.')
-    expect(button(root, 'Выбрать, что отозвать')).toBeTruthy()
+    expect(button(root, 'Выбрать, что отозвать')).toBeFalsy()
     cleanup(root)
   })
 
   it('.conf в личку: лист с приватным ключом; успех -- итог; оператору кнопка есть (v0.52, §7)', async () => {
     const { root, sheets } = await mount()
+    await tab(root, 'HideMy')
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Прислать .conf в личку').click())
     expect(sheets[0].title).toBe('Прислать .conf в личку?')
     expect(sheets[0].note).toContain('В файле приватный ключ')
     const sheetRoot = await mountSheet(sheets[0])
     await submit(sheetRoot)
-    expect(calls('send')).toEqual([['send', 7, { provider: 'amnezia', option: 'de', instanceID: '' }]])
+    expect(calls('send')).toEqual([['send', 7, { provider: 'hidemyname', option: 'de', instanceID: '' }]])
     await flush()
     expect(root.textContent).toContain('Файл отправлен вам в личку.')
     cleanup(sheetRoot)
@@ -507,6 +449,7 @@ describe('кабинет роутера: выпуск', () => {
 
     mocks.role = 'operator'
     const again = await mount()
+    await tab(again.root, 'HideMy')
     await pickOption(again.root, 'Германия')
     expect(button(again.root, 'Прислать .conf в личку')).toBeTruthy()
     cleanup(again.root)
@@ -515,6 +458,7 @@ describe('кабинет роутера: выпуск', () => {
   it('dm_unreachable -- словами на листе', async () => {
     mocks.sendReply = new ApiError(409, 'dm_unreachable', 'x')
     const { root, sheets } = await mount()
+    await tab(root, 'HideMy')
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Прислать .conf в личку').click())
     const sheetRoot = await mountSheet(sheets[0])
@@ -532,6 +476,7 @@ describe('кабинет роутера: выпуск', () => {
       { id: 'spare', label: 'Запасной', enabled: false },
     ]
     const { root, sheets } = await mount()
+    await tab(root, 'HideMy')
     await tab(root, 'Свой сервер')
     const titles = [...root.querySelectorAll('.list-row .row-title')].map((t) => t.textContent)
     expect(titles).toEqual(['Амстердам'])
@@ -552,14 +497,15 @@ describe('кабинет роутера: права, загрузка, пере�
   it('права не прочитались -- слова и «Повторить», кнопок правки нет; повтор возвращает их', async () => {
     mocks.settingsFail = true
     const { root } = await mount()
+    await tab(root, 'HideMy')
     expect(root.textContent).toContain('Не удалось узнать ваши права.')
-    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    expect(button(root, 'Добавить код')).toBeFalsy()
     mocks.settingsFail = false
     await act(async () => button(root, 'Повторить').click())
     await flush()
     await flush()
     expect(root.textContent).not.toContain('Не удалось узнать ваши права.')
-    expect(button(root, 'Добавить ключ')).toBeTruthy()
+    expect(button(root, 'Добавить код')).toBeTruthy()
     expect(calls('settings')).toHaveLength(2)
     cleanup(root)
   })
@@ -567,6 +513,7 @@ describe('кабинет роутера: права, загрузка, пере�
   it('кабинеты на сервере не настроены -- слова сервера', async () => {
     mocks.cabinetsFail = new ApiError(503, 'cabinets_not_configured', 'x', 'Кабинеты VPN на сервере не настроены')
     const { root } = await mount()
+    await tab(root, 'HideMy')
     expect(root.querySelector('.state-error').textContent).toBe('Кабинеты VPN на сервере не настроены')
     cleanup(root)
   })
@@ -574,6 +521,7 @@ describe('кабинет роутера: права, загрузка, пере�
   it('пока выпуск идёт, «назад» погашен', async () => {
     mocks.issueReply = 'hang'
     const { root } = await mount()
+    await tab(root, 'HideMy')
     await pickOption(root, 'Германия')
     expect(root.querySelector('.overlay-back').disabled).toBe(false)
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
@@ -584,6 +532,7 @@ describe('кабинет роутера: права, загрузка, пере�
 
   it('после успешного выпуска и после возврата к списку кабинет перечитан', async () => {
     const { root } = await mount()
+    await tab(root, 'HideMy')
     expect(calls('cabinets')).toHaveLength(1)
     await pickOption(root, 'Германия')
     await act(async () => button(root, 'Выпустить и положить на роутер').click())

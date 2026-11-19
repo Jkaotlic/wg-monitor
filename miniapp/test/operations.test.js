@@ -3,7 +3,9 @@ import { operationView } from '../src/operations.js'
 
 describe('operationView', () => {
   it.each([
-    [{ outcome: '' }, ['Выполняется', 'warn']],
+    [{ outcome: '' }, ['Результат не подтверждён', 'muted']],
+    [{ outcome: 'not_delivered' }, ['Команда не была выдана роутеру', 'warn']],
+    [{ outcome: 'not_delivered', action: 'agent_update' }, ['Команда не была выдана роутеру', 'muted']],
     [{ outcome: 'ok' }, ['Завершено', 'ok']],
     [{ outcome: 'failed', reason_code: 'command_timeout' }, ['Роутер не ответил вовремя', 'danger']],
     [{ outcome: 'failed', reason_code: 'command_locked' }, ['Другая операция ещё не закончилась', 'warn']],

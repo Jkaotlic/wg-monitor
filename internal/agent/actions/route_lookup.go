@@ -28,8 +28,7 @@ const (
 //
 // Read-only: it reads the same inputs as RouteStatus and asks awg-manager to
 // expand geosite tags, nothing else. firmwareLists -- сколько собственных
-// списков сайтов прошивки видно в уже читаемом running-config (0 -- нет или не
-// читалось): число лишь помечается в ответе, новых чтений конфига здесь нет.
+// списков сайтов прошивки видно в уже читаемом running-config (0 -- нет, -1 -- не читалось): число лишь помечается в ответе, новых чтений конфига здесь нет.
 func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string, firmwareLists int) (string, error) {
 	in, err := fetchRouteInputs(ctx, c)
 	if err != nil {
@@ -54,7 +53,17 @@ func RouteLookup(ctx context.Context, c *awgmgr.Client, domain string, firmwareL
 // v0.56, ревью I2): их группы -- не чужие списки, и эта проверка их и так
 // видит. Пометка -- только когда групп больше, чем таких правил.
 func withFirmwareLists(res wire.RouteLookupResult, groups, ndmsRules int) wire.RouteLookupResult {
-	if groups <= ndmsRules || groups <= 0 {
+	if groups < 0 {
+		if !slices.Contains(res.Notes, "firmware_lists_unread") {
+			res.Notes = append(slices.Clone(res.Notes), "firmware_lists_unread")
+		}
+		if res.ByDefault {
+			res.Verdict = wire.LookupViaUnknown
+			res.TunnelID, res.TunnelName = "", ""
+		}
+		return res
+	}
+	if groups <= ndmsRules || groups == 0 {
 		return res
 	}
 	res.FirmwareLists = groups

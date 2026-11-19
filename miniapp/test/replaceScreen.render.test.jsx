@@ -62,43 +62,20 @@ beforeEach(() => {
   mocks.job = null
 })
 
-describe('мастер замены: полная подписка', () => {
-  it('выпущенная страна доступна, новая -- нет', async () => {
+describe('кабинеты в мастере замены', () => {
+  it('не предлагает API Premium даже при доступных странах на старом сервере', async () => {
+    const onOpenCabinet = vi.fn()
+    const { root } = await mount({ onOpenCabinet })
+    expect(root.querySelector('.list-row')).toBeNull()
+    await act(async () => button(root, 'Кабинет Amnezia Premium').click())
+    expect(onOpenCabinet).toHaveBeenCalledWith('amnezia')
+    render(null, root)
+  })
+
+  it('оставляет выпуск HideMy.name через сервер', async () => {
+    mocks.accounts = [{ provider: 'hidemyname', label: 'HideMy.name', connected: true, options: [{ id: 'de', label: 'Германия' }] }]
     const { root } = await mount()
-    const titles = [...root.querySelectorAll('.list-row .row-title')].map((t) => t.textContent)
-    expect(titles).toEqual(['Нидерланды'])
-    expect(root.textContent).toContain('выпуск новых стран закрыт')
-    render(null, root)
-  })
-
-  it('владельцу -- «Открыть кабинет» вместо «может владелец»', async () => {
-    const { root, seen } = await mount()
-    expect(root.textContent).not.toContain('может владелец')
-    await act(async () => button(root, 'Открыть кабинет').click())
-    expect(seen.cabinet).toBe(1)
-    render(null, root)
-  })
-
-  it('оператору -- «Открыть кабинет», как владельцу (решение оператора 01.10)', async () => {
-    mocks.role = 'operator'
-    const { root, seen } = await mount()
-    expect(root.textContent).not.toContain('может владелец')
-    await act(async () => button(root, 'Открыть кабинет').click())
-    expect(seen.cabinet).toBe(1)
-    render(null, root)
-  })
-
-  it('без роли -- кто может, без кнопки', async () => {
-    mocks.role = ''
-    const { root } = await mount()
-    expect(root.textContent).toContain('может владелец роутера, оператор или администратор')
-    expect(button(root, 'Открыть кабинет')).toBeFalsy()
-    render(null, root)
-  })
-
-  it('без onOpenCabinet кнопки нет', async () => {
-    const { root } = await mount({ onOpenCabinet: undefined })
-    expect(button(root, 'Открыть кабинет')).toBeFalsy()
+    expect(root.querySelector('.list-row .row-title').textContent).toBe('Германия')
     render(null, root)
   })
 })

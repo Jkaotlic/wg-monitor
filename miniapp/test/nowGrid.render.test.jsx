@@ -19,7 +19,7 @@ vi.mock('../src/useCommand.js', () => ({
 const { RouterDetail } = await import('../src/screens/RouterDetail.jsx')
 const { AppContext } = await import('../src/appContext.js')
 
-async function mount(wide) {
+async function mount(wide, actions = {}) {
   // Фикстура роутера 1 несёт настоящие по форме тревоги (INCIDENTS).
   mocks.router = structuredClone(respond('GET', '/v1/miniapp/routers/1'))
   mocks.checks = structuredClone(respond('GET', '/v1/miniapp/routers/1/events'))
@@ -28,7 +28,7 @@ async function mount(wide) {
   await act(async () =>
     render(
       <AppContext.Provider value={{ mode: 'web', wide }}>
-        <RouterDetail id={1} openSheet={() => {}} onTab={() => {}} />
+        <RouterDetail id={1} openSheet={() => {}} onTab={() => {}} {...actions} />
       </AppContext.Provider>,
       root,
     ),
@@ -65,4 +65,22 @@ describe('«Сейчас» на широком экране', () => {
     render(null, root)
     root.remove()
   })
+})
+
+it.each([true, false])('маршруты и перевыпуск доступны с главного экрана (wide=%s)', async (wide) => {
+  const onOpenRoutes = vi.fn()
+  const onOpenReplace = vi.fn()
+  const root = await mount(wide, { onOpenRoutes, onOpenReplace })
+  try {
+    const nav = root.querySelector('nav[aria-label="Управление VPN"]')
+    expect(nav).toBeTruthy()
+    const buttons = [...nav.querySelectorAll('button')]
+    buttons.find((button) => button.textContent.includes('Маршруты')).click()
+    buttons.find((button) => button.textContent.includes('Перевыпустить туннель')).click()
+    expect(onOpenRoutes).toHaveBeenCalledTimes(1)
+    expect(onOpenReplace).toHaveBeenCalledTimes(1)
+  } finally {
+    render(null, root)
+    root.remove()
+  }
 })

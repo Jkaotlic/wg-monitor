@@ -596,3 +596,12 @@ English:
 - `WG_LEGACY_ROUTER_SSH=1` - exposes legacy SSH recovery helpers in the service menu.
 
 Do not commit real `wizard.toml`, tokens, router passwords, or local probe captures.
+
+## Checking a home router over VPN from macOS
+
+When both networks use the same LAN addresses, run
+`python3 deploy/diag/home_router_health.py --help` for the read-only check.
+Supply the VPN interface, a trusted SSH alias for a Linux host on the home LAN,
+the router IP and its previously verified LAN MAC address. The check binds SSH
+to the named interface, requires a known SSH host key, and checks the router’s MAC
+before reading its log summary and the timestamps of its latest tunnel probes.

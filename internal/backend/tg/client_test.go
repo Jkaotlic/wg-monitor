@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -740,5 +741,26 @@ func TestUserDecodesNames(t *testing.T) {
 	f := u.Message.From
 	if f.ID != 4203 || f.FirstName != "Имя" || f.LastName != "Фамилия" || f.Username != "nick_x" {
 		t.Fatalf("from = %+v", f)
+	}
+}
+
+func TestGetUpdatesCanceledDuringPoll(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	var logs strings.Builder
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "test", HTTP: srv.Client(), Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	done := make(chan error, 1)
+	go func() { _, err := c.GetUpdates(ctx, 0, 30); done <- err }()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || logs.Len() != 0 {
+		t.Fatalf("got %v, logs %s", err, logs.String())
 	}
 }

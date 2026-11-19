@@ -189,7 +189,8 @@ type miniappTraffic struct {
 	// несущий ляжет. Заполняется только когда несущий назван по сводке
 	// политик агента. Пустой список -- проверенного резерва нет, без поля --
 	// сведений о резерве нет.
-	ReserveTunnelIDs []string `json:"reserve_tunnel_ids,omitzero"`
+	ReserveTunnelIDs  []string `json:"reserve_tunnel_ids,omitzero"`
+	FallbackTunnelIDs []string `json:"fallback_tunnel_ids,omitzero"`
 	// CarrierTunnelID / CarrierBasis / CarrierAlive -- несущий VPN-туннель
 	// обхода по одному правилу для экранов «Роутер» и «VPN-туннели»
 	// (miniappCarrier, v0.56). Экраны называют несущим только его и не
@@ -264,7 +265,7 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 	// выход роутера идёт по другой линии.
 	if pol != nil {
 		if miniappObservationFresh(byCheck["hydraroute"].TS, now) {
-			out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol, now)
+			out.FallbackTunnelIDs, out.ReserveTunnelIDs = miniappPolicyReserve(tunnels, pol, now)
 		} else {
 			out.CarrierAlive = nil
 			out.ReserveTunnelIDs = []string{}
@@ -323,7 +324,7 @@ func miniappTunnelAlive(t *miniappTunnel, now time.Time) *bool {
 	if t.Status == "fail" || (t.Enabled != nil && !*t.Enabled) {
 		return new(false)
 	}
-	if !miniappTunnelCarriesRules(t) {
+	if t.RunState != "running" && t.RunState != "up" {
 		if t.RunState == "" || t.RunState == "unknown" {
 			return nil
 		}
@@ -493,22 +494,20 @@ func miniappPolicyExecuted(p *wire.PolicyBrief, hd miniappHydraDetails) int {
 // miniappPolicyReserve -- запасные звенья набора, живые по своей проверке:
 // роль fallback (интерфейс поднят) ещё не значит, что туннель что-то везёт --
 // на workrouter запасной был поднят с обменом ключами 24-минутной давности.
-func miniappPolicyReserve(tunnels []miniappTunnel, p *wire.PolicyBrief, now time.Time) []string {
-	if p == nil {
-		return nil
-	}
-	out := []string{}
+func miniappPolicyReserve(tunnels []miniappTunnel, p *wire.PolicyBrief, now time.Time) (configured, ready []string) {
+	configured, ready = []string{}, []string{}
 	for _, l := range p.Links {
 		if l.Role != "fallback" || l.TunnelID == "" || l.TunnelID == p.ActiveTunnelID {
 			continue
 		}
+		configured = append(configured, l.TunnelID)
 		if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.RunState == "running" {
 			if alive := miniappTunnelAlive(t, now); alive != nil && *alive {
-				out = append(out, l.TunnelID)
+				ready = append(ready, l.TunnelID)
 			}
 		}
 	}
-	return out
+	return configured, ready
 }
 
 func miniappTunnelByID(tunnels []miniappTunnel, id string) *miniappTunnel {

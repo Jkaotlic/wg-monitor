@@ -12,6 +12,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/timeline"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
@@ -316,7 +317,8 @@ func AlertTrafficFacts(database *db.DB) func(userID int64, checkName string) *al
 		if !ok || id == "" {
 			return nil
 		}
-		rows, err := database.Events().LatestEventsByPrefixSince(userID, "", time.Now().UTC().Add(-miniappEventsWindow))
+		now := time.Now().UTC()
+		rows, err := database.Events().LatestEventsByPrefixSince(userID, "", now.Add(-miniappEventsWindow))
 		if err != nil {
 			return nil
 		}
@@ -327,14 +329,16 @@ func AlertTrafficFacts(database *db.DB) func(userID int64, checkName string) *al
 			if tu, ok := miniappTunnelFromEvent(row); ok {
 				tunnels = append(tunnels, tu)
 			}
-			if row.CheckName == "hydraroute" && json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil {
+			if row.CheckName == "hydraroute" && (row.Status != "ok" || !miniappObservationFresh(row.TS, now) || json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil) {
 				return nil
 			}
 		}
 		if miniappReserveOnlyAlert(rows, []dashboardIncident{{CheckName: checkName}}) {
 			// Несущий сам лежит -- сказать «трафик идёт через него» нельзя.
-			if carrier, _ := miniappPolicyCarrier(tunnels, hd); carrier != nil && carrier.Status == "ok" {
-				return &alerts.TrafficFacts{Via: orTunnelID(carrier)}
+			if carrier, _ := miniappPolicyCarrier(tunnels, hd); carrier != nil {
+				if alive := miniappTunnelAlive(carrier, now); alive != nil && *alive {
+					return &alerts.TrafficFacts{Via: orTunnelID(carrier)}
+				}
 			}
 			return nil
 		}
@@ -343,13 +347,24 @@ func AlertTrafficFacts(database *db.DB) func(userID int64, checkName string) *al
 			if p.ActiveTunnelID != id || miniappPolicyExecuted(p, hd) <= 0 {
 				continue
 			}
+			unknownSpare := false
 			for _, l := range p.Links {
 				if l.Role != "fallback" || l.TunnelID == "" || l.TunnelID == id {
 					continue
 				}
-				if t := miniappTunnelByID(tunnels, l.TunnelID); t != nil && t.Status == "ok" {
+				t := miniappTunnelByID(tunnels, l.TunnelID)
+				if t == nil {
+					unknownSpare = true
+					continue
+				}
+				if alive := miniappTunnelAlive(t, now); alive == nil {
+					unknownSpare = true
+				} else if *alive {
 					return &alerts.TrafficFacts{Spare: orTunnelID(t)}
 				}
+			}
+			if unknownSpare {
+				return nil
 			}
 			return &alerts.TrafficFacts{NoSpare: true}
 		}
@@ -379,6 +394,7 @@ func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) 
 	if len(incidents) == 0 {
 		return false
 	}
+	now := time.Now()
 	var tunnels []miniappTunnel
 	var hd miniappHydraDetails
 	for _, row := range rows {
@@ -386,7 +402,7 @@ func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) 
 			tunnels = append(tunnels, tu)
 		}
 		if row.CheckName == "hydraroute" {
-			if json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil {
+			if row.Status != "ok" || !miniappObservationFresh(row.TS, now) || json.Unmarshal([]byte(row.DetailsJSON), &hd) != nil {
 				return false
 			}
 		}
@@ -396,6 +412,9 @@ func miniappReserveOnlyAlert(rows []db.EventRow, incidents []dashboardIncident) 
 	}
 	carrier, carrierPolicy := miniappPolicyCarrier(tunnels, hd)
 	if carrier == nil {
+		return false
+	}
+	if alive := miniappTunnelAlive(carrier, now); alive == nil || !*alive {
 		return false
 	}
 	carrying := map[string]bool{}
@@ -687,13 +706,14 @@ const miniappStatusUnknown = "unknown"
 // miniappRowUnverified -- details несут unverified=true (агент v0.46 не смог
 // проверить). Разбор только когда слово вообще есть в строке.
 func miniappRowUnverified(details string) bool {
-	if !strings.Contains(details, `"unverified"`) {
+	if !strings.Contains(details, `"unverified"`) && !strings.Contains(details, wire.UnusedTunnelNote) {
 		return false
 	}
 	var d struct {
-		Unverified bool `json:"unverified"`
+		Unverified bool   `json:"unverified"`
+		Note       string `json:"note"`
 	}
-	return json.Unmarshal([]byte(details), &d) == nil && d.Unverified
+	return json.Unmarshal([]byte(details), &d) == nil && (d.Unverified || d.Note == wire.UnusedTunnelNote)
 }
 
 // miniappLastInventoryOK -- время последнего отчёта с tunnels=ok. Берётся у

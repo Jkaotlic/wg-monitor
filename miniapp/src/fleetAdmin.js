@@ -127,7 +127,10 @@ export function notifyGapLines(fleet) {
     )
   }
   for (const name of notify.routers_without_recipients ?? []) {
-    lines.push(`«${name}»: уведомлять некому — ни владельца, ни операторов.`)
+    lines.push(`«${name}»: среди владельца и операторов нет получателей уведомлений.`)
+  }
+  for (const name of notify.routers_with_all_recipients_muted ?? []) {
+    lines.push(`«${name}»: все назначенные получатели выключили уведомления.`)
   }
   return lines
 }

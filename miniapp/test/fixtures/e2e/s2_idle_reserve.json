@@ -19,6 +19,10 @@
     "contested_default": true,
     "egress_tunnel_id": "awg50",
     "egress_tunnel_name": "vpn-main",
+    "fallback_tunnel_ids": [
+      "awg10",
+      "awg11"
+    ],
     "mode": "split",
     "reserve_tunnel_ids": [
       "awg10",

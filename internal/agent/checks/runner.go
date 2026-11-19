@@ -2,7 +2,8 @@ package checks
 
 import (
 	"context"
-	"os/exec"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 )
 
 // Runner abstracts subprocess execution so checks are unit-testable
@@ -14,7 +15,7 @@ type Runner interface {
 type OSExec struct{}
 
 func (OSExec) Run(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := keenetic.CommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
 }
 

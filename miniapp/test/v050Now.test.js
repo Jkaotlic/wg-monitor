@@ -39,7 +39,7 @@ describe('тревога называет VPN-туннель именем (сп�
 })
 
 describe('«запасного нет» против «запасной упал» (спека п. 1.3)', () => {
-  const traffic = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
+  const traffic = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', fallback_tunnel_ids: ['awg10'] }
 
   it('мёртвый запасной находится, несущий -- нет', () => {
     expect(deadReserveLine({ traffic, tunnels: TUNNELS, incidents: INC, via: 'vpn-hip' })?.tunnel_id).toBe('awg10')
@@ -69,7 +69,7 @@ describe('«запасного нет» против «запасной упал
 })
 
 describe('шапка закрывает плитку резерва только про тот же туннель (ревью, п. 1)', () => {
-  const carrierDown = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
+  const carrierDown = { mode: 'split', egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip', fallback_tunnel_ids: ['awg10'] }
   // Несущий упал (тревога по нему), запасной «поплыл» без своей тревоги.
   const tunnels = [
     { tunnel_id: 'awg14', name: 'vpn-hip', run_state: 'running', status: 'fail' },

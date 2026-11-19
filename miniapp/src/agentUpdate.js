@@ -52,15 +52,15 @@ export function agentUpdateState(router) {
       const last = lastError ? ` · прошлая попытка: ${lastError}` : ''
       return {
         tone: 'warn',
-        text: `ждёт включения: ${pending} поставится, когда роутер выйдет на связь${last}`,
+        text: `назначено ${pending} · ждём связи с роутером${last}`,
         canUpdate: false,
         canCancel: true,
       }
     }
     if (lastError) {
-      return { tone: 'danger', text: `не ставится ${pending}: ${lastError}${tail}`, canUpdate: false, canCancel: true }
+      return { tone: 'warn', text: `назначено ${pending} · прошлая попытка: ${lastError}${tail}`, canUpdate: false, canCancel: true }
     }
-    return { tone: 'muted', text: `ставится ${pending}${tail}`, canUpdate: false, canCancel: true }
+    return { tone: 'muted', text: `назначено обновление до ${pending}${tail}`, canUpdate: false, canCancel: true }
   }
   if (router?.agent_behind) {
     // Отметку сервер снимает после исчерпанных попыток, а причина остаётся:
@@ -122,8 +122,8 @@ export function agentUpdateErrorText(err) {
 
 export function agentUpdateDoneText(resp, nickname) {
   const to = resp?.target_version ?? ''
-  if (resp?.deferred) return `Обновление «${nickname}» до ${to} поставится, когда роутер выйдет на связь.`
-  return `Обновление «${nickname}» до ${to} отправлено на роутер. Новая версия появится после его следующего отчёта.`
+  if (resp?.deferred) return `Обновление «${nickname}» до ${to} назначено. Ждём связи с роутером.`
+  return `Обновление «${nickname}» до ${to} поставлено в очередь. Установку подтвердит отчёт роутера.`
 }
 
 export function agentCancelDoneText(resp, nickname) {
@@ -140,7 +140,7 @@ export function agentUpdateSheetText(router, backendVersion) {
       : `Агент на «${name}» обновится до ${backendVersion}.`,
   ]
   if (isAway(router)) {
-    parts.push('Роутер сейчас не на связи — обновление поставится, когда он выйдет на связь.')
+    parts.push('Роутер сейчас не на связи — сервер сохранит назначение до следующего контакта.')
   }
   // Точку в конце фразы сервера срезаем: иначе вышло бы «…бэкенда..».
   const warning = String(router?.agent_update_warning ?? '').trim().replace(/[.\s]+$/, '')
@@ -184,7 +184,7 @@ export function fleetUpdateSummary(results) {
     if (count[r?.outcome] != null) count[r.outcome]++
     const name = `«${r?.nickname ?? ''}»`
     const id = r?.router_id
-    if (r?.outcome === 'deferred') lines.push({ id, text: `${name}: поставится, когда роутер выйдет на связь` })
+    if (r?.outcome === 'deferred') lines.push({ id, text: `${name}: обновление назначено, ждём связи с роутером` })
     if (r?.outcome === 'skipped') lines.push({ id, text: `${name}: пропущен — ${r.reason_text || 'причина не названа'}` })
     if (r?.outcome === 'error') lines.push({ id, text: `${name}: не получилось — ${r.reason_text || 'ошибка на сервере'}` })
   }

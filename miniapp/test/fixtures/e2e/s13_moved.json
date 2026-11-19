@@ -26,6 +26,10 @@
     "contested_default": true,
     "egress_tunnel_id": "awg10",
     "egress_tunnel_name": "vpn-backup-one",
+    "fallback_tunnel_ids": [
+      "awg50",
+      "awg11"
+    ],
     "mode": "split",
     "reserve_tunnel_ids": [
       "awg11"

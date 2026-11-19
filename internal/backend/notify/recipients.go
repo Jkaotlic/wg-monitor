@@ -23,39 +23,43 @@ import (
 // операторов нет и админа нет. Такую тревогу обязан показать дашборд, иначе
 // она исчезает молча.
 func RecipientsFor(d *db.DB, routerUserID int64, adminID int64) ([]int64, error) {
-	return collectRecipients(d, routerUserID, adminID)
+	recipients, _, err := collectRecipients(d, routerUserID, adminID)
+	return recipients, err
 }
 
 // OwnerAndOperators -- люди роутера без админа. Нужна сводке «роутеры без
 // получателей»: админ теперь слышит всех, и посчитай его сводка -- список был
 // бы пуст всегда. Выключатель действует так же, как в RecipientsFor: владелец,
 // который выключил уведомления, их не услышит, значит у роутера нет адресата.
-func OwnerAndOperators(d *db.DB, routerUserID int64) ([]int64, error) {
+// assigned включает выключивших уведомления владельца и операторов.
+func OwnerAndOperators(d *db.DB, routerUserID int64) (enabled []int64, assigned int, err error) {
 	return collectRecipients(d, routerUserID, 0)
 }
 
-func collectRecipients(d *db.DB, routerUserID int64, adminID int64) ([]int64, error) {
+func collectRecipients(d *db.DB, routerUserID int64, adminID int64) ([]int64, int, error) {
 	u, err := d.Users().GetByID(routerUserID)
 	if err != nil {
-		return nil, fmt.Errorf("recipients: %w", err)
+		return nil, 0, fmt.Errorf("recipients: %w", err)
 	}
 	muted, err := d.NotifyMutes().MutedBy(routerUserID)
 	if err != nil {
-		return nil, fmt.Errorf("recipients: mutes: %w", err)
+		return nil, 0, fmt.Errorf("recipients: mutes: %w", err)
 	}
 	ops, err := d.RouterOperators().List(routerUserID)
 	if err != nil {
-		return nil, fmt.Errorf("recipients: operators: %w", err)
+		return nil, 0, fmt.Errorf("recipients: operators: %w", err)
 	}
 
 	out := make([]int64, 0, len(ops)+2)
 	seen := make(map[int64]bool, len(ops)+2)
 	add := func(id int64) {
-		if id == 0 || seen[id] || muted[id] {
+		if id == 0 || seen[id] {
 			return
 		}
 		seen[id] = true
-		out = append(out, id)
+		if !muted[id] {
+			out = append(out, id)
+		}
 	}
 	if u != nil && u.TelegramUserID != nil {
 		add(*u.TelegramUserID)
@@ -64,5 +68,5 @@ func collectRecipients(d *db.DB, routerUserID int64, adminID int64) ([]int64, er
 		add(op.TelegramUserID)
 	}
 	add(adminID)
-	return out, nil
+	return out, len(seen), nil
 }

@@ -260,7 +260,7 @@ describe('Парк: другая версия агента', () => {
     await flush()
     await flush()
     expect(mocks.updates).toEqual([{ id: 22, confirm: 'home', target: 'v0.34.0', allow: true }])
-    expect(root.textContent).toContain('Обновление «home» до v0.34.0 отправлено на роутер.')
+    expect(root.textContent).toContain('Обновление «home» до v0.34.0 поставлено в очередь.')
     cleanup(s.root)
     cleanup(root)
   })

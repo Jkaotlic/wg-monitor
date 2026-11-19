@@ -565,6 +565,9 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 	}
 	resp, err := httpc.Do(req)
 	if err != nil {
+		if method == "getUpdates" && ctx.Err() == context.Canceled && errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		// Go's *url.Error embeds the full URL — including our bot-token —
 		// in Error(), and `%w`-wrapping carries that all the way to slog
 		// JSON. Strip it down to the method name; details (timeout / DNS
@@ -578,7 +581,10 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		return out
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if method == "getUpdates" && ctx.Err() == context.Canceled && errors.Is(readErr, context.Canceled) {
+		return context.Canceled
+	}
 	var ar apiResp
 	if err := json.Unmarshal(raw, &ar); err != nil {
 		c.warn(method, "bad response", "status", resp.StatusCode, "body_len", len(raw))

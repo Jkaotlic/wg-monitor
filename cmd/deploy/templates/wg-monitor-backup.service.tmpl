@@ -4,6 +4,10 @@ Documentation=https://github.com/Jkaotlic/wg-monitor
 
 [Service]
 Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+IOWeight=10
 {{if not .OmitUserGroup}}
 User={{.User}}
 Group={{.Group}}

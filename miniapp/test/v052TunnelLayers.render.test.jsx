@@ -10,6 +10,7 @@ const SNAP = {
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   fetchRouterChecks: () => Promise.resolve({ checks: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok', run_state: 'running' }] }),
+  fetchRouterChecksWithIncidents: () => Promise.resolve({ incidents: [], tunnels: [{ tunnel_id: 'awg10', status: 'ok' }] }),
   fetchRouterSettings: () => Promise.resolve({ role: 'owner' }),
   fetchAwg3Issuable: () => Promise.resolve({ panels: [] }),
   fetchRouterFacts: () => Promise.resolve(null),

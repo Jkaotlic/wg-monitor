@@ -33,8 +33,8 @@ async function mount(node) {
 describe('TrafficPath: состояние -- в подписи и в тексте, а не за role=img', () => {
   const tunnels = [{ id: 'awg10', name: 'vpn-de', status: 'up', run_state: 'running' }]
   it('подпись называет состояние обеих веток', () => {
-    expect(pathLabel({ tunnel: 'up', direct: 'up', via: 'vpn-de' }, false)).toBe('Путь трафика: заблокированное идёт через VPN-туннель «vpn-de»; остальное — напрямую, без VPN-туннеля')
-    expect(pathLabel({ tunnel: 'down', direct: 'up', via: 'vpn-de' }, false)).toBe('Путь трафика: VPN-туннель «vpn-de» не отвечает; остальное — напрямую, без VPN-туннеля')
+    expect(pathLabel({ tunnel: 'up', direct: 'up', via: 'vpn-de' }, false)).toBe('Путь трафика: заблокированное идёт через VPN-туннель «vpn-de»; прямой доступ отдельно не проверен')
+    expect(pathLabel({ tunnel: 'down', direct: 'up', via: 'vpn-de' }, false)).toBe('Путь трафика: VPN-туннель «vpn-de» не отвечает; прямой доступ отдельно не проверен')
     expect(pathLabel({ tunnel: 'down', direct: 'up', via: '' }, false)).toContain('VPN-туннель не отвечает')
     expect(pathLabel({ tunnel: 'unknown', direct: 'unknown', via: '' }, true)).toBe('Путь трафика: про VPN-туннель роутер не сказал; прямой путь — неизвестно, роутер молчит')
   })

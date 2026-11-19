@@ -61,7 +61,7 @@ describe('v0.52: «Маршруты» -- выбор цели и добавлен
 })
 
 describe('v0.52: выпуск в кабинете -- слой cabinetissue', () => {
-  const pending = { provider: 'amnezia', title: 'Amnezia', option: { id: 'nl', label: 'Нидерланды', note: '' } }
+  const pending = { provider: 'hidemyname', title: 'HideMy.name', option: { id: 'nl', label: 'Нидерланды', note: '' } }
   it('layer=cabinetissue рисует «Что произойдёт» с выбранным вариантом', async () => {
     const root = await mount(<CabinetScreen routerID={4} routerName="home" openSheet={() => {}} onClose={() => {}} layer="cabinetissue" layerParams={{ pending }} openLayer={() => {}} closeLayer={() => {}} onPin={() => {}} />)
     expect(root.textContent).toContain('Что произойдёт')
@@ -79,7 +79,7 @@ describe('v0.52 fix 3: выход из cabinetissue перечитывает п�
   it('закрытие слоя выпуска (в том числе «назад» Telegram) -- fetchVPNAccounts заново', async () => {
     const api = await import('../src/api.js')
     const spy = vi.spyOn(api, 'fetchVPNAccounts')
-    const pending = { provider: 'amnezia', title: 'Amnezia', option: { id: 'nl', label: 'Нидерланды', note: '' } }
+    const pending = { provider: 'hidemyname', title: 'HideMy.name', option: { id: 'nl', label: 'Нидерланды', note: '' } }
     const root = document.createElement('div')
     document.body.appendChild(root)
     const draw = (layer, layerParams) => act(async () => render(<CabinetScreen routerID={4} routerName="home" openSheet={() => {}} onClose={() => {}} layer={layer} layerParams={layerParams} openLayer={() => {}} closeLayer={() => {}} onPin={() => {}} />, root))

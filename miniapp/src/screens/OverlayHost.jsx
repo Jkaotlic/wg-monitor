@@ -203,7 +203,7 @@ function OverlayHostContent({ nav, dispatch, routers, isAdmin, refreshRouters })
           routerName={current?.nickname}
           asleep={asleep}
           openSheet={openSheet}
-          onClose={close}
+          onClose={() => dispatch({ type: 'back' })}
           layer={nav.overlay}
           layerParams={params}
           initialTab={nav.overlay === 'cabinet' ? params.tab : undefined}
@@ -219,7 +219,7 @@ function OverlayHostContent({ nav, dispatch, routers, isAdmin, refreshRouters })
       const routesParams = nav.overlay === 'routes' ? params : params.returnParams ?? {}
       const fromTunnel = routesParams.returnTo === 'tunnel'
       return (
-        <Overlay title="Маршруты" backLabel={fromTunnel ? 'VPN-туннель' : 'VPN-туннели'} onBack={nav.overlay === 'routes' ? () => dispatch({ type: 'back' }) : toParent}>
+        <Overlay title="Маршруты" backLabel={fromTunnel ? 'VPN-туннель' : routesParams.returnTo === 'router' ? 'Роутер' : 'VPN-туннели'} onBack={nav.overlay === 'routes' ? () => dispatch({ type: 'back' }) : toParent}>
           {/* rebindFrom -- VPN-туннель, с экрана которого пришли переносить
               правила: «Маршруты» сами откроют выбор цели. */}
           <RoutesTab

@@ -344,7 +344,9 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 				q.pending[userID] = tail
 			}
 			if commandExpired(head, time.Now()) {
-				q.log().Warn("queue drop expired command", "user_id", userID, "cmd_id", head.ID, "action", head.Action)
+				if head.Action != "self_update" || q.onDrop == nil {
+					q.log().Warn("queue drop expired command", "user_id", userID, "cmd_id", head.ID, "action", head.Action)
+				}
 				if h := q.onDrop; h != nil {
 					q.mu.Unlock()
 					h(userID, head)
@@ -704,7 +706,9 @@ func (q *Queue) Sweep(ttl time.Duration) (results, pending int) {
 	onDrop := q.onDrop
 	q.mu.Unlock()
 	for _, d := range dropped {
-		q.log().Warn("queue sweep expired pending command", "user_id", d.userID, "cmd_id", d.cmd.ID, "action", d.cmd.Action)
+		if d.cmd.Action != "self_update" || onDrop == nil {
+			q.log().Warn("queue sweep expired pending command", "user_id", d.userID, "cmd_id", d.cmd.ID, "action", d.cmd.Action)
+		}
 		if onDrop != nil {
 			onDrop(d.userID, d.cmd)
 		}

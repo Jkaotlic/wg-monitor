@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { capTunnelState, statusEvidenceCopy } from '../src/statusEvidence.js'
+import { capTunnelState, currentStatusEvidence, statusEvidenceCopy } from '../src/statusEvidence.js'
 
 describe('capTunnelState', () => {
   it('не повышает локально упавший туннель даже при здоровом backend-вердикте', () => {
@@ -32,4 +32,11 @@ describe('statusEvidenceCopy', () => {
     expect(statusEvidenceCopy({ reason_code: 'address_routed' }).title).toBe('Маршрут выбирается по адресу')
     expect(statusEvidenceCopy({ reason_code: 'direct_path' }).title).toBe('Трафик идёт напрямую')
   })
+})
+
+it.each(['healthy', 'failed', 'degraded'])('истёкший серверный статус %s становится устаревшим', (state) => {
+  const evidence = { state, fresh_until: '2026-11-18T14:00:00Z' }
+  const end = Date.parse(evidence.fresh_until)
+  expect(currentStatusEvidence(evidence, end)).toBe(evidence)
+  expect(currentStatusEvidence(evidence, end + 1).state).toBe('stale')
 })

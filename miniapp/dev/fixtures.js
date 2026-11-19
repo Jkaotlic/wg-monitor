@@ -318,7 +318,7 @@ export function startReplaceJob(body) {
     running: true,
     startedAt: Date.now(),
     option: body?.option_id ?? 'nl',
-    provider: body?.provider ?? 'amnezia',
+    provider: body?.provider ?? 'hidemyname',
   }
   return replaceStatus()
 }
@@ -798,28 +798,26 @@ export function respond(method, path) {
   if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
   // Пороги живут в backend.yaml; на домашнем бэкенде это 120/180/3600.
   if (rest === '/replace') return replaceStatus()
+  if (rest === '/cabinets') {
+    return { amnezia: { keys: [] }, hidemy: { codes: [{ id: 'demo', label: 'Демо', mask: '0123', active: true }] }, selfhosted: { available: false } }
+  }
+  if (rest === '/vpn/awg3') return { panels: [] }
   if (rest === '/vpn') {
     return {
       accounts: [
         {
           provider: 'amnezia',
           label: 'Amnezia Premium',
-          connected: true,
-          status: 'active',
-          ends_at: '2026-12-01',
-          devices_used: 2,
-          devices_max: 5,
-          options: [
-            { id: 'nl', label: 'Нидерланды' },
-            { id: 'de', label: 'Германия', issued: true },
-            { id: 'se', label: 'Швеция' },
-          ],
+          disabled: true,
+          connected: false,
+          note: 'Конфигурации доступны в личном кабинете Amnezia.',
         },
         {
           provider: 'hidemyname',
           label: 'HideMy.name',
-          connected: false,
-          note: 'Код доступа не сохранён. Отправьте его боту в теме роутера — приложение коды не спрашивает.',
+          connected: true,
+          status: 'active',
+          options: [{ id: 'nl', label: 'Нидерланды' }, { id: 'de', label: 'Германия' }],
         },
       ],
     }

@@ -524,6 +524,17 @@ func TestLookupRoute_NdmsRuleCarriesFirmwareSource(t *testing.T) {
 	}
 }
 
+func TestDefaultRouteWithUnreadFirmwareRules(t *testing.T) {
+	base := wire.RouteLookupResult{Domain: "example.com", Verdict: wire.LookupViaTunnel, TunnelID: "awg10", ByDefault: true}
+	got := withFirmwareLists(base, -1, 0)
+	if got.Verdict != wire.LookupViaUnknown || got.TunnelID != "" || !slices.Contains(got.Notes, "firmware_lists_unread") {
+		t.Fatalf("unverified default route: %+v", got)
+	}
+	if known := withFirmwareLists(base, 0, 0); known.Verdict != wire.LookupViaTunnel {
+		t.Fatalf("verified empty list: %+v", known)
+	}
+}
+
 func TestWithFirmwareLists(t *testing.T) {
 	base := wire.RouteLookupResult{Domain: "example.com", Notes: []string{"ip_rules_unchecked"}}
 	// Групп больше, чем правил awg-manager с backend=ndms: есть чужие списки.

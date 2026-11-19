@@ -441,3 +441,11 @@ describe('слои awg3-панелей', () => {
     expect(awg3ListParams(undefined)).toEqual({ returnTo: null })
   })
 })
+
+it('возвращает из перевыпуска через кабинет к выбранному роутеру', () => {
+  const home = { routerID: 3, tab: 'router', overlay: null, sheet: null }
+  const replace = navReducer(home, { type: 'overlay', overlay: 'replace', params: { returnTo: 'router' } })
+  const cabinet = navReducer(replace, { type: 'overlay', overlay: 'cabinet', params: { tab: 'hidemy', returnTo: 'replace', returnParams: replace.overlayParams } })
+  expect(navReducer(cabinet, { type: 'back' })).toEqual(replace)
+  expect(navReducer(replace, { type: 'back' })).toEqual(home)
+})

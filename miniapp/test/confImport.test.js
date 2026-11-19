@@ -50,6 +50,9 @@ describe('файл', () => {
       }
     }
     expect(await readConfBase64({ text: '[Peer]\n' }, FakeReader)).toBe(btoa('[Peer]\n'))
+    const premium = '# ключ подписки vpn://example\r\n[Peer]\r\n'
+    expect(await readConfBase64({ text: premium }, FakeReader)).toBe(btoa('[Peer]\r\n'))
+    await expect(readConfBase64({ text: 'Account = vpn://example' }, FakeReader)).rejects.toThrow('subscription_key')
     await expect(readConfBase64({ text: '' }, BrokenReader)).rejects.toThrow('read_failed')
   })
 })

@@ -3,6 +3,7 @@ package heartbeat
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"regexp"
 	"sync"
@@ -217,16 +218,13 @@ func (w *Watcher) Run(ctx context.Context) {
 		"scan_every", w.cfg.ScanEvery,
 		"stale_static", w.cfg.staleFor(db.User{Kind: db.KindStatic}),
 		"send_timeout", w.sendTimeout())
-	// Выход из цикла возможен только по отмене корневого контекста, то есть
-	// при остановке backend'а. Если строка появится в логе в другой момент --
-	// это и есть объяснение молчащего мониторинга, а не «в парке всё хорошо».
-	defer slog.Warn("heartbeat: watcher loop exited", "err", ctx.Err())
 	w.scan(ctx)
 	t := time.NewTicker(w.cfg.ScanEvery)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			slog.Info("heartbeat: watcher loop exited", "err", ctx.Err())
 			return
 		case <-t.C:
 			w.scan(ctx)
@@ -321,6 +319,9 @@ func (w *Watcher) scan(ctx context.Context) {
 			}
 			latest = lp
 		}
+		if u.LastSeenAt != nil && u.LastSeenAt.After(latest) {
+			latest = *u.LastSeenAt
+		}
 		if latest.IsZero() {
 			// User never reported (agent stuck during install, never deployed,
 			// or was just added). Treat CreatedAt as the "earliest possible
@@ -336,6 +337,19 @@ func (w *Watcher) scan(ctx context.Context) {
 		now := w.now()
 		stale := now.Sub(latest)
 		threshold := w.cfg.staleFor(u)
+		if stale >= threshold {
+			// A report may have committed since the bulk snapshot, e.g.
+			// while an earlier router's Telegram notification was pending.
+			contact, err := w.d.Events().LatestReportContact(ctx, u.ID)
+			if err != nil {
+				slog.Warn("heartbeat: cannot confirm silence", "user_id", u.ID, "err", err)
+				continue
+			}
+			if contact.After(latest) {
+				latest = contact
+				stale = now.Sub(latest)
+			}
+		}
 		if stale < threshold {
 			w.mu.Lock()
 			delete(w.sleepNotified, u.ID)
@@ -416,7 +430,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			slog.Warn("heartbeat: read offline state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 			continue
 		}
-		if st.CurrentStatus == "hard" {
+		if st.CurrentStatus == "hard" && st.LastAlertAt != nil {
 			// Тревога уже ушла. Напоминания -- дело realert, с затуханием.
 			continue
 		}
@@ -432,9 +446,23 @@ func (w *Watcher) scan(ctx context.Context) {
 		if failedBefore && now.Before(retry.next) {
 			continue // прошлая попытка упала -- ждём паузу
 		}
+		// Record the observed outage independently of Telegram delivery.
+		if st.CurrentStatus != "hard" {
+			if err := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, time.Time{}); err != nil {
+				slog.Error("heartbeat: failed to record offline incident", "user_id", u.ID, "err", err)
+				continue
+			}
+		}
 		sendCtx, cancelSend := context.WithTimeout(ctx, w.sendTimeout())
 		err = w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
 		cancelSend()
+		if errors.Is(err, notify.ErrNoAvailableRecipients) {
+			// Preserve the outage without counting a send or retrying every scan.
+			w.mu.Lock()
+			w.offlineRetry[u.ID] = offlineRetryState{next: now.Add(30 * time.Minute)}
+			w.mu.Unlock()
+			continue
+		}
 		if err != nil && notify.MaybeDelivered(err) {
 			// Таймаут ответа или срок контекста: Telegram мог тревогу уже
 			// доставить. Повтор через 1 и 5 минут слал владельцу дубли
@@ -450,7 +478,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			w.lastOfflineMaybeText = redactSecrets(err.Error())
 			w.lastOfflineMaybeAt = now
 			w.mu.Unlock()
-			if mErr := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); mErr != nil {
+			if mErr := w.d.State().BumpLastAlertAt(u.ID, "agent_heartbeat", now); mErr != nil {
 				slog.Error("heartbeat: offline notice maybe delivered but not recorded", "user_id", u.ID, "nickname", u.Nickname, "err", mErr)
 			}
 			continue
@@ -477,7 +505,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		w.mu.Unlock()
 		// Точечная запись: тишину и «понятно», нажатые за время отправки, не
 		// трогает.
-		if err := w.d.State().MarkHard(u.ID, "agent_heartbeat", latest, now); err != nil {
+		if err := w.d.State().BumpLastAlertAt(u.ID, "agent_heartbeat", now); err != nil {
 			slog.Error("heartbeat: offline notice sent but not recorded", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 		}
 		metricOfflineSent.Add(1)
@@ -512,8 +540,8 @@ func (w *Watcher) clearOfflineStateIfHard(ctx context.Context, u db.User) {
 	if st.CurrentStatus != "hard" && !suppressionLeftOver {
 		return
 	}
-	wasHard := st.CurrentStatus == "hard"
-	if !wasHard {
+	wasNotified := st.CurrentStatus == "hard" && (st.LastAlertAt != nil || st.LastAlertMsgID != nil)
+	if st.CurrentStatus != "hard" {
 		slog.Info("heartbeat: снимаем заглушку с вернувшегося роутера",
 			"user_id", userID, "status", st.CurrentStatus, "acked", st.Acked)
 	}
@@ -536,7 +564,7 @@ func (w *Watcher) clearOfflineStateIfHard(ctx context.Context, u db.User) {
 		slog.Warn("heartbeat: clear offline recovery state failed", "user_id", userID, "err", err)
 		return
 	}
-	if !wasHard || w.off == nil {
+	if !wasNotified || w.off == nil {
 		return
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, w.sendTimeout())
@@ -546,5 +574,5 @@ func (w *Watcher) clearOfflineStateIfHard(ctx context.Context, u db.User) {
 		slog.Warn("heartbeat: «роутер снова на связи» не отправлено", "user_id", userID, "nickname", u.Nickname, "err", err)
 		return
 	}
-	slog.Info("heartbeat: router back online notice sent", "user_id", userID, "nickname", u.Nickname)
+	slog.Info("heartbeat: router back online", "user_id", userID, "nickname", u.Nickname)
 }

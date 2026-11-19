@@ -10,7 +10,7 @@ import (
 )
 
 func TestNoteRunningConfig_RecordsFirmwareSiteGroups(t *testing.T) {
-	t.Cleanup(func() { firmwareSiteGroups.Store(0) })
+	t.Cleanup(func() { firmwareSiteGroups.Store(-1) })
 	noteRunningConfig("dns-proxy\n!\nobject-group fqdn work\n    include example.com\n!\n")
 	if got := firmwareSiteGroups.Load(); got != 1 {
 		t.Fatalf("с группой: %d", got)
@@ -22,7 +22,7 @@ func TestNoteRunningConfig_RecordsFirmwareSiteGroups(t *testing.T) {
 }
 
 func TestBuildRunner_WiresFirmwareSiteGroups(t *testing.T) {
-	t.Cleanup(func() { firmwareSiteGroups.Store(0) })
+	t.Cleanup(func() { firmwareSiteGroups.Store(-1) })
 	cfg := &agent.Config{}
 	awg := awgmgr.New("http://127.0.0.1:1")
 	r := buildRunner(cfg, "/opt/etc/wg-monitor/config.yaml", awg, nil, nil, buildSingleChecks(cfg, awg, nil), nil)
@@ -44,12 +44,12 @@ func (failingNDMC) Run(context.Context, string, ...string) (string, error) {
 // v0.56, ревью I2: чтение running-config упало -- признак списков прошивки
 // сбрасывается, а не держит число из прошлого чтения.
 func TestReadDNSEndpoints_ErrorResetsFirmwareSiteGroups(t *testing.T) {
-	t.Cleanup(func() { firmwareSiteGroups.Store(0) })
+	t.Cleanup(func() { firmwareSiteGroups.Store(-1) })
 	firmwareSiteGroups.Store(3)
 	if _, err := readDNSEndpointsVia(context.Background(), failingNDMC{}); err == nil {
 		t.Fatal("ждали ошибку чтения")
 	}
-	if got := firmwareSiteGroups.Load(); got != 0 {
+	if got := firmwareSiteGroups.Load(); got != -1 {
 		t.Fatalf("после ошибки чтения признак держит устаревшее: %d", got)
 	}
 }

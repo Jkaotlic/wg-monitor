@@ -124,7 +124,7 @@ describe('строки роутеров', () => {
   it('обновление агента -- отдельным полем, а не в строке версий', () => {
     const office = rows.find((r) => r.id === 3)
     expect(office.versions).not.toContain('ставится')
-    expect(office.update.text).toBe('ставится v0.30.0 · 1 попытка')
+    expect(office.update.text).toBe('назначено обновление до v0.30.0 · 1 попытка')
     expect(office.update.canCancel).toBe(true)
     expect(rows.find((r) => r.id === 2).update.canUpdate).toBe(true)
   })
@@ -156,7 +156,12 @@ describe('дыры уведомлений', () => {
   it('роутер без адресатов назван по имени', () => {
     const lines = notifyGapLines(FLEET)
     expect(lines.join('\n')).toContain('Склад')
-    expect(lines.join('\n')).toContain('некому')
+    expect(lines.join('\n')).toContain('нет получателей')
+  })
+
+  it('отличает отключённые уведомления от отсутствия адресатов', () => {
+    expect(notifyGapLines({ notify: { routers_with_all_recipients_muted: ['Дом'] } }))
+      .toEqual(['«Дом»: все назначенные получатели выключили уведомления.'])
   })
 
   it('дыр нет -- строк нет, а не «всё хорошо» пустым списком', () => {

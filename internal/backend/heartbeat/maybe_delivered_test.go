@@ -68,7 +68,7 @@ func TestWatcherOfflineMaybeDeliveredIsNotRepeated(t *testing.T) {
 }
 
 // Обратный случай: Telegram заведомо отказал -- сообщения у владельца нет,
-// повтор после паузы обязателен, отметки hard нет.
+// повтор после паузы обязателен, у инцидента нет отметки доставки.
 func TestWatcherOfflineKnownNotSentIsRetried(t *testing.T) {
 	d, uid, t0 := offlineFixture(t, "refused",
 		"3636363636363636363636363636363636363636363636363636363636363636", "198.51.100.36")
@@ -85,8 +85,8 @@ func TestWatcherOfflineKnownNotSentIsRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.CurrentStatus == "hard" {
-		t.Fatal("тревога не дошла, а сторож записал hard")
+	if st.CurrentStatus != "hard" || st.LastAlertAt != nil {
+		t.Fatalf("offline without delivery: got %+v", st)
 	}
 }
 

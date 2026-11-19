@@ -81,7 +81,7 @@ describe('кабинет роутера -- слой навигации', () => {
     p.openSheet({ title: 'x' })
     expect(h.actions.pop()).toEqual({ type: 'sheet', sheet: { title: 'x' } })
     p.onClose()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: null })
+    expect(h.actions.pop()).toEqual({ type: 'back' })
     cleanup(root)
   })
 

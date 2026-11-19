@@ -185,7 +185,7 @@ import { pluralRu, incidentCopy, checkLabel, guardVerdict, tunnelCountSummary } 
 import { isStale } from './staleness.js'
 import { ageByServerClock, clockTime } from './serverClock.js'
 import { agoText, whenText } from './when.js'
-import { statusEvidenceCopy } from './statusEvidence.js'
+import { currentStatusEvidence, statusEvidenceCopy } from './statusEvidence.js'
 
 // Разделы вкладки «Проверки» → «Сейчас» (v0.52, спека §2): заголовки -- одни и
 // те же для экрана и для указателей places.js.
@@ -334,7 +334,7 @@ export function checkRows({ checks = [], tunnels = [], tunnelCounts = null, inci
     else if (key === 'hydraroute') body = hydraRow(check, clock)
     else if (key === 'awg_manager') body = awgmRow(check, clock)
     else if (key === 'dns_ru') body = { answer: check.status === 'ok' ? 'да' : 'нет', value: measuredAt(check.ts, clock) }
-    else body = tunnelsRow(check ?? null, tunnels, clock, incidents, evidence, tunnelCounts)
+    else body = tunnelsRow(check ?? null, tunnels, clock, incidents, currentStatusEvidence(evidence, nowMs + (clockOffsetMs ?? 0)), tunnelCounts)
     const answer = silent ? 'не знаем' : body.answer
     const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({

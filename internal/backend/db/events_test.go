@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,5 +186,33 @@ func TestLatestEventsByPrefixSince_OneRowPerCheckRegardlessOfHistory(t *testing.
 	}
 	if len(recent) != 1 || recent[0].CheckName != "dns" {
 		t.Fatalf("фильтр свежести = %+v", recent)
+	}
+}
+
+func TestPruneCommitsBoundedBatches(t *testing.T) {
+	d := newTestDB(t)
+	uid, err := d.Users().Insert("router", strings.Repeat("de", 32), "198.51.100.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC()
+	old := cutoff.Add(-time.Hour)
+	if _, err := d.SQL().Exec(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<1050)
+	INSERT INTO events(user_id,check_name,status,ts) SELECT ?, 'sample_'||n,'ok',? FROM seq`, uid, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`CREATE TRIGGER stop_cleanup BEFORE DELETE ON events WHEN OLD.id=1050 BEGIN SELECT RAISE(ABORT,'interrupted'); END`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := d.Events().PruneBefore(cutoff)
+	if err == nil || n <= 0 || n >= 1050 {
+		t.Fatalf("expected durable partial progress, n=%d err=%v", n, err)
+	}
+	if _, err := d.SQL().Exec("DROP TRIGGER stop_cleanup"); err != nil {
+		t.Fatal(err)
+	}
+	rest, err := d.Events().PruneBefore(cutoff)
+	if err != nil || rest+n != 1050 {
+		t.Fatalf("retry: removed %d + %d, err=%v", n, rest, err)
 	}
 }

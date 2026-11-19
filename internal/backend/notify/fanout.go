@@ -30,6 +30,9 @@ type Sender interface {
 // снимает первая удачная доставка -- в срок обычного напоминания.
 var ErrNoneDelivered = errors.New("уведомление не доставлено ни одному получателю")
 
+// ErrNoAvailableRecipients indicates that no eligible recipient received a notice.
+var ErrNoAvailableRecipients = errors.New("нет доступных получателей")
+
 // MaybeDelivered -- рассылка провалилась так, что Telegram мог сообщение уже
 // доставить: получатели были (ErrNoneDelivered), а ошибка -- не из тех, что
 // значат «заведомо не отправлено» (tg.KnownNotSent): таймаут ответа, срок

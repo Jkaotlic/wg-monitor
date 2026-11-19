@@ -4,6 +4,7 @@ package heartbeat
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -765,5 +766,55 @@ func TestWatcherBacksOffFailedOfflineAlert(t *testing.T) {
 	driveScan(w, back.Add(10*time.Minute))
 	if off.n != 6 {
 		t.Fatalf("после возвращения пауза не сброшена: попыток %d, ждали 6", off.n)
+	}
+}
+
+func TestWatcherLogsNormalShutdown(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "watcher.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var logs strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := NewWatcher(d, &fakeOffline{}, Config{ScanEvery: time.Hour})
+	// Cancel during the first scan, after the watcher has entered Run.
+	w.SetNow(func() time.Time { cancel(); return time.Now() })
+	w.Run(ctx)
+	if !strings.Contains(logs.String(), `level=INFO msg="heartbeat: watcher loop exited" err="context canceled"`) {
+		t.Fatalf("missing shutdown reason: %s", logs.String())
+	}
+}
+
+func TestWatcherRechecksSilenceAgainstReportsDuringScan(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "heartbeat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	uid, err := d.Users().Insert("home", strings.Repeat("ca", 32), "198.51.100.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(time.Hour)
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute})
+	// Simulate an incoming report after GetAll and the bulk event snapshot.
+	var once sync.Once
+	w.SetNow(func() time.Time {
+		once.Do(func() {
+			if _, err := d.SQL().Exec("UPDATE users SET last_seen_at = ? WHERE id = ?", now, uid); err != nil {
+				t.Fatal(err)
+			}
+		})
+		return now
+	})
+	w.scan(context.Background())
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("freshly reported router got %d offline alerts", got)
 	}
 }

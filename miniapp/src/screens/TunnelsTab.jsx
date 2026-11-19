@@ -14,6 +14,7 @@ import { CONFIG_SOURCES_TITLE, configSourceChoices, configSourceTarget } from '.
 import { trafficSummary, trafficView } from '../traffic.js'
 import { humanAge, pluralRu, rulesCount } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
+import { Overlay } from '../ui/Overlay.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
@@ -24,7 +25,7 @@ import { TunnelScreen } from './TunnelScreen.jsx'
 import { ConfImportScreen } from './ConfImportScreen.jsx'
 import { ErrorLine } from '../ui/ErrorLine.jsx'
 import { AwgmLine } from '../ui/AwgmLine.jsx'
-import { statusEvidenceCopy } from '../statusEvidence.js'
+import { currentStatusEvidence, statusEvidenceCopy } from '../statusEvidence.js'
 import { EvidenceSummary } from '../components/EvidenceSummary.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
@@ -271,7 +272,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         : checks
           ? 'Время последней проверки неизвестно'
           : ''
-  const evidence = checks?.evidence ?? null
+  const evidence = currentStatusEvidence(checks?.evidence, freshnessOptions.nowMs)
   const evidenceCopy = statusEvidenceCopy(evidence)
   const evidenceUncertain = ['degraded', 'stale', 'unknown'].includes(evidence?.state)
   // Тревоги -- в подпись строк: строка говорит то же, что считает счёт (Fix 2).
@@ -296,6 +297,10 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   const resolvable = Boolean(view.active && (checks?.tunnels ?? []).some((c) => c.tunnel_id === view.active.id))
   const replaceFromHero = Boolean(openLayer && resolvable && view.policyName && !list.some((t) => t.id === view.active.id))
 
+  const replaceTunnel = layerParams.tunnel ?? (resolvable && view.policyName ? view.active : null)
+  const replaceBack = layerParams.returnTo === 'router' ? 'Роутер' : layerParams.returnTo === 'tunnel' ? 'VPN-туннель' : 'VPN-туннели'
+  const openReplaceCabinet = (tab) => openLayer('cabinet', { tab, returnTo: 'replace', returnParams: layerParams })
+  const readingTarget = ['idle', 'loading'].includes(phase) || (snapshot && !checks && !checksFailed)
   const activeTunnelID = view.active?.id
   useEffect(() => {
     if (activeTunnelID) traffic.run('tunnel_traffic', { tunnel_id: activeTunnelID, period: '24h' }, deadline)
@@ -402,6 +407,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           {opening ? 'Читаю…' : 'Новый VPN-туннель'}
         </button>
       )}
+
+      {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
+          единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
+      <ul class="card list-reset tunnels-more" style="margin-top:12px">
+        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? rulesCount(view.active.rules) : undefined} onClick={onOpenRoutes} />
+      </ul>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'refreshing' && (
@@ -548,29 +559,6 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {view.active && (() => {
-        const failText = traffic.error || (traffic.result && traffic.result.status !== 'ok' ? 'Роутер не отдал обмен за сутки — попробуйте ещё раз.' : '')
-        const tv = trafficView(trafficOut, { busy: traffic.busy, error: failText })
-        const again = () => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)
-        return (
-          <Section title="Обмен за сутки">
-            <div class={tv.invite ? 'card traffic-invite' : 'card'}>
-              {tv.invite ? (
-                <p class={tv.error ? 'state state-error traffic-detail' : 'traffic-detail'}>{tv.text}</p>
-              ) : (
-                <div class="stat-grid">
-                  <Stat label="принято" value={tv.rx} note={tv.note} />
-                  <Stat label="отдано" value={tv.tx} />
-                </div>
-              )}
-              <button type="button" class="btn btn-ghost btn-wide" disabled={traffic.busy} onClick={again}>
-                {tv.button}
-              </button>
-            </div>
-          </Section>
-        )
-      })()}
-
       {overviewRows.length > 0 && (
         <Section title={summary.title}>
           <div class="tunnel-overview-head">
@@ -604,11 +592,28 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </Section>
       )}
 
-      {/* Строка не зависит от несущего VPN-туннеля: без него «Маршруты» --
-          единственный путь к ним и к HydraRoute Neo (финал п. 2). */}
-      <ul class="card list-reset tunnels-more" style="margin-top:12px">
-        <ListRow title="Маршруты: куда идёт трафик" sub={view.active ? rulesCount(view.active.rules) : undefined} onClick={onOpenRoutes} />
-      </ul>
+      {view.active && (() => {
+        const failText = traffic.error || (traffic.result && traffic.result.status !== 'ok' ? 'Роутер не отдал обмен за сутки — попробуйте ещё раз.' : '')
+        const tv = trafficView(trafficOut, { busy: traffic.busy, error: failText })
+        const again = () => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)
+        return (
+          <Section title="Обмен за сутки">
+            <div class={tv.invite ? 'card traffic-invite' : 'card'}>
+              {tv.invite ? (
+                <p class={tv.error ? 'state state-error traffic-detail' : 'traffic-detail'}>{tv.text}</p>
+              ) : (
+                <div class="stat-grid">
+                  <Stat label="принято" value={tv.rx} note={tv.note} />
+                  <Stat label="отдано" value={tv.tx} />
+                </div>
+              )}
+              <button type="button" class="btn btn-ghost btn-wide" disabled={traffic.busy} onClick={again}>
+                {tv.button}
+              </button>
+            </div>
+          </Section>
+        )
+      })()}
 
       {layer === 'tunnel' && (
         <TunnelScreen
@@ -625,19 +630,36 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           onChanged={() => requestTunnelStatus(run, deadline)}
           onOpenRebind={onOpenRebind}
           onRestart={() => requestTunnelStatus(run, deadline)}
-          canReplace={Boolean(view.active && view.policyName && view.active.id === layerParams.tunnelID)}
+          canReplace={Boolean(resolvable && view.policyName && view.active.id === layerParams.tunnelID)}
           onReplace={() => openLayer('replace', { tunnel: view.active, policyName: view.policyName, returnTo: 'tunnel', returnParams: { tunnelID: layerParams.tunnelID } })}
         />
       )}
 
-      {layer === 'replace' && layerParams.tunnel && (
+      {layer === 'replace' && !replaceTunnel && (
+        <Overlay title="Перевыпустить туннель" backLabel={replaceBack} onBack={closeLayer}>
+          <div class="screen">
+            <p class="state" role="status">
+              {readingTarget ? 'Проверяем, какой туннель несёт трафик…'
+                : !snapshot || checksFailed ? 'Не удалось загрузить данные для перевыпуска.'
+                : view.state === 'direct' ? 'Трафик идёт напрямую. Активного VPN-туннеля для перевыпуска нет.'
+                : 'Для перевыпуска нужен активный VPN-туннель с подтверждённым идентификатором и назначенными правилами.'}
+            </p>
+            {!readingTarget && <button type="button" class="btn btn-ghost btn-wide" disabled={busy} onClick={() => requestTunnelStatus(run, deadline)}>Обновить состояние</button>}
+            <button type="button" class="btn btn-ghost btn-wide" onClick={() => openReplaceCabinet('amnezia')}>Кабинет Amnezia Premium</button>
+            <button type="button" class="btn btn-ghost btn-wide" onClick={() => openReplaceCabinet('hidemy')}>Кабинет HideMy.name</button>
+          </div>
+        </Overlay>
+      )}
+
+      {layer === 'replace' && replaceTunnel && (
         <ReplaceScreen
           routerID={routerID}
-          tunnel={layerParams.tunnel}
-          policyName={layerParams.policyName}
+          tunnel={replaceTunnel}
+          policyName={layerParams.policyName ?? view.policyName}
+          backLabel={replaceBack}
           onClose={closeLayer}
           onDone={() => requestTunnelStatus(run, deadline)}
-          onOpenCabinet={() => openLayer('cabinet', {})}
+          onOpenCabinet={openReplaceCabinet}
           onOpenTunnel={(tunnelID) => (tunnelID ? openLayer('tunnel', { tunnelID }) : closeLayer())}
         />
       )}
@@ -648,6 +670,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           asleep={asleep}
           snapshot={snapshot}
           onClose={closeLayer}
+          backLabel={layerParams.returnTo === 'cabinet' ? 'Кабинет' : 'VPN-туннели'}
           onImported={() => requestTunnelStatus(run, deadline)}
         />
       )}

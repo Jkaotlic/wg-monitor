@@ -32,7 +32,7 @@ const PENDING_CODES = new Set(['preview_not_ready', 'analysis_pending'])
 // навигации, не в DOM -- и стирается в момент отправки на проверку. Дальше
 // сервер держит конфиг под токеном предпросмотра; опрос и «Добавить» шлют
 // только токен.
-export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImported }) {
+export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImported, backLabel = 'VPN-туннели' }) {
   const confRef = useRef('')
   const [hasConf, setHasConf] = useState(false)
   const [fileName, setFileName] = useState('')
@@ -101,8 +101,12 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
       if (!alive.current || seq !== pickSeq.current) return
       confRef.current = b64
       setHasConf(true)
-    } catch {
-      if (alive.current && seq === pickSeq.current) setFileProblem(IMPORT_TEXTS.readFailed)
+    } catch (err) {
+      if (alive.current && seq === pickSeq.current) {
+        setFileProblem(err?.code === 'subscription_key'
+          ? 'В конфиге есть ключ подписки vpn://. Удалите его из копии файла и выберите её снова.'
+          : IMPORT_TEXTS.readFailed)
+      }
     }
   }
 
@@ -240,7 +244,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
   const stillAnalyzing = Boolean(view?.analyzing)
 
   return (
-    <Overlay title={IMPORT_TEXTS.title} backLabel="VPN-туннели" onBack={onClose}>
+    <Overlay title={IMPORT_TEXTS.title} backLabel={backLabel} onBack={onClose}>
       <div class="screen conf-import">
         <h1 class="screen-title">{IMPORT_TEXTS.title}</h1>
         <p class="router-lastseen">{IMPORT_TEXTS.intro}</p>

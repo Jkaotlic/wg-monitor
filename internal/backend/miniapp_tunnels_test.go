@@ -336,3 +336,22 @@ func TestMiniappTunnelFromEventAwgmConnAbsentOmitted(t *testing.T) {
 		}
 	}
 }
+
+func TestGraceKeepsAssignmentButDoesNotProveAvailability(t *testing.T) {
+	now := time.Now()
+	tunnel := miniappTunnel{TunnelID: "test", Status: "ok", RunState: "stopped", RunGrace: true, TS: now.Format(time.RFC3339)}
+	if !miniappTunnelCarriesRules(&tunnel) {
+		t.Fatal("grace must retain assigned rules")
+	}
+	if alive := miniappTunnelAlive(&tunnel, now); alive == nil || *alive {
+		t.Fatalf("stopped tunnel reported available: %v", alive)
+	}
+}
+
+func TestUnusedTunnelSuppressionIsNotProofOfHealth(t *testing.T) {
+	rows := []db.EventRow{{CheckName: "tunnel_spare", Status: "ok", DetailsJSON: `{"status":"running","note":"tunnel has no DNS/static routes and pingCheck is disabled"}`}}
+	current := miniappCurrentRows(Deps{}, 0, rows)
+	if len(current) != 1 || current[0].Status != miniappStatusUnknown {
+		t.Fatalf("suppressed check classified as healthy: %+v", current)
+	}
+}

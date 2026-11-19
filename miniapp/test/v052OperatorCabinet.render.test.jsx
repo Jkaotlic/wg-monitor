@@ -5,7 +5,6 @@ import { act } from 'preact/test-utils'
 import { CabinetOptions } from '../src/screens/CabinetOptions.jsx'
 import { CabinetIssue } from '../src/screens/CabinetIssue.jsx'
 import { cabinetPerms } from '../src/cabinetKeys.js'
-import { replaceCanRevoke } from '../src/screens/ReplaceScreen.jsx'
 
 async function mount(node) {
   const root = document.createElement('div')
@@ -30,11 +29,5 @@ describe('v0.52 §7: оператор отзывает и присылает .co
     expect(texts(root)).toContain('Прислать .conf в личку')
     render(null, root)
     root.remove()
-  })
-  it('мастер замены: оператору доступен «отозвать старый»', async () => {
-    expect(replaceCanRevoke('operator')).toBe(true)
-    expect(replaceCanRevoke('owner')).toBe(true)
-    expect(replaceCanRevoke('admin')).toBe(true)
-    expect(replaceCanRevoke('')).toBe(false)
   })
 })

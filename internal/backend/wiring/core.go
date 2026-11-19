@@ -103,7 +103,7 @@ func NewCore(in Inputs) *Core {
 
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
-	backend.AttachDeployExpiryHandler(cmdQueue, logger)
+	backend.AttachDeployExpiryHandler(cmdQueue, d, logger)
 	backend.AttachDeployDispatchLimit(cmdQueue)
 
 	// Build upstream version cache from configured GitHub repos. Skip sources

@@ -576,7 +576,7 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 			details["unverified_problems"] = strings.Join(reasons, "; ")
 			return Unverified(name, start, "access policies unreadable: cannot tell whether this rule-less tunnel carries traffic", details)
 		case !used:
-			details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
+			details["note"] = wire.UnusedTunnelNote
 			return OK(name, start, details)
 		}
 	}
@@ -676,7 +676,7 @@ func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.
 }
 
 // matrixCellFresh -- ячейка снята не раньше matrixFreshWindow назад. Время
-// ячейки (ts) главнее; нет ts или он в незнакомом виде -- общая отметка
+// ячейки (ts) главнее; нет ts -- общая отметка
 // матрицы (updatedAt), как было до CHK-05.
 func matrixCellFresh(matrix *awgmgr.MonitoringMatrix, c awgmgr.MatrixCell, now time.Time) bool {
 	ts := c.ObservedAt(matrix.UpdatedAt)
@@ -696,7 +696,8 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 	if matrix == nil {
 		return false
 	}
-	own, othersAlive := 0, false
+	failedTargets := make(map[string]bool)
+	healthyTargets := make(map[string]bool)
 	for _, c := range matrix.Cells {
 		// CHK-05: в счёт идут только свежие ячейки -- и свои, и соседей.
 		if !matrixCellFresh(matrix, c, now) {
@@ -706,14 +707,19 @@ func matrixSaysDead(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.T
 			if c.OK {
 				return false
 			}
-			own++
+			failedTargets[c.TargetID] = true
 			continue
 		}
-		if c.OK {
-			othersAlive = true
+		if c.OK && c.TunnelID != "" && c.TargetID != "" {
+			healthyTargets[c.TargetID] = true
 		}
 	}
-	return own > 0 && othersAlive
+	for target := range failedTargets {
+		if healthyTargets[target] {
+			return true
+		}
+	}
+	return false
 }
 
 func matrixHasFailedOwnTargets(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.Time) bool {

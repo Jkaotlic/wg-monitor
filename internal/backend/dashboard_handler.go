@@ -313,7 +313,8 @@ type dashboardNotifyGaps struct {
 	Unreachable []dashboardUnreachable `json:"unreachable"`
 	// RoutersWithoutRecipients -- имена роутеров, которым уведомление
 	// адресовать некому.
-	RoutersWithoutRecipients []string `json:"routers_without_recipients"`
+	RoutersWithoutRecipients      []string `json:"routers_without_recipients"`
+	RoutersWithAllRecipientsMuted []string `json:"routers_with_all_recipients_muted"`
 }
 
 type dashboardUnreachable struct {
@@ -515,8 +516,9 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 // на этих граблях проект уже стоял в ленте происшествий.
 func buildDashboardNotifyGaps(d Deps) dashboardNotifyGaps {
 	gaps := dashboardNotifyGaps{
-		Unreachable:              []dashboardUnreachable{},
-		RoutersWithoutRecipients: []string{},
+		Unreachable:                   []dashboardUnreachable{},
+		RoutersWithoutRecipients:      []string{},
+		RoutersWithAllRecipientsMuted: []string{},
 	}
 	if d.DB == nil {
 		return gaps
@@ -545,14 +547,19 @@ func buildDashboardNotifyGaps(d Deps) dashboardNotifyGaps {
 	for _, u := range users {
 		// Без админа: он слышит все роутеры, и с ним этот список был бы пуст
 		// всегда (notify.OwnerAndOperators).
-		people, err := notify.OwnerAndOperators(d.DB, u.ID)
+		people, assigned, err := notify.OwnerAndOperators(d.DB, u.ID)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Warn("dashboard: recipients lookup failed", "user_id", u.ID, "err", err)
 			}
 			continue
 		}
-		if len(people) == 0 {
+		if len(people) > 0 {
+			continue
+		}
+		if assigned > 0 {
+			gaps.RoutersWithAllRecipientsMuted = append(gaps.RoutersWithAllRecipientsMuted, u.Nickname)
+		} else {
 			gaps.RoutersWithoutRecipients = append(gaps.RoutersWithoutRecipients, u.Nickname)
 		}
 	}

@@ -302,10 +302,11 @@ type MatrixCell struct {
 // ObservedAt uses the cell's timestamp when available. Older awg-manager
 // versions only timestamp the matrix as a whole.
 func (c MatrixCell) ObservedAt(matrixTimestamp string) time.Time {
-	at, err := time.Parse(time.RFC3339, strings.TrimSpace(c.TS))
-	if err != nil {
-		at, _ = time.Parse(time.RFC3339, strings.TrimSpace(matrixTimestamp))
+	stamp := c.TS
+	if stamp == "" {
+		stamp = matrixTimestamp
 	}
+	at, _ := time.Parse(time.RFC3339, strings.TrimSpace(stamp))
 	return at
 }
 

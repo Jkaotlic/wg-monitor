@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
-import { cabinetPerms } from '../cabinetKeys.js'
+import { fetchVPNAccounts, fetchReplaceStatus, startReplace } from '../api.js'
 import { accountSummary, optionRows } from '../cabinet.js'
 import { replaceView, startErrorText, stepValue, replaceLeftover } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -19,30 +18,16 @@ import { Q, Quoted } from '../ui/Q.jsx'
 // не после: именно это свойство делает операцию обратимой.
 const POLL_MS = 3000
 
-// onOpenCabinet -- открыть «Откуда взять конфиг»: там админ, владелец и
-// оператор отзывают выпущенную страну, когда в подписке нет мест.
-// onOpenTunnel(tunnelID|null) -- к экрану VPN-туннеля, который мастер оставил на
-// роутере (null -- к списку): разбираться с ним человек будет там.
-// replaceCanRevoke -- кто может отозвать старый конфиг в мастере замены:
-// админ, владелец и оператор (решение оператора 01.10).
-// Правило роли -- одно, в cabinetPerms (cabinetKeys.js).
-export function replaceCanRevoke(role) {
-  return cabinetPerms(role).revoke
-}
-
 export function ReplaceScreen(props) {
   return <RouterReplaceScreen key={props.routerID} {...props} />
 }
 
-function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
+function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel, backLabel = 'VPN-туннели' }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
   const [pick, setPick] = useState(null)
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
-  // Отзывать могут админ, владелец и оператор (replaceCanRevoke); роль не
-  // узнали -- кнопки нет, слова те же.
-  const [canRevoke, setCanRevoke] = useState(false)
   const alive = useRef(true)
   const startInFlight = useRef(false)
   const pollGeneration = useRef(0)
@@ -71,15 +56,9 @@ function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, on
         })
     }
     poll()
-    setCanRevoke(false)
-    fetchRouterSettings(routerID)
-      .then((st) => {
-        if (alive.current) setCanRevoke(replaceCanRevoke(st?.role))
-      })
-      .catch(() => {})
     fetchVPNAccounts(routerID)
       .then((data) => {
-        if (alive.current) setAccounts(data.accounts ?? [])
+        if (alive.current) setAccounts((data.accounts ?? []).filter((account) => account.provider !== 'amnezia'))
       })
       .catch(() => {
         if (alive.current) setError('Кабинеты не ответили — выпустить конфиг не из чего.')
@@ -120,10 +99,10 @@ function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, on
   const showForm = view.idle && !starting
 
   return (
-    <Overlay title="Заменить конфиг" backLabel="VPN-туннели" onBack={onClose}>
+    <Overlay title="Заменить конфиг" backLabel={backLabel} onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">
-          Заменить конфиг <Q>{tunnel.name}</Q>
+          Заменить конфиг <Q>{tunnel.name || tunnel.title || tunnel.id}</Q>
         </h1>
         <p class="router-lastseen">
           Новый VPN-туннель встанет рядом, и только когда он заработает, правила <Q>{policyName}</Q>{' '}
@@ -183,7 +162,7 @@ function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, on
         {showForm && pick && (
           <Section title="Что произойдёт">
             <div class="card card-rows">
-              <DataRow title="Заменяем" code={tunnel.id} value={tunnel.name} />
+              <DataRow title="Заменяем" code={tunnel.id} value={tunnel.name || tunnel.title || tunnel.id} />
               <DataRow title="Новый конфиг" code={pick.provider} value={pick.option.label} />
               {/* В code стоит то, что оператор может сверить с роутером:
                   идентификатор туннеля, имя кабинета. Здесь раньше стояло
@@ -211,26 +190,19 @@ function RouterReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, on
 
         {showForm && !pick && (
           <>
+            {onOpenCabinet && (
+              <Section title="Кабинеты провайдеров">
+                <button type="button" class="btn btn-ghost btn-wide" onClick={() => onOpenCabinet('amnezia')}>Кабинет Amnezia Premium</button>
+                <button type="button" class="btn btn-ghost btn-wide" onClick={() => onOpenCabinet('hidemy')}>Кабинет HideMy.name</button>
+              </Section>
+            )}
             {accounts == null && !error && <p class="state">Спрашиваем кабинеты…</p>}
             {(accounts ?? []).map((acc) => {
               const summary = accountSummary(acc)
               const options = optionRows(acc).filter((o) => o.available)
-              const openCabinet = summary.full && canRevoke && onOpenCabinet
-              const fullBlock = summary.full && (
-                <div class="card">
-                  <p class="traffic-detail">
-                    <Quoted text={openCabinet ? `${summary.fullNote} Освободить место можно в кабинете: отзовите одну из выпущенных стран.` : summary.reason} />
-                  </p>
-                  {openCabinet && (
-                    <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenCabinet}>
-                      Открыть кабинет
-                    </button>
-                  )}
-                </div>
-              )
               return (
                 <Section key={acc.provider} title={summary.title}>
-                  {fullBlock}
+                  {summary.full && <p class="hint">{summary.fullNote}</p>}
                   {summary.canIssue ? (
                     <ul class="card list-reset">
                       {options.map((o) => (

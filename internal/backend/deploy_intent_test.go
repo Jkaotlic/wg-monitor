@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -50,7 +51,7 @@ func seedSleptRouter(t *testing.T, tok string) sleptRouter {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, logger)
+	AttachDeployExpiryHandler(q, d, logger)
 	issued := time.Now().Add(-4 * 24 * time.Hour)
 	if err := q.Enqueue(uid, wire.Command{
 		ID:        "cmd-before-poweroff",
@@ -474,5 +475,47 @@ func TestReportDuringThirdAttemptInFlightDoesNotGiveUp(t *testing.T) {
 	calls := dn.snapshot()
 	if len(calls) != 1 || !strings.Contains(calls[0].output, "версия не сменилась") {
 		t.Fatalf("ждали ровно одно уведомление о потерянных попытках: %+v", calls)
+	}
+}
+
+func TestUndeliveredDeployAttemptKeepsIntentAndFinishesJournal(t *testing.T) {
+	s := seedSleptRouter(t, strings.Repeat("a", 64))
+	id, err := BeginOperation(context.Background(), s.d, s.uid, 0, "agent_update", "deploy", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AttachOperationCommand(s.d, id, "cmd-before-poweroff"); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	s.q.SetLogger(logger)
+	AttachDeployExpiryHandler(s.q, s.d, logger)
+	s.q.Sweep(time.Hour)
+	if !strings.Contains(logs.String(), "update remains scheduled") || strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("expected a deferred update, logs: %s", logs.String())
+	}
+	ops, err := s.d.Operations().List(s.uid, 1, 0)
+	if err != nil || len(ops) != 1 || ops[0].Outcome != "not_delivered" {
+		t.Fatalf("ops=%v err=%v", ops, err)
+	}
+	state, err := s.d.Users().PendingDeploy(s.uid)
+	if err != nil || state.Version != sleptTarget || state.Attempts != 0 {
+		t.Fatalf("state=%v err=%v", state, err)
+	}
+}
+
+func TestUndeliveredUpdateWithoutIntentRaisesWarning(t *testing.T) {
+	s := seedSleptRouter(t, strings.Repeat("b", 64))
+	if _, err := s.d.Users().ClearPendingDeploy(s.uid); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	s.q.SetLogger(logger)
+	AttachDeployExpiryHandler(s.q, s.d, logger)
+	s.q.Sweep(time.Hour)
+	if !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), "without a confirmed matching intent") {
+		t.Fatalf("expected a missing intent warning, logs: %s", logs.String())
 	}
 }

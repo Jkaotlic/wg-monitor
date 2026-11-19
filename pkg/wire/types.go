@@ -23,6 +23,9 @@ type Report struct {
 	Trigger string `json:"trigger,omitempty"`
 }
 
+// UnusedTunnelNote identifies an intentionally suppressed alarm, not a successful probe.
+const UnusedTunnelNote = "tunnel has no DNS/static routes and pingCheck is disabled"
+
 type Check struct {
 	Name       string         `json:"name"`
 	Status     string         `json:"status"`

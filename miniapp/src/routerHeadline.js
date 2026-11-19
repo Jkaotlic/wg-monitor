@@ -91,8 +91,8 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
   // Режим тут не важен: и при «напрямую» по главному выходу, и при
   // неизвестном главном выходе политика ведёт заблокированное в несущего
   // (ревью B1). На sing-box несущего нет вовсе.
-  if (traffic?.mode !== 'singbox' && carrier && !carrierAlive({ traffic, tunnels, incidents })) {
-    if (carrierState({ traffic, tunnels, incidents }) === 'unknown') {
+  if (traffic?.mode !== 'singbox' && carrier && !carrierAlive({ traffic, tunnels, incidents, freshness })) {
+    if (carrierState({ traffic, tunnels, incidents, freshness }) === 'unknown') {
       return { tone: 'warn', cold: true, stale, tag: 'VPN-туннель обхода не проверен', verdict: `Для обхода назначен «${via}». Доступность через него пока неизвестна.` }
     }
     return {
@@ -100,7 +100,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
       cold: true,
       stale,
       tag: 'VPN-туннель обхода не отвечает',
-      verdict: `Заблокированное роутер ведёт через «${via}», но он не отвечает — такие сайты могут не открываться. Остальное идёт напрямую, как обычно.`,
+      verdict: `Заблокированное роутер ведёт через «${via}», но он не отвечает — такие сайты могут не открываться. Остальные сайты могут идти напрямую.`,
     }
   }
 
@@ -114,7 +114,7 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
       // всегда умная маршрутизация. Заблокированное идёт через туннель,
       // российское и незаблокированное -- напрямую. Обещать общий маршрут
       // значит врать человеку о том, как устроен его собственный интернет.
-      verdict: `Заблокированное открывается через «${via}». Остальное идёт напрямую, как обычно.`,
+      verdict: `Заблокированное открывается через «${via}». Остальные сайты могут идти напрямую.`,
     }
   }
 
@@ -128,8 +128,8 @@ export function routerHeadline({ router, traffic, incidents = [], tunnels = [], 
       stale,
       tag: 'всё работает',
       verdict: via
-        ? `Заблокированное открывается через «${via}». Остальное идёт напрямую, как обычно.`
-        : 'Заблокированное открывается через VPN-туннели обхода, какой взять — решают правила. Остальное идёт напрямую, как обычно.',
+        ? `Заблокированное открывается через «${via}». Остальные сайты могут идти напрямую.`
+        : 'Заблокированное открывается через VPN-туннели обхода, какой взять — решают правила. Остальные сайты могут идти напрямую.',
     }
   }
 
@@ -211,7 +211,11 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only, freshn
   const carrier = carrierLine({ traffic, tunnels })
   if (carrier) {
     const via = lineVia(carrier, traffic)
-    if (carrierAlive({ traffic, tunnels, incidents })) {
+    if (carrierState({ traffic, tunnels, incidents, freshness }) === 'unknown') {
+      return { ...base, tone: 'warn', tag: 'Доступность обхода не подтверждена',
+        verdict: `Для обхода назначен «${via}». Свежего подтверждения связи нет.` }
+    }
+    if (carrierAlive({ traffic, tunnels, incidents, freshness })) {
       const dead = tunnels.find((t) => `tunnel_${t.tunnel_id}` === name)
       const deadName = lineName(dead) || name.slice('tunnel_'.length)
       if (!only) {
@@ -274,6 +278,6 @@ function tunnelHeadline({ name, traffic, incidents, tunnels, stale, only, freshn
     ...base,
     tone: 'danger',
     tag: 'заблокированное не открывается',
-    verdict: 'VPN-туннель обхода не отвечает. Банки, госуслуги и остальной интернет работают как обычно.',
+    verdict: 'VPN-туннель обхода не отвечает. Доступность сайтов через прямое соединение отдельно не проверялась.',
   }
 }

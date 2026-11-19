@@ -112,16 +112,16 @@ func (p *Poller) tick(ctx context.Context) {
 	}
 	latest, err := p.d.Events().LatestPerUserAll()
 	if err != nil {
-		slog.Warn("digest: LatestPerUserAll failed; treating routers as offline", "err", err)
-		latest = nil
+		slog.Warn("digest: LatestPerUserAll failed; will retry within the hour", "err", err)
+		return
 	}
 
 	online := 0
 	var offline []string
 	for _, u := range users {
-		var ts time.Time
-		if latest != nil {
-			ts = latest[u.ID]
+		ts := latest[u.ID]
+		if u.LastSeenAt != nil && u.LastSeenAt.After(ts) {
+			ts = *u.LastSeenAt
 		}
 		if !ts.IsZero() && now.Sub(ts) < p.cfg.OnlineWindow {
 			online++

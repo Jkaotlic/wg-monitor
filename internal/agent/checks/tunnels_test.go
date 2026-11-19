@@ -1183,3 +1183,18 @@ func TestTunnelsCheckReportsUnknownEgressWhenTaggedTunnelMissing(t *testing.T) {
 		t.Fatalf("unresolved reference to another tunnel would become direct WAN on screen: %+v", check.Details)
 	}
 }
+
+func TestMatrixVerdictRequiresComparableMeasurements(t *testing.T) {
+	now := time.Now().UTC()
+	m := &awgmgr.MonitoringMatrix{UpdatedAt: now.Format(time.RFC3339Nano), Cells: []awgmgr.MatrixCell{
+		{TunnelID: "one", TargetID: "target-a", OK: false},
+		{TunnelID: "two", TargetID: "target-b", OK: true},
+	}}
+	if matrixSaysDead(m, "one", now) {
+		t.Error("success against an unrelated target cannot corroborate a tunnel failure")
+	}
+	m.Cells[1].TS = "invalid"
+	if matrixSaysAlive(m, "two", now) {
+		t.Error("an invalid cell timestamp must not inherit another measurement's time")
+	}
+}

@@ -19,6 +19,14 @@ const COPY = {
   carrier_unknown: ['muted', 'Несущий VPN-туннель не определён'],
 }
 
+// The server verdict can expire while the screen is open or refresh is failing.
+export function currentStatusEvidence(evidence, nowMs) {
+  if (!evidence?.fresh_until || evidence.state === 'stale' || evidence.state === 'unknown') return evidence
+  const until = Date.parse(evidence.fresh_until)
+  if (Number.isFinite(until) && nowMs <= until) return evidence
+  return { ...evidence, state: 'stale', reason_code: 'evidence_stale', confidence: 'none' }
+}
+
 // Evidence is a ceiling, never an optimistic replacement. A healthy backend
 // verdict allows the screen to keep its more specific local result, but cannot
 // turn a locally failed branch green.

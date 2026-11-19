@@ -141,5 +141,5 @@ it('в резерв не попадает туннель со старой пр�
   const args = { traffic, tunnels, incidents: [{ check_name: 'tunnel_alarm' }], via: 'main', freshness: { nowMs, enforceFreshness: true } }
   expect(reserveLine(args)?.tunnel_id).toBe('fresh')
   expect(reserveLine({ ...args, traffic: { ...traffic, reserve_tunnel_ids: ['old', 'alarm'] } })).toBeUndefined()
-  expect(reserveLine({ ...args, traffic: { mode: 'vpn', egress_tunnel_id: 'main' } })?.tunnel_id).toBe('fresh')
+  expect(reserveLine({ ...args, traffic: { mode: 'vpn', egress_tunnel_id: 'main' } })).toBeUndefined()
 })

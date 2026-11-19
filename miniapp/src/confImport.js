@@ -71,17 +71,29 @@ export function tunnelNameProblem(name, snapshot) {
 }
 
 // Кусками: String.fromCharCode(...все байты) упирается в предел аргументов.
-export function bytesToBase64(bytes) {
+function binaryString(bytes) {
   let bin = ''
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return btoa(bin)
+  return bin
 }
 
-// Байты, а не текст: конфиг уходит серверу ровно таким, каким лежит в файле.
+export function bytesToBase64(bytes) {
+  return btoa(binaryString(bytes))
+}
+
+// Preserve the original bytes except for comments containing a Premium login key.
 export function readConfBase64(file, Reader = globalThis.FileReader) {
   return new Promise((resolve, reject) => {
     const reader = new Reader()
-    reader.onload = () => resolve(bytesToBase64(new Uint8Array(reader.result)))
+    reader.onload = () => {
+      const original = binaryString(new Uint8Array(reader.result))
+      const conf = original.replace(/^[ \t]*#[^\r\n]*vpn:\/\/[^\r\n]*(?:\r\n|\n|\r|$)/gim, '')
+      if (/vpn:\/\//i.test(conf)) {
+        reject(Object.assign(new Error('subscription_key'), { code: 'subscription_key' }))
+        return
+      }
+      resolve(btoa(conf))
+    }
     reader.onerror = () => reject(new Error('read_failed'))
     reader.readAsArrayBuffer(file)
   })

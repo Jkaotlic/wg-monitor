@@ -346,6 +346,7 @@ export function navReducer(state, action) {
         const back = { ...withoutParams(state), tab: TAB_LAYERS[target], overlay: target }
         return params?.returnParams ? { ...back, overlayParams: params.returnParams } : back
       }
+      if (target === 'router') return { ...withoutParams(state), tab: 'router', overlay: null }
       if (target === PARK_TAB) return { ...withoutParams(state), tab: PARK_TAB, overlay: null }
       // Возврат во вкладку («Ход работы» из «Управления»): слоя 'manage' нет,
       // есть вкладка -- иначе «назад» оставил бы пустую основную область.

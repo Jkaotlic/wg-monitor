@@ -109,25 +109,23 @@ func TestOfflineToUnreachableOnlyRecipientDoesNotHammer(t *testing.T) {
 		t.Fatalf("недоступные=%v, ждали 1001 с причиной chat not found -- иначе оператор не увидит, почему тихо", un)
 	}
 
-	// Повторять «не на связи» сторож не будет вовсе: тревога записана
-	// (agent_heartbeat = hard), повтор -- коротким напоминанием realert
-	// (BOT-05). Отметку недоступности снимает первая удачная доставка любого
-	// сообщения -- здесь «снова на связи», когда роутер вернётся.
+	// Re-enable the chat while the outage is ongoing. Once the retry pause
+	// expires, send the actual root alert. Recovery can then reply to it.
+	door.open()
 	clock = clock.Add(7 * time.Hour)
 	w.ScanForTest(context.Background())
-	if got := door.attempts(); got != 1 {
-		t.Fatalf("сторож сам повторил тревогу: попыток %d", got)
+	if got := door.attempts(); got != 2 {
+		t.Fatalf("expected an offline retry after the pause, got %d attempts", got)
 	}
 
-	door.open()
 	if err := d.Events().Insert(uid, "agent_heartbeat", "ok", "", clock); err != nil {
 		t.Fatal(err)
 	}
 	clock = clock.Add(scanEvery)
 	w.ScanForTest(context.Background())
 
-	if got := door.attempts(); got != 2 {
-		t.Fatalf("попыток после возвращения роутера: %d, ждали вторую («снова на связи»)", got)
+	if got := door.attempts(); got != 3 {
+		t.Fatalf("expected recovery after delivery of the root alert, got %d attempts", got)
 	}
 	un, err = d.Unreachable().List()
 	if err != nil {

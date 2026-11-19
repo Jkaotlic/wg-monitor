@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -22,7 +22,7 @@ type ExecFunc func(ctx context.Context, name string, args ...string) ([]byte, er
 
 // DefaultExec uses os/exec with combined stderr+stdout capture.
 func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return keenetic.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 // OpkgRunner enforces a lock-file so two opkg actions don't overlap;
