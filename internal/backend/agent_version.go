@@ -95,6 +95,7 @@ var miniappActionMinAgentVersion = map[string]string{
 // Рядом с miniappOwnerOnlyActions намеренно: «кто нажимает» и «что это
 // выполнит на роутере» -- два разных вопроса, и списки у них разные.
 var miniappAdminOnlyActions = map[string]bool{
+	"dns_probe":           true,
 	"opkg_busybox_hold":   true,
 	"agent_config_get":    true,
 	"update_agent_config": true,

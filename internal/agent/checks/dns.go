@@ -12,6 +12,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 // DefaultRKNTestDomains: known to be filtered by RU TSPU/ISPs in 2026
@@ -165,8 +166,8 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 		r.RKN = perDomain
 		switch {
 		case !conclusive:
-			// Every configured RKN domain was inconclusive (ctx canceled or
-			// deadline-exceeded) — no verdict possible for this endpoint.
+			// No strict majority of configured domains produced an explicit
+			// verdict — operational failures or split answers are inconclusive.
 			r.RKNStatus = "n/a"
 		case blocked:
 			r.RKNStatus = "suspect"
@@ -209,7 +210,7 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 				rknProbedCount++
 			}
 			// RKNStatus == "n/a" here means the endpoint was reachable but
-			// every RKN domain probe on it was inconclusive: no verdict,
+			// RKN probes did not establish a majority: no verdict,
 			// excluded from both the numerator and denominator below.
 		}
 	}
@@ -389,22 +390,10 @@ func (c DNS) resolveIPs(ctx context.Context, ep keenetic.DNSEndpoint, domain str
 	}
 }
 
-// rknProbe queries `ep` for each RKN-test domain concurrently and reports
-// per-domain results. The endpoint is considered "blocked" if a strict
-// majority of the CONCLUSIVE domains (i.e. excluding any whose probe was
-// canceled/timed-out at the check level — see probeInconclusive) come back
-// suspect (no IPs, genuine error, or spoof IP). The threshold scales with the
-// conclusive count, not the configured count, so a run cut short by the
-// check's time budget can't manufacture a false majority in either
-// direction; each per-domain goroutine owns exactly one index of `results`,
-// and perDomain is only written to after wg.Wait(), so there is no
-// shared-map race.
-//
-// conclusive is false only when >=1 domain was configured and every single
-// one came back inconclusive — i.e. we have zero signal either way. When RKN
-// probing is disabled (no domains configured), conclusive is true and
-// blocked is false, matching the pre-existing "n/a -> clean" trivial
-// behavior for that case.
+// rknProbe queries the configured domains concurrently. Only explicit spoof
+// addresses and NXDOMAIN count as suspect answers. Operational errors have no
+// tampering verdict. A strict majority of configured domains must agree;
+// missing probes cannot manufacture a majority from one suspect response.
 func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []string, httpc *http.Client) (blocked, conclusive bool, perDomain map[string]any) {
 	perDomain = map[string]any{}
 	if len(domains) == 0 {
@@ -432,12 +421,20 @@ func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []st
 				results[i] = domainResult{domain: dom, info: info, inconclusive: true}
 			case err != nil:
 				info["err"] = err.Error()
-				info["sus"] = true
-				results[i] = domainResult{domain: dom, info: info, sus: true}
+				var reply *DNSReplyError
+				if errors.As(err, &reply) && !reply.NoAnswer && reply.RCode == dnsmessage.RCodeNameError {
+					info["sus"] = true
+					results[i] = domainResult{domain: dom, info: info, sus: true}
+				} else {
+					// Transport failures, SERVFAIL, REFUSED and CNAME-only
+					// responses are not evidence of a forged DNS answer.
+					info["inconclusive"] = true
+					results[i] = domainResult{domain: dom, info: info, inconclusive: true}
+				}
 			case len(ips) == 0:
 				info["ips"] = []string{}
-				info["sus"] = true
-				results[i] = domainResult{domain: dom, info: info, sus: true}
+				info["inconclusive"] = true
+				results[i] = domainResult{domain: dom, info: info, inconclusive: true}
 			case hasSpoofIP(ips):
 				info["ips"] = ips
 				info["sus"] = true
@@ -468,7 +465,9 @@ func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []st
 	}
 	// Strict majority: 2*sus > conclusiveDomains. For 1 domain → 1 sus
 	// blocks; for 3 → 2 of 3; for 5 → 3 of 5.
-	return susCount*2 > conclusiveDomains, true, perDomain
+	blocked = susCount*2 > len(domains)
+	clean := (conclusiveDomains-susCount)*2 > len(domains)
+	return blocked, blocked || clean, perDomain
 }
 
 // probeInconclusive reports whether err reflects the check itself running

@@ -28,11 +28,12 @@ type TGClient interface {
 // Config -- настройки бота и кабинетов. Группы больше нет (цикл 5): ни
 // chat_id, ни списка разрешённых групп бот не знает.
 type Config struct {
-	AdminUserID        int64
-	PublicBaseURL      string
-	AmneziaSecretsPath string
-	HideMyBaseURL      string
-	HideMySecretsPath  string
+	AdminUserID         int64
+	PublicBaseURL       string
+	AmneziaSecretsPath  string
+	AmneziaFilesBaseURL string
+	HideMyBaseURL       string
+	HideMySecretsPath   string
 }
 
 // Router -- бот и кабинеты провайдеров. Бот (цикл 5) принимает только:
@@ -51,6 +52,7 @@ type Router struct {
 	busyboxQueue     BusyboxHoldQueue
 	entwareRecovery  EntwareRecoveryOps
 	entwareConfirmMu sync.Mutex
+	premiumFilesMu   sync.Mutex
 }
 
 // SetAlertMemory -- кому сообщать о «Тише на час» (alerts.Dispatcher).

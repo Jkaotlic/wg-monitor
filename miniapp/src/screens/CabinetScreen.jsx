@@ -157,7 +157,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   function body() {
-    if (pending && pending.provider !== 'amnezia') {
+    if (pending && (pending.provider !== 'amnezia' || pending.keyID)) {
       return (
         <CabinetIssue
           key={`${pending.provider}:${pending.option.id}`}
@@ -193,7 +193,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
         )}
         {externalPremium && (
           <>
-            <AmneziaDashboard />
+            <AmneziaDashboard key={routerID} routerID={routerID} rows={rows} perms={perms} onChanged={changed} onPick={pick} />
             {perms.manage && openLayer && (
               <button type="button" class="btn btn-ghost btn-wide" onClick={() => openLayer('confimport', { returnTo: 'cabinet', returnParams: { ...layerParams, tab: current } })}>
                 Загрузить скачанный .conf
@@ -218,7 +218,7 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
                 perms={perms}
                 openSheet={openSheet}
                 onChanged={changed}
-                disabledNote={account?.disabled && account.note || 'Сохранённые ключи можно удалить.'}
+                disabledNote="Для выпуска и установки Amnezia Premium выберите подписку и страну в форме выше."
               />
             </details>
           ) : account?.disabled && account.note ? <p class="hint">{account.note}</p> : null

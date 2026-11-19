@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// FRESH-06: бот не ходит в API кабинета Amnezia Premium (решение оператора
-// 16.10), и клиента кабинета в сборке нет. Тест сторожит, чтобы он не вернулся.
-func TestBackendDoesNotLinkAmneziaCabinet(t *testing.T) {
+// The legacy provisioning client remains excluded. Manual owner-triggered
+// country-file downloads use the separate premiumfiles interface.
+func TestBackendDoesNotLinkLegacyAmneziaProvisioningClient(t *testing.T) {
 	// go test кладёт свой GOROOT в окружение теста; запасной путь -- PATH.
 	goBin := filepath.Join(os.Getenv("GOROOT"), "bin", "go")
 	if _, err := os.Stat(goBin); err != nil || os.Getenv("GOROOT") == "" {

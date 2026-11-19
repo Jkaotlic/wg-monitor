@@ -50,6 +50,7 @@ import (
 // only behind their own gates: admin-only, an agent version floor and a
 // confirming screen (see their entries below).
 var miniappCommandAllowlist = map[string]bool{
+	"dns_probe": true,
 	// Read-only, already trusted to the dashboard.
 	"force_recheck":  true,
 	"diag_now":       true,

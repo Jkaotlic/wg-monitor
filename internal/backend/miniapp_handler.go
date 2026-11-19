@@ -84,6 +84,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/issue", reqID(auth(miniappVPNIssueHandler(d))))
 	// Кабинеты VPN (цикл 3): ключи Amnezia и коды HideMy. Гейт роли внутри
 	// (404), тела с секретами middleware не читают, обработчики не логируют.
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/files/install", reqID(auth(miniappPremiumFilesHandler(d, "install"))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/files/account", reqID(auth(miniappPremiumFilesHandler(d, "account"))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/files/download", reqID(auth(miniappPremiumFilesHandler(d, "download"))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/cabinets", reqID(auth(miniappCabinetsHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/keys", reqID(auth(miniappCabinetAddHandler(d, "amnezia"))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/cabinets/amnezia/active", reqID(auth(miniappCabinetActiveHandler(d, "amnezia"))))

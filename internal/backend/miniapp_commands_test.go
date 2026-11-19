@@ -20,7 +20,7 @@ import (
 // Mirrors TestDashboardCommandDispatchRejectsHiddenBackendURLUpdate.
 func TestMiniappCommandAllowlistContents(t *testing.T) {
 	allowed := []string{
-		"force_recheck", "diag_now", "tunnels_status", "route_status",
+		"dns_probe", "force_recheck", "diag_now", "tunnels_status", "route_status",
 		"check_via_tunnel", "check_direct", "tunnel_restart",
 		// Управление маршрутами (фаза C3). Каждое router-local и обратимо:
 		// add/delete идут через план с хешем черновика, rebind -- с превью и
@@ -1131,6 +1131,7 @@ func TestMiniappCommandsPackageScheduleAdminOnly(t *testing.T) {
 		action string
 		args   map[string]any
 	}{
+		{`{"action":"dns_probe","args":{"url":"https://example.com/private","x":1}}`, "dns_probe", map[string]any{}},
 		{`{"action":"opkg_cron_status","args":{"lines":999}}`, "opkg_cron_status", map[string]any{"lines": 300}},
 		{`{"action":"opkg_cron_install","args":{"schedule":"03:15","extra":"x"}}`, "opkg_cron_install", map[string]any{"schedule": "03:15"}},
 		{`{"action":"opkg_cron_logs","args":{"lines":100}}`, "opkg_cron_logs", map[string]any{"lines": 100}},

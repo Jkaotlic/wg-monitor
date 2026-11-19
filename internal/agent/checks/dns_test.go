@@ -734,3 +734,32 @@ func TestDNS_AllEndpointsSkippedIsUnverified(t *testing.T) {
 		t.Fatalf("want ok+unverified when every endpoint was skipped: %+v", got)
 	}
 }
+
+func TestDNS_RKNOperationalFailureDoesNotProveSpoofing(t *testing.T) {
+	for _, mode := range []string{"http_failure", "empty_answer", "timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				pkt, _ := base64.RawURLEncoding.DecodeString(r.URL.Query().Get("dns"))
+				var q dnsmessage.Message
+				if err := q.Unpack(pkt); err != nil {
+					t.Error(err)
+					return
+				}
+				basic := q.Questions[0].Name.String() == "example.com."
+				if !basic && mode == "timeout" {
+					time.Sleep(60 * time.Millisecond)
+				}
+				if !basic && mode == "http_failure" {
+					w.WriteHeader(503)
+					return
+				}
+				_, _ = w.Write(buildDoHResponse(t, pkt, dnsmessage.RCodeSuccess, [4]byte{198, 51, 100, 10}, basic))
+			}))
+			defer srv.Close()
+			got := (DNS{Endpoints: []keenetic.DNSEndpoint{{Type: "doh", URL: srv.URL}}, TestDomain: "example.com", RKNTestDomains: DefaultRKNTestDomains, PerProbeTimeout: 30 * time.Millisecond}).Run(context.Background(), Deps{})
+			if got.Status != "ok" || got.Details["rkn_suspect"] != 0 || got.Details["rkn_probed"] != 0 {
+				t.Fatalf("operational failure mislabeled spoofing: %+v", got)
+			}
+		})
+	}
+}
