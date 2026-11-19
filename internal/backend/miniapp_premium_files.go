@@ -36,7 +36,7 @@ func premiumFileFailure(w http.ResponseWriter, err error, download bool) {
 	case errors.Is(err, premiumfiles.ErrBusy):
 		writeMiniappDeployError(w, http.StatusConflict, "premium_busy", premiumfiles.ErrBusy.Error())
 	case errors.Is(err, premiumfiles.ErrSlotsFull):
-		writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
+		writeMiniappDeployError(w, http.StatusConflict, "slot_busy", "Все места подписки заняты. Выберите уже выпущенную страну, чтобы скачать её конфиг.")
 	default:
 		if download {
 			writeMiniappDeployError(w, http.StatusBadGateway, "premium_file_uncertain", "Ответ о выпуске не получен. Кабинет мог уже занять место: откройте подписку заново и проверьте страну перед повтором.")
