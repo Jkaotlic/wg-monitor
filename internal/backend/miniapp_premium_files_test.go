@@ -2,7 +2,9 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -51,5 +53,16 @@ func TestPremiumFileOwnerGateAndExplicitConfirmation(t *testing.T) {
 	}
 	if strings.Contains(env.logs.String(), "synthetic") {
 		t.Fatal("secret leaked")
+	}
+}
+
+func TestPremiumDownloadFailureExplainsUncertainResult(t *testing.T) {
+	rec := httptest.NewRecorder()
+	premiumFileFailure(rec, errors.New("private upstream response"), true)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "premium_file_uncertain") || !strings.Contains(rec.Body.String(), "проверьте страну перед повтором") {
+		t.Fatalf("download error: %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "private upstream") {
+		t.Fatal("provider response leaked")
 	}
 }

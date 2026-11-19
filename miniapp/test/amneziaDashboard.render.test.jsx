@@ -54,7 +54,7 @@ it('сохраняет готовый файл при отказе обновл�
   render(<AmneziaDashboard routerID={7} rows={rows} perms={{ remove: true }} />, root)
   await act(async () => root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true })))
   await act(async () => [...root.querySelectorAll('button')].find((b) => b.textContent === 'Выпустить .conf').click())
-  await vi.waitFor(() => expect(root.textContent).toContain('данные подписки'.replace('д', 'Д')))
+  await vi.waitFor(() => expect(root.textContent).toContain('Данные подписки показаны до выпуска'))
   expect(root.querySelector('a[download]').href).toContain('blob:ready')
   expect(downloadPremiumFile).toHaveBeenCalledTimes(1)
 })
