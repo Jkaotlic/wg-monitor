@@ -171,6 +171,7 @@ func TestExportSecretsCreatesPrivateExportDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX directory permissions are not reliable on Windows")
 	}
+
 	srcDir := t.TempDir()
 	src := filepath.Join(srcDir, "secrets.env")
 	if err := os.WriteFile(src, []byte("WG_VPS_PASS=secret\n"), 0o600); err != nil {
@@ -189,6 +190,31 @@ func TestExportSecretsCreatesPrivateExportDir(t *testing.T) {
 	}
 	if got := st.Mode().Perm(); got != 0o700 {
 		t.Fatalf("export dir mode=%#o, want 0700", got)
+	}
+}
+
+func TestWriteFileModeDoesNotFollowPredictableTmpSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics require POSIX")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "secrets.env")
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, target+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileMode(target, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep" {
+		t.Fatalf("predictable tmp symlink was followed: %q", got)
 	}
 }
 

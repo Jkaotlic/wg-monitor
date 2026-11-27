@@ -47,6 +47,9 @@ type CardOpts struct {
 	// rendered string would exceed MaxBytes, it is truncated rune-aware
 	// with a single trailing "…".
 	MaxBytes int
+	// MaxRunes caps the rendered text by Unicode characters. Telegram limits
+	// message length in characters rather than bytes.
+	MaxRunes int
 }
 
 // Render assembles the card into its final on-the-wire string.
@@ -100,6 +103,9 @@ func (c Card) Render(opts CardOpts) string {
 	out := b.String()
 	if opts.MaxBytes > 0 && len(out) > opts.MaxBytes {
 		out = truncateWithEllipsis(out, opts.MaxBytes)
+	}
+	if opts.MaxRunes > 0 && len([]rune(out)) > opts.MaxRunes {
+		out = truncateRunesWithEllipsis(out, opts.MaxRunes)
 	}
 	return out
 }
@@ -168,4 +174,19 @@ func truncateWithEllipsis(s string, maxBytes int) string {
 		runes = runes[:len(runes)-1]
 	}
 	return ellipsis
+}
+
+func truncateRunesWithEllipsis(s string, maxRunes int) string {
+	const ellipsis = "…"
+	runes := []rune(s)
+	if maxRunes <= 0 {
+		return ""
+	}
+	if maxRunes == 1 {
+		return ellipsis
+	}
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes-1]) + ellipsis
 }

@@ -120,7 +120,9 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 			break
 		}
 		if probe.Fresh && probe.Version == job.TargetVersion {
-			_ = e.DB.Rollouts().MarkTargetObserved(id, targets[0].RouterID, now)
+			if err := e.DB.Rollouts().MarkTargetObserved(id, targets[0].RouterID, now); err != nil {
+				return e.currentWithError(id, err)
+			}
 			if err := e.DB.Rollouts().Transition(id, "canary_pending", "observing", "", now); err != nil {
 				return job, err
 			}
@@ -177,7 +179,9 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 				return e.current(id)
 			}
 			if probe.Fresh && probe.Version == job.TargetVersion {
-				_ = e.DB.Rollouts().MarkTargetObserved(id, target.RouterID, now)
+				if err := e.DB.Rollouts().MarkTargetObserved(id, target.RouterID, now); err != nil {
+					return e.currentWithError(id, err)
+				}
 			} else {
 				all = false
 			}
@@ -194,6 +198,11 @@ func (e Engine) Tick(id string) (db.RolloutJob, error) {
 func (e Engine) current(id string) (db.RolloutJob, error) {
 	job, _, err := e.DB.Rollouts().Get(id)
 	return job, err
+}
+
+func (e Engine) currentWithError(id string, cause error) (db.RolloutJob, error) {
+	job, err := e.current(id)
+	return job, errors.Join(cause, err)
 }
 func (e Engine) probe(target db.RolloutTarget) Probe {
 	if e.Probe == nil {

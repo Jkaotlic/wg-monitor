@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -82,7 +83,7 @@ func backendSystemdSwapPlan(service string) backendSwapPlan {
 	return plan
 }
 
-func stepUploadBackendAndRestart(s *SSH, localPath string, plan backendSwapPlan) error {
+func stepUploadBackendAndRestart(s remoteExec, localPath string, plan backendSwapPlan) error {
 	data, err := readFile(localPath)
 	if err != nil {
 		PrintFail("read local: " + err.Error())
@@ -96,21 +97,21 @@ func stepUploadBackendAndRestart(s *SSH, localPath string, plan backendSwapPlan)
 	bak := plan.RemotePath + ".bak"
 
 	PrintInfo(fmt.Sprintf("upload -> %s (%d bytes)", tmp, len(data)))
-	if err := s.UploadSFTP(tmp, data); err != nil {
+	if err := s.UploadSFTPMode(tmp, data, ""); err != nil {
 		PrintFail("upload: " + err.Error())
 		return err
 	}
 
-	out, err := s.MustRun("sha256sum " + tmp + " | awk '{print $1}'")
+	out, err := s.MustRun("sha256sum " + shellQuote(tmp) + " | awk '{print $1}'")
 	if err != nil {
 		PrintFail("sha256sum: " + err.Error())
-		s.Run("rm -f " + tmp)
+		s.Run("rm -f " + shellQuote(tmp))
 		return err
 	}
 	gotSha := strings.TrimSpace(out)
 	if gotSha != wantSha {
 		PrintFail(fmt.Sprintf("sha256 mismatch: local %s remote %s", wantSha[:16], gotSha[:16]))
-		s.Run("rm -f " + tmp)
+		s.Run("rm -f " + shellQuote(tmp))
 		return fmt.Errorf("sha256 mismatch")
 	}
 	PrintOK("sha256 совпадает")
@@ -119,19 +120,27 @@ func stepUploadBackendAndRestart(s *SSH, localPath string, plan backendSwapPlan)
 		PrintInfo(plan.StopCmd)
 		if _, err := s.MustRun(plan.StopCmd); err != nil {
 			PrintFail(err.Error())
-			s.Run("rm -f " + tmp)
+			s.Run("rm -f " + shellQuote(tmp))
 			return err
 		}
 	}
 
-	s.Run(fmt.Sprintf("cp -p %s %s 2>/dev/null", plan.RemotePath, bak))
-	if _, err := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", tmp, plan.RemotePath, plan.RemotePath)); err != nil {
-		PrintFail("atomic swap: " + err.Error())
-		s.Run("rm -f " + tmp)
+	if _, err := s.MustRun(fmt.Sprintf("cp -p %s %s", shellQuote(plan.RemotePath), shellQuote(bak))); err != nil {
+		PrintFail("backup: " + err.Error())
+		s.Run("rm -f " + shellQuote(tmp))
 		if plan.StartCmd != "" {
 			s.Run(plan.StartCmd)
 		}
 		return err
+	}
+	if _, err := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", shellQuote(tmp), shellQuote(plan.RemotePath), shellQuote(plan.RemotePath))); err != nil {
+		PrintFail("atomic swap: " + err.Error())
+		rollbackErr := stepRollbackBackendBinary(s, plan)
+		if rollbackErr != nil {
+			PrintFail("rollback failed: " + rollbackErr.Error())
+		}
+		s.Run("rm -f " + shellQuote(tmp))
+		return errors.Join(err, rollbackErr)
 	}
 	PrintOK("backend binary updated")
 
@@ -141,20 +150,10 @@ func stepUploadBackendAndRestart(s *SSH, localPath string, plan backendSwapPlan)
 	PrintInfo(plan.StartCmd)
 	if _, err := s.MustRun(plan.StartCmd); err != nil {
 		PrintFail("new backend did not start: " + err.Error())
-		if _, _, rc, _ := s.Run("test -f " + bak); rc == 0 {
-			PrintWarn("automatic rollback to " + bak)
-			if plan.StopCmd != "" {
-				s.Run(plan.StopCmd)
-			}
-			if _, rbErr := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", bak, plan.RemotePath, plan.RemotePath)); rbErr != nil {
-				PrintFail("rollback failed: " + rbErr.Error())
-				return err
-			}
-			if _, rbErr := s.MustRun(plan.StartCmd); rbErr != nil {
-				PrintFail("old backend also failed to start: " + rbErr.Error())
-				return err
-			}
-			PrintOK("rollback complete - previous backend is running")
+		rollbackErr := stepRollbackBackendBinary(s, plan)
+		if rollbackErr != nil {
+			PrintFail("rollback failed: " + rollbackErr.Error())
+			return errors.Join(err, rollbackErr)
 		}
 		return err
 	}
@@ -162,16 +161,16 @@ func stepUploadBackendAndRestart(s *SSH, localPath string, plan backendSwapPlan)
 	return nil
 }
 
-func stepRollbackBackendBinary(s *SSH, plan backendSwapPlan) error {
+func stepRollbackBackendBinary(s remoteExec, plan backendSwapPlan) error {
 	bak := plan.RemotePath + ".bak"
-	if _, _, rc, _ := s.Run("test -f " + bak); rc != 0 {
+	if _, _, rc, _ := s.Run("test -f " + shellQuote(bak)); rc != 0 {
 		return fmt.Errorf(".bak absent, nothing to rollback")
 	}
 	PrintWarn("automatic rollback to " + bak)
 	if plan.StopCmd != "" {
 		s.Run(plan.StopCmd)
 	}
-	if _, err := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", bak, plan.RemotePath, plan.RemotePath)); err != nil {
+	if _, err := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", shellQuote(bak), shellQuote(plan.RemotePath), shellQuote(plan.RemotePath))); err != nil {
 		return err
 	}
 	if plan.StartCmd != "" {

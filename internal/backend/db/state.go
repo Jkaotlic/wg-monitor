@@ -302,14 +302,18 @@ func (s *StateRepo) ActiveHardForUserStatus(userID int64) ([]ActiveIncidentRow, 
 // window expires. Bug surfaced in 2026-05 audit (BUG-18). Using a Go-side
 // parameter via database/sql gives consistent serialisation.
 func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
-	now := cutoff.UTC()
+	return s.StaleHardsAt(cutoff, time.Now())
+}
+
+// StaleHardsAt uses separate clocks for alert cadence and silence expiry.
+func (s *StateRepo) StaleHardsAt(cutoff, now time.Time) ([]StaleHard, error) {
 	rows, err := s.d.db.Query(
 		`SELECT user_id, check_name, hard_since FROM incident_state
 		 WHERE current_status = 'hard'
 		   AND (last_alert_at < ? OR last_alert_at IS NULL)
 		   AND (silenced_until IS NULL OR silenced_until < ?)
 		   AND acked = 0`,
-		now, now)
+		cutoff.UTC(), now.UTC())
 	if err != nil {
 		return nil, err
 	}

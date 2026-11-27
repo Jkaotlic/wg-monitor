@@ -119,6 +119,7 @@ func TestStaleHardsCrossTimezone(t *testing.T) {
 		HardSince:     ptrTime(lastAlertAt),
 		LastAlertAt:   ptrTime(lastAlertAt),
 	}
+
 	if err := d.State().Save(uid, "awg_handshake", st); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +132,35 @@ func TestStaleHardsCrossTimezone(t *testing.T) {
 	}
 	if len(stale) != 1 {
 		t.Fatalf("cross-timezone: got %d stale hards, want 1", len(stale))
+	}
+}
+
+func TestStaleHardsAtHonorsSilenceAgainstNow(t *testing.T) {
+	d := newTestDB(t)
+	uid, _ := d.Users().Insert("silenced", "silenced-token", "2.2.2.2", "awg1")
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	hardSince := now.Add(-7 * time.Hour)
+	lastAlert := now.Add(-7 * time.Hour)
+	silencedUntil := now.Add(time.Minute)
+	if err := d.State().Save(uid, "dns", IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		HardSince: &hardSince, LastAlertAt: &lastAlert, SilencedUntil: &silencedUntil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := d.State().StaleHardsAt(now.Add(-6*time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("silence still active, got stale=%+v", stale)
+	}
+	stale, err = d.State().StaleHardsAt(now.Add(-6*time.Hour), now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("expired silence should become stale, got %+v", stale)
 	}
 }
 

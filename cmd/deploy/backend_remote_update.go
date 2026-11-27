@@ -115,7 +115,6 @@ func installBackendUpdateRunner(s *SSH, state *State, plan backendSwapPlan) erro
 
 func installDockerBackendUpdateRunner(s *SSH, user string, plan backendSwapPlan) error {
 	base := path.Dir(path.Dir(plan.RemotePath))
-	unitDir := userHome(user) + "/.config/systemd/user"
 	service := backendUpdateService("wg-monitor-backend-update.service",
 		plan.RemotePath,
 		base+"/config/backend.yaml",
@@ -123,14 +122,39 @@ func installDockerBackendUpdateRunner(s *SSH, user string, plan backendSwapPlan)
 		plan.RemotePath,
 		"docker restart wg-monitor-backend >/dev/null")
 	timer := backendUpdateTimer("wg-monitor-backend-update.service")
+	unitDir, systemctl, userSystemd := backendUpdateUnitMode(user)
+	if userSystemd {
+		if err := stepEnsureDir(s, shellSingleQuote(unitDir), ""); err != nil {
+			return err
+		}
+	}
 	if err := stepUploadFile(s, unitDir+"/wg-monitor-backend-update.service", []byte(service), "644"); err != nil {
 		return err
 	}
 	if err := stepUploadFile(s, unitDir+"/wg-monitor-backend-update.timer", []byte(timer), "644"); err != nil {
 		return err
 	}
-	_, err := s.MustRun("systemctl --user daemon-reload && systemctl --user enable --now wg-monitor-backend-update.timer")
+	if userSystemd {
+		if _, err := s.MustRun(backendUpdateLingerCommand(user)); err != nil {
+			return fmt.Errorf("enable linger for %s: %w", user, err)
+		}
+	}
+	_, err := s.MustRun(systemctl + "daemon-reload && " + systemctl + "enable --now wg-monitor-backend-update.timer")
 	return err
+}
+
+func backendUpdateLingerCommand(user string) string {
+	return "loginctl enable-linger " + shellSingleQuote(user)
+}
+
+func backendUpdateUnitMode(user string) (unitDir, systemctl string, userSystemd bool) {
+	user = strings.TrimSpace(user)
+	if user != "" && user != "root" {
+		return userHome(user) + "/.config/systemd/user",
+			"uid=$(id -u); export XDG_RUNTIME_DIR=/run/user/$uid; systemctl --user ",
+			true
+	}
+	return "/etc/systemd/system", "systemctl ", false
 }
 
 func installSystemBackendUpdateRunner(s *SSH, plan backendSwapPlan) error {

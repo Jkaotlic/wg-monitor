@@ -484,6 +484,35 @@ func TestFanout_SendTrackedKeepsMaybeDelivered(t *testing.T) {
 	}
 }
 
+func TestFanout_ReminderPathsKeepMaybeDeliveredRegardlessOfOrder(t *testing.T) {
+	timeout := errors.New("tg sendMessage: Client.Timeout exceeded while awaiting headers")
+	refused := &tg.APIError{Method: "sendMessage", Code: 502}
+	for name, fail := range map[string]map[int64]error{
+		"timeout first": {1001: timeout, 1002: refused},
+		"timeout last":  {1001: refused, 1002: timeout},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+				t.Fatal(err)
+			}
+			s := &fakeKeyboardSender{fakeSender: fakeSender{fail: fail}}
+			f := NewFanout(d, s, quietLogger(), 0)
+			_, keyboardErr := f.SendKeyboard(context.Background(), router, "x", "", &tg.InlineKeyboardMarkup{})
+			if !MaybeDelivered(keyboardErr) {
+				t.Fatalf("SendKeyboard err lost ambiguous outcome: %v", keyboardErr)
+			}
+			replyErr := f.ReplyToEach(context.Background(), router, "dns", "x", "", false)
+			if !MaybeDelivered(replyErr) {
+				t.Fatalf("ReplyToEach err lost ambiguous outcome: %v", replyErr)
+			}
+		})
+	}
+}
+
 // ctxCancelSender -- первый получатель получает 429, и за время ожидания
 // истекает общий срок рассылки (отмена ctx). second задан -- срок не
 // истекает, второй получает second.

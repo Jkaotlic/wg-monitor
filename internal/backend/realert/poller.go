@@ -175,6 +175,19 @@ func (p *Poller) retryOwedReplies(ctx context.Context, now time.Time) bool {
 func (p *Poller) sendOwedReply(ctx context.Context, now time.Time, o db.OwedReply, silent bool) bool {
 	if err := p.notify.ReplyToEach(ctx, o.UserID, o.CheckName, o.Text, "", silent); err != nil {
 		slog.Warn("realert: повтор «восстановилось» не дошёл", "user_id", o.UserID, "check", o.CheckName, "err", err)
+		if notify.MaybeDelivered(err) {
+			if err := p.d.OwedReplies().Delete(o.UserID, o.CheckName); err != nil {
+				slog.Warn("realert: ambiguous owed reply delete failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+			}
+			if err := p.d.AlertMessages().ClearSentBefore(o.UserID, o.CheckName, o.CreatedAt); err != nil {
+				slog.Warn("realert: alert messages clear failed", "user_id", o.UserID, "check", o.CheckName, "err", err)
+			}
+			if delay, ok := tg.RateLimitDelay(err); ok {
+				p.markRateLimited(now, delay)
+				return false
+			}
+			return true
+		}
 		if delay, ok := tg.RateLimitDelay(err); ok {
 			p.markRateLimited(now, delay)
 			return false
@@ -388,8 +401,12 @@ func (p *Poller) tick(ctx context.Context) {
 	if !p.retryOwedReplies(ctx, now) {
 		return
 	}
-	cutoff := now.Add(-p.cfg.RealertEvery)
-	stale, err := p.d.State().StaleHards(cutoff)
+	cadenceCutoff := p.cfg.RealertEvery
+	if p.cfg.MobileRealertEvery < cadenceCutoff {
+		cadenceCutoff = p.cfg.MobileRealertEvery
+	}
+	cutoff := now.Add(-cadenceCutoff)
+	stale, err := p.d.State().StaleHardsAt(cutoff, now)
 	if err != nil {
 		slog.Error("realert: StaleHards query failed", "err", err)
 		return
@@ -505,6 +522,17 @@ func (p *Poller) tick(ctx context.Context) {
 		kb := tg.AlertKeyboard(sh.UserID, sh.CheckName, appURL)
 		delivered, err := p.notify.SendKeyboard(ctx, sh.UserID, text, "", &kb)
 		if err != nil {
+			if notify.MaybeDelivered(err) {
+				p.recordSendOutcome(sh.UserID, sh.CheckName, true)
+				if bumpErr := p.d.State().BumpLastAlertAt(sh.UserID, sh.CheckName, now); bumpErr != nil {
+					slog.Error("realert: bump LastAlertAt after ambiguous send failed", "user_id", sh.UserID, "check", sh.CheckName, "err", bumpErr)
+				}
+				if delay, ok := tg.RateLimitDelay(err); ok {
+					p.markRateLimited(now, delay)
+					return
+				}
+				continue
+			}
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
 			}

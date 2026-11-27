@@ -44,6 +44,7 @@ func TestEngineCanaryObservationThenFleetAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	job, err = e.Tick(job.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +74,46 @@ func TestEngineCanaryObservationThenFleetAndCompletion(t *testing.T) {
 	}
 	if job.State != "complete" {
 		t.Fatalf("job=%+v", job)
+	}
+}
+
+func TestEngineDoesNotAdvanceWhenObservationWriteFails(t *testing.T) {
+	d, ids := rolloutDB(t)
+	now := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+	e := Engine{
+		DB:  d,
+		Now: func() time.Time { return now },
+		Deploy: func(int64, string) (string, error) {
+			return "cmd", nil
+		},
+		Probe: func(int64, time.Time) Probe {
+			return Probe{Fresh: true, Version: "v1"}
+		},
+	}
+	job, err := e.Create("v1", 1, ids, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Tick(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`CREATE TRIGGER fail_observed BEFORE UPDATE OF status ON rollout_targets
+		WHEN NEW.status = 'observed' BEGIN SELECT RAISE(FAIL, 'observed write failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	job, err = e.Tick(job.ID)
+	if err == nil {
+		t.Fatal("expected observed write failure")
+	}
+	if job.State != "canary_pending" {
+		t.Fatalf("rollout advanced despite failed target write: %+v", job)
+	}
+	_, targets, getErr := d.Rollouts().Get(job.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if targets[0].Status != "queued" {
+		t.Fatalf("target status=%q, want queued", targets[0].Status)
 	}
 }
 

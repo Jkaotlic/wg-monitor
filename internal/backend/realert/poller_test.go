@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -372,7 +374,7 @@ func TestTickAckedSkipped(t *testing.T) {
 
 func TestTickSendErrorPreservesLastAlertAt(t *testing.T) {
 	d, uid := newTestDB(t)
-	f := &fakeTG{sendErr: errors.New("tg flap")}
+	f := &fakeTG{sendErr: tg.NotSent(errors.New("tg flap"))}
 	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
@@ -393,6 +395,92 @@ func TestTickSendErrorPreservesLastAlertAt(t *testing.T) {
 	}
 	if time.Since(*st.LastAlertAt) < 6*time.Hour {
 		t.Errorf("LastAlertAt should NOT have advanced after send error, but it did: %v", st.LastAlertAt)
+	}
+}
+
+func TestTickAmbiguousSendAdvancesLastAlertAt(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{sendErr: context.DeadlineExceeded}
+	now := time.Now().UTC().Truncate(time.Second)
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p.SetNow(func() time.Time { return now })
+	hardSince := now.Add(-7 * time.Hour)
+	lastAlert := now.Add(-7 * time.Hour)
+	if err := d.State().Save(uid, "awg_handshake", db.IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "hard",
+		ConsecutiveFails: 3, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.tick(context.Background())
+	st, err := d.State().Get(uid, "awg_handshake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastAlertAt == nil || !st.LastAlertAt.Equal(now) {
+		t.Fatalf("ambiguous send did not consume alert slot: %v", st.LastAlertAt)
+	}
+}
+
+func TestTickAmbiguousRateLimitStillPausesBatch(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	hardSince := now.Add(-7 * time.Hour)
+	lastAlert := now.Add(-7 * time.Hour)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rateErr := &tg.APIError{Method: "sendMessage", Code: 429, RetryAfter: 30 * time.Second}
+	ambiguousRateErr := fmt.Errorf("%w: %w", notify.ErrNoneDelivered,
+		errors.Join(context.DeadlineExceeded, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, rateErr)))
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour})
+	p.SetNotifySink(&spySink{sendErr: ambiguousRateErr})
+	p.SetNow(func() time.Time { return now })
+	p.tick(context.Background())
+	st, err := d.State().Get(uid, "dns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LastAlertAt == nil || !st.LastAlertAt.Equal(now) {
+		t.Fatalf("ambiguous delivery was not consumed: %v", st.LastAlertAt)
+	}
+	if !p.rateLimitActive(now.Add(10 * time.Second)) {
+		t.Fatal("mixed ambiguous+429 result did not activate rate-limit pause")
+	}
+}
+
+func TestTickMobileUsesShorterCadenceForSQLCutoff(t *testing.T) {
+	d, err := db.Open(t.TempDir() + "/mobile.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	uid, err := d.Users().InsertWithKind("mobile", "rawtoken", "1.1.1.1", "nwg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 6001); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	hardSince := now.Add(-2 * time.Hour)
+	lastAlert := now.Add(-40 * time.Minute)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, MobileRealertEvery: 30 * time.Minute})
+	p.SetNow(func() time.Time { return now })
+	p.tick(context.Background())
+	if f.count() != 1 {
+		t.Fatalf("mobile reminder count=%d, want 1", f.count())
 	}
 }
 

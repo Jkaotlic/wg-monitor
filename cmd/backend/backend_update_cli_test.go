@@ -467,6 +467,7 @@ func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
 	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	repoBase := releaseorigin.DefaultBackendMirrorBase
 	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
@@ -512,6 +513,75 @@ func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
 	}
 	if string(got) != "old" {
 		t.Fatalf("binary changed to %q", string(got))
+	}
+}
+
+func TestRunBackendUpdateRunnerConsumesFailedRequest(t *testing.T) {
+	pending := filepath.Join(t.TempDir(), "backend-update.json")
+	if err := os.WriteFile(pending, []byte(`{"target_version":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runBackendUpdateRunner(backendUpdateRunnerOptions{
+		PendingFile: pending,
+		BinaryPath:  filepath.Join(t.TempDir(), "backend"),
+	})
+	if err == nil {
+		t.Fatal("expected malformed request to fail")
+	}
+	if _, statErr := os.Stat(pending); !os.IsNotExist(statErr) {
+		t.Fatalf("failed pending request was retained: %v", statErr)
+	}
+	if _, statErr := os.Stat(pending + ".last"); statErr != nil {
+		t.Fatalf("failure status not written: %v", statErr)
+	}
+}
+
+func TestRunBackendUpdateRunnerRestartsRolledBackBackend(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "wg-monitor-backend")
+	pending := filepath.Join(dir, "backend-update.json")
+	restartMarker := filepath.Join(dir, "restart-attempted")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
+	newBinary := []byte("new")
+	sum := sha256.Sum256(newBinary)
+	repoBase := releaseorigin.DefaultBackendMirrorBase
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		var body string
+		switch r.URL.String() {
+		case repoBase + "/v0.13.0-rc109/checksums.txt":
+			body = fmt.Sprintf("%x  %s\n", sum, asset)
+		case repoBase + "/v0.13.0-rc109/" + asset:
+			body = string(newBinary)
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found")), Header: make(http.Header), Request: r}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	})
+	if err := os.WriteFile(pending, []byte(fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q}`, repoBase)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restart := fmt.Sprintf(`if [ ! -f %q ]; then touch %q; exit 1; fi`, restartMarker, restartMarker)
+
+	err := runBackendUpdateRunner(backendUpdateRunnerOptions{
+		PendingFile: pending,
+		BinaryPath:  current,
+		RestartCmd:  restart,
+	})
+	if err == nil {
+		t.Fatal("expected failed new backend restart")
+	}
+	got, readErr := os.ReadFile(current)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Fatalf("rollback binary=%q, want old", got)
+	}
+	if _, statErr := os.Stat(restartMarker); statErr != nil {
+		t.Fatalf("old backend restart was not attempted: %v", statErr)
 	}
 }
 

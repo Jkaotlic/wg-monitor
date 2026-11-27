@@ -481,10 +481,9 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 		}
 	}
 	if err := installBackendUpdateRunner(s, state, swapPlan); err != nil {
-		PrintWarn("remote backend update runner install skipped: " + err.Error())
-	} else {
-		PrintOK("remote backend update runner installed")
+		return fmt.Errorf("install remote backend update runner: %w", err)
 	}
+	PrintOK("remote backend update runner installed")
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	state.Backend.LastDeployedVersion = rel.TagName

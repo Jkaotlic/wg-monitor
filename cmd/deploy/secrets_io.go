@@ -225,6 +225,49 @@ func ImportSecrets(src string, statePath string, force bool) error {
 		}
 	}
 
+	type oldFile struct {
+		path   string
+		data   []byte
+		mode   os.FileMode
+		exists bool
+	}
+	oldFiles := []oldFile{{path: secPath}}
+	if stateData != nil {
+		oldFiles = append(oldFiles, oldFile{path: statePath})
+	}
+	for i := range oldFiles {
+		info, err := os.Stat(oldFiles[i].path)
+		switch {
+		case err == nil:
+			body, readErr := os.ReadFile(oldFiles[i].path)
+			if readErr != nil {
+				return fmt.Errorf("read existing %s for rollback: %w", oldFiles[i].path, readErr)
+			}
+			oldFiles[i].data = body
+			oldFiles[i].mode = info.Mode().Perm()
+			oldFiles[i].exists = true
+		case os.IsNotExist(err):
+		default:
+			return fmt.Errorf("stat %s: %w", oldFiles[i].path, err)
+		}
+	}
+	rollback := func(cause error) error {
+		var errs []error
+		for _, old := range oldFiles {
+			if old.exists {
+				if err := writeFileMode(old.path, old.data, old.mode); err != nil {
+					errs = append(errs, err)
+				}
+			} else if err := os.Remove(old.path); err != nil && !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+		}
+		if err := errors.Join(errs...); err != nil {
+			return errors.Join(cause, fmt.Errorf("rollback import: %w", err))
+		}
+		return cause
+	}
+
 	if err := os.MkdirAll(filepath.Dir(secPath), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(secPath), err)
 	}
@@ -235,10 +278,10 @@ func ImportSecrets(src string, statePath string, force bool) error {
 	wroteState := false
 	if stateData != nil {
 		if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(statePath), err)
+			return rollback(fmt.Errorf("mkdir %s: %w", filepath.Dir(statePath), err))
 		}
 		if err := writeFileMode(statePath, stateData, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", statePath, err)
+			return rollback(fmt.Errorf("write %s: %w", statePath, err))
 		}
 		wroteState = true
 	}
@@ -279,11 +322,11 @@ func writeTarFile(tw *tar.Writer, name string, data []byte, mode int64) error {
 // extracted secrets file lands at exactly 0600 even when the umask would
 // have widened it.
 func writeFileMode(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(tmp)
@@ -295,6 +338,9 @@ func writeFileMode(path string, data []byte, mode os.FileMode) error {
 	}
 	// Belt-and-braces: enforce mode via Chmod in case OpenFile honoured the
 	// umask (POSIX) and dropped some of the bits we asked for.
-	_ = os.Chmod(tmp, mode)
+	if err := os.Chmod(tmp, mode); err != nil {
+		os.Remove(tmp)
+		return err
+	}
 	return os.Rename(tmp, path)
 }

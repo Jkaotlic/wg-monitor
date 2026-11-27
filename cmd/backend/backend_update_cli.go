@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -77,7 +78,7 @@ func runBackendUpdateRunnerCommand(args []string) error {
 	return runBackendUpdateRunner(opts)
 }
 
-func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
+func runBackendUpdateRunner(opts backendUpdateRunnerOptions) (retErr error) {
 	body, err := os.ReadFile(opts.PendingFile)
 	if os.IsNotExist(err) {
 		return nil
@@ -86,30 +87,36 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 		return err
 	}
 	var req backendUpdatePending
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if statusErr := writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", retErr.Error()); statusErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("write update status: %w", statusErr))
+		}
+		if removeErr := os.Remove(opts.PendingFile); removeErr != nil && !os.IsNotExist(removeErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("consume failed update request: %w", removeErr))
+		}
+	}()
 	if err := json.Unmarshal(body, &req); err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	req.TargetVersion = strings.TrimSpace(req.TargetVersion)
 	req.RepoBase = strings.TrimRight(strings.TrimSpace(req.RepoBase), "/")
 	if req.TargetVersion == "" {
 		err := fmt.Errorf("pending update requires target_version")
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if req.RepoBase == "" {
 		err := fmt.Errorf("pending update requires repo_base")
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	req.TargetVersion, err = releaseorigin.ValidateReleaseTag(req.TargetVersion)
 	if err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	req.RepoBase, err = releaseorigin.ValidateRepoBaseForBackendURL(req.RepoBase, backendUpdateAllowedRepoBases, backendUpdateTrustedURL(opts.ConfigPath, req.TrustedBackendURL))
 	if err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
@@ -123,49 +130,43 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	}
 	checks, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt", fallbackLabel, maxBackendUpdateChecksumsSize)
 	if err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if releasesig.SignatureRequiredForVersion(req.TargetVersion) {
 		sig, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig", fallbackLabel, maxBackendUpdateSignatureSize)
 		if err != nil {
 			err = fmt.Errorf("download checksums.txt signature: %w", err)
-			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 			return err
 		}
 		if err := releasesig.VerifyChecksumsSignature(checks, sig); err != nil {
 			err = fmt.Errorf("verify checksums.txt signature: %w", err)
-			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 			return err
 		}
 	}
 	want, err := checksumForAsset(string(checks), asset)
 	if err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	bin, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/"+asset, fallbackLabel, maxBackendUpdateArtifactSize)
 	if err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	gotSum := sha256.Sum256(bin)
 	got := hex.EncodeToString(gotSum[:])
 	if got != want {
 		err := fmt.Errorf("sha256 mismatch for %s: got %s want %s", asset, got, want)
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if err := swapBackendBinary(opts.BinaryPath, bin); err != nil {
-		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if strings.TrimSpace(opts.RestartCmd) != "" {
 		if err := runRestartCommand(opts.RestartCmd); err != nil {
 			if rbErr := rollbackBackendBinary(opts.BinaryPath); rbErr != nil {
 				err = fmt.Errorf("%w; rollback failed: %v", err, rbErr)
+			} else if restartErr := runRestartCommand(opts.RestartCmd); restartErr != nil {
+				err = fmt.Errorf("%w; rollback restored previous binary but restart failed: %v", err, restartErr)
 			}
-			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 			return err
 		}
 	}

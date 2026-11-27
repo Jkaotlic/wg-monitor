@@ -101,18 +101,18 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 		return 0, err
 	}
 	delivered := 0
-	var lastErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil, false); err != nil {
 			if !f.noteFailure(chatID, routerUserID, err) {
-				lastErr = err
+				sendErrors.add(err)
 			}
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	return f.result(delivered, len(targets), lastErr)
+	return f.result(delivered, len(targets), sendErrors.err())
 }
 
 // result -- общий вердикт рассылки. lastErr -- последняя ошибка, которую есть
@@ -138,19 +138,19 @@ func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, par
 		return 0, err
 	}
 	delivered := 0
-	var lastErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		_, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb, false)
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
-				lastErr = sendErr
+				sendErrors.add(sendErr)
 			}
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	return f.result(delivered, len(targets), lastErr)
+	return f.result(delivered, len(targets), sendErrors.err())
 }
 
 // SilentKeyboardSender -- тихая отправка с кнопками (disable_notification).
@@ -178,7 +178,7 @@ func (f *Fanout) SendSilentKeyboard(ctx context.Context, routerUserID int64, tex
 		return 0, err
 	}
 	delivered := 0
-	var lastErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		markup := kb
 		if f.isAdmin(chatID) {
@@ -186,14 +186,14 @@ func (f *Fanout) SendSilentKeyboard(ctx context.Context, routerUserID int64, tex
 		}
 		if _, sendErr := ss.SendSilentMessageWithKeyboard(ctx, chatID, nil, text, parseMode, nil, markup); sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
-				lastErr = sendErr
+				sendErrors.add(sendErr)
 			}
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	return f.result(delivered, len(targets), lastErr)
+	return f.result(delivered, len(targets), sendErrors.err())
 }
 
 // noteFailure -- общая обработка неудачной доставки. Возвращает true, если
@@ -244,7 +244,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 	// «могло дойти». Вердикт хранит обе (I-2): «могло дойти» не даёт
 	// DeliverHard снять отметку (иначе realert прислал бы дубль карточки),
 	// а 429 остаётся виден tg.RateLimitDelay для паузы обхода.
-	var notSentErr, maybeErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		var (
 			mid     int64
@@ -259,15 +259,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		}
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
-				if tg.KnownNotSent(sendErr) {
-					// 429 не затирается другим отказом: по нему realert
-					// выдерживает паузу.
-					if _, wasRate := tg.RateLimitDelay(notSentErr); !wasRate {
-						notSentErr = sendErr
-					}
-				} else {
-					maybeErr = sendErr
-				}
+				sendErrors.add(sendErr)
 			}
 			continue
 		}
@@ -278,14 +270,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		}
 		f.noteSuccess(chatID)
 	}
-	lastErr := notSentErr
-	switch {
-	case maybeErr != nil && notSentErr != nil:
-		lastErr = errors.Join(notSentErr, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, maybeErr))
-	case maybeErr != nil:
-		lastErr = maybeErr
-	}
-	return f.result(delivered, len(targets), lastErr)
+	return f.result(delivered, len(targets), sendErrors.err())
 }
 
 // ReplyToEach отвечает каждому получателю на его собственное сообщение о
@@ -307,7 +292,7 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 		return err
 	}
 	delivered := 0
-	var lastErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		var replyTo *int64
 		if mid, ok := msgs[chatID]; ok {
@@ -315,14 +300,14 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 		}
 		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, replyTo, nil, silent); err != nil {
 			if !f.noteFailure(chatID, routerUserID, err) {
-				lastErr = err
+				sendErrors.add(err)
 			}
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	_, err = f.result(delivered, len(targets), lastErr)
+	_, err = f.result(delivered, len(targets), sendErrors.err())
 	return err
 }
 
@@ -345,7 +330,7 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 	}
 	rks, hasKeyboard := f.s.(ReplyKeyboardSender)
 	delivered := 0
-	var lastErr error
+	var sendErrors fanoutSendErrors
 	for _, chatID := range targets {
 		var sendErr error
 		m := f.replyMarkupFor(chatID, routerUserID, markup)
@@ -358,14 +343,44 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 		}
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
-				lastErr = sendErr
+				sendErrors.add(sendErr)
 			}
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	return f.result(delivered, len(targets), lastErr)
+	return f.result(delivered, len(targets), sendErrors.err())
+}
+
+type fanoutSendErrors struct {
+	notSent error
+	maybe   error
+}
+
+func (e *fanoutSendErrors) add(err error) {
+	if err == nil {
+		return
+	}
+	if tg.KnownNotSent(err) {
+		// Preserve a rate-limit signal because it controls poller backoff.
+		if _, rateLimited := tg.RateLimitDelay(e.notSent); !rateLimited {
+			e.notSent = err
+		}
+		return
+	}
+	e.maybe = err
+}
+
+func (e fanoutSendErrors) err() error {
+	switch {
+	case e.maybe != nil && e.notSent != nil:
+		return errors.Join(e.notSent, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, e.maybe))
+	case e.maybe != nil:
+		return e.maybe
+	default:
+		return e.notSent
+	}
 }
 
 // replyMarkupFor -- разметка для конкретного адресата рассылки. Приходит сюда

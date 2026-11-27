@@ -347,12 +347,13 @@ func (d Deps) Start(req StartReq) (string, error) {
 				d.logWarn("linkrepair: история попыток не прочиталась — автозапуск отклонён",
 					"nickname", req.Nickname, "check", req.CheckName, "err", err)
 			}
+			cooldown := why == WhyRepairCooldown
 			// Потолок попыток -- не новый провал: громкого ответа нет, но что
 			// делать, человек читает в той же правке.
 			if tooOften {
 				why += ". Что делать: " + ActTooOften
 			}
-			if why == WhyRepairCooldown {
+			if cooldown {
 				// Save the safety requirement before asking for a snapshot or router lock:
 				// retries can arrive through AfterFailedReport with a fresh StartReq.
 				if err := d.Attempts.retainBackup(req.Nickname, req.CheckName); err != nil {
@@ -379,8 +380,21 @@ func (d Deps) Start(req StartReq) (string, error) {
 		return "", ErrAlreadyRunning
 	}
 	if req.Auto {
-		if allow, why, _, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
+		if allow, why, tooOften, err := d.Attempts.verdict(req.Nickname, req.CheckName); !allow {
 			d.Store.Unlock(req.Nickname)
+			cooldown := why == WhyRepairCooldown
+			if tooOften {
+				why += ". Что делать: " + ActTooOften
+			}
+			if cooldown {
+				if err := d.Attempts.retainBackup(req.Nickname, req.CheckName); err != nil {
+					d.logWarn("linkrepair: backup hold intention not saved", "err", err)
+				} else {
+					req.holdBackup = true
+					d.stampTry(req)
+					d.startMoveOnly(req, sc)
+				}
+			}
 			notStarted(why)
 			if err != nil {
 				d.logWarn("linkrepair: attempts under lock", "err", err)

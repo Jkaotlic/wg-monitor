@@ -2,11 +2,14 @@ package realert
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -14,17 +17,67 @@ import (
 type spySink struct {
 	mu      sync.Mutex
 	replies []string
+	err     error
+	sendErr error
 }
 
 func (s *spySink) SendKeyboard(context.Context, int64, string, string, *tg.InlineKeyboardMarkup) (int, error) {
-	return 1, nil
+	return 1, s.sendErr
 }
 
 func (s *spySink) ReplyToEach(_ context.Context, _ int64, checkName, text, _ string, _ bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replies = append(s.replies, checkName+": "+text)
-	return nil
+	return s.err
+}
+
+func TestOwedReplyAmbiguousDeliveryIsConsumed(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "ok", ConsecutiveOKs: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.OwedReplies().Put(uid, "dns", "🟢 восстановилось", now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	sink := &spySink{err: fmt.Errorf("%w: %w", notify.ErrNoneDelivered, context.DeadlineExceeded)}
+	p := NewPoller(d, &fakeTG{}, Config{})
+	p.SetNotifySink(sink)
+	p.SetNow(func() time.Time { return now })
+	p.tick(context.Background())
+
+	owed, err := d.OwedReplies().List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owed) != 0 {
+		t.Fatalf("ambiguous owed reply remains queued: %+v", owed)
+	}
+}
+
+func TestOwedReplyAmbiguousRateLimitStillPausesBatch(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "ok", ConsecutiveOKs: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.OwedReplies().Put(uid, "dns", "восстановилось", now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	rateErr := &tg.APIError{Method: "sendMessage", Code: 429, RetryAfter: 30 * time.Second}
+	sink := &spySink{err: fmt.Errorf("%w: %w", notify.ErrNoneDelivered, errors.Join(context.DeadlineExceeded, fmt.Errorf("%w: %w", tg.ErrMaybeDelivered, rateErr)))}
+	p := NewPoller(d, &fakeTG{}, Config{})
+	p.SetNotifySink(sink)
+	p.SetNow(func() time.Time { return now })
+	p.tick(context.Background())
+	if !p.rateLimitActive(now.Add(10 * time.Second)) {
+		t.Fatal("mixed ambiguous+429 result did not activate rate-limit pause")
+	}
 }
 
 func (s *spySink) count() int {

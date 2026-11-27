@@ -13,8 +13,37 @@ func TestBackendUpdateTimerUsesLessAggressiveInterval(t *testing.T) {
 	if !strings.Contains(got, "OnUnitActiveSec=2min") {
 		t.Fatalf("timer should poll at 2min interval, got:\n%s", got)
 	}
+
 	if strings.Contains(got, "OnUnitActiveSec=20s") {
 		t.Fatalf("timer must not keep the old 20s tight loop:\n%s", got)
+	}
+}
+
+func TestDockerBackendUpdateRunnerSystemdMode(t *testing.T) {
+	for _, tt := range []struct {
+		user       string
+		wantDir    string
+		wantPrefix string
+		userMode   bool
+	}{
+		{user: "root", wantDir: "/etc/systemd/system", wantPrefix: "systemctl "},
+		{user: "deploy", wantDir: "/home/deploy/.config/systemd/user", wantPrefix: "uid=$(id -u); export XDG_RUNTIME_DIR=/run/user/$uid; systemctl --user ", userMode: true},
+	} {
+		dir, systemctl, isUser := backendUpdateUnitMode(tt.user)
+		if dir != tt.wantDir || systemctl != tt.wantPrefix || isUser != tt.userMode {
+			t.Errorf("user %q: got (%q,%q,%v)", tt.user, dir, systemctl, isUser)
+		}
+	}
+
+}
+
+func TestDockerBackendUpdateRunnerRequiresLinger(t *testing.T) {
+	got := backendUpdateLingerCommand("deploy user")
+	if got != "loginctl enable-linger 'deploy user'" {
+		t.Fatalf("linger command=%q", got)
+	}
+	if strings.Contains(got, "|| true") {
+		t.Fatalf("linger failure must be fatal: %q", got)
 	}
 }
 

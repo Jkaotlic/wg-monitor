@@ -28,6 +28,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 		if !strings.Contains(got, "Через этот VPN-туннель идут правила: 48 по именам сайтов, 3 по адресам") {
 			t.Fatalf("missing linked-routes line:\n%s", got)
 		}
+
 	})
 	t.Run("mixed HR-Neo and ndms DNS", func(t *testing.T) {
 		got := FormatHard(HardArgs{
@@ -64,6 +65,21 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 			t.Fatalf("missing static-only line:\n%s", got)
 		}
 	})
+}
+
+func TestAlertFormatsStayWithinTelegramLimit(t *testing.T) {
+	nickname := strings.Repeat("ё", telegramTextLimit)
+	formats := []string{
+		FormatHard(HardArgs{Nickname: nickname, CheckName: "dns"}),
+		FormatRecovery(RecoveryArgs{Nickname: nickname, CheckName: "dns", HardSince: time.Now(), RecoveredAt: time.Now()}),
+		FormatRealert(RealertArgs{Nickname: nickname, CheckName: "dns", HardSince: time.Now()}),
+		FormatRouterOffline(nickname, time.Hour),
+	}
+	for i, text := range formats {
+		if n := len([]rune(text)); n > telegramTextLimit {
+			t.Errorf("format %d has %d runes, limit %d", i, n, telegramTextLimit)
+		}
+	}
 }
 
 func TestFormatHardGenericFallback(t *testing.T) {

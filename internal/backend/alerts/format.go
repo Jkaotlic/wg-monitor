@@ -168,7 +168,7 @@ func FormatHard(a HardArgs) string {
 		Summary:  headline,
 		Meta:     meta,
 		Sections: sections,
-	}.Render(CardOpts{})
+	}.Render(telegramCardOpts)
 }
 
 // FormatRecovery renders a recovery message in the same human tone as
@@ -213,7 +213,7 @@ func FormatRecovery(a RecoveryArgs) string {
 		Summary:  headline,
 		Meta:     meta,
 		Sections: []CardSection{{Title: "Итог", Lines: lines}},
-	}.Render(CardOpts{})
+	}.Render(telegramCardOpts)
 }
 
 // writeTunnelRecoveryFooter appends a one-line summary of what rides this
@@ -258,7 +258,7 @@ func FormatRouterOffline(nickname string, since time.Duration) string {
 			{Title: "Что я думаю", Lines: []string{"Либо роутер выключен или перезагружается, либо у него пропал интернет."}},
 			{Title: "Что делать", Lines: []string{routerOfflineAdvice}},
 		},
-	}.Render(CardOpts{})
+	}.Render(telegramCardOpts)
 }
 
 // RealertArgs feeds FormatRealert. Check carries the LAST KNOWN payload from
@@ -325,8 +325,12 @@ func FormatRealert(args RealertArgs) string {
 			fmt.Sprintf("#%d", args.RealertCount),
 		},
 		Sections: sections,
-	}.Render(CardOpts{})
+	}.Render(telegramCardOpts)
 }
+
+const telegramTextLimit = 4096
+
+var telegramCardOpts = CardOpts{MaxRunes: telegramTextLimit}
 
 type alertTone struct {
 	Badge         string
