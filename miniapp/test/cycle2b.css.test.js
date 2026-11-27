@@ -137,7 +137,10 @@ describe('осмотр приёмки: CSS', () => {
   })
 
   it('подсказка провала задания -- карточкой', () => {
-    expect(rule(outside, '\n.job-hint')).toMatch(/border-left/)
+    const hint = rule(outside, '\n.job-hint')
+    expect(hint).toMatch(/border:\s*1px solid/)
+    expect(hint).toMatch(/border-radius/)
+    expect(hint).not.toMatch(/border-left/)
   })
 
   it('«Опасное» на широком экране без лишнего отступа секции', () => {

@@ -26,13 +26,21 @@ export function EventsTab({ routerID, routerName }) {
   const [raw, setRaw] = useState(false)
 
   useEffect(() => {
+    let current = true
     setData(null)
     setError(null)
     fetchTimeline(routerID, DAYS, { raw })
-      .then(setData)
+      .then((next) => {
+        if (current) setData(next)
+      })
       // Человеку нужен ответ, а не путь и код: техническая строка вида
       // "/routers/1/timeline failed: 404" ничего ему не говорит.
-      .catch(() => setError('Не удалось загрузить события. Потяните экран вниз и попробуйте ещё раз.'))
+      .catch(() => {
+        if (current) setError('Не удалось загрузить события. Потяните экран вниз и попробуйте ещё раз.')
+      })
+    return () => {
+      current = false
+    }
   }, [routerID, raw])
 
   if (error) return <p class="state state-error">{error}</p>

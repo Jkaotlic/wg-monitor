@@ -1064,7 +1064,7 @@ body {
 
 .person-pick.is-picked {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .person-pick:disabled {
@@ -3686,7 +3686,7 @@ body {
 .job-hint {
   margin: var(--sp-3) 0 0;
   padding: var(--sp-3) var(--sp-4);
-  border-left: 3px solid var(--bad);
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent);
   border-radius: var(--radius-sm);
   background: var(--surf);
   font-size: var(--fs-sm);
@@ -5970,7 +5970,8 @@ body {
   display: block;
   margin-top: var(--sp-2);
   padding: 8px 10px;
-  border-left: 3px solid var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
   color: var(--warn);
   font-size: var(--fs-xs);
@@ -5978,7 +5979,7 @@ body {
 }
 
 .source-conflict-danger {
-  border-left-color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
   background: color-mix(in srgb, var(--bad) 8%, transparent);
   color: var(--bad);
 }

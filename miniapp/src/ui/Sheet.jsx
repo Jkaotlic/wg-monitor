@@ -17,6 +17,8 @@ import { Chip } from './Chip.jsx'
 // onBusy(locked) -- лист занят или освободился: оболочка не даёт «назад»
 // Telegram закрыть его, пока ответ в пути.
 export function Sheet({ sheet, asleep, onClose, onBusy }) {
+  const dialogRef = useRef(null)
+  const openerRef = useRef(null)
   const { busy, result, error, errorCode, sleepNote, sent, run } = useCommand(sheet.routerID)
   // Локальное действие (sheet.perform) выполняет сам бэкенд, а не роутер:
   // ходу выполнения там неоткуда взяться, поэтому фаза остаётся «спросить»,
@@ -87,15 +89,47 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
   }
 
   // Esc -- то же, что клик по затемнению и «Отмена»: пока лист не занят,
-  // закрывает, во время выполнения молчит.
+  // закрывает, во время выполнения молчит. Tab остаётся внутри модального
+  // листа, а после закрытия фокус возвращается к кнопке, которая его открыла.
   const escRef = useRef(null)
   escRef.current = dismiss
   useLayoutEffect(() => {
+    openerRef.current = document.activeElement
+    const dialog = dialogRef.current
+    const focusable = () => [...(dialog?.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? [])]
+    const first = focusable()[0]
+    if (first) first.focus()
+    else dialog?.focus()
     const onKey = (e) => {
-      if (e.key === 'Escape') escRef.current?.()
+      if (e.key === 'Escape') {
+        escRef.current?.()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const nodes = focusable()
+      if (nodes.length === 0) {
+        e.preventDefault()
+        dialog?.focus()
+        return
+      }
+      const active = document.activeElement
+      const firstNode = nodes[0]
+      const lastNode = nodes[nodes.length - 1]
+      if (!dialog?.contains(active) || (e.shiftKey && active === firstNode)) {
+        e.preventDefault()
+        ;(e.shiftKey ? lastNode : firstNode).focus()
+      } else if (!e.shiftKey && active === lastNode) {
+        e.preventDefault()
+        firstNode.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (openerRef.current?.isConnected) openerRef.current.focus()
+    }
   }, [])
 
   function start(choice) {
@@ -147,15 +181,15 @@ export function Sheet({ sheet, asleep, onClose, onBusy }) {
     <div class="sheet-layer">
       {/* Подложка закрывает шит только до запуска: обрывать наблюдение за
           уже ушедшей на роутер командой случайным тапом мимо -- плохая идея. */}
-      <div class="sheet-scrim" onClick={locked ? undefined : dismiss} />
-      <div class="sheet">
+      <div class="sheet-scrim" aria-hidden="true" onClick={locked ? undefined : dismiss} />
+      <div ref={dialogRef} class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" aria-describedby="sheet-body" tabIndex="-1">
         <div class="sheet-grip" />
         {/* Заголовок и текст шита собирают экраны готовыми строками с
             именами внутри; имена ложатся в <Q> здесь, в одном месте. */}
-        <p class="sheet-title">
+        <p id="sheet-title" class="sheet-title">
           <Quoted text={sheet.title} />
         </p>
-        <p class="sheet-body">
+        <p id="sheet-body" class="sheet-body">
           <Quoted text={sheet.body} />
         </p>
 

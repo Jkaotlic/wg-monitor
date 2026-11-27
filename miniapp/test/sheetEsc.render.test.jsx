@@ -24,6 +24,29 @@ async function mount(sheet, onClose) {
 }
 
 describe('Esc на листе', () => {
+  it('лист объявлен как диалог, удерживает Tab и возвращает фокус', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'Открыть'
+    document.body.appendChild(opener)
+    opener.focus()
+    const onClose = vi.fn()
+    const root = await mount(localSheet({ title: 'Точно?', body: 'Проверка фокуса', perform: () => Promise.resolve() }), onClose)
+    const dialog = root.querySelector('[role="dialog"]')
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(dialog.getAttribute('aria-labelledby')).toBe('sheet-title')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+
+    const buttons = [...dialog.querySelectorAll('button:not([disabled])')]
+    buttons[buttons.length - 1].focus()
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' })))
+    expect(document.activeElement).toBe(buttons[0])
+
+    render(null, root)
+    root.remove()
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
+  })
+
   it('до запуска закрывает лист', async () => {
     const onClose = vi.fn()
     const root = await mount(localSheet({ title: 'Точно?', body: '', perform: () => Promise.resolve() }), onClose)

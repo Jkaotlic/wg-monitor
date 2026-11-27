@@ -135,6 +135,8 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
   const [notice, setNotice] = useState('')
   const [fleetResult, setFleetResult] = useState(null)
   const [rolloutResp, setRolloutResp] = useState(null)
+  const [rolloutBusy, setRolloutBusy] = useState(false)
+  const [rolloutError, setRolloutError] = useState('')
   const rolloutID = useRef(null)
   // «Ещё ▸» на карточке -- по роутеру: раскрытие одной не трогает другие.
   const [moreOpen, setMoreOpen] = useState(() => new Set())
@@ -232,6 +234,24 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
       })
       .finally(() => {
         if (aliveRef.current) setLinkBusy(false)
+      })
+  }
+
+  function stopRollout() {
+    if (!rolloutResp?.job || rolloutBusy) return
+    setRolloutBusy(true)
+    setRolloutError('')
+    cancelFleetAgentRollout(rolloutResp.job.id)
+      .then((resp) => {
+        if (!aliveRef.current) return
+        setRolloutResp(resp)
+        setFleetResult(rolloutSummary(resp))
+      })
+      .catch(() => {
+        if (aliveRef.current) setRolloutError('Не удалось остановить раскатку. Попробуйте ещё раз.')
+      })
+      .finally(() => {
+        if (aliveRef.current) setRolloutBusy(false)
       })
   }
 
@@ -629,10 +649,11 @@ export function ParkSection({ routers = [], openSheet, onOpenRouter, currentID, 
                   </p>
                 ))}
                 {fleetResult.active && rolloutResp?.job && (
-                  <button type="button" class="btn btn-ghost btn-row" onClick={() => cancelFleetAgentRollout(rolloutResp.job.id).then((resp) => { setRolloutResp(resp); setFleetResult(rolloutSummary(resp)) }).catch(() => {})}>
-                    Остановить раскатку
+                  <button type="button" class="btn btn-ghost btn-row" disabled={rolloutBusy} onClick={stopRollout}>
+                    {rolloutBusy ? 'Останавливаем…' : 'Остановить раскатку'}
                   </button>
                 )}
+                {rolloutError && <p class="state state-error" role="alert">{rolloutError}</p>}
               </div>
             )}
             {notice && (
